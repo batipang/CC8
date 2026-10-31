@@ -117,7 +117,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
         }).setNegativeButton("关闭",null).show();
     }
     @Override public void playback(boolean value){runOnUiThread(()->{playbackActive=value;refresh();});}
-    @Override public void microphone(boolean value){runOnUiThread(()->{active=value;if(!value)screen(false);if(value)heardText.setText("等待你的指令");refresh();});}
+    @Override public void microphone(boolean value){runOnUiThread(()->{active=session.isRecording();if(!active)screen(false);if(active)heardText.setText("等待你的指令");refresh();});}
     @Override public void screen(boolean sleeping){runOnUiThread(()->{
         if(sleeping&&(!foreground||!active))return;if(screenSleeping==sleeping)return;screenSleeping=sleeping;
         WindowManager.LayoutParams attrs=getWindow().getAttributes();if(sleeping){previousBrightness=attrs.screenBrightness;attrs.screenBrightness=0;blackScreen.setVisibility(View.VISIBLE);handler.removeCallbacks(animate);}

@@ -3,7 +3,6 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
-import os
 import platform
 import shutil
 import subprocess

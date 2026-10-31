@@ -1,7 +1,6 @@
 import hashlib
 import json
 from pathlib import Path
-import queue
 import secrets
 import socket
 import ssl
@@ -13,7 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from transport import Pairing,TransportHub,signature,private_ipv4
-from protocol import Packet,receive,EVENT,SPEAKER,RENDER
+from protocol import Packet,receive,SPEAKER,RENDER
 from bridge import Bridge,usb_target
 
 

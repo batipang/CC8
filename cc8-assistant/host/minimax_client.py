@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 import hashlib
 import json
 import os
+import stat
 from pathlib import Path
 import re
 import threading
@@ -29,26 +30,78 @@ def subscription_key():
     if not value:
         path=ROOT/'.toolchains/cc8/voice-secrets.env'
         if path.exists():
+            info=path.stat()
+            if info.st_uid!=os.getuid() or stat.S_IMODE(info.st_mode)&0o077:
+                raise MiniMaxError('MiniMax credential file must be owner-only (chmod 600)')
             for line in path.read_text().splitlines():
                 if line.startswith('CC8_MINIMAX_API_KEY='):value=line.split('=',1)[1].strip()
     if not value.startswith('sk-cp-'):raise MiniMaxError('A dedicated MiniMax subscription key is required')
     return value
 
 
+MAX_SSE_EVENT = 8*1024*1024
+MAX_STREAM_BYTES = 32*1024*1024
+
+
+def bounded_lines(chunks,max_line=MAX_SSE_EVENT,max_total=MAX_STREAM_BYTES,is_current=lambda:True):
+    """Read bounded bytes before splitting; iter_lines itself buffers long lines."""
+    pending=bytearray();total=0;scan=0
+    for chunk in chunks:
+        if not is_current():raise Cancelled('Turn cancelled')
+        total+=len(chunk)
+        if total>max_total:raise MiniMaxError('MiniMax stream exceeds size limit')
+        pending.extend(chunk)
+        while True:
+            end=pending.find(b'\n',scan)
+            if end<0:
+                scan=len(pending)
+                if len(pending)>max_line:raise MiniMaxError('MiniMax SSE line exceeds size limit')
+                break
+            if end>max_line:raise MiniMaxError('MiniMax SSE line exceeds size limit')
+            line=bytes(pending[:end]).rstrip(b'\r').decode('utf-8')
+            del pending[:end+1];scan=0
+            yield line
+    if not is_current():raise Cancelled('Turn cancelled')
+    if pending:yield bytes(pending).rstrip(b'\r').decode('utf-8')
+
+
 def sse_events(lines):
-    """Parse fragmented/multiline SSE; comments and [DONE] are handled."""
-    parts=[]
+    """Parse fragmented/multiline SSE without unbounded event accumulation."""
+    parts=[];size=0
     for line in lines:
         if isinstance(line,bytes):line=line.decode('utf-8')
+        if len(line.encode('utf-8'))>MAX_SSE_EVENT:raise MiniMaxError('MiniMax SSE line exceeds size limit')
         if not line:
             if parts:
-                payload='\n'.join(parts);parts=[]
+                payload='\n'.join(parts);parts=[];size=0
                 if payload.strip()=='[DONE]':return
-                yield json.loads(payload)
-        elif line.startswith('data:'):parts.append(line[5:].lstrip())
+                event=json.loads(payload)
+                if not isinstance(event,dict):raise MiniMaxError('Invalid MiniMax SSE event')
+                yield event
+        elif line.startswith('data:'):
+            value=line[5:].lstrip();size+=len(value.encode('utf-8'))+1
+            if size>MAX_SSE_EVENT:raise MiniMaxError('MiniMax SSE event exceeds size limit')
+            parts.append(value)
     if parts:
         payload='\n'.join(parts)
-        if payload.strip()!='[DONE]':yield json.loads(payload)
+        if payload.strip()!='[DONE]':
+            event=json.loads(payload)
+            if not isinstance(event,dict):raise MiniMaxError('Invalid MiniMax SSE event')
+            yield event
+
+
+def response_json(response,is_current,slot,limit):
+    chunks=[];size=0
+    for chunk in response.iter_content(chunk_size=8192):
+        if slot.stopped.is_set() or not is_current():raise Cancelled('Turn cancelled')
+        size+=len(chunk)
+        if size>limit:raise MiniMaxError('MiniMax response exceeds size limit')
+        chunks.append(chunk)
+    if slot.stopped.is_set() or not is_current():raise Cancelled('Turn cancelled')
+    data=json.loads(b''.join(chunks))
+    if not isinstance(data,dict) or not isinstance(data.get('base_resp',{}),dict):
+        raise MiniMaxError('Invalid MiniMax response')
+    return data
 
 
 class VisibleText:
@@ -94,7 +147,7 @@ class RequestSlot:
 class Transport:
     def __init__(self,key=None,base='https://api.minimax.cn',session_factory=requests.Session):
         parsed=urlparse(base)
-        if parsed.scheme!='https' or parsed.hostname not in {'api.minimax.cn','api.minimaxi.com','api.minimax.io'} or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        if parsed.scheme!='https' or parsed.hostname not in {'api.minimax.cn','api.minimaxi.com','api.minimax.io'} or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.port not in (None,443) or parsed.path not in ('','/'):
             raise ValueError('Only official MiniMax HTTPS endpoints are allowed')
         self.base=base.rstrip('/');self.key=key or subscription_key();self.factory=session_factory
         self.lock=threading.Lock();self.slots=set()
@@ -116,14 +169,7 @@ class Transport:
                 headers={'Authorization':'Bearer '+self.key},stream=True,allow_redirects=False,timeout=(8,20))
             slot.response=response
             if response.status_code!=200:raise MiniMaxError('MiniMax ASR HTTP request failed',http_status=response.status_code)
-            chunks=[];size=0
-            for chunk in response.iter_content(chunk_size=8192):
-                if slot.stopped.is_set() or not is_current():raise Cancelled('Turn cancelled')
-                size+=len(chunk)
-                if size>512*1024:raise MiniMaxError('MiniMax ASR response exceeds size limit')
-                chunks.append(chunk)
-            if slot.stopped.is_set() or not is_current():raise Cancelled('Turn cancelled')
-            data=json.loads(b''.join(chunks));code=(data.get('base_resp') or {}).get('status_code',0)
+            data=response_json(response,is_current,slot,512*1024);code=(data.get('base_resp') or {}).get('status_code',0)
             if code or data.get('error'):raise MiniMaxError('MiniMax ASR API request failed',code=code)
             text=data.get('text')
             if not isinstance(text,str) or len(text)>10000:raise MiniMaxError('Invalid MiniMax ASR transcript')
@@ -147,15 +193,7 @@ class Transport:
                 stream=True,allow_redirects=False,timeout=(8,20))
             slot.response=response
             if response.status_code!=200:raise MiniMaxError('MiniMax HTTP request failed',http_status=response.status_code)
-            chunks=[];size=0
-            for chunk in response.iter_content(chunk_size=8192):
-                if slot.stopped.is_set() or not is_current():raise Cancelled('Turn cancelled')
-                size+=len(chunk)
-                if size>2*1024*1024:raise MiniMaxError('MiniMax response exceeds size limit')
-                chunks.append(chunk)
-            if slot.stopped.is_set() or not is_current():raise Cancelled('Turn cancelled')
-            data=json.loads(b''.join(chunks))
-            if not isinstance(data,dict):raise MiniMaxError('Invalid MiniMax response')
+            data=response_json(response,is_current,slot,2*1024*1024)
             code=(data.get('base_resp') or {}).get('status_code',0)
             if code!=0 or data.get('error'):raise MiniMaxError('MiniMax API request failed',code=code)
             return data
@@ -181,18 +219,20 @@ class Transport:
             if response.status_code!=200:raise MiniMaxError('MiniMax HTTP request failed',http_status=response.status_code)
             response.encoding='utf-8'
             if 'text/event-stream' not in response.headers.get('Content-Type','').lower():
-                data=response.json();base=data.get('base_resp') or {}
+                data=response_json(response,is_current,slot,2*1024*1024);base=data.get('base_resp') or {}
                 code=base.get('status_code')
                 raise MiniMaxError('Expected MiniMax streaming response',code=code)
-            for event in sse_events(response.iter_lines(chunk_size=128,decode_unicode=True)):
+            for event in sse_events(bounded_lines(response.iter_content(chunk_size=8192),is_current=lambda:not slot.stopped.is_set() and is_current())):
                 if slot.stopped.is_set() or not is_current():raise Cancelled('Turn cancelled')
                 base=event.get('base_resp') or {}
+                if not isinstance(base,dict):raise MiniMaxError('Invalid MiniMax stream status')
                 if base.get('status_code',0)!=0:raise MiniMaxError('MiniMax API request failed',code=base['status_code'])
                 if event.get('error'):raise MiniMaxError('MiniMax streaming error')
                 yield event
         except requests.RequestException:
             if slot.stopped.is_set() or not is_current():raise Cancelled('Turn cancelled') from None
             raise MiniMaxError('MiniMax network request failed') from None
+        except (ValueError,TypeError,AttributeError):raise MiniMaxError('Invalid MiniMax streaming response') from None
         finally:
             with self.lock:self.slots.discard(slot)
             if slot.response is not None:slot.response.close()

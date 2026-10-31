@@ -114,12 +114,23 @@ class TransportHub:
         self.events=queue.Queue(maxsize=512);self.channels={};self.active=None;self.guard=threading.RLock();self.stop=threading.Event()
         self.usb_disabled_until=0.;self.switches=0;self.auth_failures=0;self.server=None;self.discovery=None
     def start(self):
-        self.server=socket.socket(socket.AF_INET,socket.SOCK_STREAM);self.server.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);self.server.bind((self.bind,self.tls_port));self.server.listen(4);self.server.settimeout(.5)
-        self.discovery=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);self.discovery.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);self.discovery.bind((self.bind,self.discovery_port));self.discovery.settimeout(.5)
+        try:
+            self.server=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+            self.server.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+            self.server.bind((self.bind,self.tls_port));self.server.listen(4);self.server.settimeout(.5)
+            self.discovery=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+            self.discovery.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+            self.discovery.bind((self.bind,self.discovery_port));self.discovery.settimeout(.5)
+        except OSError:
+            self.close()
+            raise
         for method in [self.accept_wifi,self.discover,self.monitor_usb,self.heartbeat]:threading.Thread(target=method,daemon=True).start()
     def register(self,stream,kind):
         channel=Channel(stream,kind,self.events)
         with self.guard:
+            if self.stop.is_set():
+                channel.close()
+                raise RuntimeError('Transport hub is closed')
             previous=self.channels.get(kind)
             if previous and not previous.closed:previous.close()
             self.channels[kind]=channel
@@ -140,8 +151,8 @@ class TransportHub:
                 if auth.get('event')!='transport_auth' or not isinstance(token,str) or not re.fullmatch('[0-9a-f]{64}',token) or not hmac.compare_digest(token,self.pairing.token):raise ValueError('LAN authentication failed')
                 tls.settimeout(10);tls.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,1)
                 tls.sendall(Packet.event('transport_welcome').encode());self.register(tls,'wifi')
-            except (OSError,EOFError,ValueError):
-                self.auth_failures+=1
+            except (OSError,EOFError,ValueError,RuntimeError):
+                if not self.stop.is_set():self.auth_failures+=1
                 try:(tls or raw).close()
                 except OSError:pass
     def discover(self):

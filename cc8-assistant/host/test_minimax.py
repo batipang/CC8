@@ -1,4 +1,3 @@
-import hashlib
 import json
 import threading
 import time
@@ -17,6 +16,8 @@ class Response:
             yield 'data: '+json.dumps(e,ensure_ascii=False)
             yield ''
         yield 'data: [DONE]';yield ''
+    def iter_content(self,**kwargs):
+        yield ('\n'.join(self.iter_lines())+'\n').encode('utf-8')
     def close(self):self.closed=True
 
 

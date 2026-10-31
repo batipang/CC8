@@ -29,7 +29,7 @@ def validate_text(text):
 class AnnouncementServer:
     def __init__(self,bridge,path=SOCKET):self.bridge=bridge;self.path=path;self.stop=threading.Event();self.socket=None;self.slots=threading.BoundedSemaphore(4)
     def start(self):
-        self.path.parent.mkdir(parents=True,exist_ok=True)
+        self.path.parent.mkdir(parents=True,exist_ok=True,mode=0o700);os.chmod(self.path.parent,0o700)
         if self.path.exists():
             info=self.path.lstat()
             if not stat.S_ISSOCK(info.st_mode) or info.st_uid!=os.getuid():raise RuntimeError('Unsafe announcement socket path')

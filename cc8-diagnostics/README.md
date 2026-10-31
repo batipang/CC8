@@ -11,7 +11,7 @@ AEC 显示可用或创建成功不代表实际消回声有效；应分别录制�
 ```sh
 python3 cc8-diagnostics/tools/build.py
 python3 cc8-diagnostics/tools/test-audio.py
-python3 device-access/cc8_install.py --install artifacts/cc8-diagnostics-1.0.1.apk --launch
+python3 device-access/cc8_install.py --install artifacts/cc8-diagnostics-1.0.1.apk --launch --shared-staging
 ```
 
-工具链、开发签名和设备工程通道见[开发说明](../docs/DEVELOPMENT.md)及[APK 安装步骤](../docs/APK_INSTALL.md)。报告和 WAV 保存在设备本地，可能包含个人内容；仓库不包含用户实机报告与录音。
+`--shared-staging` 的共享存储替换风险及工具链、开发签名和设备工程通道见[开发说明](../docs/DEVELOPMENT.md)及[APK 安装步骤](../docs/APK_INSTALL.md)。报告和 WAV 保存在设备本地，可能包含个人内容；仓库不包含用户实机报告与录音。

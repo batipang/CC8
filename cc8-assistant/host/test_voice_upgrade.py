@@ -4,7 +4,6 @@ import subprocess
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
 
 from caption_timing import CaptionTiming
 from voice_tools import VoiceTools

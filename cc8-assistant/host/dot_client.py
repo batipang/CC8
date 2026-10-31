@@ -11,11 +11,10 @@ import signal
 import subprocess
 import threading
 import time
-import tomllib
 from urllib.parse import urlsplit
 from voice_tools import VoiceTools, TOOLS
 from minimax_client import Cancelled
-from web_search import SpeechClauses,now
+from web_search import SpeechClauses,now,public_url
 
 ROOT=Path(__file__).resolve().parents[2]
 
@@ -26,10 +25,9 @@ def answer_sources(answer):
     links += [('',url) for url in re.findall(r'https://[^\s<>`，。；）)\]\"“”]+',answer)]
     for title,url in links:
         url=url.rstrip('）),，。；;]〉》".')
-        try:parsed=urlsplit(url)
-        except ValueError:continue
-        if len(url)>2048 or not parsed.hostname or '.' not in parsed.hostname or parsed.username or parsed.password or url in seen:continue
-        seen.add(url);items.append({'title':title or parsed.hostname,'url':url})
+        url=public_url(url)
+        if not url or not url.startswith('https://') or url in seen:continue
+        seen.add(url);items.append({'title':title or urlsplit(url).hostname,'url':url})
         if len(items)>=6:break
     return items
 
@@ -147,6 +145,7 @@ class CodexRpc:
 class Turn:
     stopped:threading.Event=field(default_factory=threading.Event)
     ident:str|None=None
+    ident_ready:threading.Event=field(default_factory=threading.Event)
     interrupt_sent:bool=False
     lock:object=field(default_factory=threading.Lock)
 
@@ -180,6 +179,16 @@ class DotBrain:
                 'developerInstructions':instructions,'serviceName':'cc8_bumblebee_voice','dynamicTools':TOOLS},timeout=150)
             self.thread_id=(result.get('thread') or {}).get('id')
             if not self.thread_id:raise DotError('Codex did not create a voice session')
+    def call_tool(self,turn,params,is_current=lambda:True):
+        # Requests can arrive before turn/start is acknowledged. Never accept
+        # a previous turn merely because the new turn ID is not known yet.
+        if not isinstance(params,dict):return {'ok':False,'error':'invalid_request'}
+        if not turn.ident_ready.wait(20):return {'ok':False,'error':'turn_not_ready'}
+        current=lambda:not turn.stopped.is_set() and self.current is turn and is_current()
+        if (not current() or not turn.ident or params.get('threadId')!=self.thread_id
+                or params.get('turnId')!=turn.ident):return {'ok':False,'error':'stale_turn'}
+        return VoiceTools(self.device_control).call(params.get('tool'),params.get('arguments'),current)
+
     def clauses(self,text,history,is_current=lambda:True,on_web=None):
         if not is_current():raise Cancelled('Turn cancelled')
         turn=Turn();self.current=turn;start=time.monotonic();messages=[];completed=False
@@ -191,12 +200,12 @@ class DotBrain:
             if turn.stopped.is_set() or not is_current():raise Cancelled('Turn cancelled')
             self.rpc.approval_seen.clear()
             def tool_handler(params):
-                if params.get('threadId')!=self.thread_id or (turn.ident and params.get('turnId')!=turn.ident):return {'ok':False,'error':'stale_turn'}
-                return VoiceTools(self.device_control).call(params.get('tool'),params.get('arguments'),lambda:not turn.stopped.is_set() and self.current is turn and is_current())
+                return self.call_tool(turn,params,is_current)
             self.rpc.tool_handler=tool_handler
             result=self.rpc.request('turn/start',{'threadId':self.thread_id,'input':[{'type':'text','text':text[:6000]}],
                 'cwd':str(ROOT)},timeout=20)
             turn.ident=(result.get('turn') or {}).get('id')
+            turn.ident_ready.set()
             if not turn.ident:raise DotError('Codex did not start a turn')
             if turn.stopped.is_set() or not is_current():self._interrupt(turn);raise Cancelled('Turn cancelled')
             if on_web:on_web('progress',{'message':'Dot 正在分析 · 说“停一下”可打断'})
@@ -251,4 +260,5 @@ class DotBrain:
             self.last_metrics.update(completed=True,characters=len(answer),elapsed_ms=round((time.monotonic()-start)*1000))
         finally:
             if not completed and turn.ident:self._interrupt(turn)
+            turn.ident_ready.set()
             if self.current is turn:self.current=None

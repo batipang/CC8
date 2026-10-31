@@ -23,7 +23,7 @@ import time
 import wave
 import numpy as np
 
-from protocol import Packet, receive, MIC, RENDER, EVENT, SPEAKER
+from protocol import Packet, MIC, RENDER, EVENT, SPEAKER
 from transport import Pairing, TransportHub
 from dsp import RATE, FRAME, WebRtcEchoCanceller, RenderTimeline, ReferenceCapture, VoiceDetector, NearSpeechDetector, level, estimate_reference_shift, resembles_playback
 from fast_stop import FastStopDetector, can_fast_stop
@@ -31,7 +31,7 @@ from brain_router import BrainRouter
 from announce import Announcement, AnnouncementServer, validate_text
 from caption_timing import CaptionTiming
 from recognition import MandarinRecognizer
-from minimax_client import MiniMaxBrain, MiniMaxVoice, MiniMaxError, Cancelled
+from minimax_client import MiniMaxBrain, MiniMaxVoice, MiniMaxError
 
 ROOT = Path(__file__).resolve().parents[2]
 PRIVATE = ROOT/'device-access/private/voice-runtime'
@@ -143,7 +143,7 @@ class Bridge:
     def change_transport(self,channel):
         old=self.connection
         if old is channel:return
-        was_active=self.active;was_calibrating=self.calibrating
+        was_active=self.active
         try:self.cancel('transport_switch')
         except (OSError,EOFError):pass
         self.connection=channel;self.rebind_seen=False;self.transport_kind=channel.kind if channel else 'none'
@@ -279,6 +279,7 @@ class Bridge:
         self.pending_mic.clear();self.calibration_frames.clear();self.save_status()
 
     def on_event(self,j):
+        if not isinstance(j,dict):raise ValueError('Invalid device event')
         event=j.get('event')
         if event=='device_ready':
             self.device_can_pause=bool(j.get('supports_playback_pause'))
@@ -327,11 +328,15 @@ class Bridge:
             generation=self.generation
             threading.Thread(target=self.calibrate,args=(generation,),daemon=True).start();self.log('foreground_capture_started')
         elif event=='session_stop':
-            if self.active:self.stop();self.log('foreground_capture_stopped')
+            # A stopped worker can finish after a new foreground capture starts.
+            if self.active and int(j.get('epoch',self.epoch))==self.epoch:
+                self.stop();self.log('foreground_capture_stopped')
         elif event=='interrupt':
             if self.active or self.announcement_generation is not None:self.cancel('button');self.status('listening' if self.active else 'idle','播报已停止')
         elif event=='play_done':
-            with self.done:self.completed.add(int(j['generation']));self.done.notify_all()
+            with self.done:
+                if int(j['generation'])==self.generation:self.completed={self.generation}
+                self.done.notify_all()
             if int(j['generation'])==self.generation:self.playing=False;self.last_audio_end=time.monotonic()
         elif event=='playback_paused' and int(j.get('token',-1))==self.pause_token and int(j.get('generation',-1))==self.generation:
             self.timeline.pause_at(int(j['nanos']))
@@ -343,13 +348,20 @@ class Bridge:
         elif event=='capture_gap':self.log('capture_read_gap',milliseconds=j.get('milliseconds'))
 
     def on_packet(self,p):
-        if p.kind==EVENT:self.on_event(json.loads(p.data));return
+        if p.kind==EVENT:
+            try:self.on_event(json.loads(p.data))
+            except (KeyError,TypeError,OverflowError):
+                raise ValueError('Invalid device event fields') from None
+            return
         if p.kind==RENDER:
             if p.generation!=self.generation:return
             pcm=np.frombuffer(p.data,dtype='<i2').astype(float)/32768
             self.timeline.add(p.generation,p.frame,p.nanos,pcm);self.metrics['render_frames']+=len(pcm)
             self.metrics['render_clock_discontinuities']=self.timeline.discontinuities;return
         if p.kind!=MIC or not self.active or p.generation!=self.epoch:return
+        if self.pending_mic and p.nanos<=self.pending_mic[-1].nanos:
+            raise ValueError('Non-monotonic microphone timestamp')
+        if len(self.pending_mic)>=64:raise ValueError('Microphone lookahead exceeded')
         self.pending_mic.append(p)
         # A short fixed lookahead lets playback reference arrive before AEC,
         # even when estimated capture timestamps lead the render clock.
@@ -445,10 +457,10 @@ class Bridge:
         self.save_status()
 
     def save_status(self):
-        PRIVATE.mkdir(parents=True,exist_ok=True)
+        PRIVATE.mkdir(parents=True,exist_ok=True,mode=0o700);os.chmod(PRIVATE,0o700)
         data={'connected':self.connection is not None,'active':self.active,'calibrating':self.calibrating,
               'playing':self.playing,'generation':self.generation,'wake_mode':self.wake,'wake_word':WAKE_WORD,
-              'bridge_version':'0.8.0','transport':self.transport_kind,**(self.transport_hub.diagnostics() if self.transport_hub else {}),'screen_sleeping':self.screen_sleeping,'idle_sleep_seconds':900,'asr_engine':getattr(getattr(self.speech,'recognizer',None),'engine',None),'barge_in_enabled':self.device_can_pause,'playback_paused':self.pause_state is not None,'announcement_active':self.announcement_generation is not None,'brain_provider':getattr(self.brain,'selected','minimax') if self.brain else 'echo test','dot_enabled':isinstance(self.brain,BrainRouter),'web_search_enabled':self.brain is not None,'fast_stop_enabled':self.fast_stop is not None,
+              'bridge_version':'0.8.1','transport':self.transport_kind,**(self.transport_hub.diagnostics() if self.transport_hub else {}),'screen_sleeping':self.screen_sleeping,'idle_sleep_seconds':900,'asr_engine':getattr(getattr(self.speech,'recognizer',None),'engine',None),'barge_in_enabled':self.device_can_pause,'playback_paused':self.pause_state is not None,'announcement_active':self.announcement_generation is not None,'brain_provider':getattr(self.brain,'selected','minimax') if self.brain else 'echo test','dot_enabled':isinstance(self.brain,BrainRouter),'web_search_enabled':self.brain is not None,'fast_stop_enabled':self.fast_stop is not None,
               'fast_stop_input':'AEC3 without additional NS','fast_stop_gain':getattr(self.fast_stop,'gain',None),
               'aec_engine':'WebRTC AEC3 + NS; AGC disabled',
               'render_asr_comparison':True,
@@ -537,8 +549,10 @@ class Bridge:
             # Retain reference for the room tail; continue adapting before VAD.
             time.sleep(.4)
             if not self.valid(generation):return
-            self.align_reference()
-            self.calibrating=False;self.vad.reset();self.reference_capture.reset()
+            if not self.align_reference(generation):return
+            with self.guard:
+                if not self.valid(generation):return
+                self.calibrating=False;self.vad.reset();self.reference_capture.reset()
             if self.echo_check_pending:
                 self.echo_check_pending=False;self.check_echo(generation)
             elif self.wake:self.status('listening','请说“大黄蜂”或“Bumblebee”开始聊天')
@@ -591,28 +605,31 @@ class Bridge:
             report['seconds']=round(time.monotonic()-start,1);self.echo_check_running=False
             self.log('echo_self_check_finished',**report);self.save_status()
 
-    def align_reference(self):
-        frames=list(self.calibration_frames)
-        if len(frames)<100:return
-        mic=np.concatenate([pcm for _,pcm in frames])
-        render=np.concatenate([self.timeline.at(stamp,FRAME) for stamp,_ in frames])
-        shift,correlation=estimate_reference_shift(mic,render)
-        self.reference_shift_ns=round(shift*1e9/RATE)
-        with self.dsp_lock:
-            if not self.active:return
-            if self.aec:self.aec.close()
-            if self.stop_aec:self.stop_aec.close()
-            self.aec=WebRtcEchoCanceller()
-            self.stop_aec=WebRtcEchoCanceller(noise_suppression=False) if self.fast_stop else None
-            # Warm the adaptive filter on the same visible calibration only.
-            for stamp,pcm in frames:
-                reference=self.timeline.at(stamp-self.reference_shift_ns,FRAME)
-                self.aec.process(pcm,reference)
-                if self.stop_aec:self.stop_aec.process(pcm,reference)
-        self.metrics['reference_shift_samples']=shift
-        self.metrics['calibration_reference_correlation']=round(correlation,3)
-        self.calibration_frames.clear()
-        self.log('reference_alignment_estimated',shift_samples=shift,correlation=round(correlation,3))
+    def align_reference(self,generation=None):
+        with self.guard:
+            if not self.active or (generation is not None and not self.valid(generation)):return False
+            frames=list(self.calibration_frames)
+            if len(frames)<100:return True
+            mic=np.concatenate([pcm for _,pcm in frames])
+            render=np.concatenate([self.timeline.at(stamp,FRAME) for stamp,_ in frames])
+            shift,correlation=estimate_reference_shift(mic,render)
+            self.reference_shift_ns=round(shift*1e9/RATE)
+            with self.dsp_lock:
+                if not self.active:return False
+                if self.aec:self.aec.close()
+                if self.stop_aec:self.stop_aec.close()
+                self.aec=WebRtcEchoCanceller()
+                self.stop_aec=WebRtcEchoCanceller(noise_suppression=False) if self.fast_stop else None
+                # Warm the adaptive filter on the same visible calibration only.
+                for stamp,pcm in frames:
+                    reference=self.timeline.at(stamp-self.reference_shift_ns,FRAME)
+                    self.aec.process(pcm,reference)
+                    if self.stop_aec:self.stop_aec.process(pcm,reference)
+            self.metrics['reference_shift_samples']=shift
+            self.metrics['calibration_reference_correlation']=round(correlation,3)
+            self.calibration_frames.clear()
+            self.log('reference_alignment_estimated',shift_samples=shift,correlation=round(correlation,3))
+            return True
 
     def failure(self,message,error):
         # MiniMaxError messages are our own fixed strings, never provider
@@ -759,7 +776,7 @@ class USBPipe:
         self.error=None
         def drain():
             # Do not persist command output or private shell environment.
-            self.child.stderr.read()
+            while self.child.stderr.read(8192):pass
         threading.Thread(target=drain,daemon=True).start()
 
     def recv(self,count):return os.read(self.child.stdout.fileno(),count)
@@ -778,7 +795,7 @@ class USBPipe:
             self.child.terminate()
             try:self.child.wait(timeout=2)
             except subprocess.TimeoutExpired:self.child.kill();self.child.wait(timeout=2)
-        for stream in [self.child.stdin,self.child.stdout]:
+        for stream in [self.child.stdin,self.child.stdout,self.child.stderr]:
             try:stream.close()
             except OSError:pass
 
@@ -833,7 +850,7 @@ def main():
     bridge=Bridge(speech,BrainRouter(MiniMaxBrain()) if args.brain=='minimax' else None,fast_stop=fast_stop,echo_check=args.echo_check_after_start)
     hub=TransportHub(Pairing(),connect_device,usb_present,bridge.log);bridge.transport_hub=hub;hub.start();bridge.save_status()
     announcements=AnnouncementServer(bridge);announcements.start()
-    PRIVATE.mkdir(parents=True,exist_ok=True)
+    PRIVATE.mkdir(parents=True,exist_ok=True,mode=0o700);os.chmod(PRIVATE,0o700)
     (PRIVATE/'bridge.pid').write_text(str(os.getpid())+'\n')
     stop=threading.Event()
     def shutdown(*unused):

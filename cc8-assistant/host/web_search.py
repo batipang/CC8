@@ -2,6 +2,7 @@
 import ipaddress
 import json
 import re
+import socket
 from datetime import datetime
 from urllib.parse import urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
@@ -29,7 +30,14 @@ def public_url(value):
         if host=='localhost' or host.endswith(('.localhost','.local','.internal')) or '.' not in host:return None
         try:
             if not ipaddress.ip_address(host).is_global:return None
-        except ValueError:pass
+        except ValueError:
+            # Browsers also accept short/octal/hex IPv4 spellings such as
+            # 127.1 and 0177.0.0.1. Do not treat those as public DNS names.
+            try:
+                address=ipaddress.ip_address(socket.inet_aton(host))
+            except OSError:pass
+            else:
+                if host!=str(address) or not address.is_global:return None
         return urlunsplit((p.scheme,p.netloc,p.path,p.query,''))
     except ValueError:return None
 

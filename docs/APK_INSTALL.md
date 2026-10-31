@@ -67,15 +67,19 @@ dumpsys activity com.ailabs.emode >/dev/null 2>&1; <普通 shell 命令>
 
 ## 5. 安装并启动 APK
 
+代码检查发现：原成功路线将临时助手放在共享下载目录，存在被其他有存储权限的应用替换后以 shell UID 加载的风险。现在默认使用权限核验后的 `/data/local/tmp`；这台固件的安全策略会拒绝在该目录创建文件，工具明确停止，**不会自动回退**。
+
+以下命令显式选择已验证的共享目录兼容路线 `--shared-staging`，只适用于你信任设备上现有应用的环境。共享目录不能提供受保护的装载保证，传输哈希也无法消除此类竞态；如果不接受此风险，保持默认模式并停止安装，不能靠关闭系统安全策略解决。
+
 ```sh
-python3 device-access/cc8_install.py --install artifacts/cc8-diagnostics-1.0.1.apk --launch
+python3 device-access/cc8_install.py --install artifacts/cc8-diagnostics-1.0.1.apk --launch --shared-staging
 ```
 
 安装语音助手：
 
 ```sh
 python3 cc8-assistant/tools/build.py
-python3 device-access/cc8_install.py --install artifacts/cc8-assistant-0.5.0.apk --launch
+python3 device-access/cc8_install.py --install artifacts/cc8-assistant-0.5.1.apk --launch --shared-staging
 ```
 
 安装其他单 APK 时替换 `--install` 后的路径。不想启动就省略 `--launch`。没有桌面入口的 APK 不能使用 `--launch`。
@@ -90,7 +94,7 @@ python3 device-access/cc8_install.py --install artifacts/cc8-assistant-0.5.0.apk
 | `installed_apk_hash_verified: true` | 已安装 APK 的哈希与本地签名 APK 相同 |
 | `launched: true` | `--launch` 后通过前台 Activity 再次确认 |
 
-如果安装成功但启动未确认，应查看 `launch_error`、`launch_command_accepted` 与设备画面，不能将“命令已发送”当成“应用已在前台”。如果设备不允许读取已安装文件的哈希，报告会明确标记该项未验证；不要把它当成完整校验通过。
+如果安装成功但启动未确认，应查看 `launch_error`、`launch_command_accepted` 与设备画面，不能将“命令已发送”当成“应用已在前台”。如果设备不允许读取已安装文件的哈希，工具会以非零状态退出并明确说明“已安装但验证不完整”，不会继续启动或报告完整成功；不会自动卸载应用。
 
 麦克风、摄像头等运行时权限仍由用户在设备前台授权。安装不会自动开始录音或预览。
 
@@ -99,7 +103,7 @@ python3 device-access/cc8_install.py --install artifacts/cc8-assistant-0.5.0.apk
 本机原厂 `adb install` / `pm install` 路径会拒绝安装，直接重试不能解决。实际使用的是系统已有的 `PackageInstaller` API：
 
 1. AAPT 读取本地 APK 包名与启动 Activity；计算 APK SHA-256。
-2. 将小型 DEX JAR 传到随机命名的 `/sdcard/Download/.cc8-installer-<随机值>.jar`，再次核验哈希。
+2. 默认核验 `/data/local/tmp` 的 shell 所有权及目录权限，写入随机临时 JAR、设置 0400 并核验哈希；策略拒绝写入就停止。只有显式 `--shared-staging` 才沿用 `/sdcard/Download/.cc8-installer-<随机值>.jar`，该共享目录的替换风险仍存在。
 3. 通过 `CLASSPATH=... app_process /system/bin Cc8Installer --install <包名> <字节数> <SHA256>` 启动助手，从标准输入流入 APK。
 4. Java 助手再次检查 UID 2000、AILABS_S6、SDK 27，用 `com.android.shell` 上下文创建 full-install session。
 5. 写入 `base.apk`，校验大小与哈希，`fsync` 后提交，最多等待 60 秒系统安装完成回调。失败或未提交的 session 会清理。
@@ -115,6 +119,7 @@ python3 device-access/cc8_install.py --install artifacts/cc8-assistant-0.5.0.apk
 | 找不到设备、offline、unauthorized | 保持正常 Android 启动，检查数据线 / USB 接口及设备授权；不要进入下载模式 |
 | `closed`、探测输出不完整 | 工程命令通道没有通过；确认工程模式与当前固件，停止后续安装 |
 | 多台 CC8 在线 | 只保留目标设备的 USB 连接后重试 |
+| `Protected staging is blocked` | 固件拒绝受保护目录写入，未尝试 APK 安装；参见上文兼容选项和残留风险，不修改系统策略 |
 | 工具或 JAR 缺失 / 哈希不符 | 重新执行工具链准备与助手构建，勿手改哈希来跳过检查 |
 | 安装 session 失败 | 检查存储空间、Android / ABI 兼容性、APK 是否完整以及更新证书是否匹配 |
 | 更新提示签名不一致 | 使用原签名私钥重新构建；不要为更新擅自卸载已有应用 |

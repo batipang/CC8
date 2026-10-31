@@ -1,13 +1,10 @@
-import io
 import queue
 import threading
 import time
 import unittest
 from unittest.mock import patch
-from pathlib import Path
-import tempfile
 
-from dot_client import DotBrain, CodexRpc, DotError, DotApprovalRequired, codex_command, answer_sources
+from dot_client import DotBrain, CodexRpc, DotError, codex_command, answer_sources
 from brain_router import BrainRouter
 from minimax_client import Cancelled
 from bridge import Bridge

@@ -5,7 +5,7 @@ import numpy as np
 
 from bridge import Bridge
 from minimax_client import MiniMaxError
-from protocol import Packet, receive, EVENT, SPEAKER
+from protocol import receive, EVENT, SPEAKER
 from test_runtime import Fragmented
 
 

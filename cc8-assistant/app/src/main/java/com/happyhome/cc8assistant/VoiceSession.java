@@ -17,7 +17,7 @@ import org.json.JSONArray;
 
 final class VoiceSession {
     interface Listener {void link(boolean connected);void state(String phase,String message);void caption(String text,String mood);void microphone(boolean active);void playback(boolean active);void heard(String text);void sources(JSONArray items,String retrievedAt);void brain(String provider);void recognition(String engine);void dotResult(String text,boolean truncated);void screen(boolean sleeping);}
-    private final Context context;private final Listener listener;private final Object routeLock=new Object();private final LanConnector lan;private volatile Link activeLink,usbLink,wifiLink;private volatile String wifiError="";private boolean receiverRegistered;private volatile boolean usbPhysical,wakeMode=true;
+    private final Context context;private final Listener listener;private final Object routeLock=new Object();private final Object captureResourceLock=new Object();private final LanConnector lan;private volatile Link activeLink,usbLink,wifiLink;private volatile String wifiError="";private boolean receiverRegistered;private volatile boolean usbPhysical,wakeMode=true;
     private volatile boolean foreground,recording,announcement;private volatile int announcementGeneration;private volatile ServerSocket server;private volatile Socket socket;private volatile DataOutputStream output;private volatile AudioRecord recorder;private volatile Player player;
     private volatile float inputLevel=0;private volatile CaptionProgress lastCaption=CaptionProgress.empty();
     private volatile int epoch=0,minimumGeneration=0,lifecycle=0;private volatile long micFrames=0,renderFrames=0;private volatile String phase="idle";
@@ -31,18 +31,18 @@ final class VoiceSession {
         else if(!lan.networkAvailable()){Link link=wifiLink;if(link!=null)link.close();}
     }};
     void resume(){
-        if(foreground)return;foreground=true;int ticket=++lifecycle;
+        final int ticket;synchronized(routeLock){if(foreground)return;foreground=true;ticket=++lifecycle;}
         if(!receiverRegistered){IntentFilter filter=new IntentFilter("android.hardware.usb.action.USB_STATE");filter.addAction("android.net.conn.CONNECTIVITY_CHANGE");context.registerReceiver(usbState,filter);receiverRegistered=true;}
         if(lan.paired())lan.acquire();new Thread(()->accept(ticket),"cc8-usb-listener").start();new Thread(()->wifiLoop(ticket),"cc8-wifi-link").start();
     }
     void pause(){
-        foreground=false;lifecycle++;stopMicrophone();cancelPlayback();closeSocket();ServerSocket listener=server;server=null;if(listener!=null)try{listener.close();}catch(IOException ignored){}
+        ServerSocket listener;synchronized(routeLock){foreground=false;lifecycle++;listener=server;server=null;}lan.cancelPending();stopMicrophone();cancelPlayback();closeSocket();if(listener!=null)try{listener.close();}catch(IOException ignored){}
         if(receiverRegistered){context.unregisterReceiver(usbState);receiverRegistered=false;}lan.release();
     }
     private void closeSocket(){Link usb=usbLink,wifi=wifiLink;activeLink=null;output=null;socket=null;if(usb!=null)usb.close();if(wifi!=null)wifi.close();listener.link(false);}
     private void accept(int ticket){
         try(ServerSocket ss=new ServerSocket()){
-            ss.setReuseAddress(true);ss.bind(new InetSocketAddress(InetAddress.getByName("127.0.0.1"),18765),1);server=ss;
+            synchronized(routeLock){if(!foreground||lifecycle!=ticket)return;ss.setReuseAddress(true);ss.bind(new InetSocketAddress(InetAddress.getByName("127.0.0.1"),18765),1);server=ss;}
             while(foreground&&lifecycle==ticket){Socket connection=ss.accept();if(!foreground||lifecycle!=ticket){connection.close();break;}
                 Link old=usbLink;if(old!=null&&!old.closed){connection.close();continue;}Link next=new Link(connection,"usb",ticket);usbLink=next;new Thread(next,"cc8-usb-link").start();}
         }catch(IOException error){if(foreground&&lifecycle==ticket)listener.state("idle","USB 通道等待重连，Wi-Fi 仍可连接");}
@@ -51,8 +51,9 @@ final class VoiceSession {
     private void wifiLoop(int ticket){
         while(foreground&&lifecycle==ticket){
             if(lan.paired()&&lan.networkAvailable())try{
-                lan.acquire();Socket connection=lan.connect();if(!foreground||lifecycle!=ticket){connection.close();break;}
-                Link next=new Link(connection,"wifi",ticket);wifiLink=next;wifiError="";next.run();
+                Socket connection=lan.connect(()->foreground&&lifecycle==ticket);Link next;
+                synchronized(routeLock){if(!foreground||lifecycle!=ticket){connection.close();break;}next=new Link(connection,"wifi",ticket);wifiLink=next;wifiError="";}
+                next.run();
             }catch(Exception error){if(foreground&&lifecycle==ticket)wifiError=error.getClass().getSimpleName();}
             try{Thread.sleep(1000);}catch(InterruptedException error){Thread.currentThread().interrupt();break;}
         }
@@ -97,7 +98,7 @@ final class VoiceSession {
             if("transport_ping".equals(name)){source.event(Wire.event("transport_pong"));return;}
             if("transport_activate".equals(name)){select(source);return;}
             if("transport_standby".equals(name)){source.ready=true;return;}
-            if("lan_config".equals(name)){if(source==activeLink&&"usb".equals(source.kind)){try{lan.configure(control.getJSONObject("config"));lan.acquire();}catch(Exception error){wifiError=error.getClass().getSimpleName();}}return;}
+            if("lan_config".equals(name)){if(source==activeLink&&"usb".equals(source.kind)){try{synchronized(routeLock){if(foreground&&source==activeLink){lan.configure(control.getJSONObject("config"));lan.acquire();}}}catch(Exception error){wifiError=error.getClass().getSimpleName();}}return;}
         }
         if(source!=activeLink)return;
         if(p.type==Wire.EVENT){
@@ -141,36 +142,44 @@ final class VoiceSession {
     void startMicrophone(){
         if(!foreground||recording||!isConnected())return;
         if(context.checkCallingOrSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){listener.state("error","请先允许麦克风权限");return;}
-        announcement=false;listener.playback(false);cancelPlayback();recording=true;epoch++;micFrames=0;renderFrames=0;minimumGeneration=0;listener.microphone(true);listener.state("calibrating","正在准备音频，请保持安静");
-        new Thread(()->{
-            AudioRecord record=null;int mine=epoch;long sequence=0,origin=0,last=System.nanoTime();
+        announcement=false;listener.playback(false);cancelPlayback();final int mine;synchronized(this){if(!foreground||recording||!isConnected())return;recording=true;mine=++epoch;micFrames=0;renderFrames=0;minimumGeneration=0;}listener.microphone(true);listener.state("calibrating","正在准备音频，请保持安静");
+        new Thread(()->{synchronized(captureResourceLock){
+            if(!recording||!foreground||epoch!=mine)return;
+            AudioRecord record=null;long sequence=0,origin=0,last=System.nanoTime();
             try{
                 int min=AudioRecord.getMinBufferSize(16000,AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT);
                 if(min<=0)throw new IOException("不支持 16 kHz 录音");
-                record=new AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION,16000,AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT,Math.max(min*2,6400));recorder=record;
+                record=new AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION,16000,AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT,Math.max(min*2,6400));
                 if(record.getState()!=AudioRecord.STATE_INITIALIZED)throw new IOException("麦克风初始化失败");
-                if(!recording||!foreground||epoch!=mine)return;record.startRecording();if(record.getRecordingState()!=AudioRecord.RECORDSTATE_RECORDING)throw new IOException("麦克风无法开始");
-                JSONObject began=Wire.event("session_start");Wire.put(began,"epoch",mine);Wire.put(began,"source",7);Wire.put(began,"sample_rate",16000);Wire.put(began,"render_gain",.35);send(began);
+                synchronized(VoiceSession.this){if(!recording||!foreground||epoch!=mine)return;recorder=record;record.startRecording();if(record.getRecordingState()!=AudioRecord.RECORDSTATE_RECORDING)throw new IOException("麦克风无法开始");}
+                JSONObject began=Wire.event("session_start");Wire.put(began,"epoch",mine);Wire.put(began,"source",7);Wire.put(began,"sample_rate",16000);Wire.put(began,"render_gain",.35);synchronized(routeLock){if(!recording||!foreground||epoch!=mine)return;send(began);}
                 short[] chunk=new short[320];
                 while(recording&&foreground&&epoch==mine){
-                    int count=record.read(chunk,0,chunk.length);if(count<0)throw new IOException("录音读取错误 "+count);if(count==0)continue;long now=System.nanoTime();double power=0;for(int i=0;i<count;i++)power+=(double)chunk[i]*chunk[i];inputLevel=(float)Math.sqrt(power/count)/32768;
+                    int count=record.read(chunk,0,chunk.length);if(count<0)throw new IOException("录音读取错误 "+count);if(count==0)continue;if(!recording||!foreground||epoch!=mine)break;long now=System.nanoTime();double power=0;for(int i=0;i<count;i++)power+=(double)chunk[i]*chunk[i];inputLevel=(float)Math.sqrt(power/count)/32768;
                     if(origin==0)origin=now-count*1000000000L/16000;
                     if(now-last>400000000L&&micFrames>0){JSONObject gap=Wire.event("capture_gap");Wire.put(gap,"milliseconds",(now-last)/1000000);send(gap);}last=now;
                     sendPacket(Wire.MIC,mine,sequence++,micFrames,origin+micFrames*1000000000L/16000,Wire.pcm(chunk,count));micFrames+=count;
                 }
-            }catch(Exception error){if(recording&&foreground)listener.state("error","录音已停止："+error.getMessage());}
+            }catch(Exception error){if(recording&&foreground&&epoch==mine)listener.state("error","录音已停止："+error.getMessage());}
             finally{
-                if(record!=null){try{record.stop();}catch(RuntimeException ignored){}record.release();}if(recorder==record)recorder=null;
-                if(epoch==mine){recording=false;listener.microphone(false);send(Wire.event("session_stop"));}
+                if(record!=null){try{record.stop();}catch(RuntimeException ignored){}try{record.release();}catch(RuntimeException ignored){}}
+                boolean owned;synchronized(VoiceSession.this){if(recorder==record)recorder=null;owned=epoch==mine;if(owned)recording=false;}
+                if(owned){listener.microphone(false);JSONObject stopped=Wire.event("session_stop");Wire.put(stopped,"epoch",mine);send(stopped);}
             }
-        },"cc8-microphone").start();
+        }},"cc8-microphone").start();
     }
-    void stopMicrophone(){announcement=false;listener.playback(false);recording=false;inputLevel=0;phase="idle";AudioRecord r=recorder;if(r!=null)try{r.stop();}catch(RuntimeException ignored){}cancelPlayback();listener.microphone(false);send(Wire.event("session_stop"));}
+    void stopMicrophone(){
+        final int stoppedEpoch;final AudioRecord r;
+        synchronized(this){stoppedEpoch=epoch++;recording=false;r=recorder;recorder=null;}
+        announcement=false;listener.playback(false);inputLevel=0;phase="idle";
+        if(r!=null)try{r.stop();}catch(RuntimeException ignored){}
+        cancelPlayback();listener.microphone(false);JSONObject stopped=Wire.event("session_stop");Wire.put(stopped,"epoch",stoppedEpoch);send(stopped);
+    }
     private synchronized void cancelPlayback(){Player p=player;player=null;lastCaption=CaptionProgress.empty();if(p!=null)p.cancel();}
     float microphoneLevel(){return recording?inputLevel:0;}
     float mouthLevel(){Player p=player;return p==null?0:p.level();}
     String mood(){Player p=player;return p==null?"attentive":p.mood;}
-    long playbackHead(){Player p=player;return p==null||p.track==null?0:p.track.getPlaybackHeadPosition()&0xffffffffL;}
+    long playbackHead(){Player p=player;AudioTrack t=p==null?null:p.track;try{return t==null?0:t.getPlaybackHeadPosition()&0xffffffffL;}catch(IllegalStateException ignored){return 0;}}
     JSONObject snapshot(){JSONObject j=Wire.event("snapshot");Wire.put(j,"foreground",foreground);Wire.put(j,"connected",isConnected());Wire.put(j,"transport",transportName());Wire.put(j,"usb_connected",usbLink!=null&&!usbLink.closed);Wire.put(j,"usb_physical",usbPhysical);Wire.put(j,"wifi_ready",wifiLink!=null&&wifiLink.ready&&!wifiLink.closed);Wire.put(j,"wifi_paired",lan.paired());Wire.put(j,"wifi_error",wifiError);Wire.put(j,"microphone_active",recording);Wire.put(j,"announcement_active",announcement);Wire.put(j,"mic_frames",micFrames);Wire.put(j,"render_frames",renderFrames);Wire.put(j,"playback_head",playbackHead());Wire.put(j,"playback_paused",player!=null&&player.paused);Wire.put(j,"phase",phase);Wire.put(j,"raw_audio_saved",false);return j;}
 
     static final class CaptionProgress {

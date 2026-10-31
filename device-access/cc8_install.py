@@ -34,14 +34,40 @@ def helper_artifact() -> bytes:
     return payload
 
 
-def install_stream(transport: str, package: str, payload: bytes, digest: str):
+def private_staging(transport: str) -> str:
+    # Shared /sdcard storage lets other apps replace a verified helper before
+    # app_process loads it. Require a directory writable only by shell/root.
+    directory = '/data/local/tmp'
+    try:
+        fields = shell(transport, "stat -c '%u %g %a' " + directory).split()
+        if len(fields) != 3:raise ValueError('Invalid stat fields')
+        uid, gid = int(fields[0]), int(fields[1])
+        mode = int(fields[2], 8)
+    except (ValueError, RuntimeError):
+        raise RuntimeError('Cannot verify protected shell staging directory') from None
+    if uid != 2000 or mode & 0o002 or (mode & 0o020 and gid != 2000) or mode & 0o300 != 0o300:
+        raise RuntimeError('Unsafe permissions on shell staging directory')
+    return directory
+
+
+def install_stream(transport: str, package: str, payload: bytes, digest: str, shared_staging: bool = False):
     helper = helper_artifact()
     helper_hash = hashlib.sha256(helper).hexdigest()
-    remote = '/sdcard/Download/.cc8-installer-' + uuid.uuid4().hex + '.jar'
+    directory = '/sdcard/Download' if shared_staging else private_staging(transport)
+    if shared_staging:
+        print('Shared staging explicitly selected: other storage-enabled apps may replace the temporary helper.', flush=True)
+    remote = directory + '/.cc8-installer-' + uuid.uuid4().hex + '.jar'
     quoted = shlex.quote(remote)
     try:
-        shell(transport, 'cat > ' + quoted, helper)
-        if shell(transport, 'sha256sum ' + quoted).split()[0] != helper_hash:
+        try:
+            shell(transport, 'umask 077; cat > ' + quoted, helper)
+        except RuntimeError as error:
+            if not shared_staging and 'Permission denied' in str(error):
+                raise RuntimeError('Protected staging is blocked by device policy; APK installation was not attempted. See docs/APK_INSTALL.md for the explicit --shared-staging compatibility mode and its risks.') from None
+            raise
+        if not shared_staging:shell(transport, 'chmod 400 ' + quoted)
+        received = shell(transport, 'sha256sum ' + quoted).split()
+        if not received or received[0] != helper_hash:
             raise RuntimeError('Transferred installer helper hash mismatch')
         command = ('CLASSPATH=' + quoted + ' app_process /system/bin Cc8Installer --install ' +
                    shlex.quote(package) + ' ' + str(len(payload)) + ' ' + digest)
@@ -87,7 +113,7 @@ def probe(transport: str) -> dict:
     return {'shell_verified': True, 'uid': int(lines[1]), 'model': lines[2], 'sdk': int(lines[3])}
 
 
-def install(transport: str, apk: Path, launch: bool) -> dict:
+def install(transport: str, apk: Path, launch: bool, shared_staging: bool = False) -> dict:
     apk = apk.resolve()
     payload = apk.read_bytes()
     metadata = subprocess.check_output([str(AAPT), 'dump', 'badging', str(apk)], text=True, timeout=15)
@@ -100,24 +126,26 @@ def install(transport: str, apk: Path, launch: bool) -> dict:
         raise ValueError('APK does not declare a launchable activity')
     digest = hashlib.sha256(payload).hexdigest()
     report = {'package': package, 'apk_sha256': digest, 'installed': False, 'launched': False,
-              'firmware_written': False, 'bootloader_modified': False}
+              'firmware_written': False, 'bootloader_modified': False,
+              'helper_staging': 'shared_compatibility' if shared_staging else 'protected_shell_directory'}
     # The shipped pm command advertises installation but rejects it at runtime.
     # The temporary helper calls the stock PackageInstaller API at shell UID.
-    install_stream(transport, package, payload, digest)
+    install_stream(transport, package, payload, digest, shared_staging=shared_staging)
     installed_path = shell(transport, 'pm path ' + shlex.quote(package)).strip()
     if not installed_path.startswith('package:'):
         raise RuntimeError('Package manager could not locate the installed package')
     report['installed'] = True
     report['installation_method'] = 'stock_package_installer_API_via_temporary_shell_UID_helper'
     paths = [line[len('package:'):] for line in installed_path.splitlines() if line.startswith('package:')]
+    if len(paths)!=1 or not paths[0].startswith('/'):
+        raise RuntimeError('APK installed but its single base APK path was not verified')
     try:
         remote_digest = shell(transport, 'sha256sum ' + shlex.quote(paths[0])).split()
     except RuntimeError:
-        report['installed_apk_hash_verified'] = False
-    else:
-        if not remote_digest or remote_digest[0] != digest:
-            raise RuntimeError('Installed APK hash differs from the local signed APK')
-        report['installed_apk_hash_verified'] = True
+        raise RuntimeError('APK installed but reading its SHA-256 failed; verification incomplete') from None
+    if not remote_digest or remote_digest[0] != digest:
+        raise RuntimeError('APK installed but its SHA-256 is missing or differs from the local signed APK')
+    report['installed_apk_hash_verified'] = True
     if launch:
         component = package + '/' + activity.group(1)
         output = shell(transport, 'input keyevent 224; am start -W -n ' + shlex.quote(component))
@@ -138,9 +166,11 @@ if __name__ == '__main__':
     mode.add_argument('--probe', action='store_true')
     mode.add_argument('--install', type=Path, metavar='APK')
     parser.add_argument('--launch', action='store_true')
+    parser.add_argument('--shared-staging', action='store_true',
+                        help='Explicit legacy shared-directory mode; other storage-enabled apps may replace the helper. See docs/APK_INSTALL.md')
     args = parser.parse_args()
-    if args.launch and not args.install:
-        parser.error('--launch requires --install APK')
+    if (args.launch or args.shared_staging) and not args.install:
+        parser.error('--launch and --shared-staging require --install APK')
     if not ADB.is_file() or not AAPT.is_file():
         raise SystemExit('Local Android tools are missing')
     if args.check:
@@ -152,7 +182,7 @@ if __name__ == '__main__':
         report = probe(transport)
         print(json.dumps(report), flush=True)
         if args.install:
-            report.update(install(transport, args.install, args.launch))
+            report.update(install(transport, args.install, args.launch, shared_staging=args.shared_staging))
             destination = ROOT / 'device-access/private/apk-install-result.json'
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text(json.dumps(report, indent=2) + '\n')

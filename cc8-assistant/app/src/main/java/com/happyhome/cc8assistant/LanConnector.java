@@ -16,6 +16,10 @@ import org.json.JSONArray;
 
 /** USB-provisioned private pairing; no transport secret is compiled into the APK. */
 final class LanConnector {
+    interface Current {boolean active();}
+    private final Object connectLock=new Object();private volatile Socket pendingSocket;
+    void cancelPending(){Socket pending=pendingSocket;if(pending!=null)try{pending.close();}catch(IOException ignored){}}
+    private static void check(Current current)throws IOException{if(!current.active())throw new IOException("Connection lifecycle ended");}
     private final SharedPreferences prefs;private final WifiManager manager;private final ConnectivityManager connectivity;private WifiManager.WifiLock lock;
     LanConnector(Context context){prefs=context.getSharedPreferences("cc8_lan_pairing",Context.MODE_PRIVATE);manager=(WifiManager)context.getApplicationContext().getSystemService(Context.WIFI_SERVICE);connectivity=(ConnectivityManager)context.getSystemService(Context.CONNECTIVITY_SERVICE);}
     boolean networkAvailable(){NetworkInfo network=connectivity==null?null:connectivity.getActiveNetworkInfo();return network!=null&&network.isConnected()&&(network.getType()==ConnectivityManager.TYPE_WIFI||network.getType()==ConnectivityManager.TYPE_ETHERNET);}
@@ -26,18 +30,18 @@ final class LanConnector {
         String sid=value.optString("server_id"),token=value.optString("token"),pin=value.optString("certificate_sha256");int port=value.optInt("port");
         if(!sid.matches("[0-9a-f]{32}")||!token.matches("[0-9a-f]{64}")||!pin.matches("[0-9a-f]{64}")||port<1024||port>65535)throw new IOException("Invalid LAN pairing");
         String old=prefs.getString("config","");if(!old.isEmpty()){JSONObject previous=new JSONObject(old);if(!previous.optString("server_id").equals(sid)||!previous.optString("certificate_sha256").equals(pin))throw new IOException("Different paired Mac");}
-        prefs.edit().putString("config",value.toString()).commit();
+        if(!prefs.edit().putString("config",value.toString()).commit())throw new IOException("Could not persist LAN pairing");
     }
-    Socket connect()throws Exception{
-        JSONObject config=new JSONObject(prefs.getString("config","{}"));String last=prefs.getString("last_host","");
-        if(!last.isEmpty())try{return connectTo(last,config);}catch(IOException|GeneralSecurityException ignored){}
+    Socket connect(Current current)throws Exception{synchronized(connectLock){
+        check(current);JSONObject config=new JSONObject(prefs.getString("config","{}"));String last=prefs.getString("last_host","");
+        if(!last.isEmpty())try{return connectTo(last,config,current);}catch(IOException|GeneralSecurityException ignored){}
         JSONArray hosts=config.optJSONArray("hosts");if(hosts!=null)for(int i=0;i<Math.min(8,hosts.length());i++){
-            String host=hosts.optString(i);if(host.equals(last))continue;try{return connectTo(host,config);}catch(IOException|GeneralSecurityException ignored){}
+            String host=hosts.optString(i);if(host.equals(last))continue;try{return connectTo(host,config,current);}catch(IOException|GeneralSecurityException ignored){}
         }
-        return connectTo(discover(config),config);
-    }
-    private Socket connectTo(String host,JSONObject config)throws Exception{
-        InetAddress address=InetAddress.getByName(host);if(!(address instanceof Inet4Address)||!address.isSiteLocalAddress())throw new IOException("LAN address required");
+        check(current);return connectTo(discover(config),config,current);
+    }}
+    private Socket connectTo(String host,JSONObject config,Current current)throws Exception{
+        check(current);InetAddress address=InetAddress.getByName(host);if(!(address instanceof Inet4Address)||!address.isSiteLocalAddress())throw new IOException("LAN address required");
         final String pin=config.getString("certificate_sha256");SSLContext ssl=SSLContext.getInstance("TLSv1.2");
         ssl.init(null,new TrustManager[]{new X509TrustManager(){
             public X509Certificate[] getAcceptedIssuers(){return new X509Certificate[0];}
@@ -47,15 +51,16 @@ final class LanConnector {
                 catch(GeneralSecurityException error){throw new CertificateException("Mac certificate validation failed",error);}
             }
         }},new SecureRandom());
-        Socket raw=new Socket();SSLSocket socket=null;
+        Socket raw=new Socket();SSLSocket socket=null;pendingSocket=raw;
         try{
-            raw.connect(new InetSocketAddress(address,config.getInt("port")),900);raw.setTcpNoDelay(true);raw.setSoTimeout(3500);
+            check(current);raw.connect(new InetSocketAddress(address,config.getInt("port")),900);raw.setTcpNoDelay(true);raw.setSoTimeout(3500);
             socket=(SSLSocket)ssl.getSocketFactory().createSocket(raw,host,config.getInt("port"),true);socket.setEnabledProtocols(new String[]{"TLSv1.2"});socket.setSoTimeout(3500);socket.startHandshake();
-            JSONObject auth=Wire.event("transport_auth");Wire.put(auth,"token",config.getString("token"));byte[] bytes=Wire.jsonBytes(auth);
+            check(current);JSONObject auth=Wire.event("transport_auth");Wire.put(auth,"token",config.getString("token"));byte[] bytes=Wire.jsonBytes(auth);
             Wire.write(new DataOutputStream(socket.getOutputStream()),Wire.EVENT,0,0,0,System.nanoTime(),bytes);
             Wire.Packet reply=Wire.read(new DataInputStream(socket.getInputStream()));if(reply.type!=Wire.EVENT||!"transport_welcome".equals(Wire.json(reply).optString("event")))throw new IOException("Mac authentication incomplete");
-            prefs.edit().putString("last_host",host).apply();return socket;
+            check(current);prefs.edit().putString("last_host",host).apply();return socket;
         }catch(Exception error){if(socket!=null)try{socket.close();}catch(IOException ignored){}else try{raw.close();}catch(IOException ignored){}throw error;}
+        finally{if(pendingSocket==raw)pendingSocket=null;}
     }
     private String discover(JSONObject config)throws Exception{
         byte[] nonceBytes=new byte[16];new SecureRandom().nextBytes(nonceBytes);String nonce=TransportAuth.hex(nonceBytes),token=config.getString("token");

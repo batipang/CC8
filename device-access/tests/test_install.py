@@ -57,6 +57,7 @@ class InstallerTests(unittest.TestCase):
         calls = []
         def shell(transport, command, data=None, timeout=30):
             calls.append((command, data))
+            if command.startswith('stat -c'):return '2000 2000 771'
             if command.startswith('sha256sum'):
                 return hashlib.sha256(b'helper').hexdigest() if hash_ok else 'bad'
             if command.startswith('CLASSPATH'):
@@ -68,7 +69,7 @@ class InstallerTests(unittest.TestCase):
             else:
                 with self.assertRaises(RuntimeError):
                     access.install_stream('7', 'com.example.app', b'apk', hashlib.sha256(b'apk').hexdigest())
-        self.assertTrue(calls[-1][0].startswith('rm -f /sdcard/Download/.cc8-installer-'))
+        self.assertTrue(calls[-1][0].startswith('rm -f /data/local/tmp/.cc8-installer-'))
         return calls
 
     def test_stream_waits_for_real_install_callback_and_cleans_on_failure(self):
@@ -86,6 +87,61 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(args[0][-1], access.PREFIX+'cat > /safe')
         self.assertEqual(kwargs['input'], b'\x00\xff')
         self.assertNotIn('shell', kwargs)
+
+    def test_installed_hash_missing_wrong_or_unreadable_cannot_report_success(self):
+        with tempfile.TemporaryDirectory() as folder:
+            apk=Path(folder)/'app.apk';apk.write_bytes(b'signed test apk')
+            metadata="package: name='com.example.app'\nlaunchable-activity: name='com.example.Main'\n"
+            for checksum in ['', 'bad hash', RuntimeError('read denied')]:
+                with self.subTest(checksum=repr(checksum)),patch.object(access.subprocess,'check_output',return_value=metadata),patch.object(access,'install_stream'),patch.object(access,'shell',side_effect=['package:/data/app/test/base.apk',checksum]) as shell:
+                    with self.assertRaises(RuntimeError):access.install('7',apk,True)
+                    self.assertEqual(shell.call_count,2)
+            digest=hashlib.sha256(apk.read_bytes()).hexdigest()
+            with patch.object(access.subprocess,'check_output',return_value=metadata),patch.object(access,'install_stream'),patch.object(access,'shell',side_effect=['package:/data/app/test/base.apk',digest+'  base.apk']):
+                result=access.install('7',apk,False)
+                self.assertTrue(result['installed']);self.assertTrue(result['installed_apk_hash_verified'])
+
+    def test_empty_transferred_helper_hash_is_a_controlled_failure(self):
+        calls=[]
+        def shell(transport,command,data=None,timeout=30):
+            calls.append(command)
+            if command.startswith('stat -c'):return '2000 2000 771'
+            return ''
+        with patch.object(access,'helper_artifact',return_value=b'helper'),patch.object(access,'shell',side_effect=shell):
+            with self.assertRaisesRegex(RuntimeError,'helper hash mismatch'):
+                access.install_stream('7','com.example.app',b'apk','0'*64)
+        self.assertTrue(calls[-1].startswith('rm -f '))
+
+    def test_staging_rejects_shared_or_unverified_directory_permissions(self):
+        for output in ['', '2000 2000 777', '2000 1000 771', '1000 2000 771', '2000 2000 400']:
+            with self.subTest(output=output),patch.object(access,'shell',return_value=output),self.assertRaises(RuntimeError):
+                access.private_staging('7')
+        with patch.object(access,'shell',return_value='2000 2000 771'):
+            self.assertEqual(access.private_staging('7'),'/data/local/tmp')
+
+    def test_denied_protected_write_aborts_without_running_installer(self):
+        calls=[]
+        def shell(transport,command,data=None,timeout=30):
+            calls.append(command)
+            if command.startswith('umask'):raise RuntimeError('Permission denied')
+            return ''
+        with patch.object(access,'private_staging',return_value='/data/local/tmp'),patch.object(access,'helper_artifact',return_value=b'helper'),patch.object(access,'shell',side_effect=shell):
+            with self.assertRaisesRegex(RuntimeError,'installation was not attempted'):
+                access.install_stream('7','com.example.app',b'apk','0'*64)
+        self.assertFalse(any(command.startswith('CLASSPATH') for command in calls))
+        self.assertFalse(any('/sdcard/' in command for command in calls))
+        self.assertTrue(calls[-1].startswith('rm -f '))
+
+    def test_shared_path_is_used_only_when_explicitly_selected(self):
+        calls=[]
+        def shell(transport,command,data=None,timeout=30):
+            calls.append(command)
+            if command.startswith('sha256sum'):return hashlib.sha256(b'helper').hexdigest()
+            if command.startswith('CLASSPATH'):return 'CC8_APK_STREAM_VERIFIED bytes=3\nCC8_PACKAGE_INSTALLED com.example.app version=1\n'
+            return ''
+        with patch.object(access,'private_staging',side_effect=AssertionError('Explicit mode should choose its path')),patch.object(access,'helper_artifact',return_value=b'helper'),patch.object(access,'shell',side_effect=shell):
+            access.install_stream('7','com.example.app',b'apk','0'*64,shared_staging=True)
+        self.assertTrue(any(command.startswith('umask') and '/sdcard/Download/' in command for command in calls))
 
 
 if __name__ == '__main__':

@@ -4,6 +4,7 @@ import argparse
 import fcntl
 import os
 import signal
+import shlex
 import subprocess
 import sys
 import time
@@ -15,9 +16,14 @@ PYTHON=ROOT/'.toolchains/cc8/voice-venv/bin/python'
 
 
 def own_process(pid):
-    result=subprocess.run(['ps','-p',str(pid),'-o','command='],capture_output=True,text=True)
-    command=result.stdout.strip()
-    return result.returncode==0 and (str(BRIDGE) in command or command.endswith('cc8-assistant/host/bridge.py'))
+    if type(pid) is not int or pid<=0:return False
+    result=subprocess.run(['ps','-p',str(pid),'-o','uid=','-o','command='],capture_output=True,text=True)
+    try:
+        owner,command=result.stdout.strip().split(None,1)
+        owner=int(owner);arguments=shlex.split(command)
+        script=arguments[2:] if arguments[1:2]==['-u'] else arguments[1:]
+    except ValueError:return False
+    return result.returncode==0 and owner==os.getuid() and bool(script) and script[0]==str(BRIDGE)
 
 
 def main():
@@ -25,7 +31,8 @@ def main():
     parser.add_argument('--stop',action='store_true')
     parser.add_argument('--echo-check-after-start',action='store_true')
     args=parser.parse_args()
-    PRIVATE.mkdir(parents=True,exist_ok=True)
+    PRIVATE.mkdir(parents=True,exist_ok=True,mode=0o700)
+    os.chmod(PRIVATE,0o700)
     with (PRIVATE/'launcher.lock').open('w') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX)
         pid_file=PRIVATE/'bridge.pid'

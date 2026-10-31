@@ -81,7 +81,7 @@ class BargeInTests(unittest.TestCase):
         self.assertGreater(b.generation,old);self.assertFalse(b.playing)
         self.assertFalse(any(e['event']=='playback_resume' for e in self.events(b)))
     def test_no_old_pcm_is_sent_while_paused(self):
-        b=self.bridge();token=b.pause_for_voice();done=threading.Event()
+        b=self.bridge();b.pause_for_voice();done=threading.Event()
         def play():b.play_stream(iter([np.ones(320,dtype=np.int16)]),'test',b.generation);done.set()
         thread=threading.Thread(target=play,daemon=True);thread.start();time.sleep(.05)
         self.assertFalse(any(p.kind==SPEAKER for p in b.connection.packets))

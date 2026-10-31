@@ -1,14 +1,12 @@
 import io
 import json
-from pathlib import Path
-import socket
 import struct
 import threading
 import time
 import unittest
 import numpy as np
 
-from protocol import Packet, receive, EVENT, SPEAKER, MIC, MAX_PACKET
+from protocol import Packet, receive, SPEAKER, MIC, MAX_PACKET
 from dsp import EchoCanceller, WebRtcEchoCanceller, VoiceDetector, RenderTimeline, ReferenceCapture, FRAME, RATE, estimate_reference_shift, resembles_playback
 from bridge import Bridge, ROOT, LIBRARY, wav_samples
 from fast_stop import can_fast_stop, FastStopDetector
