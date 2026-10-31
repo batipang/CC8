@@ -1,0 +1,11 @@
+{
+  "engine": "sherpa-onnx SenseVoice int8",
+  "repo": "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09",
+  "revision": "355f4d4884d8afd08aef04b9007a8556d7b463b2",
+  "local_directory": ".toolchains/cc8/sensevoice-int8-2025-09-09",
+  "documentation": "https://k2-fsa.github.io/sherpa/onnx/sense-voice/pretrained.html",
+  "sha256": {
+    "model.int8.onnx": "12ca1a2ae7ecf3e0019ef2822307ee0b5cadc9196569e379b4c4026f8205276d",
+    "tokens.txt": "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc"
+  }
+}

@@ -1,0 +1,37 @@
+plugins { id 'com.android.application' }
+android {
+    namespace 'com.happyhome.cc8assistant'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'com.happyhome.cc8assistant'
+        minSdk 21
+        targetSdk 28
+        versionCode 18
+        versionName '0.5.0'
+    }
+    signingConfigs {
+        diagnostic {
+            storeFile rootProject.file('../cc8-diagnostics/signing/cc8-diagnostics-debug.jks')
+            storePassword 'android'
+            keyAlias 'cc8-diagnostics'
+            keyPassword 'android'
+            enableV1Signing true
+            enableV2Signing true
+            enableV3Signing true
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            debuggable false
+            signingConfig signingConfigs.diagnostic
+        }
+    }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_1_8; targetCompatibility JavaVersion.VERSION_1_8 }
+    lint {
+        abortOnError true
+        checkReleaseBuilds true
+        // Private, sideloaded legacy-device diagnostic; not a Google Play release.
+        disable 'ExpiredTargetSdkVersion'
+    }
+}

@@ -1,0 +1,4 @@
+<resources>
+    <string name="aec_option">请求启用系统 AEC（回声消除）</string>
+    <string name="audio_progress">%1$s\n采样电平 %2$.1f dBFS · %3$.1f / %4$.1f 秒</string>
+</resources>

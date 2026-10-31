@@ -1,0 +1,130 @@
+# CC8 安装 APK：已验证步骤
+
+## 1. 适用范围与实际结果
+
+本次实际设备：
+
+| 项目 | 已验证值 |
+| --- | --- |
+| 底部标签型号 | TG_S6B01 |
+| Android `ro.product.model` | AILABS_S6 |
+| SDK | 27（Android 8.1 API 级别） |
+| 固件版本 | 6.1.8-RS-20251125.1919 |
+| 运行架构 | ARM 32 位 |
+| 开发主机 | Apple Silicon Mac |
+
+已经安装运行离线检测器 `com.happyhome.cc8diagnostics` 和语音助手 `com.happyhome.cc8assistant`。它们与原厂应用并存。本方法没有获得 Root，没有写入固件分区，没有修改 Bootloader，也没有停用原厂语音服务。
+
+这里只记录当前设备上已成功的路线。工程模式是否能在其他固件开启、是否具有相同权限，必须重新验证；不是任意 CC8 的通用一键破解。
+
+## 2. 设备与电脑准备
+
+1. CC8 正常开机，保留原装电源。使用能传输数据的 USB 线连接 Mac。
+2. 在 CC8 尝试说“天猫精灵，开启远程调试”。本机当时在屏幕角落出现“工程模式”字样，没有完整的 USB 调试开关页面。
+3. 如果出现系统 USB 调试授权提示，在设备上确认。仅看到工程模式字样还不能证明 ADB 通道可用，后面必须执行探测。
+4. 按[构建说明](DEVELOPMENT.md)准备 JDK、SDK、Gradle，构建安装助手和目标 APK。
+
+不需要关机按组合键，不进入 BootROM、Preloader 或下载代理模式。此前底层读取尝试曾导致设备黑屏，需要复位恢复；它不是成功安装路线的前置步骤。
+
+## 3. 构建并检查本地文件
+
+从仓库根目录执行：
+
+```sh
+python3 device-access/installer-helper/build.py
+python3 cc8-diagnostics/tools/build.py
+python3 device-access/cc8_install.py --check
+```
+
+生成文件：
+
+- `artifacts/cc8-installer-shell-1.0.jar`：临时 Java / DEX 安装助手。
+- `artifacts/cc8-installer-shell-1.0.json`：助手 SHA-256 与 Java 源码 SHA-256。
+- `artifacts/cc8-diagnostics-1.0.1.apk`：签名后的示例应用。
+- 对应 APK 的 `.sha256` 文件。
+
+`--check` 只检查电脑上的 ADB、AAPT 和助手 / 源码哈希，不连接设备。修改 Java 安装助手后必须重新构建，不能复用旧哈希元数据。
+
+## 4. 探测普通 Android 工程通道
+
+```sh
+python3 device-access/cc8_install.py --probe
+```
+
+成功应输出类似：
+
+```json
+{"shell_verified": true, "uid": 2000, "model": "AILABS_S6", "sdk": 27}
+```
+
+工具只接受一个在线的 USB `AILABS_S6`，使用 ADB transport ID 定位设备，排除网络 ADB 端点，避免误操作其他设备。设备端以工程诊断命令前缀进入普通 shell：
+
+```sh
+dumpsys activity com.ailabs.emode >/dev/null 2>&1; <普通 shell 命令>
+```
+
+前缀是这版原厂 adbd 限制下实测可用的命令路径，并不意味着获取 Root。UID 必须是 2000。型号、SDK、UID 或通道输出不符就停止。
+
+## 5. 安装并启动 APK
+
+```sh
+python3 device-access/cc8_install.py --install artifacts/cc8-diagnostics-1.0.1.apk --launch
+```
+
+安装语音助手：
+
+```sh
+python3 cc8-assistant/tools/build.py
+python3 device-access/cc8_install.py --install artifacts/cc8-assistant-0.5.0.apk --launch
+```
+
+安装其他单 APK 时替换 `--install` 后的路径。不想启动就省略 `--launch`。没有桌面入口的 APK 不能使用 `--launch`。
+
+成功报告保存到本机忽略目录 `device-access/private/apk-install-result.json`。核对：
+
+| 字段 / 提示 | 含义 |
+| --- | --- |
+| `CC8_APK_STREAM_VERIFIED` | 设备接收的 APK 字节数与 SHA-256 正确 |
+| `CC8_PACKAGE_INSTALLED` | 原生安装 session 成功回调，包已可查询 |
+| `installed: true` | 包管理器返回安装路径 |
+| `installed_apk_hash_verified: true` | 已安装 APK 的哈希与本地签名 APK 相同 |
+| `launched: true` | `--launch` 后通过前台 Activity 再次确认 |
+
+如果安装成功但启动未确认，应查看 `launch_error`、`launch_command_accepted` 与设备画面，不能将“命令已发送”当成“应用已在前台”。如果设备不允许读取已安装文件的哈希，报告会明确标记该项未验证；不要把它当成完整校验通过。
+
+麦克风、摄像头等运行时权限仍由用户在设备前台授权。安装不会自动开始录音或预览。
+
+## 6. 安装器内部流程
+
+本机原厂 `adb install` / `pm install` 路径会拒绝安装，直接重试不能解决。实际使用的是系统已有的 `PackageInstaller` API：
+
+1. AAPT 读取本地 APK 包名与启动 Activity；计算 APK SHA-256。
+2. 将小型 DEX JAR 传到随机命名的 `/sdcard/Download/.cc8-installer-<随机值>.jar`，再次核验哈希。
+3. 通过 `CLASSPATH=... app_process /system/bin Cc8Installer --install <包名> <字节数> <SHA256>` 启动助手，从标准输入流入 APK。
+4. Java 助手再次检查 UID 2000、AILABS_S6、SDK 27，用 `com.android.shell` 上下文创建 full-install session。
+5. 写入 `base.apk`，校验大小与哈希，`fsync` 后提交，最多等待 60 秒系统安装完成回调。失败或未提交的 session 会清理。
+6. 查询安装包信息，并由电脑核对 `pm path` 和安装文件哈希；可选启动和前台校验。
+7. 删除本次随机命名的临时助手文件。安装的应用继续保留。
+
+`INSTALL_REPLACE_EXISTING` 仅允许正常更新，系统仍检查签名；它不绕过证书验证。
+
+## 7. 常见问题
+
+| 现象 | 处理 |
+| --- | --- |
+| 找不到设备、offline、unauthorized | 保持正常 Android 启动，检查数据线 / USB 接口及设备授权；不要进入下载模式 |
+| `closed`、探测输出不完整 | 工程命令通道没有通过；确认工程模式与当前固件，停止后续安装 |
+| 多台 CC8 在线 | 只保留目标设备的 USB 连接后重试 |
+| 工具或 JAR 缺失 / 哈希不符 | 重新执行工具链准备与助手构建，勿手改哈希来跳过检查 |
+| 安装 session 失败 | 检查存储空间、Android / ABI 兼容性、APK 是否完整以及更新证书是否匹配 |
+| 更新提示签名不一致 | 使用原签名私钥重新构建；不要为更新擅自卸载已有应用 |
+| APK 已装但没声音 / 录音失败 | 打开应用检查运行时权限、媒体音量及音频测试；安装成功不等于音频能力验证通过 |
+| 黑屏、不枚举普通 Android | 停止安装流程，恢复设备正常启动；本安装工具不是救砖或固件恢复工具 |
+
+目前只支持单个完整 APK，不处理 split APK、APKS、XAPK。检测器和助手采用 Java、无 Android 原生 ABI 依赖；第三方 APK 若只有 arm64 库或最低系统要求高于 SDK 27，仍可能无法运行。
+
+## 8. 签名与备份
+
+首次构建会生成本地开发签名，两个示例应用共用该签名文件。仓库不含现有设备应用的签名私钥，因此新克隆生成的 APK 通常不能直接覆盖原开发机签名的已安装版本。应在原开发机保留并安全管理原签名，或者使用不同 applicationId 做独立安装；不要为绕过冲突直接清除数据。
+
+安装器不会备份应用数据，也不会创建系统分区镜像。需要保留的应用数据应在更新前通过应用自身支持的方式导出。无需任何原厂分区镜像才能使用本方法。

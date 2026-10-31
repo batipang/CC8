@@ -1,0 +1,253 @@
+package com.happyhome.cc8assistant;
+
+import android.Manifest;
+import android.annotation.SuppressLint;
+import android.content.Context;
+import android.content.BroadcastReceiver;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.pm.PackageManager;
+import android.media.*;
+import android.os.SystemClock;
+import java.io.*;
+import java.net.*;
+import java.util.concurrent.*;
+import org.json.JSONObject;
+import org.json.JSONArray;
+
+final class VoiceSession {
+    interface Listener {void link(boolean connected);void state(String phase,String message);void caption(String text,String mood);void microphone(boolean active);void playback(boolean active);void heard(String text);void sources(JSONArray items,String retrievedAt);void brain(String provider);void recognition(String engine);void dotResult(String text,boolean truncated);void screen(boolean sleeping);}
+    private final Context context;private final Listener listener;private final Object routeLock=new Object();private final LanConnector lan;private volatile Link activeLink,usbLink,wifiLink;private volatile String wifiError="";private boolean receiverRegistered;private volatile boolean usbPhysical,wakeMode=true;
+    private volatile boolean foreground,recording,announcement;private volatile int announcementGeneration;private volatile ServerSocket server;private volatile Socket socket;private volatile DataOutputStream output;private volatile AudioRecord recorder;private volatile Player player;
+    private volatile float inputLevel=0;private volatile CaptionProgress lastCaption=CaptionProgress.empty();
+    private volatile int epoch=0,minimumGeneration=0,lifecycle=0;private volatile long micFrames=0,renderFrames=0;private volatile String phase="idle";
+    VoiceSession(Context context,Listener listener){this.context=context.getApplicationContext();this.listener=listener;this.lan=new LanConnector(this.context);}
+    boolean isRecording(){return recording;}
+    boolean isConnected(){Link link=activeLink;return link!=null&&!link.closed;}
+    String transportName(){Link link=activeLink;return link==null?"none":link.kind;}
+    boolean wifiPaired(){return lan.paired();}
+    private final BroadcastReceiver usbState=new BroadcastReceiver(){public void onReceive(Context ignored,Intent event){
+        if("android.hardware.usb.action.USB_STATE".equals(event.getAction())){usbPhysical=event.getBooleanExtra("connected",false);Link link=usbLink;if(!usbPhysical&&link!=null)link.close();}
+        else if(!lan.networkAvailable()){Link link=wifiLink;if(link!=null)link.close();}
+    }};
+    void resume(){
+        if(foreground)return;foreground=true;int ticket=++lifecycle;
+        if(!receiverRegistered){IntentFilter filter=new IntentFilter("android.hardware.usb.action.USB_STATE");filter.addAction("android.net.conn.CONNECTIVITY_CHANGE");context.registerReceiver(usbState,filter);receiverRegistered=true;}
+        if(lan.paired())lan.acquire();new Thread(()->accept(ticket),"cc8-usb-listener").start();new Thread(()->wifiLoop(ticket),"cc8-wifi-link").start();
+    }
+    void pause(){
+        foreground=false;lifecycle++;stopMicrophone();cancelPlayback();closeSocket();ServerSocket listener=server;server=null;if(listener!=null)try{listener.close();}catch(IOException ignored){}
+        if(receiverRegistered){context.unregisterReceiver(usbState);receiverRegistered=false;}lan.release();
+    }
+    private void closeSocket(){Link usb=usbLink,wifi=wifiLink;activeLink=null;output=null;socket=null;if(usb!=null)usb.close();if(wifi!=null)wifi.close();listener.link(false);}
+    private void accept(int ticket){
+        try(ServerSocket ss=new ServerSocket()){
+            ss.setReuseAddress(true);ss.bind(new InetSocketAddress(InetAddress.getByName("127.0.0.1"),18765),1);server=ss;
+            while(foreground&&lifecycle==ticket){Socket connection=ss.accept();if(!foreground||lifecycle!=ticket){connection.close();break;}
+                Link old=usbLink;if(old!=null&&!old.closed){connection.close();continue;}Link next=new Link(connection,"usb",ticket);usbLink=next;new Thread(next,"cc8-usb-link").start();}
+        }catch(IOException error){if(foreground&&lifecycle==ticket)listener.state("idle","USB 通道等待重连，Wi-Fi 仍可连接");}
+        finally{if(lifecycle==ticket)server=null;}
+    }
+    private void wifiLoop(int ticket){
+        while(foreground&&lifecycle==ticket){
+            if(lan.paired()&&lan.networkAvailable())try{
+                lan.acquire();Socket connection=lan.connect();if(!foreground||lifecycle!=ticket){connection.close();break;}
+                Link next=new Link(connection,"wifi",ticket);wifiLink=next;wifiError="";next.run();
+            }catch(Exception error){if(foreground&&lifecycle==ticket)wifiError=error.getClass().getSimpleName();}
+            try{Thread.sleep(1000);}catch(InterruptedException error){Thread.currentThread().interrupt();break;}
+        }
+    }
+    private void select(Link next)throws IOException{
+        synchronized(routeLock){
+            if(!foreground||next.closed||next.ticket!=lifecycle)return;next.ready=true;
+            if(activeLink!=next){
+                cancelPlayback();announcement=false;listener.playback(false);listener.caption("","attentive");minimumGeneration=0;
+                activeLink=next;socket=next.connection;output=next.out;phase=recording?"listening":"idle";listener.link(true);
+            }
+            JSONObject hello=Wire.event("device_ready");Wire.put(hello,"supports_playback_pause",true);Wire.put(hello,"protocol",2);Wire.put(hello,"sample_rate",16000);Wire.put(hello,"capture_active",recording);Wire.put(hello,"wake_mode",wakeMode);next.event(hello);
+            if(recording){JSONObject rebound=Wire.event("session_rebind");Wire.put(rebound,"capture_active",true);Wire.put(rebound,"epoch",epoch);Wire.put(rebound,"source",7);Wire.put(rebound,"sample_rate",16000);Wire.put(rebound,"render_gain",.35);next.event(rebound);}
+        }
+    }
+    private void lost(Link link){
+        synchronized(routeLock){
+            if(usbLink==link)usbLink=null;if(wifiLink==link)wifiLink=null;if(activeLink!=link)return;
+            activeLink=null;socket=null;output=null;
+            Link backup=usbLink!=null&&usbLink.ready&&!usbLink.closed?usbLink:wifiLink!=null&&wifiLink.ready&&!wifiLink.closed?wifiLink:null;
+            if(foreground&&backup!=null)try{select(backup);return;}catch(IOException ignored){}
+            stopMicrophone();cancelPlayback();listener.link(false);if(foreground)listener.state("idle","连接已断开，正在自动重连 · 麦克风已关闭");
+        }
+    }
+    private final class Link implements Runnable {
+        final Socket connection;final String kind;final int ticket;final ArrayBlockingQueue<Wire.Packet> queue=new ArrayBlockingQueue<>(128);volatile boolean closed,ready;DataOutputStream out;
+        Link(Socket connection,String kind,int ticket){this.connection=connection;this.kind=kind;this.ticket=ticket;}
+        void event(JSONObject value)throws IOException{Wire.Packet packet=new Wire.Packet();packet.type=Wire.EVENT;packet.generation=epoch;packet.nanos=System.nanoTime();packet.data=Wire.jsonBytes(value);offer(packet);}
+        void offer(Wire.Packet packet)throws IOException{if(closed||!queue.offer(packet)){close();throw new IOException("Transport queue unavailable");}}
+        public void run(){
+            try{
+                connection.setTcpNoDelay(true);connection.setKeepAlive(true);connection.setSoTimeout(10000);out=new DataOutputStream(connection.getOutputStream());
+                new Thread(()->{try{while(!closed&&foreground&&lifecycle==ticket){Wire.Packet packet=queue.poll(1,TimeUnit.SECONDS);if(packet!=null)Wire.write(out,packet.type,packet.generation,packet.sequence,packet.frame,packet.nanos,packet.data);}}catch(Exception error){close();}},"cc8-"+kind+"-writer").start();
+                JSONObject hello=Wire.event("transport_hello");Wire.put(hello,"protocol",2);event(hello);
+                DataInputStream in=new DataInputStream(connection.getInputStream());while(!closed&&foreground&&lifecycle==ticket)handle(Wire.read(in),this);
+            }catch(Exception ignored){}finally{close();}
+        }
+        void close(){if(closed)return;closed=true;queue.clear();try{connection.close();}catch(IOException ignored){}lost(this);}
+    }
+    private void handle(Wire.Packet p,Link source)throws Exception {
+        if(p.type==Wire.EVENT){JSONObject control=Wire.json(p);String name=control.optString("event");
+            if("transport_ping".equals(name)){source.event(Wire.event("transport_pong"));return;}
+            if("transport_activate".equals(name)){select(source);return;}
+            if("transport_standby".equals(name)){source.ready=true;return;}
+            if("lan_config".equals(name)){if(source==activeLink&&"usb".equals(source.kind)){try{lan.configure(control.getJSONObject("config"));lan.acquire();}catch(Exception error){wifiError=error.getClass().getSimpleName();}}return;}
+        }
+        if(source!=activeLink)return;
+        if(p.type==Wire.EVENT){
+            JSONObject j=Wire.json(p);String event=j.optString("event");
+            if("hello".equals(event)){listener.recognition(j.optString("asr_engine","sensevoice"));listener.state(recording?"listening":"idle",j.optString("message","Mac 已连接，点击开始语音"));}
+            else if("screen_sleep".equals(event)){if(recording)listener.screen(true);}
+            else if("screen_wake".equals(event)){listener.screen(false);}
+            else if("device_control".equals(event)){deviceControl(j);}
+            else if("caption_timing".equals(event)){Player current=player;if(current!=null&&current.generation==p.generation&&current.playbackId==j.optInt("playback_id",-1))current.timings=timings(j.optJSONArray("timings"),current.text.length());}
+            else if("ping".equals(event)){send(Wire.event("pong"));}
+            else if("status".equals(event)){if(recording||announcement){phase=j.optString("phase","listening");listener.state(phase,j.optString("message"));}}
+            else if("transcript".equals(event)){if(recording)listener.heard(j.optString("text"));}
+            else if("announcement_begin".equals(event)){if(foreground&&p.generation>=minimumGeneration){announcement=true;announcementGeneration=p.generation;listener.playback(true);}}
+            else if("announcement_done".equals(event)){if(announcement&&p.generation==announcementGeneration){announcement=false;listener.playback(false);phase=recording?"listening":"idle";listener.state(phase,"completed".equals(j.optString("result"))?(recording?"播报已结束，我在听":"播报已结束 · 麦克风关闭"):(recording?"播报未完成，我在听":"播报未完成 · 麦克风关闭"));}}
+            else if("brain_provider".equals(event)){listener.brain(j.optString("provider","minimax"));}
+            else if("dot_result".equals(event)){if(recording&&p.generation>=minimumGeneration)listener.dotResult(j.optString("text"),j.optBoolean("truncated"));}
+            else if("web_sources".equals(event)){if(recording&&p.generation>=minimumGeneration)listener.sources(j.optJSONArray("items"),j.optString("retrieved_at"));}
+            else if("cancel".equals(event)){minimumGeneration=Math.max(minimumGeneration,p.generation);announcement=false;listener.playback(false);cancelPlayback();listener.caption("","attentive");if(recording)listener.state("listening","我在听，你继续说");else{phase="idle";listener.state("idle","播报已停止 · 麦克风关闭");}}
+            else if("playback_pause".equals(event)){Player current=player;if(recording&&current!=null&&current.generation==p.generation&&p.generation>=minimumGeneration)current.pauseForVoice(j.optInt("token"));}
+            else if("playback_resume".equals(event)){Player current=player;if(recording&&current!=null&&current.generation==p.generation&&p.generation>=minimumGeneration)current.resumeAfterNoise(j.optInt("token"));}
+            else if("play_begin".equals(event)){
+                boolean permitted=recording||(announcement&&p.generation==announcementGeneration&&"announcement".equals(j.optString("role")));if(!foreground||!permitted||p.generation<minimumGeneration)return;cancelPlayback();Player next=new Player(p.generation,j.optString("text"),j.optString("mood","friendly"),j.optString("role","assistant"),j.optInt("playback_id"),timings(j.optJSONArray("timings"),j.optString("text").length()));player=next;next.start();
+            }else if("play_end".equals(event)){Player current=player;if(current!=null&&current.generation==p.generation)current.ended=true;}
+        }else if(p.type==Wire.SPEAKER){Player current=player;if((recording||announcement)&&current!=null&&current.generation==p.generation&&p.generation>=minimumGeneration)current.offer(p.data);}
+    }
+    private void send(JSONObject j){try{sendPacket(Wire.EVENT,epoch,0,0,System.nanoTime(),Wire.jsonBytes(j));}catch(IOException ignored){}}
+    private void sendPacket(int type,int generation,long sequence,long frame,long nanos,byte[] bytes)throws IOException {
+        synchronized(routeLock){
+            Link destination=activeLink;
+            if(destination!=null&&destination.closed){Link backup=usbLink!=null&&usbLink.ready&&!usbLink.closed?usbLink:wifiLink!=null&&wifiLink.ready&&!wifiLink.closed?wifiLink:null;if(backup!=null)select(backup);destination=activeLink;}
+            if(destination==null||destination.closed)throw new IOException("Mac disconnected");
+            Wire.Packet packet=new Wire.Packet();packet.type=type;packet.generation=generation;packet.sequence=sequence;packet.frame=frame;packet.nanos=nanos;packet.data=bytes;
+            try{destination.offer(packet);}catch(IOException error){Link fallback=activeLink;if(fallback!=null&&fallback!=destination&&!fallback.closed)fallback.offer(packet);else throw error;}
+        }
+    }
+
+    void settings(boolean wake){wakeMode=wake;JSONObject e=Wire.event("settings");Wire.put(e,"wake_mode",wake);send(e);}
+    void brain(String provider){JSONObject e=Wire.event("settings");Wire.put(e,"brain_provider",provider);send(e);}
+    void interrupt(){announcement=false;listener.playback(false);cancelPlayback();listener.caption("","attentive");send(Wire.event("interrupt"));if(recording)listener.state("listening","我在听，你继续说");else{phase="idle";listener.state("idle","播报已停止 · 麦克风关闭");}}
+    @SuppressLint("MissingPermission") // Only MainActivity's foreground button may call this method; checked again here.
+    void startMicrophone(){
+        if(!foreground||recording||!isConnected())return;
+        if(context.checkCallingOrSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){listener.state("error","请先允许麦克风权限");return;}
+        announcement=false;listener.playback(false);cancelPlayback();recording=true;epoch++;micFrames=0;renderFrames=0;minimumGeneration=0;listener.microphone(true);listener.state("calibrating","正在准备音频，请保持安静");
+        new Thread(()->{
+            AudioRecord record=null;int mine=epoch;long sequence=0,origin=0,last=System.nanoTime();
+            try{
+                int min=AudioRecord.getMinBufferSize(16000,AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT);
+                if(min<=0)throw new IOException("不支持 16 kHz 录音");
+                record=new AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION,16000,AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT,Math.max(min*2,6400));recorder=record;
+                if(record.getState()!=AudioRecord.STATE_INITIALIZED)throw new IOException("麦克风初始化失败");
+                if(!recording||!foreground||epoch!=mine)return;record.startRecording();if(record.getRecordingState()!=AudioRecord.RECORDSTATE_RECORDING)throw new IOException("麦克风无法开始");
+                JSONObject began=Wire.event("session_start");Wire.put(began,"epoch",mine);Wire.put(began,"source",7);Wire.put(began,"sample_rate",16000);Wire.put(began,"render_gain",.35);send(began);
+                short[] chunk=new short[320];
+                while(recording&&foreground&&epoch==mine){
+                    int count=record.read(chunk,0,chunk.length);if(count<0)throw new IOException("录音读取错误 "+count);if(count==0)continue;long now=System.nanoTime();double power=0;for(int i=0;i<count;i++)power+=(double)chunk[i]*chunk[i];inputLevel=(float)Math.sqrt(power/count)/32768;
+                    if(origin==0)origin=now-count*1000000000L/16000;
+                    if(now-last>400000000L&&micFrames>0){JSONObject gap=Wire.event("capture_gap");Wire.put(gap,"milliseconds",(now-last)/1000000);send(gap);}last=now;
+                    sendPacket(Wire.MIC,mine,sequence++,micFrames,origin+micFrames*1000000000L/16000,Wire.pcm(chunk,count));micFrames+=count;
+                }
+            }catch(Exception error){if(recording&&foreground)listener.state("error","录音已停止："+error.getMessage());}
+            finally{
+                if(record!=null){try{record.stop();}catch(RuntimeException ignored){}record.release();}if(recorder==record)recorder=null;
+                if(epoch==mine){recording=false;listener.microphone(false);send(Wire.event("session_stop"));}
+            }
+        },"cc8-microphone").start();
+    }
+    void stopMicrophone(){announcement=false;listener.playback(false);recording=false;inputLevel=0;phase="idle";AudioRecord r=recorder;if(r!=null)try{r.stop();}catch(RuntimeException ignored){}cancelPlayback();listener.microphone(false);send(Wire.event("session_stop"));}
+    private synchronized void cancelPlayback(){Player p=player;player=null;lastCaption=CaptionProgress.empty();if(p!=null)p.cancel();}
+    float microphoneLevel(){return recording?inputLevel:0;}
+    float mouthLevel(){Player p=player;return p==null?0:p.level();}
+    String mood(){Player p=player;return p==null?"attentive":p.mood;}
+    long playbackHead(){Player p=player;return p==null||p.track==null?0:p.track.getPlaybackHeadPosition()&0xffffffffL;}
+    JSONObject snapshot(){JSONObject j=Wire.event("snapshot");Wire.put(j,"foreground",foreground);Wire.put(j,"connected",isConnected());Wire.put(j,"transport",transportName());Wire.put(j,"usb_connected",usbLink!=null&&!usbLink.closed);Wire.put(j,"usb_physical",usbPhysical);Wire.put(j,"wifi_ready",wifiLink!=null&&wifiLink.ready&&!wifiLink.closed);Wire.put(j,"wifi_paired",lan.paired());Wire.put(j,"wifi_error",wifiError);Wire.put(j,"microphone_active",recording);Wire.put(j,"announcement_active",announcement);Wire.put(j,"mic_frames",micFrames);Wire.put(j,"render_frames",renderFrames);Wire.put(j,"playback_head",playbackHead());Wire.put(j,"playback_paused",player!=null&&player.paused);Wire.put(j,"phase",phase);Wire.put(j,"raw_audio_saved",false);return j;}
+
+    static final class CaptionProgress {
+        final int id;final String text;final float position;final boolean timed,playing,paused;
+        CaptionProgress(int id,String text,float position,boolean timed,boolean playing,boolean paused){this.id=id;this.text=text;this.position=position;this.timed=timed;this.playing=playing;this.paused=paused;}
+        static CaptionProgress empty(){return new CaptionProgress(0,"",0,false,false,false);}
+    }
+    CaptionProgress captionProgress(){Player p=player;if(p==null)return lastCaption;AudioTrack t=p.track;long head=0;try{if(t!=null)head=t.getPlaybackHeadPosition()&0xffffffffL;}catch(IllegalStateException ignored){}CaptionTimeline line=p.timings;return new CaptionProgress(p.playbackId,p.text,line.position(head),line.rows.length>0,true,p.paused);}
+    private static CaptionTimeline timings(JSONArray values,int length){
+        if(values==null||values.length()>2048)return new CaptionTimeline(new int[0][],length);
+        int[][] rows=new int[values.length()][];for(int i=0;i<rows.length;i++){JSONArray r=values.optJSONArray(i);if(r==null||r.length()!=4)return new CaptionTimeline(new int[0][],length);rows[i]=new int[]{r.optInt(0,-1),r.optInt(1,-1),r.optInt(2,-1),r.optInt(3,-1)};}
+        return new CaptionTimeline(rows,length);
+    }
+    void screenTouched(){listener.screen(false);send(Wire.event("screen_touch"));}
+    private void deviceControl(JSONObject j){
+        JSONObject result=Wire.event("device_control_result");Wire.put(result,"request_id",j.optString("request_id"));
+        try{
+            String action=j.optString("action");AudioManager audio=(AudioManager)context.getSystemService(Context.AUDIO_SERVICE);
+            if("volume".equals(action)){int percent=j.optInt("percent",-1);if(percent<0||percent>100)throw new IllegalArgumentException("volume range");audio.setStreamVolume(AudioManager.STREAM_MUSIC,Math.round(audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)*percent/100f),0);}
+            else if("stop".equals(action)){cancelPlayback();listener.playback(false);}
+            else if("wake_screen".equals(action))listener.screen(false);
+            else if(!"status".equals(action))throw new IllegalArgumentException("unknown action");
+            Wire.put(result,"ok",true);Wire.put(result,"volume_percent",Math.round(100f*audio.getStreamVolume(AudioManager.STREAM_MUSIC)/Math.max(1,audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC))));Wire.put(result,"microphone_active",recording);Wire.put(result,"foreground",foreground);Wire.put(result,"transport",transportName());Wire.put(result,"wifi_ready",wifiLink!=null&&wifiLink.ready&&!wifiLink.closed);
+        }catch(RuntimeException e){Wire.put(result,"ok",false);Wire.put(result,"error",e.getClass().getSimpleName());}send(result);
+    }
+    private final class Player extends Thread implements PcmPump.Sink {
+        final int generation,playbackId;final String text,mood,role;volatile CaptionTimeline timings;long renderSequence;long writeNanos;final ArrayBlockingQueue<byte[]> queue=new ArrayBlockingQueue<>(64);final ConcurrentLinkedQueue<Envelope> envelopes=new ConcurrentLinkedQueue<>();
+        volatile boolean ended,stopped,paused;volatile int pauseToken;volatile AudioTrack track;long written=0;
+        Player(int g,String t,String m,String role,int id,CaptionTimeline line){super("cc8-speaker");generation=g;text=t;mood=m;this.role=role;playbackId=id;timings=line;}
+        void offer(byte[] pcm)throws IOException {try{if(!stopped&&!queue.offer(pcm,2,TimeUnit.SECONDS))throw new IOException("播放队列积压");}catch(InterruptedException e){Thread.currentThread().interrupt();throw new IOException(e);}}
+        void cancel(){stopped=true;queue.clear();AudioTrack t=track;if(t!=null)try{t.pause();t.flush();}catch(RuntimeException ignored){}interrupt();}
+        void pauseForVoice(int token){
+            if(!allowed())return;pauseToken=token;paused=true;AudioTrack t=track;
+            if(t!=null)try{t.pause();}catch(IllegalStateException ignored){}
+            phase="listening";listener.state("listening","听到你说话，正在听…");
+            JSONObject ack=Wire.event("playback_paused");Wire.put(ack,"generation",generation);Wire.put(ack,"token",token);Wire.put(ack,"nanos",System.nanoTime());send(ack);
+        }
+        void resumeAfterNoise(int token){
+            if(!allowed()||!paused||pauseToken!=token)return;paused=false;AudioTrack t=track;
+            if(t!=null)try{t.play();}catch(IllegalStateException ignored){}
+            JSONObject ack=Wire.event("playback_resumed");Wire.put(ack,"generation",generation);Wire.put(ack,"token",token);Wire.put(ack,"nanos",System.nanoTime());send(ack);
+            phase="speaking";listener.caption(text,mood);listener.state("speaking","继续播报 · 你可以开口打断");synchronized(this){notifyAll();}
+        }
+        void waitIfPaused()throws InterruptedException{synchronized(this){while(paused&&allowed())wait(30);}}
+        float level(){try{if(paused)return 0;AudioTrack t=track;if(t==null||stopped||t.getPlayState()!=AudioTrack.PLAYSTATE_PLAYING)return 0;long head=t.getPlaybackHeadPosition()&0xffffffffL;Envelope e=envelopes.peek();while(e!=null&&head>=e.end){envelopes.poll();e=envelopes.peek();}return e!=null&&head>=e.start?e.value:0;}catch(IllegalStateException ignored){return 0;}}
+        public boolean allowed(){return !stopped&&foreground&&(recording||("announcement".equals(role)&&announcement&&generation==announcementGeneration));}
+        public boolean paused(){return paused;}
+        public void awaitReady()throws InterruptedException{waitIfPaused();}
+        public int write(short[] samples,int offset,int count){writeNanos=System.nanoTime();return track.write(samples,offset,count);}
+        public void accepted(short[] samples,int offset,int count)throws IOException{
+            AudioTrack t=track;long now=System.nanoTime(),head=t.getPlaybackHeadPosition()&0xffffffffL;AudioTimestamp stamp=new AudioTimestamp();boolean valid=t.getTimestamp(stamp);
+            long speakerTime=PlaybackClock.estimate(now,written,head,valid,stamp.framePosition,stamp.nanoTime);
+            double power=0;short[] accepted=new short[count];System.arraycopy(samples,offset,accepted,0,count);for(short v:accepted)power+=(double)v*v;
+            float value=(float)Math.sqrt(power/Math.max(1,count))/32768;
+            envelopes.add(new Envelope(written,written+count,value));sendPacket(Wire.RENDER,generation,renderSequence++,written,speakerTime,Wire.pcm(accepted,count));written+=count;renderFrames+=count;
+        }
+        @Override public void run(){
+            AudioTrack t=null;
+            try{
+                int min=AudioTrack.getMinBufferSize(16000,AudioFormat.CHANNEL_OUT_MONO,AudioFormat.ENCODING_PCM_16BIT);
+                t=new AudioTrack(AudioManager.STREAM_MUSIC,16000,AudioFormat.CHANNEL_OUT_MONO,AudioFormat.ENCODING_PCM_16BIT,Math.max(min*2,3200),AudioTrack.MODE_STREAM);track=t;
+                if(t.getState()!=AudioTrack.STATE_INITIALIZED)throw new IOException("播放初始化失败");t.setVolume(.35f);t.play();
+                if(!allowed())return;if(paused){t.pause();waitIfPaused();}if(!allowed())return;listener.caption(text,mood);listener.state("calibration".equals(role)?"calibrating":"speaking","calibration".equals(role)?"首次校准：请安静听完这段声音":"announcement".equals(role)&&!recording?"正在播报 · 点击打断可停止":"正在回答 · 你可以开口打断");
+                long sequence=0;
+                while(allowed()){
+                    waitIfPaused();if(!allowed())break;
+                    byte[] bytes=queue.poll(50,TimeUnit.MILLISECONDS);
+                    if(bytes==null){if(ended&&queue.isEmpty())break;continue;}
+                    if(!PcmPump.writeAll(Wire.samples(bytes),this))break;
+                }
+                long deadline=SystemClock.elapsedRealtime()+3000;while(allowed()&&(t.getPlaybackHeadPosition()&0xffffffffL)<written&&SystemClock.elapsedRealtime()<deadline){long before=SystemClock.elapsedRealtime();waitIfPaused();deadline+=SystemClock.elapsedRealtime()-before;Thread.sleep(10);}
+                if(allowed()&&(t.getPlaybackHeadPosition()&0xffffffffL)<written)throw new IOException("播放排空超时");
+                if(allowed()){synchronized(VoiceSession.this){if(player==this)lastCaption=new CaptionProgress(playbackId,text,text.length(),timings.rows.length>0,false,false);}JSONObject done=Wire.event("play_done");Wire.put(done,"generation",generation);Wire.put(done,"role",role);Wire.put(done,"played_frames",t.getPlaybackHeadPosition()&0xffffffffL);send(done);if(recording)listener.state("listening","我在听");}
+            }catch(InterruptedException error){Thread.currentThread().interrupt();}
+            catch(Exception error){if(!stopped&&foreground){listener.state("error","播放已停止："+error.getMessage());JSONObject failure=Wire.event("playback_error");Wire.put(failure,"error_type",error.getClass().getSimpleName());Wire.put(failure,"generation",generation);send(failure);}}
+            finally{track=null;if(t!=null){try{t.stop();}catch(RuntimeException ignored){}t.release();}synchronized(VoiceSession.this){if(player==this)player=null;}}
+        }
+    }
+    private static final class Envelope {final long start,end;final float value;Envelope(long s,long e,float v){start=s;end=e;value=v;}}
+}

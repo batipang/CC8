@@ -1,0 +1,17 @@
+# CC8 离线能力检测器
+
+Android Java / 平台控件应用，包名 `com.happyhome.cc8diagnostics`，版本 1.0.1，与语音助手独立安装。不联网，不 Root，不读取设备序列号 / MAC / 账户标识，不自动录音。
+
+可查看 Android / CPU / 内存 / 屏幕 / 音频能力，测试参考音、麦克风录音、10 秒同时录放，导出 JSON 报告与最近录音 WAV。录音仅在前台点击并授予麦克风权限后开始；离开页面会取消并释放音频资源。参考音 `app/src/main/assets/reference.wav` 为测试播放素材，不是用户录音。
+
+AEC 显示可用或创建成功不代表实际消回声有效；应分别录制安静时纯播放和有人讲话的双讲对照，确认残余回声与人声保留情况。
+
+在仓库根目录构建、检查并安装：
+
+```sh
+python3 cc8-diagnostics/tools/build.py
+python3 cc8-diagnostics/tools/test-audio.py
+python3 device-access/cc8_install.py --install artifacts/cc8-diagnostics-1.0.1.apk --launch
+```
+
+工具链、开发签名和设备工程通道见[开发说明](../docs/DEVELOPMENT.md)及[APK 安装步骤](../docs/APK_INSTALL.md)。报告和 WAV 保存在设备本地，可能包含个人内容；仓库不包含用户实机报告与录音。
