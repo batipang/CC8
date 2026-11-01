@@ -1,0 +1,262 @@
+"""Read-only measurement runs and private output, using synthetic receipts only."""
+
+import argparse
+from contextlib import redirect_stdout, redirect_stderr
+import io
+import json
+from pathlib import Path
+import socket
+import subprocess
+import sys
+import tempfile
+import threading
+import unittest
+from unittest.mock import patch
+from diagnostics import TraceBook
+from measure import run
+from private_output import PrivateOutput
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+class PrivateOutputTests(unittest.TestCase):
+    def test_atomic_private_updates_reject_existing_output_and_external_replacement(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'run.json'
+            with PrivateOutput(path) as output:
+                output.write({'version': 1})
+                output.write({'version': 2})
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(json.loads(path.read_text()), {'version': 2})
+                with self.assertRaises(ValueError):
+                    output.write({'bad': float('nan')})
+                self.assertEqual(json.loads(path.read_text()), {'version': 2})
+                self.assertEqual(list(Path(folder).iterdir()), [path])
+                with self.assertRaises(FileExistsError), PrivateOutput(path):
+                    pass
+                path.unlink()
+                target = Path(folder) / 'untouched.json'
+                target.write_text('untouched')
+                path.symlink_to(target)
+                with self.assertRaises(OSError):
+                    output.write({'bad': 1})
+                self.assertEqual(target.read_text(), 'untouched')
+
+    def test_nonprivate_or_symlink_directory_is_rejected_without_chmod(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            public = root / 'public'
+            public.mkdir(mode=0o755)
+            public.chmod(0o755)
+            with self.assertRaises(OSError), PrivateOutput(public / 'run.json'):
+                pass
+            self.assertEqual(public.stat().st_mode & 0o777, 0o755)
+            link = root / 'link'
+            link.symlink_to(root, target_is_directory=True)
+            with self.assertRaises(OSError), PrivateOutput(link / 'run.json'):
+                pass
+            self.assertFalse((root / 'run.json').exists())
+
+
+class MeasurementTests(unittest.TestCase):
+    def args(self, path):
+        return argparse.Namespace(
+            seconds=0.3,
+            interval=0.1,
+            output=path,
+            socket=path.parent / 'unused.sock',
+            condition='quiet',
+            distance='1m',
+            partition='acceptance',
+        )
+
+    def execute(self, args, query):
+        now = [0.0]
+
+        def sleep(seconds):
+            now[0] += seconds
+
+        with redirect_stdout(io.StringIO()) as output, redirect_stderr(io.StringIO()):
+            result = run(args, query_fn=query, clock=lambda: now[0], sleep=sleep)
+        return result, output.getvalue()
+
+    def test_updates_merge_and_output_is_content_free_without_starting_devices(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'run.json'
+            book = TraceBook()
+            count = [0]
+
+            def query(target, *, operation, timeout):
+                self.assertEqual(operation, 'diagnostics')
+                self.assertGreater(timeout, 0)
+                self.assertLessEqual(timeout, 5)
+                count[0] += 1
+                if count[0] == 2:
+                    ident = book.begin('text', 101)
+                    book.finish(ident, 'completed')
+                result = book.report()
+                result['provider_body'] = 'SECRET'
+                return result
+
+            code, printed = self.execute(self.args(path), query)
+            self.assertEqual(code, 0)
+            result = json.loads(path.read_text())
+            self.assertEqual(result['summary']['samples'], 1)
+            self.assertEqual(result['summary']['outcomes'], {'completed': 1})
+            self.assertEqual(result['capture']['state'], 'completed')
+            self.assertFalse(result['capture']['device_capture_started'])
+            self.assertNotIn('SECRET', path.read_text() + printed)
+            self.assertEqual(printed.strip(), str(path))
+
+    def test_unavailable_or_invalid_backend_stops_with_partial_private_report(self):
+        for invalid in (False, True):
+            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as folder:
+                path = Path(folder) / 'run.json'
+                args = self.args(path)
+                args.seconds = 1
+
+                def query(*a, **k):
+                    if invalid:
+                        return {'contains_content': True, 'secret': 'SECRET'}
+                    raise OSError('SECRET')
+
+                code, printed = self.execute(args, query)
+                result = json.loads(path.read_text())
+                self.assertEqual(code, 2)
+                self.assertEqual(
+                    result['capture']['state'], 'invalid_snapshot' if invalid else 'ipc_unavailable'
+                )
+                self.assertEqual(result['summary']['samples'], 0)
+                self.assertNotIn('SECRET', path.read_text() + printed)
+
+    def test_interrupt_saves_completed_receipts_and_returns_cancelled(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'run.json'
+            calls = [0]
+            book = TraceBook()
+
+            def query(*a, **k):
+                calls[0] += 1
+                if calls[0] == 3:
+                    raise KeyboardInterrupt()
+                if calls[0] == 2:
+                    ident = book.begin('text', 101)
+                    book.finish(ident, 'completed')
+                return book.report()
+
+            code, _ = self.execute(self.args(path), query)
+            result = json.loads(path.read_text())
+            self.assertEqual(code, 130)
+            self.assertEqual(result['capture']['state'], 'cancelled')
+            self.assertEqual(result['summary']['samples'], 1)
+            self.assertEqual(result['summary']['outcomes'], {'completed': 1})
+
+    def test_a_query_gap_is_not_reported_as_clean_completion(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'run.json'
+            calls = [0]
+
+            def query(*a, **k):
+                calls[0] += 1
+                if calls[0] == 2:
+                    raise OSError('synthetic gap')
+                return TraceBook().report()
+
+            code, _ = self.execute(self.args(path), query)
+            result = json.loads(path.read_text())
+            self.assertEqual(code, 2)
+            self.assertEqual(result['capture']['state'], 'partial')
+            self.assertEqual(result['capture']['query_failures'], 1)
+
+    def test_bad_arguments_cannot_create_files_or_read_socket(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'run.json'
+            for value in (float('nan'), 0, True, 10**1000):
+                args = self.args(path)
+                args.seconds = value
+                with patch('measure.default_output') as default, patch('measure.query') as query:
+                    with self.assertRaises(ValueError):
+                        self.execute(args, query)
+                    default.assert_not_called()
+                    query.assert_not_called()
+                self.assertFalse(path.exists())
+
+    def test_real_minimal_path_cli_reads_only_diagnostic_ipc(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            path, output = root / 'test.sock', root / 'run.json'
+            server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            server.bind(str(path))
+            path.chmod(0o600)
+            server.listen(1)
+            server.settimeout(0.1)
+            stop = threading.Event()
+            errors, operations = [], []
+            book = TraceBook()
+
+            def serve():
+                try:
+                    while not stop.is_set():
+                        try:
+                            peer, _ = server.accept()
+                        except socket.timeout:
+                            continue
+                        with peer:
+                            peer.settimeout(1)
+                            data = bytearray()
+                            while b'\n' not in data and len(data) <= 4096:
+                                block = peer.recv(4096)
+                                if not block:
+                                    raise OSError('incomplete synthetic request')
+                                data.extend(block)
+                            operations.append(json.loads(data)['operation'])
+                            if len(operations) == 2:
+                                ident = book.begin('text', 101)
+                                book.finish(ident, 'completed')
+                            peer.sendall(
+                                (json.dumps({'ok': True, **book.report()}) + '\n').encode()
+                            )
+                except OSError:
+                    if not stop.is_set():
+                        errors.append('socket')
+                except Exception as error:
+                    errors.append(type(error).__name__)
+
+            worker = threading.Thread(target=serve, daemon=True)
+            worker.start()
+            try:
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(ROOT / 'cc8'),
+                        'measure',
+                        '--seconds',
+                        '0.2',
+                        '--interval',
+                        '0.05',
+                        '--socket',
+                        str(path),
+                        '--output',
+                        str(output),
+                    ],
+                    cwd='/',
+                    env={'PATH': '/usr/bin:/bin', 'HOME': folder},
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+            finally:
+                stop.set()
+                worker.join(2)
+                server.close()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertGreaterEqual(len(operations), 2)
+            self.assertEqual(set(operations), {'diagnostics'})
+            self.assertEqual(errors, [])
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(json.loads(output.read_text())['summary']['samples'], 1)
+            self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+
+
+if __name__ == '__main__':
+    unittest.main()
