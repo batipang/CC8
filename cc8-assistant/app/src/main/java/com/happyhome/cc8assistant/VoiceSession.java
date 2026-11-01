@@ -119,7 +119,7 @@ final class VoiceSession {
             else if("device_control".equals(event)){deviceControl(j);}
             else if("vision_begin".equals(event)){
                 String nonce=j.optString("nonce");if(visual&&p.generation==visualGeneration)return;if(!foreground||p.generation<minimumGeneration||(!recording&&!nonce.equals(pendingVisionNonce))||(nonce.isEmpty()&&!recording))return;
-                visual=true;visualGeneration=p.generation;visionRequestId="";listener.dotResult("",false);listener.caption("正在拍摄当前画面，交给 Dot 分析。","attentive");listener.screen(false);listener.vision(true,"正在拍摄 · 本次图片交给 Dot 分析");final int waitingGeneration=visualGeneration;new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(()->{if(visual&&visualGeneration==waitingGeneration&&visionRequestId.isEmpty()){cancelVision();listener.state(recording?"listening":"idle","拍摄请求超时，请重试");}},15000);
+                visual=true;visualGeneration=p.generation;visionRequestId="";listener.dotResult("",false);listener.caption("请调整画面，预览 5 秒后自动拍摄并交给 Dot 分析。","attentive");listener.screen(false);listener.vision(true,"请调整画面 · 预览 5 秒后拍摄");final int waitingGeneration=visualGeneration;new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(()->{if(visual&&visualGeneration==waitingGeneration&&visionRequestId.isEmpty()){cancelVision();listener.state(recording?"listening":"idle","拍摄请求超时，请重试");}},15000);
             }
             else if("camera_capture".equals(event)){
                 if(!foreground||!visual||p.generation!=visualGeneration||p.generation<minimumGeneration)return;

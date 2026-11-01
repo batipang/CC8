@@ -1,6 +1,6 @@
 # 大黄蜂（Bumblebee）语音助手
 
-完整源码快照：Android APK **0.6.0**（versionCode 22）、Mac 后台 **0.9.0**。包名 `com.happyhome.cc8assistant`。默认 **Dot / Codex 做大脑，MiniMax ASR 做耳朵，MiniMax TTS 做嘴巴**，Mac 执行消回声与即时打断，CC8 负责录放和显示。
+完整源码快照：Android APK **0.6.1**（versionCode 23）、Mac 后台 **0.9.1**。包名 `com.happyhome.cc8assistant`。默认 **Dot / Codex 做大脑，MiniMax ASR 做耳朵，MiniMax TTS 做嘴巴**，Mac 执行消回声与即时打断，CC8 负责录放和显示。
 
 ## 构建与安装
 
@@ -10,7 +10,7 @@
 python3 device-access/installer-helper/build.py
 python3 cc8-assistant/tools/build.py
 python3 device-access/cc8_install.py --probe
-python3 device-access/cc8_install.py --install artifacts/cc8-assistant-0.6.0.apk --launch --shared-staging
+python3 device-access/cc8_install.py --install artifacts/cc8-assistant-0.6.1.apk --launch --shared-staging
 ```
 
 `--shared-staging` 的共享存储替换风险、安装条件和更新签名问题见[安装步骤](../docs/APK_INSTALL.md)。新克隆不会拥有原开发机签名，首次构建生成独立本地开发证书。
@@ -88,4 +88,4 @@ python3 cc8-assistant/host/announce.py --text '你好，我是大黄蜂。'
 
 ## 摄像头看图
 
-点「看一看」，或在语音开启后说「大黄蜂，看看我手里是什么」，将当次图片交给 Dot 分析。详见[视觉功能说明](../docs/VISION.md)。
+点「看一看」，或在语音开启后说「大黄蜂，看看我手里是什么」，先显示 5 秒实时预览供调整，再把当次图片交给 Dot 分析。详见[视觉功能说明](../docs/VISION.md)。

@@ -50,7 +50,7 @@ def jpeg_dimensions(data):
 class Capture:
     generation:int
     ident:str=field(default_factory=lambda:secrets.token_hex(16))
-    expires:float=field(default_factory=lambda:time.monotonic()+12)
+    expires:float=field(default_factory=lambda:time.monotonic()+16)
     done:threading.Event=field(default_factory=threading.Event)
     data:bytearray=field(default_factory=bytearray)
     image:bytes|None=None
