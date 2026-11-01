@@ -75,7 +75,7 @@ class WorkerRecoveryTests(unittest.TestCase):
 
     def test_announcement_always_finishes_waiter_even_if_status_write_fails(self):
         b = self.bridge()
-        b.announcement_generation = b.generation
+        b.announcements.generation = b.generation
         b.speak = lambda *a: True
         job = Announcement(b.generation, '测试')
         with (

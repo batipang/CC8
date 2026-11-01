@@ -53,7 +53,7 @@ class AnnouncementTests(unittest.TestCase):
         self.assertEqual(begin['role'], 'announcement')
         self.assertEqual(begin['text'], job.text)
         self.assertTrue(any(p.kind == SPEAKER for p in b.connection.packets))
-        self.assertIsNone(b.announcement_generation)
+        self.assertIsNone(b.announcements.generation)
         self.assertFalse(any(e['event'] == 'session_start' for e in events))
 
     def test_cancelled_announcement_cannot_resume_audio(self):
@@ -63,7 +63,7 @@ class AnnouncementTests(unittest.TestCase):
         self.assertEqual(job.result, 'interrupted')
         self.assertFalse(b.active)
         self.assertFalse(b.valid(job.generation))
-        self.assertIsNone(b.announcement_generation)
+        self.assertIsNone(b.announcements.generation)
 
     def test_microphone_state_is_preserved_if_already_active(self):
         b = self.bridge()

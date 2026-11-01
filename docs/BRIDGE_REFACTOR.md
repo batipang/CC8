@@ -108,3 +108,12 @@ Bridge 仍协调会话、校准提示流程、识别/回答 worker 和任务；�
 将六组件的依赖绑定移入 236 行 composition.py；它是唯一可读取完整 Bridge 的装配根，只创建 passive 对象并返回 frozen Components，不写会话字段、不启动线程或提供方。Bridge 发布全部对象后才启动识别与回复消费者。各实际组件依旧只持有 frozen narrow Hooks；没有把 Bridge 作为混入对象供业务模块任意修改。Echo factory 显式注入，保持原 façade 的测试/提供方替换入口；动态查询仍指向唯一会话和真实所属组件。
 
 六份构造表达式经显式 session→self / factory / wake-pattern 名称归一后逐项 AST 完全相同；原全套 installer 16、host 353（4 private skip）、tooling 47、Java 15 checks 与质量再次通过。Bridge 缩至 970 行，装配移动与校准移动保持不同纯重构提交；仍不宣称 F-06 已完成。
+
+
+## 第八步：显式播报与提醒调度（候选）
+
+AnnouncementController 拥有播报 generation 与完成回执，ReminderScheduler 拥有 5 秒 poll 与当前版本化提醒 job。Bridge 的 announce / read_announcement / reminder_action / reminder_tick 保留转发入口；会话取消通过 invalidate 失效播报，valid / Playback 只查询唯一所属状态。两组件通过 frozen Hooks 接收会话锁、明确忙闲判定与输出/Workspace 方法，不持有 Bridge、音频队列或共享指标字典。
+
+原文每段最多 120 字、不经 LLM 改写、队列满显式拒绝、无论状态写入成败总释放 waiter、与麦克风状态独立均保持。提醒同原 guard 事务内检查连接及所有 busy 标志，只在有到期事项时触摸屏幕/提交播报；重复/过期回执、编辑提醒后旧 revision 隔离及存储失败回滚仍由原 Workspace 验证，不启动捕获、不后台打开界面。
+
+原全套 installer 16、host 353（4 private skip）、tooling 47、Java 15 checks 和质量通过；原断言只移动内部状态路径。Bridge 876 行，装配 280 行。严格六模块范围不变，未接设备/提供方或替换运行版本；F-06 与实机 P0 均开放，待 CI。

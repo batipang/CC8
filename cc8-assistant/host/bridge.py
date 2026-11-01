@@ -28,7 +28,7 @@ from dsp import (
 )
 from fast_stop import FastStopDetector
 from brain_router import BrainRouter
-from announce import Announcement, AnnouncementServer, validate_text
+from announce import AnnouncementServer
 from calibration_controller import STARTUP_GREETING as STARTUP_GREETING
 from composition import build_components
 from minimax_client import MiniMaxBrain, MiniMaxError
@@ -79,8 +79,6 @@ class Bridge:
         self.brain = brain
         self.library = library
         self.workspace = workspace or Workspace()
-        self.reminder_job = None
-        self.reminder_poll = 0
         self.text_generation = None
         self.connection = None
         self.transport_hub = None
@@ -91,7 +89,6 @@ class Bridge:
         self.active = False
         self.epoch = 0
         self.generation = 100
-        self.announcement_generation = None
         self.wake = False
         self.awake = True
         self.metrics = {
@@ -123,6 +120,8 @@ class Bridge:
         self.capture = components.capture
         self.recognition = components.recognition
         self.response = components.response
+        self.announcements = components.announcements
+        self.reminders = components.reminders
         self.recognition.start()
         self.response.start()
 
@@ -186,7 +185,7 @@ class Bridge:
             (
                 self.active
                 or generation == self.text_generation
-                or generation == self.announcement_generation
+                or generation == self.announcements.generation
                 or generation == self.visual.generation
             )
             and self.connection is not None
@@ -255,11 +254,7 @@ class Bridge:
         return {'ok': True, 'health': self.health(), **self.diagnostics.report()}
 
     def reminder_action(self, args, is_current=lambda: True):
-        with self.guard:
-            result = self.workspace.reminder(args, is_current)
-            if result.get('ok'):
-                self.publish_workspace()
-            return result
+        return self.reminders.action(args, is_current)
 
     def submit_text(self, text):
         if (
@@ -281,41 +276,7 @@ class Bridge:
             return {'ok': True, 'generation': generation}
 
     def reminder_tick(self):
-        # Do not interrupt conversations or turn on capture to deliver a reminder.
-        with self.guard:
-            job = self.reminder_job
-            if job is not None:
-                if not job.done.is_set():
-                    return
-                self.workspace.delivered(
-                    job.reminder_id, job.result == 'completed', revision=job.reminder_revision
-                )
-                self.reminder_job = None
-                self.publish_workspace()
-            if time.monotonic() < self.reminder_poll:
-                return
-            self.reminder_poll = time.monotonic() + 5
-            if (
-                self.connection is None
-                or self.calibration.active
-                or self.playback.playing
-                or self.response.busy
-                or self.recognition.busy
-                or self.text_generation is not None
-                or self.visual.generation is not None
-                or self.announcement_generation is not None
-                or self.capture.endpoint.vad.talking
-                or not self.response.queue.empty()
-            ):
-                return
-            item = self.workspace.due()
-            if item is None:
-                return
-            self.touch_activity()
-            job = self.announce('提醒你：' + item['title'])
-            job.reminder_id = item['id']
-            job.reminder_revision = item['revision']
-            self.reminder_job = job
+        return self.reminders.tick()
 
     def control_device(self, action, percent=None):
         if action not in ('status', 'volume', 'stop', 'wake_screen'):
@@ -355,65 +316,10 @@ class Bridge:
         return self.playback.wait_playback(generation)
 
     def announce(self, text):
-        text = validate_text(text)
-        with self.guard:
-            if (
-                self.connection is None
-                or self.calibration.active
-                or self.calibration.running
-                or self.announcement_generation is not None
-            ):
-                raise RuntimeError('Announcement unavailable')
-            generation = self.cancel('announcement')
-            self.announcement_generation = generation
-            self.diagnostics.begin('announcement', generation)
-            job = Announcement(generation, text)
-            try:
-                self.response.offer(job)
-            except queue.Full:
-                self.announcement_generation = None
-                raise RuntimeError('Announcement queue busy') from None
-            return job
+        return self.announcements.announce(text)
 
     def read_announcement(self, job):
-        generation = job.generation
-        try:
-            if not self.valid(generation):
-                return
-            self.event('announcement_begin', generation=generation)
-            self.status('thinking', '正在准备播报 · 麦克风状态保持不变')
-            # Read user-provided text literally, without an LLM rewrite or lookup.
-            pieces = [job.text[i : i + 120] for i in range(0, len(job.text), 120)]
-            for text in pieces:
-                if not self.valid(generation) or not self.speak(text, generation):
-                    return
-            if self.valid(generation):
-                job.result = 'completed'
-        except Exception as error:
-            job.result = 'failed'
-            if self.valid(generation):
-                self.failure('这次播报没有完成', error)
-        finally:
-            if self.connection is not None:
-                try:
-                    self.event('announcement_done', generation=generation, result=job.result)
-                except (OSError, EOFError):
-                    pass
-            if self.announcement_generation == generation:
-                self.announcement_generation = None
-            self.metrics['last_announcement'] = {'status': job.result, 'characters': len(job.text)}
-            self.diagnostics.finish(
-                generation,
-                'completed'
-                if job.result == 'completed'
-                else 'failed'
-                if job.result == 'failed'
-                else 'cancelled',
-            )
-            try:
-                self.save_status()
-            finally:
-                job.done.set()
+        return self.announcements.read_announcement(job)
 
     def cancel(self, reason='speech'):
         # 推进代次使旧模型、音频、字幕和看图结果失效，但不能撤销已执行的工具动作。
@@ -423,7 +329,7 @@ class Bridge:
             self.generation += 1
             generation = self.generation
             was_playing = self.playback.stop_output()
-            self.announcement_generation = None
+            self.announcements.invalidate()
             self.text_generation = None
             self.visual.invalidate()
             self.playback.clear_cancelled_pause(was_playing)
@@ -592,7 +498,7 @@ class Bridge:
                 return
             if self.visual.generation is not None or self.text_generation is not None:
                 self.cancel('microphone_start')
-            if self.active or self.announcement_generation is not None:
+            if self.active or self.announcements.generation is not None:
                 self.stop()
             self.epoch = int(j['epoch'])
             self.active = True
@@ -626,7 +532,7 @@ class Bridge:
             if (
                 self.active
                 or self.text_generation is not None
-                or self.announcement_generation is not None
+                or self.announcements.generation is not None
                 or self.visual.generation is not None
             ):
                 self.cancel('button')
@@ -690,7 +596,7 @@ class Bridge:
             'asr_engine': getattr(getattr(self.speech, 'recognizer', None), 'engine', None),
             'barge_in_enabled': self.playback.device_can_pause,
             'playback_paused': self.playback.pause_state is not None,
-            'announcement_active': self.announcement_generation is not None,
+            'announcement_active': self.announcements.generation is not None,
             'brain_provider': getattr(self.brain, 'selected', 'minimax')
             if self.brain
             else 'echo test',
@@ -887,7 +793,7 @@ def run_backend():
         stop.set()
         bridge.active = False
         bridge.playback.stop_output()
-        bridge.announcement_generation = None
+        bridge.announcements.invalidate()
         try:
             bridge.cancel('shutdown')
         except (OSError, EOFError):
