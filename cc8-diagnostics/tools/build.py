@@ -2,7 +2,6 @@ from pathlib import Path
 import hashlib
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -11,6 +10,7 @@ project = Path(__file__).resolve().parents[1]
 workspace = project.parent
 sys.path.insert(0, str(workspace / 'cc8-assistant/host'))
 from configuration import load_config  # noqa: E402 - standalone build entry
+from release_info import RELEASE, source_stamp, write_build_receipt  # noqa: E402
 
 config = load_config(root=workspace)
 tools = workspace / '.toolchains/cc8'
@@ -57,6 +57,7 @@ if '--prepare' in sys.argv:
     tasks = ['wrapper', '--gradle-version', '8.11.1', '--distribution-type', 'bin']
 else:
     tasks = sys.argv[1:] or ['assembleRelease', 'lintRelease']
+stamp = source_stamp(workspace)
 subprocess.run(
     [paths['gradle'], '--console=plain', '--no-daemon'] + tasks, cwd=project, env=env, check=True
 )
@@ -64,12 +65,11 @@ apk = project / 'app/build/outputs/apk/release/app-release.apk'
 if apk.exists() and '--prepare' not in sys.argv:
     output = workspace / 'artifacts'
     output.mkdir(exist_ok=True)
-    version = re.search(
-        r"versionName\s+['\"]([^'\"]+)['\"]", (project / 'app/build.gradle').read_text()
-    ).group(1)
+    version = RELEASE.diagnostics.version
     final = output / ('cc8-diagnostics-' + version + '.apk')
     shutil.copy2(apk, final)
     digest = hashlib.sha256(final.read_bytes()).hexdigest()
     final.with_suffix(final.suffix + '.sha256').write_text(digest + '  ' + final.name + '\n')
+    write_build_receipt(final, 'diagnostics', stamp, workspace)
     print('APK: ' + str(final))
     print('SHA-256: ' + digest)

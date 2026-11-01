@@ -50,6 +50,7 @@ from diagnostics import TraceBook
 from runtime_guard import RuntimeLease, RuntimeConflict
 from configuration import load_config
 from config_schema import ConfigError
+from release_info import RELEASE
 from dot_client import runtime_status as dot_runtime_status
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -389,7 +390,9 @@ class Bridge:
         # 白名单输出就绪位，不导出 metrics 内可能存在的自检文字和用户内容。
         return {
             'ok': True,
-            'bridge_version': '0.12.4',
+            'bridge_version': RELEASE.backend_version,
+            'release_id': RELEASE.release_id,
+            'protocol_version': RELEASE.protocol_version,
             'uptime_seconds': round(time.monotonic() - self.started_at, 1),
             'model_ready': True,
             'recognition_worker': self.worker.is_alive(),
@@ -1133,7 +1136,9 @@ class Bridge:
             'generation': self.generation,
             'wake_mode': self.wake,
             'wake_word': WAKE_WORD,
-            'bridge_version': '0.12.4',
+            'bridge_version': RELEASE.backend_version,
+            'release_id': RELEASE.release_id,
+            'protocol_version': RELEASE.protocol_version,
             'desktop_camera_enabled': bool(self.desktop_challenge),
             'desktop_snapshot_active': self.desktop_snapshot is not None,
             'noise_profile': 'moderate',

@@ -18,6 +18,7 @@ import time
 import uuid
 from typing import Callable, Literal, Protocol, TypeAlias
 from protocol import Packet, receive, EVENT, decode_event, decode_json_object, JsonValue, JsonObject
+from release_info import RELEASE
 
 ROOT = Path(__file__).resolve().parents[2]
 PAIR_DIR = ROOT / '.toolchains/cc8/transport'
@@ -223,8 +224,7 @@ class Channel:
             if (
                 not isinstance(hello, dict)
                 or hello.get('event') != 'transport_hello'
-                or type(hello.get('protocol')) is not int
-                or hello['protocol'] != 2
+                or not RELEASE.compatible(hello.get('protocol'))
             ):
                 raise ValueError('Missing transport hello')
             self.ready = True

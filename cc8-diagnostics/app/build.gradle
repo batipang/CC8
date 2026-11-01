@@ -1,4 +1,9 @@
 plugins { id 'com.android.application' }
+def releaseManifest = new groovy.json.JsonSlurper().parse(rootProject.file('../release.json'))
+def component = releaseManifest.diagnostics
+assert releaseManifest.schema_version == 1
+assert component.version_code instanceof Integer && component.version_code > 0
+assert component.version ==~ /\d+\.\d+\.\d+/
 android {
     namespace 'com.happyhome.cc8diagnostics'
     compileSdk 35
@@ -6,8 +11,8 @@ android {
         applicationId 'com.happyhome.cc8diagnostics'
         minSdk 21
         targetSdk 28
-        versionCode 2
-        versionName '1.0.1'
+        versionCode component.version_code
+        versionName component.version
     }
     signingConfigs {
         diagnostic {

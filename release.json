@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "release_id": "foundation-20261102.1",
+  "backend": {"version": "0.12.5"},
+  "assistant": {"version": "0.8.7", "version_code": 32, "package": "com.happyhome.cc8assistant"},
+  "diagnostics": {"version": "1.0.1", "version_code": 2, "package": "com.happyhome.cc8diagnostics"},
+  "protocol": {"version": 2, "device_min": 2, "device_max": 2},
+  "known_deployed_pair": {
+    "assistant_version": "0.8.6",
+    "assistant_version_code": 31,
+    "backend_version": "0.12.2",
+    "protocol": 2
+  }
+}
