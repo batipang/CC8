@@ -70,3 +70,14 @@ The 0.8.1 long-announcement capture reproduced text painting outside its 665×15
 On the physical 1280×800 CC8, the same 97-character announcement completed with seven wrapped lines. Eleven status samples confirmed the active line was fully visible, viewport/progress intersection was false, clipping was enabled, and the caption remained 42sp; scroll reached 302px. Native screenshots of each line were captured, with first, middle and final states visually checked. Neighboring context can be cropped at the viewport edges; the current spoken line is fully visible and no text paints across the progress bar. The microphone and camera remained off during this verification. Seven relevant timing / playback regressions, release build and lint passed.
 
 final result: passed
+
+
+## 0.8.3 orbit clock and playback rail (2026-11-01)
+
+Latest owner brief explicitly replaces the free-spinning orbit with a readable abstract clock and the rounded progress capsule with a technical treatment. The selected reference remains the target for the rest of the screen. Compare the physical 1280×800 0.8.2 and 0.8.3 first-line captures of the same 97-character announcement, both with maintenance microphone-off state; inspect the final-line capture too.
+
+The portrait, full orbit footprint, independent waveform, status, task/reminder sections, dock and 42sp caption remain in place. The orbit has 60 fixed tick marks, amber hour and cyan minute beacons, a smoothly moving seconds point, and an HH:mm readout below the face. The real-device capture crosses 17:26 to 17:27, matching the device's Asia/Shanghai system clock. The readout does not touch the portrait or waveform. Playback uses 32 segments in a cut-ended rail with a bright diamond at actual caption progress; no synthetic progress animation. Its expanded 24px height remains separated from the clipped caption viewport.
+
+The actual announcement completed; all eight status samples report a fully visible current caption line and no caption/rail overlap. First and final native screenshots were visually inspected; the seconds point moves between frames and the rail advances with playback. Both capture devices remain off during this check. Build/lint and seven relevant playback/timing tests pass. The current task receipt reflects real service history, not seeded design content. No new P0/P1/P2 visual defects found; cropped neighboring caption context at the viewport edge remains the same P3 detail documented in 0.8.2.
+
+final result: passed
