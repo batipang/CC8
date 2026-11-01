@@ -86,7 +86,9 @@ python3 device-access/cc8_install.py --install artifacts/cc8-assistant-0.8.7.apk
 
 安装其他单 APK 时替换 `--install` 后的路径。不想启动就省略 `--launch`。没有桌面入口的 APK 不能使用 `--launch`。
 
-成功报告保存到本机忽略目录 `device-access/private/apk-install-result.json`。核对：
+安装报告保存到本机忽略目录 `device-access/private/apk-install-result-<随机值>.json`，每次独立新建，不覆盖历史报告。安装前就校验目录为当前用户的真实私有目录（0700），并预留 0600 原子报告；已有目录权限不私有或为链接时在探测设备之前停止，不自动 chmod。先核对本机目录的所有权/类型，再修正该专用目录权限。`--probe` / `--verify-apk` / `--check` 不建安装报告。
+
+报告的 `report_state=prepared` 表示尚未开始安装，`result_unconfirmed` 表示已进入安装但尚无可保存的最终核验，不冒充未执行；`installation_verified` 才是正常安装函数的已验证结果，前台/音频仍按各自字段判断。若最后保存失败，命令明确提醒可能已完成安装、先查实际包再决定，不自动重复安装。旧固定文件名的报告保持不动，不自动迁移其权限。核对：
 
 | 字段 / 提示 | 含义 |
 | --- | --- |

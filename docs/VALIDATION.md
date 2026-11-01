@@ -421,3 +421,12 @@ P0-05 观察软件经 [PR #33](https://github.com/batipang/CC8/pull/33) 的 [真
 新增来源分级兼容表、仅四字段 probe 的公开 issue 表单、明确为示意的安装路线/分阶段排障、文档导航/历史索引/英文入口，以及贡献和安全策略。README/安装页补齐停止条件、共享装载剩余风险及当前 APK 示例。GitHub issues 已核对可用，private vulnerability reporting 由 API 启用并再次读回 enabled；没有发送报告/通知。
 
 文档 147 个本地链接存在性与 diff whitespace 通过；兼容 issue form 经系统 Ruby/Psych YAML 解析和字段/唯一 ID 校验通过（旧 Ruby 无 filter_map 的检查脚本已换成 map/compact，不是表单错误）。未操作设备或采集截图。F-16 真实脱敏截图/GIF 仍开放；其他文档条目只按本轮已完成内容关闭。安装报告保存权限问题另行独立修复，不混入本次纯文档提交。
+
+
+文档前置工作经 [PR #34](https://github.com/batipang/CC8/pull/34) 的 [真实 CI 八项](https://github.com/batipang/CC8/actions/runs/41355184899) 通过并合入 66fa6ee；F-16 的真实截图仍开放。
+
+### 安装报告 owner-only 与未知结果处理（无真实安装）
+
+先独立纯提交共享原 PrivateOutput，定义 AST 完全一致，保留 host 兼容导出；安装 CLI 仅提取 main，installer 16 / host 436 / tooling 51 / Java 15 旧全套通过。随后在旧保存实现上新增两项回归，确认宽松 umask 产生非私有目录/文件，且已有公开目录仍继续设备操作，两项都失败；独立功能修复后通过。
+
+现在安装前预留 0700/0600 私有独立报告，拒绝公开/链接目录且不 chmod；探测/验签/本地 check 不建报告；安装失败/最后保存失败保留 unconfirmed，明确先核对已装包而非重装。新增共 6 项还验证多轮不覆盖历史、链接拒绝、探测前已预留、结果不明和保存失败不重试。无 USB 或实际 APK 安装，target/probe/install 全替身。最终 installer 22、host 436（4 private-audio skip）、tooling 51、Java 15 checks，以及质量/strict 六模块和脱敏历史扫描通过，待 CI。P0 软件候选统一为后台 0.13.3 / p0-software-20261102.1，APK/协议保持。
