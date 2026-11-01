@@ -23,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-14]
+        os: [ubuntu-24.04, macos-15]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -90,7 +90,8 @@ jobs:
           cache-disabled: true
       - name: Prepare SDK and ignored build configuration
         run: |
-          sdkmanager 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
           python3 scripts/configure-toolchain.py \
             --java-home "$JAVA_HOME" --android-sdk "$ANDROID_HOME" \
             --gradle "$(command -v gradle)"

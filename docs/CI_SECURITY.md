@@ -6,7 +6,7 @@
 
 | 检查 | 环境与入口 | 失败条件 |
 | --- | --- | --- |
-| 可移植回归 | Ubuntu 24.04、macOS 14；Python 3.13、JDK 21；`python tools/test_all.py` | 核心缺依赖、失败、超时均失败；4 项私人录音用例明确 opt-in skip |
+| 可移植回归 | Ubuntu 24.04、macOS 15；Python 3.13、JDK 21；`python tools/test_all.py` | 核心缺依赖、失败、超时均失败；4 项私人录音用例明确 opt-in skip |
 | 格式 | Ubuntu；`python tools/quality.py check` | 与本地 Ruff / Java formatter 相同锁版、规则及范围，只读检查 |
 | 工作流 | actionlint 1.7.12 | YAML、表达式、job/step 等检查失败；不声称包含 shellcheck（显式禁用可选 shellcheck 集成） |
 | Android | Ubuntu、JDK 21、Gradle 8.11.1；两个工程 `assembleRelease` / `lintRelease` | 编译或 lint 失败；只生成一次性 CI 开发签名，不上传 APK、签名或本机配置 |
@@ -17,6 +17,8 @@
 Actions 引用固定完整 commit SHA，默认 token 仅 contents:read，checkout 不保留 Git 凭证；不使用 pull_request_target 或仓库秘密。CI 不缓存 Gradle，避免 PR 写入共享构建缓存。报告仅保留 lint 和包版本/公开漏洞信息，7 天过期。
 
 原工作流配置及实际运行记录见 [VALIDATION.md](VALIDATION.md)。macOS/Ubuntu 测试通过不代表完整 Linux 语音服务、CC8 物理切换、AEC 或长期运行已通过验收。
+
+main 的分支保护要求 `Required checks` 成功且分支与目标同步，管理员也适用，不允许强推或删除。普通代码通过 PR 合入，失败时先修复重跑，不绕过检查；不额外要求多人审批或改变原有合并方式。
 
 ## 本地复现
 
