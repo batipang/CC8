@@ -14,7 +14,7 @@
 | Python 依赖 | pip-audit 2.10.1；开发、安全工具、运行锁分别扫描 | 已知漏洞、无法查询的包、缺失报告、请求错误均失败；不自动 `--fix` |
 | 合入门槛 | `Required checks` 汇总所有 job 和 matrix 结果 | 任何失败、取消或跳过的整组均失败，不能以最后一个成功 job 掩盖前序失败 |
 
-Actions 引用固定完整 commit SHA，默认 token 仅 contents:read，checkout 不保留 Git 凭证；不使用 pull_request_target 或仓库秘密。CI 不缓存 Gradle，避免 PR 写入共享构建缓存。报告仅保留 lint 和包版本/公开漏洞信息，7 天过期。
+Actions 引用固定完整 commit SHA，仓库已启用 sha_pinning_required 强制策略；默认 token 仅 contents:read，checkout 不保留 Git 凭证，不使用 pull_request_target 或仓库秘密。CI 不缓存 Gradle，避免 PR 写入共享构建缓存。报告仅保留 lint 和包版本/公开漏洞信息，7 天过期。
 
 原工作流配置及实际运行记录见 [VALIDATION.md](VALIDATION.md)。macOS/Ubuntu 测试通过不代表完整 Linux 语音服务、CC8 物理切换、AEC 或长期运行已通过验收。
 
