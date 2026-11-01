@@ -77,7 +77,10 @@ def local_addresses() -> list[str]:
 
 class Pairing:
     # 私有文件保存共享密钥与 TLS 证书；USB 负责初次交付设备侧配对信息。
-    def __init__(self, folder: str | Path = PAIR_DIR) -> None:
+    def __init__(self, folder: str | Path = PAIR_DIR, port: int = TLS_PORT) -> None:
+        if type(port) is not int or not 0 <= port <= 65535:
+            raise ValueError('Invalid TLS port')
+        self.port = port
         self.folder = Path(folder)
         self.folder.mkdir(parents=True, exist_ok=True)
         os.chmod(self.folder, 0o700)
@@ -141,7 +144,7 @@ class Pairing:
             'server_id': self.server_id,
             'token': self.token,
             'certificate_sha256': self.pin,
-            'port': TLS_PORT,
+            'port': self.port,
             'hosts': hosts,
         }
 
@@ -163,9 +166,9 @@ class Pairing:
             'type': 'cc8_offer',
             'nonce': nonce,
             'server_id': self.server_id,
-            'port': TLS_PORT,
+            'port': self.port,
             'mac': signature(
-                self.token, 'offer:' + nonce + ':' + self.server_id + ':' + str(TLS_PORT)
+                self.token, 'offer:' + nonce + ':' + self.server_id + ':' + str(self.port)
             ),
         }
 
@@ -321,6 +324,7 @@ class TransportHub:
             self.discovery.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self.discovery.bind((self.bind, self.discovery_port))
             self.discovery.settimeout(0.5)
+            self.pairing.port = self.server.getsockname()[1]
         except OSError:
             self.close()
             raise

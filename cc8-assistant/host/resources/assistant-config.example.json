@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "asr": "minimax",
+  "brain": "dot"
+}

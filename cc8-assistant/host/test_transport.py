@@ -264,6 +264,8 @@ class TransportTests(unittest.TestCase):
         client.sendto(json.dumps(request).encode(), hub.discovery.getsockname())
         raw, _ = client.recvfrom(2048)
         offer = json.loads(raw)
+        self.assertEqual(offer['port'], hub.server.getsockname()[1])
+        self.assertEqual(self.pairing.device_config()['port'], hub.server.getsockname()[1])
         self.assertNotIn(self.pairing.token, raw.decode())
         self.assertEqual(offer['nonce'], nonce)
         self.assertEqual(

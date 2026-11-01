@@ -54,3 +54,7 @@ OS 文件锁覆盖模型加载到退出，直接执行 bridge.py 也不能绕过
 launchd 不会自动读取交互 shell 的 PATH。服务 plist 仅保存 PATH（不保存环境密钥），Dot 子进程自身也补齐常见本机工具目录；保留已有绝对路径顺序，剔除空项/相对项，再加入 Homebrew 和用户本地工具目录，不修改全局 shell 或模型配置。更新已有服务的启动环境时，先 service.py stop 再 service.py start，确保 launchd 重新加载 plist。
 
 health.dot_runtime 返回 Codex 可发现、包装器是否需要 Node、Node 是否可发现等就绪位。这是本地依赖检查，不代表已完成远端模型认证或请求。缺少 Node 时 npm 安装的 Codex 包装器可能立即以 127 退出，语音识别/TTS 本身仍正常。实际故障及修复验证见 VALIDATION.md 文末。
+
+## 0.12.4 候选：统一配置
+
+F-09 增加了非敏感配置来源、迁移与恢复，见 [CONFIGURATION.md](CONFIGURATION.md)。默认仍只持久化 PATH；安装时明确提供的白名单非敏感环境覆盖会经校验后继承到登录服务，不保存 API key 或其他环境秘密。模型初始化前校验错误字段，避免登录后悄悄换回默认选择。本段是候选软件能力，实际运行环境需另行部署验证。

@@ -14,10 +14,10 @@ class BrainRouter:
     # 文字按用户选择或显式委派路由，图像统一交给 Dot；失败时报告错误而不暗中换大脑。
     label = 'MiniMax + Dot'
 
-    def __init__(self, minimax, dot=None):
+    def __init__(self, minimax, dot=None, selected='dot'):
         self.minimax = minimax
         self.dot = dot or DotBrain()
-        self.selected = 'dot'
+        self.select(selected)
         self.last_metrics = {}
 
     def select(self, provider):

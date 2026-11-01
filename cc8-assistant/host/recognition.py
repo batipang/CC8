@@ -9,21 +9,15 @@ import re
 import time
 import wave
 import numpy as np
+from configuration import load_config
 
 ROOT = Path(__file__).resolve().parents[2]
 MODEL = ROOT / '.toolchains/cc8/sensevoice-int8-2025-09-09'
 MANIFEST = Path(__file__).parent / 'resources/sensevoice.json'
-CONFIG = Path(__file__).parent / 'voice-config.json'
 
 
 def selected_engine():
-    if os.environ.get('CC8_ASR_ENGINE'):
-        return os.environ['CC8_ASR_ENGINE']
-    return (
-        json.loads(CONFIG.read_text()).get('asr', 'sensevoice')
-        if CONFIG.is_file()
-        else 'sensevoice'
-    )
+    return load_config().asr
 
 
 def prepare_audio(samples):
@@ -61,8 +55,14 @@ def verify_model():
 
 class MandarinRecognizer:
     # 按显式配置选择引擎，失败不偷偷换服务或上传更多录音。
-    def __init__(self, engine=None, recognizer=None):
-        self.engine = engine or ('sensevoice' if recognizer is not None else selected_engine())
+    def __init__(self, engine=None, recognizer=None, config=None):
+        self.engine = engine or (
+            'sensevoice'
+            if recognizer is not None
+            else config.asr
+            if config is not None
+            else selected_engine()
+        )
         self.last_metrics = {}
         if self.engine == 'sensevoice':
             if recognizer is None:
@@ -82,7 +82,7 @@ class MandarinRecognizer:
         elif self.engine == 'minimax':
             from minimax_client import Transport
 
-            self.recognizer = recognizer or Transport()
+            self.recognizer = recognizer or Transport(config=config)
         elif self.engine == 'whisper':
             os.environ['HF_HUB_OFFLINE'] = '1'
             os.environ['TRANSFORMERS_OFFLINE'] = '1'

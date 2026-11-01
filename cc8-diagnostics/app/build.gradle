@@ -11,7 +11,7 @@ android {
     }
     signingConfigs {
         diagnostic {
-            storeFile rootProject.file('signing/cc8-diagnostics-debug.jks')
+            storeFile rootProject.file(System.getenv('CC8_SIGNING_KEYSTORE') ?: 'signing/cc8-diagnostics-debug.jks')
             storePassword 'android'
             keyAlias 'cc8-diagnostics'
             keyPassword 'android'

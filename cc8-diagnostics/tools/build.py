@@ -9,6 +9,10 @@ import sys
 
 project = Path(__file__).resolve().parents[1]
 workspace = project.parent
+sys.path.insert(0, str(workspace / 'cc8-assistant/host'))
+from configuration import load_config  # noqa: E402 - standalone build entry
+
+config = load_config(root=workspace)
 tools = workspace / '.toolchains/cc8'
 paths = json.loads((tools / 'paths.json').read_text())
 env = os.environ.copy()
@@ -20,7 +24,10 @@ env['PATH'] = str(Path(paths['java_home']) / 'bin') + os.pathsep + env.get('PATH
 (project / 'local.properties').write_text('sdk.dir=' + paths['android_sdk'] + '\n')
 signing = project / 'signing'
 signing.mkdir(exist_ok=True)
-key = signing / 'cc8-diagnostics-debug.jks'
+key = (config.signing_keystore or signing / 'cc8-diagnostics-debug.jks').resolve()
+if config.signing_keystore is not None and not key.is_file():
+    raise SystemExit('Configured signing keystore is missing; no replacement key will be generated')
+env['CC8_SIGNING_KEYSTORE'] = str(key)
 if not key.exists():
     subprocess.run(
         [

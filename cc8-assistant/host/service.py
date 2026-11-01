@@ -17,6 +17,8 @@ from diagnose import query
 from launch import ROOT, PRIVATE, BRIDGE, PYTHON, own_process
 from process_lock import ProcessLease, atomic_private_json
 from runtime_env import command_path
+from configuration import load_config
+from config_schema import ConfigError
 
 LABEL = 'com.happyhome.cc8.' + hashlib.sha256(str(ROOT).encode()).hexdigest()[:12]
 PLIST = Path.home() / 'Library/LaunchAgents' / f'{LABEL}.plist'
@@ -33,6 +35,7 @@ def enabled(path=ENABLED):
 def agent_payload():
     # 子进程退避由本进程管理；监督进程自身崩溃才由 launchd 拉起。
     # 明确停止先落盘 enabled=false，即使遇到拉起竞态也不会再启动语音后台。
+    config = load_config()
     return {
         'Label': LABEL,
         'RunAtLoad': True,
@@ -42,7 +45,7 @@ def agent_payload():
         'WorkingDirectory': str(ROOT),
         'ProcessType': 'Background',
         'Umask': 0o077,
-        'EnvironmentVariables': {'PATH': command_path()},
+        'EnvironmentVariables': {'PATH': command_path(), **config.service_environment(os.environ)},
     }
 
 
@@ -226,7 +229,10 @@ def main():
     )
     args = parser.parse_args()
     if args.action in ('install', 'start'):
-        install()
+        try:
+            install()
+        except ConfigError as error:
+            parser.error(str(error))
         print('登录后台已启用；不打开设备界面或麦克风。')
     elif args.action in ('stop', 'uninstall'):
         disable()

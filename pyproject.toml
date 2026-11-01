@@ -17,6 +17,6 @@ docstring-code-format = false
 [tool.mypy]
 python_version = "3.11"
 strict = true
-files = ["cc8-assistant/host/protocol.py", "cc8-assistant/host/transport.py", "cc8-assistant/host/workspace.py"]
+files = ["cc8-assistant/host/protocol.py", "cc8-assistant/host/transport.py", "cc8-assistant/host/workspace.py", "cc8-assistant/host/config_schema.py", "cc8-assistant/host/configuration.py"]
 mypy_path = "$MYPY_CONFIG_FILE_DIR/cc8-assistant/host"
 cache_dir = ".toolchains/cc8/quality/mypy-cache"
