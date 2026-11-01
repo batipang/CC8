@@ -236,6 +236,7 @@ def resembles_playback(text, spoken):
 
 class VoiceDetector:
     """Energy VAD for prototype testing, not a semantic speech detector."""
+    ONSET_FRAMES=14
     def __init__(self):
         self.pre = deque(maxlen=50)
         self.audio = []
@@ -260,7 +261,7 @@ class VoiceDetector:
             self.hot = self.hot+1 if voiced else max(0, self.hot-2)
             if not voiced:
                 self.noise = .995*self.noise + .005*db
-            if self.hot >= 12:  # 120 ms onset, with a 500 ms pre-roll; not end-to-end latency.
+            if self.hot >= self.ONSET_FRAMES:  # 140 ms onset, with a 500 ms pre-roll; not end-to-end latency.
                 self.talking = True
                 self.audio = list(self.pre)
                 self.pre.clear()
@@ -278,13 +279,19 @@ class VoiceDetector:
 
 class NearSpeechDetector:
     """Local WebRTC VAD plus residual energy/correlation; not speaker identity."""
+    MIN_DBFS=-43.
+    MAX_DBFS=-34.
+    NOISE_MARGIN_DB=12.
+    CONFIRM_WINDOW=24
+    CONFIRM_MIN_FRAMES=20
+    CONFIRM_VOTES=16
     def __init__(self,vad=None):
         if vad is None:
             import webrtcvad
             vad=webrtcvad.Vad(2)
         self.vad=vad;self.reset()
     def reset(self):
-        self.votes=deque(maxlen=20);self.raw=deque(maxlen=20);self.render=deque(maxlen=20);self.residual=deque(maxlen=20)
+        self.votes=deque(maxlen=self.CONFIRM_WINDOW);self.raw=deque(maxlen=20);self.render=deque(maxlen=20);self.residual=deque(maxlen=20)
         self.noise=-58.;self.voiced=False;self.credible=False;self.correlation=0.;self.residual_correlation=0.
     @staticmethod
     def coherence(signal,reference):
@@ -300,7 +307,7 @@ class NearSpeechDetector:
         return float(np.max(np.abs(cross[lags+n-1])/np.maximum(energy,1e-9)))
     def feed(self,cleaned,mic,reference):
         if any(len(x)!=FRAME for x in (cleaned,mic,reference)):raise ValueError('Near speech requires 10 ms frames')
-        db=level(cleaned);threshold=max(-46.,min(-36.,self.noise+10))
+        db=level(cleaned);threshold=max(self.MIN_DBFS,min(self.MAX_DBFS,self.noise+self.NOISE_MARGIN_DB))
         raw=np.rint(np.clip(cleaned*1.5,-.98,.98)*32768).astype('<i2').tobytes()
         speech=bool(self.vad.is_speech(raw,RATE))
         if not speech:self.noise=.995*self.noise+.005*db
@@ -314,5 +321,5 @@ class NearSpeechDetector:
         echo_only=has_render and self.correlation>.78 and self.residual_correlation>.60 and db<level(rec)-6
         self.voiced=speech and db>threshold and not echo_only
         self.votes.append(self.voiced)
-        self.credible=len(self.votes)>=16 and sum(self.votes)>=12 and self.voiced
+        self.credible=len(self.votes)>=self.CONFIRM_MIN_FRAMES and sum(self.votes)>=self.CONFIRM_VOTES and self.voiced
         return self.voiced,self.credible

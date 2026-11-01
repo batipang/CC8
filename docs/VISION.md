@@ -1,6 +1,6 @@
 # 大黄蜂的眼睛：CC8 → Dot
 
-Android **0.6.1 / versionCode 23**、Mac 后台 **0.9.1** 支持按次看图。保留 MiniMax ASR、MiniMax 大黄蜂音色、本地 AEC / 插话及原有 Dot 模型、推理、技能、工具和权限配置。
+Android **0.6.1 / versionCode 23**、Mac 后台 **0.9.2** 支持按次看图。保留 MiniMax ASR、MiniMax 大黄蜂音色、本地 AEC / 插话及原有 Dot 模型、推理、技能、工具和权限配置。
 
 ## 使用
 

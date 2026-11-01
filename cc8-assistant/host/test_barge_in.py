@@ -122,6 +122,41 @@ class AcousticGateTests(unittest.TestCase):
         for _ in range(85):
             detector.external_voice=False;_,done,_=detector.feed(np.zeros(FRAME));ends+=done is not None
         self.assertEqual(ends,1)
+    @staticmethod
+    def acoustic_frame(db,seed=81):
+        frame=np.random.default_rng(seed).normal(0,1,FRAME)
+        return frame/np.sqrt(np.mean(frame*frame))*10**(db/20)
+    def test_weak_background_is_rejected_even_if_vad_misclassifies_it(self):
+        detector=NearSpeechDetector(self.SpeechVad(True));utterance=VoiceDetector();begins=0
+        for i in range(100):
+            frame=self.acoustic_frame(-44,i);voiced,credible=detector.feed(frame,frame,np.zeros(FRAME))
+            utterance.external_voice=voiced;began,_,_=utterance.feed(frame);begins+=began
+            self.assertFalse(voiced);self.assertFalse(credible)
+        self.assertEqual(begins,0)
+    def test_short_speech_like_transient_cannot_start_a_turn_or_pause(self):
+        detector=NearSpeechDetector(self.SpeechVad(True));utterance=VoiceDetector();begins=0
+        for i in range(40):
+            frame=self.acoustic_frame(-32,i) if 5<=i<18 else np.zeros(FRAME)
+            voiced,credible=detector.feed(frame,frame,np.zeros(FRAME))
+            utterance.external_voice=voiced;began,_,_=utterance.feed(frame);begins+=began
+            self.assertFalse(credible)
+        self.assertEqual(begins,0)
+    def test_ordinary_and_soft_clear_speech_still_start_and_confirm(self):
+        for db in (-38,-42):
+            with self.subTest(db=db):
+                detector=NearSpeechDetector(self.SpeechVad(True));utterance=VoiceDetector();begins=0;confirmed=False
+                for i in range(40):
+                    frame=self.acoustic_frame(db,i);voiced,credible=detector.feed(frame,frame,np.zeros(FRAME))
+                    utterance.external_voice=voiced;began,_,_=utterance.feed(frame);begins+=began;confirmed|=credible
+                self.assertEqual(begins,1);self.assertTrue(confirmed)
+    def test_moderate_background_requires_clearer_energy_without_losing_near_speech(self):
+        detector=NearSpeechDetector(self.SpeechVad(True));detector.noise=-48
+        for i in range(40):
+            frame=self.acoustic_frame(-38,i);voiced,credible=detector.feed(frame,frame,np.zeros(FRAME))
+            self.assertFalse(voiced);self.assertFalse(credible)
+        for i in range(40):
+            frame=self.acoustic_frame(-32,i);detector.feed(frame,frame,np.zeros(FRAME))
+        self.assertTrue(detector.credible)
     def test_reference_moves_with_pause_without_replaying_future_echo_early(self):
         timeline=RenderTimeline();pcm=np.ones(320);stamp=1_000_000_000
         timeline.add(100,0,stamp,pcm);timeline.pause_at(stamp+10_000_000)

@@ -1,6 +1,6 @@
 # 大黄蜂（Bumblebee）语音助手
 
-完整源码快照：Android APK **0.6.1**（versionCode 23）、Mac 后台 **0.9.1**。包名 `com.happyhome.cc8assistant`。默认 **Dot / Codex 做大脑，MiniMax ASR 做耳朵，MiniMax TTS 做嘴巴**，Mac 执行消回声与即时打断，CC8 负责录放和显示。
+完整源码快照：Android APK **0.6.1**（versionCode 23）、Mac 后台 **0.9.2**。包名 `com.happyhome.cc8assistant`。默认 **Dot / Codex 做大脑，MiniMax ASR 做耳朵，MiniMax TTS 做嘴巴**，Mac 执行消回声与即时打断，CC8 负责录放和显示。
 
 ## 构建与安装
 
