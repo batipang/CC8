@@ -690,7 +690,7 @@ class Bridge:
             elif self.wake:self.status('listening','请说“大黄蜂”或“Bumblebee”开始聊天')
             else:
                 self.status('listening','我在听，可以开始说话')
-                greeting='我在。你可以开始说话，也可以在我回答时打断我。'
+                greeting='汽车人，变形！'
                 self.speak(greeting,generation)
             self.save_status();self.log('calibration_finished')
         except Exception as e:
