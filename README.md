@@ -15,6 +15,7 @@
 - [轻量测试、格式规范与提交钩子](docs/DEVELOPMENT.md#轻量测试与质量检查)
 - [CI、密钥扫描、依赖审计与更新边界](docs/CI_SECURITY.md)
 - [配置来源、私有覆盖、迁移与恢复](docs/CONFIGURATION.md)
+- [统一 setup / doctor / run 与单实例规则](docs/COMMANDS.md)
 - [语音助手配置与使用](cc8-assistant/README.md)
 - [方案一界面、任务与提醒](docs/WORKSPACE.md)
 - [功能迭代列表](docs/ROADMAP.md)
@@ -32,6 +33,24 @@
 - [全面代码检查与修复记录](docs/CODE_REVIEW.md)
 
 ## 快速开始
+
+统一入口（Python 3.9+ 可显示帮助和自检；实际准备选 Python 3.13）：
+
+```sh
+./cc8 setup --profile dev       # 独立轻量开发环境；仍需 JDK 21+ / OpenSSL
+./cc8 doctor --profile dev
+
+./cc8 setup --profile android   # 官方构建工具与交互式 SDK 许可
+./cc8 doctor --profile android
+
+# 配好原签名、MiniMax 私有凭证和 owner 的 Codex CLI 后
+./cc8 setup --profile voice     # Apple Silicon macOS / Python 3.13
+./cc8 doctor --profile voice
+./cc8 run                       # 登录后台；不打开 CC8 界面或麦克风
+./cc8 run --stop                # 只停当前目录的后台
+```
+
+已有其他目录运行的助手时，先在原目录明确停止再切换；新命令不会替你终止或升级它。doctor 为本地只读检查，未验证 API 额度、登录和真实音频效果；可加 `--json`。首次安装与设备端工程入口仍按下文执行，详情见 [命令说明](docs/COMMANDS.md)。
 
 已验证开发环境为 Apple Silicon Mac，Python 3.13、JDK 21、Gradle 8.11.1、Android SDK 35 / Build Tools 35.0.0。所有命令在仓库根目录执行。
 

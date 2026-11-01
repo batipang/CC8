@@ -104,6 +104,7 @@ class ServiceTests(unittest.TestCase):
             patch.object(service, 'enabled', return_value=True),
             patch.object(service, 'read_pid', return_value=None),
             patch.object(service, 'own_process', return_value=False),
+            patch.object(service, 'ensure_available'),
         ):
             supervisor = service.Supervisor()
             supervisor.stop = Stop()
@@ -135,6 +136,26 @@ class ServiceTests(unittest.TestCase):
             self.assertEqual(
                 json.loads((Path(folder) / 'supervisor.json').read_text())['phase'], 'stopped'
             )
+
+    def test_other_checkout_blocks_supervisor_without_spawning_or_stopping_it(self):
+        from runtime_guard import RuntimeConflict
+
+        with (
+            tempfile.TemporaryDirectory() as folder,
+            patch.object(service, 'PRIVATE', Path(folder)),
+            patch.object(service, 'enabled', return_value=True),
+            patch.object(service, 'read_pid', return_value=None),
+            patch.object(service, 'ensure_available', side_effect=RuntimeConflict('other')),
+        ):
+            supervisor = service.Supervisor()
+            supervisor.stop.wait = lambda seconds: True
+            with (
+                patch.object(supervisor, 'start_child') as spawn,
+                patch.object(supervisor, 'state') as state,
+            ):
+                supervisor.run()
+            spawn.assert_not_called()
+            self.assertIn(unittest.mock.call('other_runtime', 0), state.call_args_list)
 
     def test_log_rotation_is_bounded(self):
         with (

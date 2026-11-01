@@ -252,3 +252,13 @@ main 的 [CI 运行](https://github.com/batipang/CC8/actions/runs/41320525409) �
 - 本机安装器 11、后台 335（331 通过、4 私人录音 skip）、工具 27、Java 音频 15 项通过；配置专项 19 项检查通过。包含来源/数值与秘密不入日志、权限/打开后再次核验、目录/符号链接/大小/深度/重复字段、迁移失败保留、写入/重置回滚、已有外部目录权限保留、真实最小 PATH 子进程和模型加载前失败。两份配置模块使 strict 范围增至 5，检查与真实提交钩子使用相同入口。
 - 使用真实 MiniMax 客户端编码与模拟 HTTP 响应核对模型、voice、speed、连接/读取 timeout；没有调用云端。登录 payload 只继承明确的非敏感白名单覆盖，API key 与其他环境秘密不进入 plist。已验证的 TLS 发现与 USB 配置返回实际绑定端口，改变端口仍要求原 USB 配对下发。
 - 两个 Android `assembleRelease` / `lintRelease` 本机通过，未安装；两构建器对缺失的显式签名引用均在生成证书前失败。335 项总数不包含模型准确率、真人语音、设备旁操作或长期观察；实际运行目录、进程与已装 APK 均未更新。
+# F-15 统一入口候选（2026-11-02，待 CI）
+
+新增 `./cc8 setup / doctor / run`、dev/android/voice 三类 profile、只读就绪报告，以及跨工作区 OS 排他锁；旧版 bridge / enabled supervisor 也会被只读识别。直接 voice setup 和 bridge 都使用同一运行锁，不在模型准备/加载时互相修改环境。
+
+本机全套离线检查：installer 11、host 341（4 项私人录音明确 skip）、tooling 38、Java 15 checks；之后新增的显式签名引用 / 前台与停止路由两项连同原 CLI 共 13 项通过。Ruff / Java formatter / 5 模块 strict mypy 通过。锁竞争用两个真实 Python 子进程、两个临时 checkout 和临时 owner 锁验证，SIGKILL 后锁由 OS 释放；不使用当前助手的锁或进程。
+
+把当前候选的公开源码复制到临时干净目录，使用全新 owner HOME / venv 实际执行 `setup --profile dev`，27 项固定依赖和校验 Java formatter 安装成功；随后从 `/`、`PATH=/usr/bin:/bin`、显式 JDK 的条件运行 dev doctor，退出 0。原仓库 dev / Android doctor 通过；voice doctor / run 准确报告本仓库凭证/包版本不足及另一目录运行中，退出 2，不创建第二个后台。
+
+未在本轮重新安装 Android/voice 环境、验证云端请求或打开设备采集。当前运行实例仍是原目录后台 0.12.2 / APK 0.8.6，未升级或重启；此项不关闭 P0 的真人、物理切换、待机和长期运行验收。
+

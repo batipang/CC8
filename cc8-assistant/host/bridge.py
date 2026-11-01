@@ -47,7 +47,7 @@ from vision import CameraInbox, DesktopSnapshot, VisionError, visual_request, de
 from minimax_client import MiniMaxBrain, MiniMaxVoice, MiniMaxError
 from workspace import Workspace
 from diagnostics import TraceBook
-from process_lock import ProcessLease
+from runtime_guard import RuntimeLease, RuntimeConflict
 from configuration import load_config
 from config_schema import ConfigError
 from dot_client import runtime_status as dot_runtime_status
@@ -2116,10 +2116,12 @@ def connect_device():
 def main():
     # 锁覆盖模型加载到退出全程；直接执行 bridge.py 也不能绕过单实例检查。
     try:
-        with ProcessLease(PRIVATE / 'bridge.lock'):
+        with RuntimeLease(ROOT):
             run_backend()
     except BlockingIOError:
-        raise SystemExit('当前目录已有大黄蜂后台，未启动第二份模型。')
+        raise SystemExit('已有大黄蜂后台或环境准备任务占用运行锁，未启动第二份模型。')
+    except RuntimeConflict as error:
+        raise SystemExit(str(error)) from None
 
 
 def run_backend():
