@@ -52,6 +52,7 @@ FIELDS = {
     'tls_port': Field('integer', 18766, minimum=1024, maximum=65535),
     'connect_timeout': Field('integer', 8, minimum=1, maximum=30),
     'read_timeout': Field('integer', 20, minimum=1, maximum=120),
+    'wake_window_seconds': Field('integer', 60, minimum=15, maximum=300),
     'credential_file': Field('path', '.toolchains/cc8/voice-secrets.env', max_length=4096),
     'signing_keystore': Field('path', None, max_length=4096, nullable=True),
 }
@@ -69,6 +70,7 @@ ENV_FIELDS = {
     'CC8_TLS_PORT': 'tls_port',
     'CC8_CONNECT_TIMEOUT': 'connect_timeout',
     'CC8_READ_TIMEOUT': 'read_timeout',
+    'CC8_WAKE_WINDOW_SECONDS': 'wake_window_seconds',
     'CC8_MINIMAX_CREDENTIAL_FILE': 'credential_file',
     'CC8_SIGNING_KEYSTORE': 'signing_keystore',
 }

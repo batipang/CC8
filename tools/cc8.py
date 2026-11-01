@@ -142,30 +142,37 @@ def verified_models(root, engine):
         return value.hexdigest()
 
     resources = root / 'cc8-assistant/host/resources'
-    manifest = json.loads((resources / 'fast-stop-model.json').read_text())
-    archive = root / '.toolchains/cc8' / manifest['name']
-    if not archive.is_file() or digest(archive) != manifest['digest'].split(':')[1]:
-        return False
-    # Compare extracted files with the pinned archive, not just presence/size.
-    with tarfile.open(archive) as source:
-        for entry in source.getmembers():
-            if not entry.isfile():
-                continue
-            path = root / '.toolchains/cc8' / entry.name
-            if (
-                not path.resolve().is_relative_to((root / '.toolchains/cc8').resolve())
-                or not path.is_file()
-            ):
-                return False
-            extracted = source.extractfile(entry)
-            if extracted is None:
-                return False
-            with extracted:
-                expected = hashlib.sha256()
-                for chunk in iter(lambda: extracted.read(1024 * 1024), b''):
-                    expected.update(chunk)
-            if expected.hexdigest() != digest(path):
-                return False
+
+    def verify_kws(resource):
+        manifest = json.loads(resource.read_text())
+        archive = root / '.toolchains/cc8' / manifest['name']
+        if not archive.is_file() or digest(archive) != manifest['digest'].split(':')[1]:
+            return False
+        # Compare extracted files with the pinned archive, not just presence/size.
+        with tarfile.open(archive) as source:
+            for entry in source.getmembers():
+                if not entry.isfile():
+                    continue
+                path = root / '.toolchains/cc8' / entry.name
+                if (
+                    not path.resolve().is_relative_to((root / '.toolchains/cc8').resolve())
+                    or not path.is_file()
+                ):
+                    return False
+                extracted = source.extractfile(entry)
+                if extracted is None:
+                    return False
+                with extracted:
+                    expected = hashlib.sha256()
+                    for chunk in iter(lambda: extracted.read(1024 * 1024), b''):
+                        expected.update(chunk)
+                if expected.hexdigest() != digest(path):
+                    return False
+        return True
+
+    for name in ('fast-stop-model.json', 'english-wake-model.json'):
+        if not verify_kws(resources / name):
+            return False
     if engine == 'sensevoice':
         manifest = json.loads((resources / 'sensevoice.json').read_text())
         for name, expected_digest in manifest['sha256'].items():

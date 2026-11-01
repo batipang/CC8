@@ -22,6 +22,7 @@ from response_worker import ResponseWorker, ResponseHooks
 from fast_stop import FastStopDetector
 from session_controller import SessionController, SessionHooks
 from status_reporter import StatusReporter, ReportingHooks
+from wake_controller import WakeController, WakeHooks, Detector as WakeDetectorPort
 from announcement_controller import AnnouncementController, AnnouncementHooks
 from reminder_scheduler import ReminderScheduler, ReminderHooks
 from device_controller import DeviceController, DeviceControlHooks
@@ -42,6 +43,7 @@ class Components:
     reminders: ReminderScheduler
     device: DeviceController
     reporting: StatusReporter
+    wake: WakeController
 
 
 def build_components(
@@ -51,6 +53,8 @@ def build_components(
     wake_pattern: Pattern[str],
     fast_stop: FastStopDetector | None,
     echo_check: bool,
+    wake_detector: WakeDetectorPort | None,
+    wake_window_seconds: int,
     started_at: float,
     private_directory: Callable[[], Path],
     wake_word: str,
@@ -72,6 +76,7 @@ def build_components(
             check_echo=lambda generation: host.check_echo(generation),
             recognition_pending=lambda: host.recognition.busy or not host.recognition.queue.empty(),
             talking=lambda: host.capture.endpoint.vad.talking,
+            wake_allowed=lambda: host.wake.allowed(),
             status=lambda phase, message: host.status(phase, message),
             save_status=lambda: host.save_status(),
             log=lambda name, **fields: host.log(name, **fields),
@@ -163,6 +168,11 @@ def build_components(
             EndpointHooks(
                 generation=lambda: host.session.generation,
                 awake=lambda: host.session.awake,
+                wake_feed=lambda pcm, generation, **fields: host.wake.feed(
+                    pcm, generation, **fields
+                ),
+                wake_allowed=lambda: host.wake.allowed(),
+                claim_wake=lambda: host.wake.claim_prefix(),
                 playing=lambda: host.playback.playing,
                 last_audio_end=lambda: host.playback.last_audio_end,
                 last_spoken=lambda: host.playback.last_spoken,
@@ -205,6 +215,7 @@ def build_components(
             echo_running=lambda: host.calibration.running,
             echo_failed=lambda: host.calibration.failed,
             awake=lambda: host.session.awake,
+            wake_allowed=lambda: host.wake.allowed(),
             wake=lambda: host.session.wake,
             set_awake=host.set_awake,
             wake_pattern=wake_pattern,
@@ -290,9 +301,40 @@ def build_components(
             touch=lambda: host.touch_activity(),
         )
     )
+    wake = WakeController(
+        WakeHooks(
+            lock=host.session.guard,
+            active=lambda: host.session.active,
+            generation=lambda: host.session.generation,
+            awake=lambda: host.session.awake,
+            wake_mode=lambda: host.session.wake,
+            busy=lambda: (
+                host.calibration.active
+                or host.calibration.running
+                or host.playback.playing
+                or host.playback.pause_state is not None
+                or host.recognition.busy
+                or not host.recognition.queue.empty()
+                or host.response.busy
+                or not host.response.queue.empty()
+                or host.visual.generation is not None
+                or host.announcements.generation is not None
+                or host.capture.endpoint.vad.talking
+            ),
+            set_awake=lambda value: host.session.set_awake(value),
+            touch_activity=lambda: host.touch_activity(),
+            cancel=lambda reason: host.cancel(reason),
+            status=lambda phase, message: host.status(phase, message),
+            metric=host.record_metric,
+            log=lambda name, **fields: host.log(name, **fields),
+        ),
+        wake_detector,
+        window_seconds=wake_window_seconds,
+    )
     reporting = StatusReporter(
         ReportingHooks(
             session=lambda: host.session.snapshot(),
+            wake=lambda: host.wake,
             diagnostics=lambda: host.diagnostics,
             playback=lambda: host.playback,
             capture=lambda: host.capture,
@@ -326,6 +368,7 @@ def build_components(
         reminders,
         device,
         reporting,
+        wake,
     )
 
 
@@ -359,5 +402,9 @@ def build_session(host: Bridge) -> SessionController:
             log=lambda name, **fields: host.log(name, **fields),
             metric=host.record_metric,
             metric_value=lambda name: host.metrics.get(name, 0),
+            wake_reset=lambda reason: host.wake.reset(reason),
+            wake_touch=lambda: host.wake.touch(),
+            awake_changed=lambda value: host.wake.awake_changed(value),
+            wake_tick=lambda: host.wake.tick(),
         )
     )

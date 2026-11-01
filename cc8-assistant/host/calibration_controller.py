@@ -12,6 +12,7 @@ from typing import Callable, Protocol
 import numpy as np
 from dsp import RATE
 from session_ports import EventSink, MetricSink
+from wake_controller import WAITING
 
 STARTUP_GREETING = '汽车人，变形！'
 
@@ -36,6 +37,7 @@ class CalibrationHooks:
     check_echo: Callable[[int], None]
     recognition_pending: Callable[[], bool]
     talking: Callable[[], bool]
+    wake_allowed: Callable[[], bool]
     status: Callable[[str, str], None]
     save_status: Callable[[], None]
     log: EventSink
@@ -108,7 +110,7 @@ class CalibrationController:
                 self.pending = False
                 self.hooks.check_echo(generation)
             elif self.hooks.wake():
-                self.hooks.status('listening', '请说“大黄蜂”或“Bumblebee”开始聊天')
+                self.hooks.status('listening', WAITING)
             else:
                 self.hooks.status('listening', '我在听，可以开始说话')
             self.hooks.save_status()
@@ -146,6 +148,10 @@ class CalibrationController:
             '声音示例已经播完，请继续保持安静二十秒，等屏幕显示自检结果。',
         ]
         try:
+            if not self.hooks.wake_allowed():
+                report['state'] = 'blocked'
+                self.hooks.status('error', '自检未运行：请先唤醒或切换为无唤醒词模式')
+                return
             self.hooks.log('echo_self_check_started')
             self.hooks.save_status()
             for line in lines:

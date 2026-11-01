@@ -3,12 +3,19 @@
 from __future__ import annotations
 from dataclasses import dataclass
 import time
-from typing import Callable
+from typing import Callable, Protocol
+import numpy as np
 from diagnostics import TraceBook
 from dsp import VoiceDetector, ReferenceCapture, NearSpeechDetector, level
 from fast_stop import can_fast_stop
 from protocol import JsonValue
 from session_ports import EventSink, MetricSink
+
+
+class WakeFrame(Protocol):
+    def __call__(
+        self, pcm: np.ndarray, generation: int, *, echo_risk: bool, render_text: str
+    ) -> bool: ...
 
 
 @dataclass(frozen=True)
@@ -35,6 +42,9 @@ class EndpointHooks:
     diagnostics: Callable[[], TraceBook]
     enqueue: Callable[[tuple[object, ...]], None]
     discard_recognition: Callable[[], None]
+    wake_feed: WakeFrame
+    wake_allowed: Callable[[], bool]
+    claim_wake: Callable[[], bool]
 
 
 class EndpointPipeline:
@@ -47,6 +57,7 @@ class EndpointPipeline:
         self.voice_trace = None
         self.live_turn = 0
         self.turn_reference = []
+        self.turn_local_wake = False
         self.turn_during_playback = False
         self.turn_echo_risk = False
         self.turn_capture_started = 0
@@ -64,6 +75,7 @@ class EndpointPipeline:
     def reset_session(self):
         self.vad = VoiceDetector()
         self.turn_reference = []
+        self.turn_local_wake = False
         self.turn_echo_risk = False
         self.last_capture_render_ns = None
         self.reference_capture.reset()
@@ -89,7 +101,18 @@ class EndpointPipeline:
             self.last_capture_render_ns is not None
             and 0 <= stamp - self.last_capture_render_ns < 3_000_000_000
         )
-        if self.fast_stop:
+        now = time.monotonic()
+        render_text = (
+            self.hooks.last_spoken()
+            if self.hooks.playing() or now - self.hooks.last_audio_end() < 3
+            else ''
+        )
+        if now < self.hooks.previous_spoken_until():
+            render_text += self.hooks.previous_spoken()
+        self.hooks.wake_feed(
+            cleaned, self.hooks.generation(), echo_risk=echo_risk, render_text=render_text
+        )
+        if self.fast_stop and (self.hooks.awake() or echo_risk):
             self.hooks.metric('stop_input_dbfs', round(level(stop_cleaned), 1))
             keyword = self.fast_stop.feed(stop_cleaned)
             if keyword and stamp - self.last_fast_stop_ns > 1_200_000_000:
@@ -107,9 +130,11 @@ class EndpointPipeline:
         self.vad.external_voice = voiced
         began, utterance, _ = self.vad.feed(cleaned)
         render_audio = self.reference_capture.feed(reference, began, utterance is not None)
+        claimed_wake = (
+            self.hooks.claim_wake() if began or self.vad.talking or utterance is not None else False
+        )
         if began:
-            # This keeps the existing text-based wake path. Actual local wake
-            # spotting before cloud ASR is a separate P0-03 feature, not this refactor.
+            self.turn_local_wake = claimed_wake
             self.voice_trace = self.hooks.diagnostics().begin('voice')
             self.hooks.diagnostics().mark(self.voice_trace, 'voice_detected')
             now = time.monotonic()
@@ -123,8 +148,12 @@ class EndpointPipeline:
                 if self.turn_echo_risk or not self.hooks.awake()
                 else self.hooks.cancel_session('voice')
             )
-            if not self.turn_echo_risk:
+            if not self.turn_echo_risk and self.hooks.awake():
                 self.hooks.status('listening', '我在听，你继续说')
+        elif claimed_wake:
+            self.turn_local_wake = True
+        if claimed_wake and self.voice_trace is not None:
+            self.hooks.diagnostics().mark(self.voice_trace, 'wake_detected')
         if (
             self.vad.talking
             and credible
@@ -145,6 +174,7 @@ class EndpointPipeline:
                 'echo_risk': self.turn_echo_risk,
                 'captured_at': self.turn_capture_started,
                 'pause_token': self.turn_pause_token,
+                'local_wake': self.turn_local_wake,
             }
             job = (
                 self.live_turn,
@@ -155,6 +185,10 @@ class EndpointPipeline:
                 render_audio,
                 self.voice_trace,
             )
+            if not self.hooks.wake_allowed():
+                self.hooks.diagnostics().finish(self.voice_trace, 'rejected')
+                self.hooks.metric('local_wake_utterances_withheld', increment=True)
+                return
             self.hooks.enqueue(job)
 
     def apply_fast_stop(self, keyword, stamp):

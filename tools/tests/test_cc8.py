@@ -145,6 +145,9 @@ class CommandTests(unittest.TestCase):
             (root / 'cc8-assistant/host/resources/fast-stop-model.json').write_text(
                 json.dumps(manifest)
             )
+            (root / 'cc8-assistant/host/resources/english-wake-model.json').write_text(
+                json.dumps(manifest)
+            )
             self.assertTrue(cc8.verified_models(root, 'minimax'))
             path.write_bytes(b'changed')
             self.assertFalse(cc8.verified_models(root, 'minimax'))

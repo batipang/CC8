@@ -17,6 +17,7 @@ from dsp import RATE, resembles_playback
 from reply_types import Reply
 from session_ports import EventSink, MetricSink
 from vision import visual_request
+from wake_controller import WAITING
 
 
 class FailureSink(Protocol):
@@ -49,6 +50,7 @@ class RecognitionHooks:
     echo_running: Callable[[], bool]
     echo_failed: Callable[[], bool]
     awake: Callable[[], bool]
+    wake_allowed: Callable[[], bool]
     wake: Callable[[], bool]
     set_awake: Callable[[bool], None]
     wake_pattern: Pattern[str]
@@ -114,15 +116,19 @@ class RecognitionWorker:
             self.busy = True
             rejected = False
             try:
+                if not self.hooks.wake_allowed():
+                    rejected = True
+                    self.hooks.status('listening', WAITING)
+                    continue
                 if not self.hooks.playing():
-                    self.hooks.status('thinking', '正在本机识别…')
+                    self.hooks.status('thinking', '正在识别语音…')
                 self.hooks.diagnostics().mark(trace_id, 'asr_start')
                 text = self.hooks.speech().recognize(audio)
                 self.hooks.diagnostics().mark(trace_id, 'asr_end')
                 asr = getattr(self.hooks.speech(), 'recognizer', None)
                 if asr:
                     self.hooks.metric('last_asr', dict(asr.last_metrics))
-                if not self.hooks.valid(generation):
+                if not self.hooks.valid(generation) or not self.hooks.wake_allowed():
                     continue
                 clean = re.sub('\\W', '', text)
                 if not clean or clean in ['谢谢观看', '感谢观看', '字幕由Amaraorg社区提供']:
@@ -210,18 +216,16 @@ class RecognitionWorker:
                         references=len(available),
                     )
                     continue
-                if not self.hooks.awake():
-                    # Preserve the legacy text wake gate until the separate
-                    # local pre-ASR P0-03 implementation is introduced.
-                    found = self.hooks.wake_pattern.search(text)
-                    if not found:
+                if evidence and evidence.get('local_wake') is True:
+                    stripped = text.lstrip('，。 ,！!')
+                    found = self.hooks.wake_pattern.match(stripped)
+                    if found:
+                        text = stripped[found.end() :].lstrip('，。 ,！!')
+                    if not text:
                         rejected = True
-                        self.hooks.status('listening', '请说“大黄蜂”或“Bumblebee”开始聊天')
+                        self.hooks.cancel_session('wake_only')
+                        self.hooks.status('listening', '我在听，请说出你的问题')
                         continue
-                    self.hooks.touch()
-                    self.hooks.set_awake(True)
-                    text = text[found.end() :].lstrip('，。 ,') or '你好'
-                    generation = self.hooks.cancel_session('wake_word')
                 if (
                     self.hooks.wake()
                     and '休息' in text

@@ -20,6 +20,7 @@ from vision_controller import VisionController
 from calibration_controller import CalibrationController
 from announcement_controller import AnnouncementController
 from session_ports import EventSink, MetricSink
+from wake_controller import WAITING
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,7 @@ class SessionView:
     transport_kind: str
     wake: bool
     screen_sleeping: bool
+    awake: bool
 
 
 @dataclass(frozen=True)
@@ -61,6 +63,10 @@ class SessionHooks:
     log: EventSink
     metric: MetricSink
     metric_value: Callable[[str], int]
+    wake_reset: Callable[[str], None]
+    wake_touch: Callable[[], None]
+    awake_changed: Callable[[bool], None]
+    wake_tick: Callable[[], None]
 
 
 class SessionController:
@@ -88,6 +94,7 @@ class SessionController:
             self.transport_kind,
             self.wake,
             self.screen_sleeping,
+            self.awake,
         )
 
     def deactivate(self):
@@ -127,6 +134,7 @@ class SessionController:
         self.rebind_seen = False
         self.transport_kind = channel.kind if channel else 'none'
         self.hooks.capture().reset_transport(self.transport_kind)
+        self.hooks.wake_reset('transport')
         self.hooks.playback().clear_transport_pause()
         if channel is None:
             self.hooks.stop()
@@ -157,12 +165,14 @@ class SessionController:
 
     def touch_activity(self):
         self.last_interaction = time.monotonic()
+        self.hooks.wake_touch()
         if self.screen_sleeping:
             self.screen_sleeping = False
             self.hooks.event('screen_wake')
 
     def idle_tick(self):
         self.hooks.reminder_tick()
+        self.hooks.wake_tick()
         if (
             self.active
             and not self.hooks.calibration().active
@@ -172,7 +182,7 @@ class SessionController:
             and not self.screen_sleeping
             and time.monotonic() - self.last_interaction >= 900
         ):
-            self.awake = False
+            self.set_awake(False)
             self.screen_sleeping = True
             self.hooks.event('screen_sleep')
             self.hooks.log('screen_idle_sleep')
@@ -208,6 +218,7 @@ class SessionController:
             self.text_generation = None
             self.hooks.visual().invalidate()
             self.hooks.playback().clear_cancelled_pause(was_playing)
+            self.hooks.wake_reset('cancel')
         if self.hooks.brain():
             self.hooks.brain().cancel()
         cancel_speech = getattr(self.hooks.speech(), 'cancel', None)
@@ -232,7 +243,9 @@ class SessionController:
         self.hooks.save_status()
 
     def set_awake(self, value):
-        self.awake = value
+        with self.guard:
+            self.awake = value
+            self.hooks.awake_changed(value)
 
     def finish_text_response(self, generation):
         if self.text_generation == generation:
@@ -245,8 +258,12 @@ class SessionController:
         self.hooks.playback().set_pause_capability(bool(j.get('supports_playback_pause')))
         if self.active and not j.get('capture_active', False):
             self.hooks.stop()
-        if 'wake_mode' in j:
-            self.wake = bool(j['wake_mode'])
+        if 'wake_mode' in j and bool(j['wake_mode']) != self.wake:
+            with self.guard:
+                self.hooks.cancel('wake_mode_change')
+                self.wake = bool(j['wake_mode'])
+                self.awake = not self.wake
+                self.hooks.wake_reset('mode')
         self.hooks.event(
             'hello',
             message='我在听'
@@ -282,9 +299,14 @@ class SessionController:
             self.hooks.route_event({**j, 'event': 'session_start'})
 
     def settings(self, j):
-        if 'wake_mode' in j:
-            self.wake = bool(j['wake_mode'])
-            self.awake = not self.wake
+        if 'wake_mode' in j and bool(j['wake_mode']) != self.wake:
+            with self.guard:
+                self.hooks.cancel('wake_mode_change')
+                self.wake = bool(j['wake_mode'])
+                self.awake = not self.wake
+                self.hooks.wake_reset('mode')
+            if self.active and not self.hooks.calibration().active:
+                self.hooks.status('listening', WAITING if self.wake else '我在听，可以开始说话')
         if 'brain_provider' in j and hasattr(self.hooks.brain(), 'select'):
             provider = j['brain_provider']
             if provider in ('minimax', 'dot') and not self.hooks.calibration().active:
@@ -319,6 +341,7 @@ class SessionController:
         self.awake = not self.wake
         self.screen_sleeping = False
         self.last_interaction = time.monotonic()
+        self.hooks.wake_reset('start')
         for k in [
             'mic_frames',
             'render_frames',

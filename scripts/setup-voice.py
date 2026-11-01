@@ -29,8 +29,16 @@ def digest(path):
     return value.hexdigest()
 
 
-def download(url, destination, expected):
-    if destination.is_file() and digest(destination) == expected:
+def download(url, destination, expected, *, maximum_bytes=None):
+    if maximum_bytes is not None and (
+        type(maximum_bytes) is not int or not 0 < maximum_bytes <= 1024**3
+    ):
+        raise ValueError('Invalid download bound')
+    if (
+        destination.is_file()
+        and (maximum_bytes is None or destination.stat().st_size == maximum_bytes)
+        and digest(destination) == expected
+    ):
         return
     partial = destination.with_suffix(destination.suffix + '.partial')
     subprocess.run(
@@ -43,22 +51,30 @@ def download(url, destination, expected):
             '20',
             '--max-time',
             '600',
+            *(['--max-filesize', str(maximum_bytes)] if maximum_bytes is not None else []),
             '-o',
             str(partial),
             url,
         ],
         check=True,
     )
-    if digest(partial) != expected:
+    if (maximum_bytes is not None and partial.stat().st_size != maximum_bytes) or digest(
+        partial
+    ) != expected:
         partial.unlink()
         raise RuntimeError('Checksum mismatch: ' + destination.name)
     partial.replace(destination)
 
 
-def prepare_models(sensevoice=False):
-    manifest = json.loads((RESOURCES / 'fast-stop-model.json').read_text())
+def prepare_kws_model(resource):
+    manifest = json.loads((RESOURCES / resource).read_text())
     archive = TOOLS / manifest['name']
-    download(manifest['browser_download_url'], archive, manifest['digest'].split(':', 1)[1])
+    download(
+        manifest['browser_download_url'],
+        archive,
+        manifest['digest'].split(':', 1)[1],
+        maximum_bytes=manifest['size'],
+    )
     # Extract only the expected single top-level model directory; reject links.
     expected_root = manifest['name'].removesuffix('.tar.bz2')
     with tarfile.open(archive, 'r:bz2') as source:
@@ -75,6 +91,11 @@ def prepare_models(sensevoice=False):
             ):
                 raise RuntimeError('Unsafe model archive entry')
         source.extractall(TOOLS, members=members, filter='data')
+
+
+def prepare_models(sensevoice=False):
+    prepare_kws_model('fast-stop-model.json')
+    prepare_kws_model('english-wake-model.json')
     if sensevoice:
         manifest = json.loads((RESOURCES / 'sensevoice.json').read_text())
         destination = ROOT / manifest['local_directory']

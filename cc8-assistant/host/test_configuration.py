@@ -37,6 +37,32 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(load_config(self.root, {}).asr, 'whisper')
         self.assertEqual(stat.S_IMODE(self.profile.stat().st_mode), 0o600)
 
+    def test_wake_window_uses_same_config_priority_and_nonsecret_service_environment(self):
+        self.assertEqual(load_config(self.root, {}).wake_window_seconds, 60)
+        self.save(wake_window_seconds=30)
+        config = load_config(self.root, {'CC8_WAKE_WINDOW_SECONDS': '90'})
+        self.assertEqual(config.wake_window_seconds, 90)
+        self.assertEqual(dict(config.sources)['wake_window_seconds'], 'environment')
+        self.assertEqual(
+            config.service_environment(
+                {'CC8_WAKE_WINDOW_SECONDS': '90', 'CC8_MINIMAX_API_KEY': 'SECRET'}
+            ),
+            {'CC8_WAKE_WINDOW_SECONDS': '90'},
+        )
+        self.assertEqual(load_config(self.root, {}).wake_window_seconds, 30)
+
+    def test_wake_window_rejects_invalid_types_and_bounds_without_values_in_errors(self):
+        for value in ('14', '301', '1.5', 'NaN', 'SECRET'):
+            with (
+                self.subTest(value_type=type(value).__name__),
+                self.assertRaises(ConfigError) as failure,
+            ):
+                load_config(self.root, {'CC8_WAKE_WINDOW_SECONDS': value})
+            self.assertNotIn('SECRET', str(failure.exception))
+        for value in (True, 60.0, 0, 301):
+            with self.subTest(value_type=type(value).__name__), self.assertRaises(ConfigError):
+                self.save(wake_window_seconds=value)
+
     def test_invalid_fields_do_not_fallback_or_print_values(self):
         cases = (
             {'asr': 'PRIVATE-SENTINEL'},

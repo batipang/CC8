@@ -34,6 +34,7 @@ python3 cc8-assistant/host/configuration.py check
 | minimax_base | 保留三个官方 HTTPS 域名，不允许凭证、查询参数、第三方端点或其他路径 |
 | minimax_model / asr_model / tts_model | MiniMax 对应模型 ID 格式；不等于订阅支持或服务可用性保证 |
 | tts_voice / tts_speed / tts_pitch / tts_emotion | 音色及有界数值；默认仍为已选大黄蜂音色参数，emotion 默认 null |
+| wake_window_seconds | 唤醒后空闲对话窗口，整数 15～300 秒、默认 60；环境变量 CC8_WAKE_WINDOW_SECONDS，见 [LOCAL_WAKE](LOCAL_WAKE.md) |
 | tls_port | 已配对 Wi-Fi 的 TCP 端口，1024～65535，默认 18766 |
 | connect_timeout / read_timeout | MiniMax 请求的连接/读取秒数，分别限制 1～30 / 1～120，默认 8 / 20 |
 | credential_file | 现有 owner-only 密钥文件的引用，校验配置时不读取其内容 |
