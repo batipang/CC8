@@ -16,7 +16,7 @@ import subprocess
 import threading
 import time
 import uuid
-from protocol import Packet, receive, EVENT
+from protocol import Packet, receive, EVENT, decode_event, decode_json_object
 
 ROOT = Path(__file__).resolve().parents[2]
 PAIR_DIR = ROOT / '.toolchains/cc8/transport'
@@ -173,8 +173,13 @@ class Channel:
     def read(self):
         try:
             first = receive(self.stream)
-            hello = json.loads(first.data) if first.kind == EVENT else None
-            if not isinstance(hello, dict) or hello.get('event') != 'transport_hello':
+            hello = decode_event(first.data) if first.kind == EVENT else None
+            if (
+                not isinstance(hello, dict)
+                or hello.get('event') != 'transport_hello'
+                or type(hello.get('protocol')) is not int
+                or hello['protocol'] != 2
+            ):
                 raise ValueError('Missing transport hello')
             self.ready = True
             self.last_rx = time.monotonic()
@@ -183,9 +188,7 @@ class Channel:
                 packet = receive(self.stream)
                 self.last_rx = time.monotonic()
                 if packet.kind == EVENT:
-                    event = json.loads(packet.data)
-                    if not isinstance(event, dict):
-                        raise ValueError('Invalid event object')
+                    event = decode_event(packet.data)
                     if event.get('event') == 'transport_pong':
                         continue
                 self.events.put(('packet', self, packet), timeout=0.2)
@@ -244,8 +247,11 @@ class TransportHub:
         self.auth_failures = 0
         self.server = None
         self.discovery = None
+        self.workers = []
 
     def start(self):
+        if self.workers or self.stop.is_set():
+            raise RuntimeError('Transport hub cannot be started twice or after close')
         try:
             self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -260,7 +266,9 @@ class TransportHub:
             self.close()
             raise
         for method in [self.accept_wifi, self.discover, self.monitor_usb, self.heartbeat]:
-            threading.Thread(target=method, daemon=True).start()
+            worker = threading.Thread(target=method, daemon=True, name='cc8-' + method.__name__)
+            self.workers.append(worker)
+            worker.start()
 
     def register(self, stream, kind):
         channel = Channel(stream, kind, self.events)
@@ -293,7 +301,7 @@ class TransportHub:
                 tls = self.pairing.context.wrap_socket(raw, server_side=True)
                 packet = receive(tls)
                 auth = (
-                    json.loads(packet.data)
+                    decode_json_object(packet.data, max_bytes=1024)
                     if packet.kind == EVENT and len(packet.data) <= 1024
                     else {}
                 )
@@ -325,7 +333,7 @@ class TransportHub:
                 raw, peer = self.discovery.recvfrom(2048)
                 if not private_ipv4(peer[0]):
                     continue
-                value = self.pairing.offer(json.loads(raw))
+                value = self.pairing.offer(decode_json_object(raw, max_bytes=2048))
                 if value:
                     self.discovery.sendto(json.dumps(value, separators=(',', ':')).encode(), peer)
             except socket.timeout:

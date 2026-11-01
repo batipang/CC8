@@ -31,3 +31,4 @@ device-access/private/
 # Local quality-tool caches
 .ruff_cache/
 .pre-commit-cache/
+.hypothesis/
