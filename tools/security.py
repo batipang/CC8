@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -15,8 +16,23 @@ ROOT = Path(__file__).resolve().parents[1]
 REQUIREMENTS = (
     'requirements-dev.txt',
     'requirements-security.txt',
-    'cc8-assistant/host/requirements-runtime.lock',
+    'cc8-assistant/host/requirements-runtime.txt',
 )
+
+
+def pinned_inventory(path):
+    expected = set()
+    for line in path.read_text().splitlines():
+        line = line.split('#', 1)[0].strip()
+        if not line:
+            continue
+        match = re.fullmatch(r'([A-Za-z0-9_.-]+)==([A-Za-z0-9_.!+\-]+)', line)
+        if not match:
+            raise ValueError('Audit requires a flat pinned manifest: ' + path.name)
+        expected.add((re.sub(r'[-_.]+', '-', match[1]).lower(), match[2]))
+    if not expected:
+        raise ValueError('Audit manifest is empty: ' + path.name)
+    return expected
 
 
 def audit(run=subprocess.run):
@@ -24,6 +40,7 @@ def audit(run=subprocess.run):
     directory.mkdir(parents=True, exist_ok=True)
     failed = False
     for index, requirements in enumerate(REQUIREMENTS):
+        expected = pinned_inventory(ROOT / requirements)
         report = directory / f'audit-{index}.json'
         report.unlink(missing_ok=True)
         # Each environment has its own lock; do not merge conflicting versions.
@@ -53,6 +70,14 @@ def audit(run=subprocess.run):
             failed = True
             continue
         dependencies = json.loads(report.read_text())['dependencies']
+        observed = {
+            (re.sub(r'[-_.]+', '-', d['name']).lower(), d.get('version')) for d in dependencies
+        }
+        if observed != expected or len(dependencies) != len(expected):
+            print(
+                f'{requirements}: audited inventory does not match declared pins', file=sys.stderr
+            )
+            failed = True
         skipped = [d['name'] for d in dependencies if d.get('skip_reason')]
         vulnerabilities = sum(len(d.get('vulns', [])) for d in dependencies)
         if vulnerabilities:

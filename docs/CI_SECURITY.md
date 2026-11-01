@@ -38,7 +38,7 @@ setup 才下载；工具官方 release 归档的 SHA-256 锁在 `tools/resources
 
 secrets 扫描**已经提交的历史**，不等于扫描所有未提交文件；提交前仍需检查 staged diff，提交后的 PR CI 扫描该提交。唯一 `.gitleaksignore` 条目限定到原提交、文件、规则及行号：SenseVoice 的 `tokens.txt` 公共词表文件 SHA-256 被当成 API token。没有忽略整个文件、目录或默认规则。新增例外必须说明具体误报证据，不能用通用 baseline 隐藏未核查条目。
 
-审计 JSON 在忽略的 `artifacts/security/`；开发、审计工具和运行环境分开查询，避免相同包不同版本发生冲突。`--no-deps --disable-pip` 只查询已声明的固定版本，不在 Ubuntu 安装 Apple Silicon 原生轮子。**覆盖的是三个锁定清单中的包，不证明所有运行时自动解析的间接依赖、Gradle 依赖、模型或二进制工具都无漏洞。** 增加/调整实际运行环境时仍需审核完整依赖变化，不用零告警代表无风险。
+审计 JSON 在忽略的 `artifacts/security/`；开发、审计工具和运行环境分开查询，避免相同包不同版本发生冲突。直接扫描三份标准、非空、平铺的固定版本清单（运行清单用 host 下的 requirements-runtime.txt），不将兼容 -r 入口交给 --disable-pip；逐一核对报告包名、版本和数量与源码声明一致，空报告、缺包、版本偏差都失败。`--no-deps --disable-pip` 只查询已声明的固定版本，不在 Ubuntu 安装 Apple Silicon 原生轮子。**覆盖的是三个锁定清单中的包，不证明所有运行时自动解析的间接依赖、Gradle 依赖、模型或二进制工具都无漏洞。** 增加/调整实际运行环境时仍需审核完整依赖变化，不用零告警代表无风险。
 
 本轮把源代码中的 `mlx` / `mlx-metal` 从 0.29.3 更新到 0.29.4，修复上游明确列出的 NPY / GGUF 文件解析问题；未忽略这些告警。见 [NPY 公告](https://github.com/ml-explore/mlx/security/advisories/GHSA-w6vg-jg77-2qg6)、[GGUF 公告](https://github.com/ml-explore/mlx/security/advisories/GHSA-j842-xgm4-wf88)。当前运行助手的环境不会被 CI 或审计自动升级；模型回归和运行环境补丁部署仍需独立验证。
 
