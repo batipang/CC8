@@ -253,6 +253,7 @@ def doctor(profile, root=ROOT):
                 sdk / 'build-tools/35.0.0/aapt',
                 sdk / 'build-tools/35.0.0/d8',
                 sdk / 'build-tools/35.0.0/apksigner',
+                sdk / 'build-tools/35.0.0/lib/apksigner.jar',
             ]
             if not all(p.is_file() for p in required):
                 return False

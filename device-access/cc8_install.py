@@ -11,13 +11,20 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shlex
 import subprocess
+import sys
+import tempfile
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'tools'))
+from apk_signing import signer_fingerprints, require_same_signers, SignatureError  # noqa: E402
+from java_toolchain import require_java  # noqa: E402
+
 CONFIG = ROOT / '.toolchains/cc8/paths.json'
 SDK = (
     Path(json.loads(CONFIG.read_text())['android_sdk'])
@@ -26,6 +33,8 @@ SDK = (
 )
 ADB = SDK / 'platform-tools/adb'
 AAPT = SDK / 'build-tools/35.0.0/aapt'
+APKSIGNER = SDK / 'build-tools/35.0.0/lib/apksigner.jar'
+MAX_APK_BYTES = 150 * 1024 * 1024
 PREFIX = 'dumpsys activity com.ailabs.emode >/dev/null 2>&1; '
 
 
@@ -171,9 +180,7 @@ def probe(transport: str) -> dict:
     return {'shell_verified': True, 'uid': int(lines[1]), 'model': lines[2], 'sdk': int(lines[3])}
 
 
-def install(transport: str, apk: Path, launch: bool, shared_staging: bool = False) -> dict:
-    apk = apk.resolve()
-    payload = apk.read_bytes()
+def apk_package(apk: Path):
     metadata = subprocess.check_output(
         [str(AAPT), 'dump', 'badging', str(apk)], text=True, timeout=15
     )
@@ -182,6 +189,111 @@ def install(transport: str, apk: Path, launch: bool, shared_staging: bool = Fals
         raise ValueError('Cannot read a safe Android package name from APK')
     package = package.group(1)
     activity = re.search(r"^launchable-activity: name='([A-Za-z][A-Za-z0-9_.$]+)'", metadata, re.M)
+    return package, activity
+
+
+def package_paths(transport, package):
+    output = shell(transport, 'pm path ' + shlex.quote(package)).strip()
+    if not output:
+        return []
+    lines = output.splitlines()
+    if len(lines) != 1 or not re.fullmatch(r'package:/[^\r\n\x00]+\.apk', lines[0]):
+        raise RuntimeError(
+            'Cannot verify a single installed base APK; installation was not attempted'
+        )
+    return [lines[0][len('package:') :]]
+
+
+def signature_preflight(transport, package, candidate, directory):
+    java = require_java(root=ROOT) / 'java'
+    candidate_signers = signer_fingerprints(candidate, java, APKSIGNER)
+    paths = package_paths(transport, package)
+    if not paths:
+        # Empty pm path alone may mean a broken/blocked command. Confirm absence
+        # through a second PackageManager query; never treat an error as new install.
+        listed = shell(transport, 'pm list packages ' + shlex.quote(package)).strip()
+        if listed:
+            raise RuntimeError(
+                'Package absence could not be verified; installation was not attempted'
+            )
+        return {'apk_signature_verified_sdk27': True, 'signature_continuity': 'new_package'}
+    remote = paths[0]
+    before = shell(transport, 'sha256sum ' + shlex.quote(remote)).split()
+    if not before or not re.fullmatch(r'[a-fA-F0-9]{64}', before[0]):
+        raise RuntimeError('Installed APK hash unreadable; installation was not attempted')
+    installed = directory / 'installed-base.apk'
+    try:
+        # Bound the device's output before it reaches disk. No raw image/code from
+        # the device is retained: TemporaryDirectory removes this owner-only copy.
+        with open(installed, 'xb', opener=lambda path, flags: os.open(path, flags, 0o600)) as out:
+            subprocess.run(
+                [
+                    str(ADB),
+                    '-t',
+                    transport,
+                    'shell',
+                    '-T',
+                    PREFIX + 'toybox head -c ' + str(MAX_APK_BYTES + 1) + ' ' + shlex.quote(remote),
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=out,
+                stderr=subprocess.PIPE,
+                check=True,
+                timeout=30,
+            )
+    except (OSError, subprocess.SubprocessError):
+        raise RuntimeError(
+            'Installed APK could not be read; installation was not attempted'
+        ) from None
+    size = installed.stat().st_size
+    if not 0 < size <= MAX_APK_BYTES:
+        raise RuntimeError('Installed APK exceeds read budget; installation was not attempted')
+    local_hash = hashlib.sha256(installed.read_bytes()).hexdigest()
+    after = shell(transport, 'sha256sum ' + shlex.quote(remote)).split()
+    if (
+        not after
+        or before[0].lower() != local_hash
+        or after[0].lower() != local_hash
+        or package_paths(transport, package) != paths
+    ):
+        raise RuntimeError('Installed APK changed while checking; installation was not attempted')
+    installed_package, _ = apk_package(installed)
+    if installed_package != package:
+        raise RuntimeError('Installed APK package identity differs; installation was not attempted')
+    require_same_signers(candidate_signers, signer_fingerprints(installed, java, APKSIGNER))
+    return {
+        'apk_signature_verified_sdk27': True,
+        'signature_continuity': 'matching_installed_signers',
+    }
+
+
+def prepare_apk(transport, apk, launch=False):
+    # A private byte snapshot binds aapt, certificate verification and the actual
+    # stream to the same APK even if the original build output is replaced.
+    with apk.open('rb') as source:
+        payload = source.read(MAX_APK_BYTES + 1)
+    if not 0 < len(payload) <= MAX_APK_BYTES:
+        raise ValueError('Candidate APK is empty or exceeds the size budget')
+    with tempfile.TemporaryDirectory(prefix='cc8-apk-preflight-') as folder:
+        directory = Path(folder)
+        candidate = directory / 'candidate.apk'
+        candidate.write_bytes(payload)
+        candidate.chmod(0o600)
+        package, activity = apk_package(candidate)
+        if launch and not activity:
+            raise ValueError('APK does not declare a launchable activity')
+        signature = signature_preflight(transport, package, candidate, directory)
+    return package, activity, payload, signature
+
+
+def install(transport: str, apk: Path, launch: bool, shared_staging: bool = False) -> dict:
+    package, activity, payload, signature = prepare_apk(transport, apk, launch)
+    return _install_verified(
+        transport, package, activity, payload, launch, shared_staging, signature
+    )
+
+
+def _install_verified(transport, package, activity, payload, launch, shared_staging, signature):
     if launch and not activity:
         raise ValueError('APK does not declare a launchable activity')
     digest = hashlib.sha256(payload).hexdigest()
@@ -193,6 +305,7 @@ def install(transport: str, apk: Path, launch: bool, shared_staging: bool = Fals
         'firmware_written': False,
         'bootloader_modified': False,
         'helper_staging': 'shared_compatibility' if shared_staging else 'protected_shell_directory',
+        **signature,
     }
     # The shipped pm command advertises installation but rejects it at runtime.
     # The temporary helper calls the stock PackageInstaller API at shell UID.
@@ -242,6 +355,12 @@ if __name__ == '__main__':
     mode.add_argument('--check', action='store_true')
     mode.add_argument('--probe', action='store_true')
     mode.add_argument('--install', type=Path, metavar='APK')
+    mode.add_argument(
+        '--verify-apk',
+        type=Path,
+        metavar='APK',
+        help='Read-only device signature preflight; no installation or UI launch',
+    )
     parser.add_argument('--launch', action='store_true')
     parser.add_argument(
         '--shared-staging',
@@ -251,16 +370,22 @@ if __name__ == '__main__':
     args = parser.parse_args()
     if (args.launch or args.shared_staging) and not args.install:
         parser.error('--launch and --shared-staging require --install APK')
-    if not ADB.is_file() or not AAPT.is_file():
+    if not ADB.is_file() or not AAPT.is_file() or not APKSIGNER.is_file():
         raise SystemExit('Local Android tools are missing')
     if args.check:
         helper_artifact()
-        print('PASS: local ADB/AAPT and installer helper/source hashes; no device commands.')
+        require_java(root=ROOT)
+        print(
+            'PASS: local ADB/AAPT/apksigner/JDK and installer helper/source hashes; no device commands.'
+        )
         raise SystemExit(0)
     try:
         transport = target()
         report = probe(transport)
         print(json.dumps(report), flush=True)
+        if args.verify_apk:
+            package, _, _, signature = prepare_apk(transport, args.verify_apk)
+            print(json.dumps({'package': package, **signature, 'installed': False}), flush=True)
         if args.install:
             report.update(
                 install(transport, args.install, args.launch, shared_staging=args.shared_staging)
@@ -269,5 +394,5 @@ if __name__ == '__main__':
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text(json.dumps(report, indent=2) + '\n')
             print(json.dumps(report, indent=2), flush=True)
-    except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as error:
+    except (RuntimeError, SignatureError, ValueError, OSError, subprocess.SubprocessError) as error:
         raise SystemExit(str(error)) from None

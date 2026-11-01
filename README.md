@@ -12,6 +12,7 @@
 
 - [从准备设备到安装 APK 的完整步骤](docs/APK_INSTALL.md)
 - [构建、签名与测试](docs/DEVELOPMENT.md)
+- [原签名备份、导入与安装前证书核对](docs/SIGNING.md)
 - [轻量测试、格式规范与提交钩子](docs/DEVELOPMENT.md#轻量测试与质量检查)
 - [CI、密钥扫描、依赖审计与更新边界](docs/CI_SECURITY.md)
 - [配置来源、私有覆盖、迁移与恢复](docs/CONFIGURATION.md)

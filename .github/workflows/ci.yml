@@ -99,6 +99,10 @@ jobs:
         env:
           CC8_CI_PROJECT: ${{ matrix.project }}
         run: python3 "$CC8_CI_PROJECT/tools/build.py"
+      - name: Verify actual APK certificate continuity and tamper rejection
+        env:
+          CC8_CI_PROJECT: ${{ matrix.project }}
+        run: python3 tools/test_apk_signing.py "$CC8_CI_PROJECT/app/build/outputs/apk/release/app-release.apk"
       - name: Keep lint reports (no APK or signing keys)
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

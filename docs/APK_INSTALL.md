@@ -43,7 +43,7 @@ python3 device-access/cc8_install.py --check
 - `artifacts/cc8-diagnostics-1.0.1.apk`：签名后的示例应用。
 - 对应 APK 的 `.sha256` 文件。
 
-`--check` 只检查电脑上的 ADB、AAPT 和助手 / 源码哈希，不连接设备。修改 Java 安装助手后必须重新构建，不能复用旧哈希元数据。
+`--check` 只检查电脑上的 ADB、AAPT、apksigner / JDK 和助手 / 源码哈希，不连接设备。修改 Java 安装助手后必须重新构建，不能复用旧哈希元数据。
 
 ## 4. 探测普通 Android 工程通道
 
@@ -102,7 +102,7 @@ python3 device-access/cc8_install.py --install artifacts/cc8-assistant-0.7.0.apk
 
 本机原厂 `adb install` / `pm install` 路径会拒绝安装，直接重试不能解决。实际使用的是系统已有的 `PackageInstaller` API：
 
-1. AAPT 读取本地 APK 包名与启动 Activity；计算 APK SHA-256。
+1. 将本地 APK 读取为有界私有快照，AAPT 读取包名与启动 Activity；官方 apksigner 验证 SDK 27 签名，并只读核对已装同包名 APK 的完整证书集合。失败在任何设备写入前停止。可先用 `--verify-apk <APK>` 单独检查，详见 [SIGNING.md](SIGNING.md)。
 2. 默认核验 `/data/local/tmp` 的 shell 所有权及目录权限，写入随机临时 JAR、设置 0400 并核验哈希；策略拒绝写入就停止。只有显式 `--shared-staging` 才沿用 `/sdcard/Download/.cc8-installer-<随机值>.jar`，该共享目录的替换风险仍存在。
 3. 通过 `CLASSPATH=... app_process /system/bin Cc8Installer --install <包名> <字节数> <SHA256>` 启动助手，从标准输入流入 APK。
 4. Java 助手再次检查 UID 2000、AILABS_S6、SDK 27，用 `com.android.shell` 上下文创建 full-install session。
@@ -131,5 +131,7 @@ python3 device-access/cc8_install.py --install artifacts/cc8-assistant-0.7.0.apk
 ## 8. 签名与备份
 
 首次构建会生成本地开发签名，两个示例应用共用该签名文件。仓库不含现有设备应用的签名私钥，因此新克隆生成的 APK 通常不能直接覆盖原开发机签名的已安装版本。应在原开发机保留并安全管理原签名，或者使用不同 applicationId 做独立安装；不要为绕过冲突直接清除数据。
+
+原签名备份、路径导入、安装前证书比对和失败处理见 [SIGNING.md](SIGNING.md)。安装器默认强制签名预检，不提供跳过选项。
 
 安装器不会备份应用数据，也不会创建系统分区镜像。需要保留的应用数据应在更新前通过应用自身支持的方式导出。无需任何原厂分区镜像才能使用本方法。
