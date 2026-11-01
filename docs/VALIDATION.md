@@ -453,3 +453,10 @@ P0-06 搜索回执补充经 [PR #36](https://github.com/batipang/CC8/pull/36) / 
 ### P0 软件源码标记及原签名产物核验
 
 CI 通过的干净源码 5f1c087cfa8c4cdea42758dd26b7f0597b1c31ef 已包含在 main；两个 APK 实际原钥引用 assemble/lint 通过，独立版本/SDK27 签名及旧原证书集合一致。annotated tag p0-software-20261102.1 固定该源码，实际 record / verify 通过，远端解引用同 SHA。Git 归档源码包 7075058 字节，SHA-256 为 57bb5533cb415850e2ade89cfd52e0a10e92d912b70d51912f31b6e9e141485c；逐项检查不含工具链、private、密钥文件或 Git 目录。所有产物/回执仍在忽略目录，没有上传 APK 或发布 GitHub Release；未部署、重启或打开采集。完整版本/产物和待补输入见 [软件交接](P0_SOFTWARE_HANDOFF.md)，P0 实体/真人验收保持开放。
+
+
+### P0-01：可选设备播放头回执（未部署）
+
+后台 0.13.6 / APK 0.8.8 code 33 增加双端能力协商、首个非零 PCM 帧播放进度和 Mac 单端回执阶段。九项新回归含平台无关 Java 编译执行、真实读线程提前回执、发布/取消并发、旧端和非法/过期/重复事件。新增同步曾被原取消回归发现会阻塞，已改为组件短时锁并保留原用例。全套 installer 22、host 453（4 private skip）、tooling 51、Java 15 checks，格式/lint/strict 七模块通过。没有访问设备、私人录音或云服务；Android 构建和 CI 结果随后追加。方法和计时限制见 [PLAYOUT_RECEIPT](PLAYOUT_RECEIPT.md)，不作为声学起声或物理验收证据。
+
+真实提交钩子额外检出新 strict 模块的 numpy 类型依赖未列入独立 hook 环境；已补同 requirements-dev 的 numpy 2.3.4 固定版本，不改变运行依赖、关闭规则或跳过检查。

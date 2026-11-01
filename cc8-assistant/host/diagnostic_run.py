@@ -117,6 +117,8 @@ def snapshot(payload):
         raise ValueError('Unsupported diagnostic clock/content contract')
     if payload.get('render_ack_is_audible_onset') is not False:
         raise ValueError('Unsupported diagnostic playback contract')
+    if payload.get('playout_ack_is_audible_onset', False) is not False:
+        raise ValueError('Unsupported diagnostic acoustic contract')
     rows = payload.get('requests')
     if not isinstance(rows, list) or len(rows) > 128:
         raise ValueError('Invalid diagnostic window')
@@ -175,6 +177,7 @@ class DiagnosticRun:
             'clock': 'mac_monotonic',
             'contains_content': False,
             'render_ack_is_audible_onset': False,
+            'playout_ack_is_audible_onset': False,
             'coverage': {
                 'polls': self.polls,
                 'baseline_excluded': len(self.baseline or ()),

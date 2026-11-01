@@ -30,7 +30,7 @@ stdout 只输出报告的绝对路径，提示写 stderr。退出 0 表示采集
 
 `summary / groups / scenarios` 给出样本数、终态、成功率和各耗时的样本数/p50/p95；缺少阶段或逆序时不填零、不加入该项耗时样本。成功率沿用后台规则，以 completed / failed / cancelled 为分母，rejected 和 pending 另列。`task_outcomes` 单独统计已执行任务，停止后续朗读不会撤销已完成工作。
 
-所有阶段来自 Mac 单调时钟的请求内相对时长，不相减 Android 和 Mac 的原始时钟。`render_ack` 仅是播放数据回执；`render_ack_is_audible_onset=false`。真实人声起点、扬声器出声与声学端到端耗时仍需后续实测，不能用此工具或 VAD 参数代替。
+所有阶段来自 Mac 单调时钟的请求内相对时长，不相减 Android 和 Mac 的原始时钟。`render_ack` 仅是播放数据回执；`render_ack_is_audible_onset=false`。新配对（后台 0.13.6 / APK 0.8.8）可增加 `playout_ack`：设备播放头越过首个非零 PCM 后的 Mac 收到回执时刻，`playout_ack_is_audible_onset=false`，其延时含轮询/传输开销，见 [设备播放回执](PLAYOUT_RECEIPT.md)。旧端缺少此阶段不填零。真实人声起点、扬声器出声与声学端到端耗时仍需后续实测，不能用此工具或 VAD 参数代替。
 
 `coverage.window_discontinuities` 标出相邻非空窗口无交集或窗口变空的情况，可能由重启、窗口溢出或采集间断造成。即使为零，`complete_capture_asserted` 仍为 false：两次轮询之间可能错过已被窗口淘汰的请求。实际观察到的请求与人工固定样本编号还须核对，不能把无数据写成零延迟或 100% 成功。
 

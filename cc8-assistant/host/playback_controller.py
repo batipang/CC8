@@ -12,6 +12,7 @@ import threading
 import time
 from typing import Callable, ContextManager
 from caption_timing import CaptionTiming
+from playout_receipt import PlayoutReceipt
 from diagnostics import TraceBook, error_kind
 from failure_feedback import FailureSink
 from operation_failure import OperationFailure
@@ -59,7 +60,10 @@ class PlaybackController:
         self.pause_state = None
         self.pause_serial = 0
         self.pause_token = 0
+        self.publication_lock = threading.RLock()
         self.device_can_pause = False
+        self.device_can_report_playout = False
+        self.playout_probe = PlayoutReceipt()
         self.pause_cooldown = 0
         self.playback_serial = 0
         self.previous_spoken = ''
@@ -67,9 +71,11 @@ class PlaybackController:
 
     def stop_output(self):
         # The caller holds the session guard through the entire cancel transaction.
-        was_playing = self.playing
-        self.playing = False
-        return was_playing
+        with self.publication_lock:
+            was_playing = self.playing
+            self.playing = False
+            self.playout_probe.clear()
+            return was_playing
 
     def clear_cancelled_pause(self, was_playing):
         self.pause_state = None
@@ -80,6 +86,7 @@ class PlaybackController:
 
     def clear_transport_pause(self):
         self.pause_state = None
+        self.set_playout_capability(False)
 
     def notify(self):
         with self.done:
@@ -88,7 +95,14 @@ class PlaybackController:
     def set_pause_capability(self, enabled):
         self.device_can_pause = enabled
 
+    def set_playout_capability(self, enabled):
+        with self.publication_lock:
+            self.device_can_report_playout = enabled
+            if not enabled:
+                self.playout_probe.clear()
+
     def reset_session(self):
+        self.playout_probe.clear()
         self.spoken.clear()
         self.pause_state = None
         self.pause_token = 0
@@ -99,6 +113,26 @@ class PlaybackController:
 
     def device_event(self, event):
         name = event.get('event')
+        if name == 'playout_progress':
+            generation = event['generation']
+            with self.publication_lock:
+                if (
+                    self.device_can_report_playout
+                    and self.playing
+                    and generation == self.hooks.generation()
+                    and self.playout_probe.accept(
+                        generation,
+                        event['playback_id'],
+                        event['first_signal_frame'],
+                        event['played_frames'],
+                        event['accepted_frames'],
+                    )
+                ):
+                    # The admission point precedes local stop/publication; its
+                    # clock and trace key are always the Mac and this generation.
+                    self.hooks.diagnostics().mark(generation, 'playout_ack')
+                    self.hooks.metric('playout_receipts', increment=True)
+            return
         if name == 'play_done':
             if int(event['generation']) == self.hooks.generation():
                 self.hooks.diagnostics().mark(self.hooks.generation(), 'playback_done')
@@ -264,11 +298,20 @@ class PlaybackController:
             self.wait_playback(generation)
             if not self.hooks.valid(generation):
                 return False
-            self.playing = True
-            self.last_spoken = text
-            self.spoken.append((time.monotonic(), text))
-            self.playback_serial += 1
-            playback_id = self.playback_serial
+            # Owner cancel takes session guard -> publication -> probe. Render
+            # only queries validity (no guard acquisition), so it can still
+            # drain while an owner holds the session guard. No wire I/O here.
+            with self.publication_lock:
+                if not self.hooks.valid(generation):
+                    return False
+                self.playing = True
+                self.last_spoken = text
+                self.spoken.append((time.monotonic(), text))
+                self.playback_serial += 1
+                playback_id = self.playback_serial
+                request_playout = self.device_can_report_playout
+                if request_playout:
+                    self.playout_probe.begin(generation, playback_id)
             # Output is locally active before any begin notification can fail.
             started = True
             self.output_event(
@@ -279,6 +322,7 @@ class PlaybackController:
                 role='announcement' if generation == self.hooks.announcement_generation() else role,
                 streaming=True,
                 playback_id=playback_id,
+                playout_receipt_version=1 if request_playout else 0,
                 timings=timing.rows() if timing else [],
             )
             if timing:
@@ -304,6 +348,8 @@ class PlaybackController:
                     if not self.hooks.valid(generation):
                         return False
                     piece = pcm[offset : offset + 320].astype('<i2')
+                    if request_playout:
+                        self.playout_probe.reserve(generation, playback_id, written, piece)
                     self.output_packet(
                         Packet(SPEAKER, generation, sequence, written, 0, piece.tobytes())
                     )
