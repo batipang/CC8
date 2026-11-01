@@ -13,27 +13,80 @@ from pathlib import Path
 import threading
 import uuid
 from zoneinfo import ZoneInfo
+from typing import Callable, Literal, NotRequired, TypeAlias, TypedDict, cast
 
 ZONE = ZoneInfo('Asia/Shanghai')
 
 
-def clock():
+class TaskStep(TypedDict):
+    id: str
+    title: str
+    status: str
+
+
+class TaskRecord(TypedDict):
+    id: str
+    generation: int
+    title: str
+    status: str
+    stage: str
+    steps: list[TaskStep]
+    result: str
+    started_at: str
+
+
+class ReminderRecord(TypedDict):
+    id: str
+    title: str
+    due: str
+    repeat: str
+    status: str
+    revision: int
+    retry_after: NotRequired[str]
+
+
+class Snapshot(TypedDict):
+    revision: int
+    tasks: list[TaskRecord]
+    reminders: list[ReminderRecord]
+    timezone: str
+    server_time: str
+
+
+class ReminderResult(TypedDict):
+    ok: Literal[True]
+    reminder: ReminderRecord
+
+
+class ListResult(Snapshot):
+    ok: Literal[True]
+
+
+class CancelledResult(TypedDict):
+    ok: Literal[False]
+    error: Literal['turn_cancelled']
+
+
+WorkspaceResult: TypeAlias = ReminderResult | ListResult | CancelledResult
+
+
+def clock() -> datetime:
     return datetime.now(ZONE)
 
 
 class Workspace:
     # 任务回执只存内存，明确创建的提醒才持久化到 owner-private 文件。
     # self.revision 刷新整个界面，提醒自身的 revision 绑定某次播报，二者用途不同。
-    def __init__(self, path=None, now=clock):
+    def __init__(self, path: str | Path | None = None, now: Callable[[], datetime] = clock) -> None:
         self.path = Path(path) if path else None
         self.now = now
         self.lock = threading.RLock()
-        self.tasks = []
-        self.reminders = []
+        self.tasks: list[TaskRecord] = []
+        self.reminders: list[ReminderRecord] = []
         self.revision = 0
         if self.path and self.path.exists():
             # Do not silently replace a corrupt reminder store with an empty one.
-            data = json.loads(self.path.read_text())
+            data: object = json.loads(self.path.read_text())
             if (
                 not isinstance(data, dict)
                 or data.get('version') != 1
@@ -41,17 +94,20 @@ class Workspace:
                 or len(data['reminders']) > 64
             ):
                 raise ValueError('Invalid reminder store')
-            self.reminders = data['reminders']
-            for item in self.reminders:
-                self._validate(item, existing=True)
+            for raw_item in data['reminders']:
+                self._validate(raw_item, existing=True)
+                # The private JSON store is untyped until _validate establishes all
+                # record fields; normalize the two legacy defaults at that boundary.
+                item = cast(ReminderRecord, raw_item)
                 item.setdefault('revision', 0)
                 item.setdefault('repeat', 'none')
+                self.reminders.append(item)
             if len({r['id'] for r in self.reminders}) != len(self.reminders):
                 raise ValueError('Duplicate reminder ID')
             if sum(r['status'] == 'pending' for r in self.reminders) > 32:
                 raise ValueError('Too many pending reminders')
 
-    def _save(self):
+    def _save(self) -> None:
         # 同目录临时文件写完后原子替换，避免半份 JSON；调用方负责失败时回滚内存。
         if self.path:
             self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -69,7 +125,7 @@ class Workspace:
         self.revision += 1
 
     @staticmethod
-    def _date(value):
+    def _date(value: object) -> datetime:
         if not isinstance(value, str) or len(value) > 40:
             raise ValueError('提醒时间需要带时区的 ISO 日期')
         try:
@@ -83,7 +139,7 @@ class Workspace:
         except OverflowError:
             raise ValueError('提醒时间超出可用范围') from None
 
-    def _validate(self, item, existing=False):
+    def _validate(self, item: object, existing: bool = False) -> datetime:
         if not isinstance(item, dict):
             raise ValueError('Invalid reminder')
         title = item.get('title')
@@ -114,20 +170,19 @@ class Workspace:
             self._date(item['retry_after'])
         return due
 
-    def snapshot(self):
+    def snapshot(self) -> Snapshot:
         with self.lock:
             reminders = sorted(
                 (r for r in self.reminders if r['status'] == 'pending'), key=lambda r: r['due']
             )
-            data = deepcopy(
-                {
-                    'revision': self.revision,
-                    'tasks': list(reversed(self.tasks)),
-                    'reminders': reminders,
-                    'timezone': 'Asia/Shanghai',
-                    'server_time': self.now().isoformat(timespec='seconds'),
-                }
-            )
+            snapshot: Snapshot = {
+                'revision': self.revision,
+                'tasks': list(reversed(self.tasks)),
+                'reminders': reminders,
+                'timezone': 'Asia/Shanghai',
+                'server_time': self.now().isoformat(timespec='seconds'),
+            }
+            data = deepcopy(snapshot)
             # The authenticated audio protocol has a 64 KiB packet ceiling.
             # Preserve current work/reminders, omit oldest receipts if needed.
             while (
@@ -137,9 +192,9 @@ class Workspace:
                 data['tasks'].pop()
             return data
 
-    def task_start(self, generation, title):
+    def task_start(self, generation: int, title: str) -> str:
         with self.lock:
-            task = {
+            task: TaskRecord = {
                 'id': uuid.uuid4().hex[:16],
                 'generation': generation,
                 'title': title[:80],
@@ -154,14 +209,14 @@ class Workspace:
             self.revision += 1
             return task['id']
 
-    def task_stage(self, ident, key, title, status):
+    def task_stage(self, ident: str | None, key: str, title: str, status: str) -> None:
         with self.lock:
             task = next((t for t in self.tasks if t['id'] == ident), None)
             if not task or task['status'] != 'running':
                 return
             step = next((s for s in task['steps'] if s['id'] == key), None)
             if step is None:
-                step = {'id': key, 'title': title[:40]}
+                step = {'id': key, 'title': title[:40], 'status': status}
                 task['steps'].append(step)
                 task['steps'] = task['steps'][-5:]
             step['title'] = title[:40]
@@ -169,7 +224,7 @@ class Workspace:
             task['stage'] = title[:40]
             self.revision += 1
 
-    def task_finish(self, ident, status, result=''):
+    def task_finish(self, ident: str | None, status: str, result: str = '') -> None:
         # 只有 running 可进入终态，迟到的进度或停止朗读不能覆盖已有完成结果。
         with self.lock:
             task = next((t for t in self.tasks if t['id'] == ident), None)
@@ -193,7 +248,7 @@ class Workspace:
                     )
             self.revision += 1
 
-    def cancel_generation(self, generation):
+    def cancel_generation(self, generation: int) -> bool:
         with self.lock:
             before = self.revision
             for task in self.tasks:
@@ -201,7 +256,9 @@ class Workspace:
                     self.task_finish(task['id'], 'cancelled')
             return self.revision != before
 
-    def reminder(self, args, is_current=lambda: True):
+    def reminder(
+        self, args: object, is_current: Callable[[], bool] = lambda: True
+    ) -> WorkspaceResult:
         if not isinstance(args, dict) or set(args) - {'action', 'id', 'title', 'due', 'repeat'}:
             raise ValueError('提醒参数不正确')
         action = args.get('action')
@@ -214,7 +271,7 @@ class Workspace:
             if action == 'create':
                 if len([r for r in self.reminders if r['status'] == 'pending']) >= 32:
                     raise ValueError('最多保留 32 条待提醒事项')
-                item = {
+                raw_item: dict[str, object] = {
                     'id': uuid.uuid4().hex[:16],
                     'title': args.get('title'),
                     'due': args.get('due'),
@@ -222,7 +279,9 @@ class Workspace:
                     'status': 'pending',
                     'revision': 1,
                 }
-                item['due'] = self._validate(item).isoformat(timespec='seconds')
+                raw_item['due'] = self._validate(raw_item).isoformat(timespec='seconds')
+                # id/status/revision are generated here; user fields just passed validation.
+                item = cast(ReminderRecord, raw_item)
                 self.reminders.append(item)
                 if len(self.reminders) > 64:
                     self.reminders = [
@@ -231,7 +290,7 @@ class Workspace:
                 # Stable unique IDs, even after pruning completed records.
                 self.reminders = list({r['id']: r for r in self.reminders}.values())
             elif action in ('update', 'cancel'):
-                item = next(
+                current = next(
                     (
                         r
                         for r in self.reminders
@@ -239,17 +298,18 @@ class Workspace:
                     ),
                     None,
                 )
-                if item is None:
+                if current is None:
                     raise ValueError('这条提醒不存在或已经结束')
+                item = current
                 if action == 'cancel':
                     item['status'] = 'cancelled'
                 else:
-                    candidate = {
+                    candidate: dict[str, object] = {
                         **item,
                         **{k: v for k, v in args.items() if k in ('title', 'due', 'repeat')},
                     }
                     candidate['due'] = self._validate(candidate).isoformat(timespec='seconds')
-                    item.update(candidate)
+                    item.update(cast(ReminderRecord, candidate))
                     item.pop('retry_after', None)
                 item['revision'] = item.get('revision', 0) + 1
             else:
@@ -261,7 +321,7 @@ class Workspace:
                 raise
             return {'ok': True, 'reminder': deepcopy(item)}
 
-    def due(self):
+    def due(self) -> ReminderRecord | None:
         with self.lock:
             now = self.now()
             return next(
@@ -275,7 +335,7 @@ class Workspace:
                 None,
             )
 
-    def delivered(self, ident, success, *, revision):
+    def delivered(self, ident: str, success: bool, *, revision: object) -> bool:
         # 旧回执不能结束编辑/稍后提醒后的新版本，也不能推进下一次重复提醒。
         with self.lock:
             item = next(
