@@ -165,8 +165,8 @@ class WebTurns(unittest.TestCase):
     def test_search_error_cannot_fall_back_to_model_facts(self):
         f = Fake(error=MiniMaxError('network', http_status=503))
         b = MiniMaxBrain(f)
-        answer = b.reply('今天最新新闻', [])
-        self.assertIn('无法核实', answer)
+        with self.assertRaises(MiniMaxError):
+            b.reply('今天最新新闻', [])
         self.assertEqual(len(f.calls), 2)
         self.assertTrue(b.last_metrics['web_error'])
 
@@ -177,7 +177,8 @@ class WebTurns(unittest.TestCase):
 
     def test_missing_provider_status_is_failure(self):
         f = Fake(search={'organic': [result()]})
-        self.assertIn('没有成功', MiniMaxBrain(f).reply('查一下新闻', []))
+        with self.assertRaises(MiniMaxError):
+            MiniMaxBrain(f).reply('查一下新闻', [])
         self.assertEqual(len(f.calls), 2)
 
     def test_cancel_during_search_drops_late_sources_and_answer(self):

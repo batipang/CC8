@@ -16,6 +16,7 @@ import requests
 from web_search import now, wants_web, normalize, parse_plan, SpeechClauses
 from configuration import load_config
 from operation_failure import ClassifiedFailure
+from diagnostics import error_kind
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -494,23 +495,13 @@ class MiniMaxBrain:
                 if not is_current():
                     raise Cancelled('Turn cancelled') from None
                 self.web_context = True
-                self.last_metrics.update(
-                    web_error=True,
-                    api_code=error.code,
-                    http_status=error.http_status,
-                    error_reason=str(error),
-                )
+                kind = error_kind(error)
+                self.last_metrics.update(web_error=True, completed=False, error_kind=kind)
                 if on_web:
-                    on_web(
-                        'failed',
-                        {
-                            'reason': str(error),
-                            'api_code': error.code,
-                            'http_status': error.http_status,
-                        },
-                    )
-                yield '这次联网查询没有成功，我暂时无法核实最新信息。请稍后让我再查一次。'
-                return
+                    on_web('failed', {'kind': kind})
+                # A failed retrieval is an execution failure, not an ordinary
+                # answer clause that would close the task as successful.
+                raise
         else:
             self.pending_web = None
             self.web_context = False

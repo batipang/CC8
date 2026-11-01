@@ -2,7 +2,7 @@
 
 ## Unreleased — p0-software-20261102.1
 
-Backend 0.13.3; APK and wire protocol versions stay independent and unchanged.
+Backend 0.13.4; APK and wire protocol versions stay independent and unchanged.
 
 - Split vision and speaker/pause lifecycle ownership behind explicit session
   ports, preserving foreground authorization and existing audio parameters.
@@ -44,6 +44,10 @@ Backend 0.13.3; APK and wire protocol versions stay independent and unchanged.
 - Prepare a new owner-private installation receipt before device operations;
   reject public/symlink output folders and retain unconfirmed state on failures.
   A late report-save failure never automatically reinstalls the APK.
+
+- Propagate MiniMax search failures as failed task receipts with classified
+  recovery; never narrate a failed search as a successful normal answer or log
+  arbitrary failed-progress payloads.
 
 This candidate has not replaced the running installation.
 

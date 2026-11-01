@@ -430,3 +430,10 @@ P0-05 观察软件经 [PR #33](https://github.com/batipang/CC8/pull/33) 的 [真
 先独立纯提交共享原 PrivateOutput，定义 AST 完全一致，保留 host 兼容导出；安装 CLI 仅提取 main，installer 16 / host 436 / tooling 51 / Java 15 旧全套通过。随后在旧保存实现上新增两项回归，确认宽松 umask 产生非私有目录/文件，且已有公开目录仍继续设备操作，两项都失败；独立功能修复后通过。
 
 现在安装前预留 0700/0600 私有独立报告，拒绝公开/链接目录且不 chmod；探测/验签/本地 check 不建报告；安装失败/最后保存失败保留 unconfirmed，明确先核对已装包而非重装。新增共 6 项还验证多轮不覆盖历史、链接拒绝、探测前已预留、结果不明和保存失败不重试。无 USB 或实际 APK 安装，target/probe/install 全替身。最终 installer 22、host 436（4 private-audio skip）、tooling 51、Java 15 checks，以及质量/strict 六模块和脱敏历史扫描通过，待 CI。P0 软件候选统一为后台 0.13.3 / p0-software-20261102.1，APK/协议保持。
+
+
+### P0-06 补充：真实 MiniMax 搜索路径的失败回执（未部署）
+
+沿实际 MiniMaxBrain→BrainRouter→ResponseWorker 复查，发现检索异常仍可能作为普通回答关闭成完成，failed 进度 payload 也曾整包进日志。新增两个测试方法：五类检索失败各 3 次、任意正文进度注入一次；正确 fixture 对旧实现确认 16 个预期断言失败且无 fixture error，修复后通过。现在检索失败上抛并保留 completed=false，仅记录白名单 kind，任务/search step 明确失败；不重试、不调用其他大脑或模型事实替代新查结果。查询准备的原关键词兜底和真实空结果语义保持。
+
+本机 installer 22、host 438（4 private-audio skip）、tooling 51、Java 15 checks，质量/strict 六模块通过；34 项定向错误/检索回归也通过。全为假提供方，无设备/网络/采集；候选后台 0.13.4 / p0-software-20261102.1，待 CI。
