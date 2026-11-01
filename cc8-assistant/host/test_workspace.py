@@ -216,7 +216,7 @@ class WorkspaceTests(unittest.TestCase):
                 else field,
                 True,
             )
-            b.reminder_poll = 0
+            b.reminders.poll = 0
             b.reminder_tick()
             self.assertEqual(jobs, [])
             setattr(
@@ -229,11 +229,11 @@ class WorkspaceTests(unittest.TestCase):
                 False,
             )
         b.connection = None
-        b.reminder_poll = 0
+        b.reminders.poll = 0
         b.reminder_tick()
         self.assertEqual(jobs, [])
         b.connection = object()
-        b.reminder_poll = 0
+        b.reminders.poll = 0
         b.reminder_tick()
         self.assertEqual(len(jobs), 1)
         self.assertFalse(b.active)
@@ -255,7 +255,7 @@ class WorkspaceTests(unittest.TestCase):
                 b.publish_workspace = lambda: None
                 b.announce = lambda text: Announcement(b.generation, text)
                 b.reminder_tick()
-                job = b.reminder_job
+                job = b.reminders.job
                 updated = board.reminder(
                     {
                         'action': 'update',

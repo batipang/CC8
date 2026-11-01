@@ -19,6 +19,9 @@ from endpoint_pipeline import EndpointPipeline, EndpointHooks
 from recognition_worker import RecognitionWorker, RecognitionHooks
 from response_worker import ResponseWorker, ResponseHooks
 from fast_stop import FastStopDetector
+from announcement_controller import AnnouncementController, AnnouncementHooks
+from reminder_scheduler import ReminderScheduler, ReminderHooks
+from device_controller import DeviceController, DeviceControlHooks
 
 if TYPE_CHECKING:
     from bridge import Bridge
@@ -32,6 +35,9 @@ class Components:
     capture: CapturePipeline
     recognition: RecognitionWorker
     response: ResponseWorker
+    announcements: AnnouncementController
+    reminders: ReminderScheduler
+    device: DeviceController
 
 
 def build_components(
@@ -98,7 +104,7 @@ def build_components(
             lock=session.guard,
             generation=lambda: session.generation,
             active=lambda: session.active,
-            announcement_generation=lambda: session.announcement_generation,
+            announcement_generation=lambda: session.announcements.generation,
             valid=lambda generation: session.valid(generation),
             cancel_session=lambda reason: session.cancel(reason),
             event=lambda name, **fields: session.event(name, **fields),
@@ -233,4 +239,61 @@ def build_components(
             speak=lambda text, generation: session.speak(text, generation),
         )
     )
-    return Components(calibration, visual, playback, capture, recognition, response)
+    announcements = AnnouncementController(
+        AnnouncementHooks(
+            lock=session.guard,
+            connected=lambda: session.connection is not None,
+            calibration_busy=lambda: session.calibration.active or session.calibration.running,
+            cancel_session=lambda reason: session.cancel(reason),
+            valid=lambda generation: session.valid(generation),
+            offer=lambda job: session.response.offer(job),
+            diagnostics=lambda: session.diagnostics,
+            event=lambda name, **fields: session.event(name, **fields),
+            status=lambda phase, message: session.status(phase, message),
+            speak=lambda text, generation: session.speak(text, generation),
+            failure=lambda message, error: session.failure(message, error),
+            metric=session.record_metric,
+            save_status=lambda: session.save_status(),
+        )
+    )
+    reminders = ReminderScheduler(
+        ReminderHooks(
+            lock=session.guard,
+            workspace=lambda: session.workspace,
+            publish_workspace=lambda: session.publish_workspace(),
+            can_deliver=lambda: (
+                session.connection is not None
+                and not session.calibration.active
+                and not session.playback.playing
+                and not session.response.busy
+                and not session.recognition.busy
+                and session.text_generation is None
+                and session.visual.generation is None
+                and session.announcements.generation is None
+                and not session.capture.endpoint.vad.talking
+                and session.response.queue.empty()
+            ),
+            touch=lambda: session.touch_activity(),
+            announce=lambda text: session.announce(text),
+        )
+    )
+    device = DeviceController(
+        DeviceControlHooks(
+            lock=session.guard,
+            connected=lambda: session.connection is not None,
+            cancel_session=lambda reason: session.cancel(reason),
+            event=lambda name, **fields: session.event(name, **fields),
+            touch=lambda: session.touch_activity(),
+        )
+    )
+    return Components(
+        calibration,
+        visual,
+        playback,
+        capture,
+        recognition,
+        response,
+        announcements,
+        reminders,
+        device,
+    )
