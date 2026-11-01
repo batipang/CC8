@@ -85,7 +85,7 @@ class StreamPlaybackTests(unittest.TestCase):
         with self.assertRaises(MiniMaxError):
             b.play_stream(failing(), 'test', generation)
         self.assertGreater(b.generation, generation)
-        self.assertFalse(b.playing)
+        self.assertFalse(b.playback.playing)
         self.assertTrue(b.active)
         events = [json.loads(p.data) for p in b.connection.packets if p.kind == EVENT]
         self.assertTrue(any(e.get('event') == 'cancel' for e in events))

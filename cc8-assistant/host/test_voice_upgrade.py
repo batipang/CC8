@@ -65,7 +65,7 @@ class IdleTests(unittest.TestCase):
     def test_never_sleep_during_answer_calibration_or_without_user_microphone(self):
         for field in ('playing', 'calibrating', 'response_busy', 'recognition_busy'):
             b = self.bridge()
-            setattr(b, field, True)
+            setattr(b.playback if field == 'playing' else b, field, True)
             b.idle_tick()
             self.assertFalse(b.screen_sleeping)
         b = self.bridge()

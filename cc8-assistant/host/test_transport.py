@@ -341,7 +341,7 @@ class HandoverTests(unittest.TestCase):
         b = self.bridge()
         b.active = True
         b.epoch = 12
-        b.playing = True
+        b.playback.playing = True
         old = b.generation
         new = FakeChannel('wifi')
         b.change_transport(new)

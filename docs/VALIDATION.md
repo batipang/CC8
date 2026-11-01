@@ -296,3 +296,15 @@ main 的 [CI 运行](https://github.com/batipang/CC8/actions/runs/41320525409) �
 
 由 249 行 VisionController 拥有拍照/看图代次、nonce、挑战、inbox 与桌面 waiter，通过 frozen typed callback 接口协调会话，不传整个 Bridge 或共享指标字典。Bridge 入口保留薄转发；原全部 345 项 host 通过（4 私人录音 skip），视觉/桌面照片/取消/断线/异常收尾断言保留，仅更新内部状态路径。Ruff / Java formatting / 六模块 strict mypy 通过（视觉模块本身尚不在 strict 清单）。无摄像头、麦克风、模型调用或当前运行实例操作，F-06 整体未结项。
 
+[PR #19](https://github.com/batipang/CC8/pull/19) 的 [真实 CI](https://github.com/batipang/CC8/actions/runs/41334082851) 八项全部通过并合入。
+
+# F-06 输出/暂停所有权候选（2026-11-02，待 CI）
+
+纯拆分保持参数、协议和行为：输出/字幕/完成 Condition、近期播报与暂停状态集中 PlaybackController，Bridge 保留同签名转发；设备事件和时钟通过明确端口协调。内部测试状态路径迁移后，同套 host 345 项通过（4 private skip），Ruff / Java formatting / 六模块 strict mypy 通过；未接设备、调用云端或读私人音频。
+
+审计完成等待的锁路径时，在基线 `462f20d6c4330984db3ed22f5c19d742cc157afd` 和纯拆分候选两份源码，均以两个受控线程、合成零 PCM 和屏障复现 LOCK_CYCLE：持有 done 的 pause timeout 等 guard，同时外层持有 guard 的 cancel 等 done。每个复现进程约 2 秒退出，未干扰运行实例。这是原问题而非拆分引入；后续独立修复提交将通过同一复现及有上限子进程回归验收，不把既有 345 项通过当成已解除死锁。
+
+纯重构提交 `6f01187` 后独立修复：pause wait / cancel 移出完成 Condition 临界区，重新检查 ACK；暂停超时在 session guard 内重新核对 generation，旧超时不能取消新请求。新增子进程回归在纯重构上有界失败（6.2 秒，锁循环），修复后通过（约 0.17 秒），并验证只由 owner cancel 推进一次 generation。测试子进程上限 12 秒、检查线程异常/未退出，使用合成零 PCM、假发送，不启动 provider 或设备。
+
+修复后完整离线 installer 16、host 346（4 private skip）、tooling 47、Java 15 checks；Ruff / Java formatting / strict mypy 六模块通过。后台候选版本独立升至 0.12.6 / foundation-20261102.2，APK 0.8.7 / 协议 2 不变，旧 .1 tag 仍指原 0.12.5 快照。本轮未构建/安装设备包、升级/重启运行实例或打开采集；待真实 CI，不关闭 F-06 和 P0。
+

@@ -225,14 +225,14 @@ class CaptureAndTransportTests(unittest.TestCase):
 
     def test_old_completion_ids_do_not_accumulate_or_finish_current_playback(self):
         value = self.bridge()
-        value.playing = True
+        value.playback.playing = True
         for old in range(100):
             value.on_event({'event': 'play_done', 'generation': old})
-        self.assertEqual(value.completed, set())
-        self.assertTrue(value.playing)
+        self.assertEqual(value.playback.completed, set())
+        self.assertTrue(value.playback.playing)
         value.on_event({'event': 'play_done', 'generation': value.generation})
-        self.assertEqual(value.completed, {value.generation})
-        self.assertFalse(value.playing)
+        self.assertEqual(value.playback.completed, {value.generation})
+        self.assertFalse(value.playback.playing)
 
     def test_old_calibration_cannot_replace_new_session_echo_state(self):
         value = self.bridge()

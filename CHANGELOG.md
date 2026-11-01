@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — foundation-20261102.2
+
+Backend 0.12.6; APK and wire protocol versions stay independent and unchanged.
+
+- Split vision and speaker/pause lifecycle ownership behind explicit session
+  ports, preserving foreground authorization and existing audio parameters.
+- Fix a completion-condition/session-guard cycle during concurrent pause expiry
+  and owner cancellation. Recheck generation before timeout cancellation so an
+  old output cannot cancel a newer request. Add a bounded subprocess regression.
+
+This candidate has not replaced the running installation.
+
 ## foundation-20261102.1 — source snapshot
 
 Independent components: assistant APK 0.8.7 / code 32, host 0.12.5,

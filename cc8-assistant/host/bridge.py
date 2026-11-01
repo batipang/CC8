@@ -8,7 +8,6 @@ from __future__ import annotations
 import argparse
 from collections import deque
 import json
-import itertools
 import os
 from pathlib import Path
 import queue
@@ -38,9 +37,9 @@ from dsp import (
 from fast_stop import FastStopDetector, can_fast_stop
 from brain_router import BrainRouter
 from announce import Announcement, AnnouncementServer, validate_text
-from caption_timing import CaptionTiming
 from vision import visual_request, desktop_signature
 from vision_controller import VisionController, VisionHooks
+from playback_controller import PlaybackController, PlaybackHooks
 from minimax_client import MiniMaxBrain, MiniMaxError
 from workspace import Workspace
 from diagnostics import TraceBook
@@ -104,7 +103,6 @@ class Bridge:
         self.active = False
         self.epoch = 0
         self.generation = 100
-        self.playing = False
         self.calibrating = False
         self.announcement_generation = None
         self.wake = False
@@ -115,8 +113,6 @@ class Bridge:
         self.vad = VoiceDetector()
         self.history = deque(maxlen=8)
         self.queue = queue.Queue(maxsize=2)
-        self.completed = set()
-        self.done = threading.Condition()
         self.metrics = {
             'mic_frames': 0,
             'render_frames': 0,
@@ -127,10 +123,7 @@ class Bridge:
         }
         self.last_sequence = None
         self.last_status = 0
-        self.last_spoken = ''
-        self.last_audio_end = 0
         self.live_turn = 0
-        self.spoken = deque(maxlen=32)
         self.pending_mic = deque()
         self.calibration_frames = []
         self.reference_shift_ns = 0
@@ -142,15 +135,9 @@ class Bridge:
         self.last_capture_render_ns = None
         self.reference_capture = ReferenceCapture()
         self.near_speech = NearSpeechDetector()
-        self.pause_state = None
-        self.pause_serial = 0
-        self.pause_token = 0
-        self.device_can_pause = False
         self.turn_pause_token = None
-        self.pause_cooldown = 0
         self.response_queue = queue.Queue(maxsize=2)
         self.status_lock = threading.Lock()
-        self.playback_serial = 0
         self.last_interaction = time.monotonic()
         self.screen_sleeping = False
         self.response_busy = False
@@ -162,8 +149,6 @@ class Bridge:
         self.fast_stop = fast_stop
         self.last_fast_stop_ns = 0
         self.ignore_vad_until_ns = 0
-        self.previous_spoken = ''
-        self.previous_spoken_until = 0
         self.echo_check_pending = echo_check
         self.echo_check_running = False
         self.echo_check_failed = False
@@ -188,8 +173,36 @@ class Bridge:
                 enqueue=lambda job: self.enqueue_response(job),
                 answer=lambda text, generation, image: self.answer(text, generation, image=image),
                 answer_completed=lambda: self.brain.last_metrics.get('completed'),
-                metric=self.record_vision_metric,
+                metric=self.record_metric,
                 log=lambda name, **fields: self.log(name, **fields),
+            )
+        )
+        self.playback = PlaybackController(
+            PlaybackHooks(
+                lock=self.guard,
+                generation=lambda: self.generation,
+                active=lambda: self.active,
+                announcement_generation=lambda: self.announcement_generation,
+                valid=lambda generation: self.valid(generation),
+                cancel_session=lambda reason: self.cancel(reason),
+                event=lambda name, **fields: self.event(name, **fields),
+                send=lambda packet: self.send(packet),
+                status=lambda phase, message: self.status(phase, message),
+                log=lambda name, **fields: self.log(name, **fields),
+                metric=self.record_metric,
+                diagnostics=lambda: self.diagnostics,
+                trace=lambda: self.voice_trace,
+                echo_metrics=lambda: dict(
+                    input_dbfs=self.metrics.get('input_dbfs'),
+                    residual_dbfs=self.metrics.get('output_dbfs'),
+                    raw_coherence=round(self.near_speech.correlation, 3),
+                    residual_coherence=round(self.near_speech.residual_correlation, 3),
+                ),
+                utterance_paused=lambda token: self.vad.talking and self.turn_pause_token == token,
+                speech=lambda: self.speech,
+                cancel_timeline_pause=lambda: self.timeline.cancel_pause(),
+                pause_timeline=lambda nanos: self.timeline.pause_at(nanos),
+                resume_timeline=lambda nanos: self.timeline.resume_at(nanos),
             )
         )
         self.worker = threading.Thread(target=self.work, daemon=True)
@@ -243,7 +256,7 @@ class Bridge:
         self.reference_capture.reset()
         self.near_speech.reset()
         self.last_sequence = None
-        self.pause_state = None
+        self.playback.clear_transport_pause()
         self.turn_pause_token = None
         if channel is None:
             self.stop()
@@ -282,7 +295,7 @@ class Bridge:
         if (
             self.active
             and not self.calibrating
-            and not self.playing
+            and not self.playback.playing
             and not self.response_busy
             and not self.recognition_busy
             and not self.screen_sleeping
@@ -324,7 +337,7 @@ class Bridge:
             'asr_engine': getattr(getattr(self.speech, 'recognizer', None), 'engine', None),
             'brain_provider': getattr(self.brain, 'selected', 'echo'),
             'dot_runtime': dot_runtime_status(),
-            'playing': self.playing,
+            'playing': self.playback.playing,
             'mic_frames': self.metrics.get('mic_frames', 0),
             'render_frames': self.metrics.get('render_frames', 0),
         }
@@ -376,7 +389,7 @@ class Bridge:
             if (
                 self.connection is None
                 or self.calibrating
-                or self.playing
+                or self.playback.playing
                 or self.response_busy
                 or self.recognition_busy
                 or self.text_generation is not None
@@ -424,74 +437,13 @@ class Bridge:
                 self.device_requests.pop(ident, None)
 
     def pause_for_voice(self):
-        # 先可撤销地暂停并保留回答代次；ASR 确认新话语后才真正取消旧回答。
-        with self.guard:
-            if (
-                not self.device_can_pause
-                or not self.active
-                or not self.playing
-                or self.pause_state
-                or time.monotonic() < self.pause_cooldown
-            ):
-                return None
-            self.pause_serial += 1
-            token = self.pause_serial
-            self.pause_token = token
-            self.pause_state = {
-                'token': token,
-                'generation': self.generation,
-                'started': time.monotonic(),
-            }
-        self.diagnostics.mark(self.voice_trace, 'pause_request')
-        self.event('playback_pause', token=token)
-        self.metrics['barge_in_pauses'] = self.metrics.get('barge_in_pauses', 0) + 1
-        self.log(
-            'barge_in_tentative_pause',
-            token=token,
-            input_dbfs=self.metrics.get('input_dbfs'),
-            residual_dbfs=self.metrics.get('output_dbfs'),
-            raw_coherence=round(self.near_speech.correlation, 3),
-            residual_coherence=round(self.near_speech.residual_correlation, 3),
-        )
-        return token
+        return self.playback.pause_for_voice()
 
     def resume_after_rejection(self, token, generation):
-        # token 区分同一回答中的多次暂停，generation 隔离不同回答，均匹配才恢复。
-        with self.guard:
-            state = self.pause_state
-            if (
-                token is None
-                or not state
-                or state['token'] != token
-                or state['generation'] != generation
-                or not self.valid(generation)
-            ):
-                return
-            if self.vad.talking and self.turn_pause_token == token:
-                return
-            self.pause_state = None
-            self.pause_cooldown = time.monotonic() + 0.6
-        self.event('playback_resume', generation=generation, token=token)
-        self.metrics['barge_in_resumed'] = self.metrics.get('barge_in_resumed', 0) + 1
-        self.log('barge_in_rejected_resumed', token=token)
-        with self.done:
-            self.done.notify_all()
+        return self.playback.resume_after_rejection(token, generation)
 
     def wait_playback(self, generation):
-        if not self.pause_state:
-            return 0.0
-        start = time.monotonic()
-        while self.valid(generation):
-            state = self.pause_state
-            if not state:
-                break
-            if time.monotonic() - state['started'] > 20:
-                self.cancel('barge_in_timeout')
-                self.status('listening', '插话识别超时，已停止旧播报')
-                break
-            with self.done:
-                self.done.wait(0.02)
-        return time.monotonic() - start
+        return self.playback.wait_playback(generation)
 
     def announce(self, text):
         text = validate_text(text)
@@ -561,16 +513,11 @@ class Bridge:
             workspace_changed = self.workspace.cancel_generation(self.generation)
             self.generation += 1
             generation = self.generation
-            was_playing = self.playing
-            self.playing = False
+            was_playing = self.playback.stop_output()
             self.announcement_generation = None
             self.text_generation = None
             self.visual.invalidate()
-            self.pause_state = None
-            self.pause_token = 0
-            self.timeline.cancel_pause()
-            if was_playing:
-                self.last_audio_end = time.monotonic()
+            self.playback.clear_cancelled_pause(was_playing)
         if self.brain:
             self.brain.cancel()
         cancel_speech = getattr(self.speech, 'cancel', None)
@@ -580,8 +527,7 @@ class Bridge:
             self.event('cancel', generation=generation)
         if workspace_changed:
             self.publish_workspace()
-        with self.done:
-            self.done.notify_all()
+        self.playback.notify()
         if was_playing:
             self.metrics['interruptions'] += 1
             self.log('playback_cancelled', reason=reason, generation=generation)
@@ -629,7 +575,7 @@ class Bridge:
                 self.status('listening' if self.active else 'idle', '已停止看图')
         elif event == 'device_ready':
             self.visual.update_peer(j)
-            self.device_can_pause = bool(j.get('supports_playback_pause'))
+            self.playback.set_pause_capability(bool(j.get('supports_playback_pause')))
             if self.active and not j.get('capture_active', False):
                 self.stop()
             if 'wake_mode' in j:
@@ -758,19 +704,13 @@ class Bridge:
             self.pending_mic.clear()
             self.calibration_frames = []
             self.reference_shift_ns = 0
-            self.spoken.clear()
+            self.playback.reset_session()
             self.turn_reference = []
             self.turn_echo_risk = False
             self.last_capture_render_ns = None
             self.reference_capture.reset()
             self.near_speech.reset()
-            self.pause_state = None
-            self.pause_token = 0
             self.turn_pause_token = None
-            self.last_spoken = ''
-            self.previous_spoken = ''
-            self.previous_spoken_until = 0
-            self.last_audio_end = 0
             self.last_fast_stop_ns = 0
             self.ignore_vad_until_ns = 0
             if self.fast_stop:
@@ -808,37 +748,8 @@ class Bridge:
             ):
                 self.cancel('button')
                 self.status('listening' if self.active else 'idle', '播报已停止')
-        elif event == 'play_done':
-            if int(j['generation']) == self.generation:
-                self.diagnostics.mark(self.generation, 'playback_done')
-            with self.done:
-                if int(j['generation']) == self.generation:
-                    self.completed = {self.generation}
-                self.done.notify_all()
-            if int(j['generation']) == self.generation:
-                self.playing = False
-                self.last_audio_end = time.monotonic()
-        elif (
-            event == 'playback_paused'
-            and int(j.get('token', -1)) == self.pause_token
-            and int(j.get('generation', -1)) == self.generation
-        ):
-            self.diagnostics.mark(self.voice_trace, 'pause_ack')
-            self.timeline.pause_at(int(j['nanos']))
-        elif (
-            event == 'playback_resumed'
-            and int(j.get('token', -1)) == self.pause_token
-            and int(j.get('generation', -1)) == self.generation
-        ):
-            self.diagnostics.mark(self.voice_trace, 'resume_ack')
-            self.timeline.resume_at(int(j['nanos']))
-        elif (
-            event == 'playback_error'
-            and int(j.get('generation', self.generation)) == self.generation
-        ):
-            self.diagnostics.failure(self.generation, 'playback', RuntimeError())
-            self.log('device_playback_error', error_type=str(j.get('error_type', 'Unknown'))[:50])
-            self.cancel('playback_error')
+        elif event in ('play_done', 'playback_paused', 'playback_resumed', 'playback_error'):
+            self.playback.device_event(j)
         elif event == 'capture_gap':
             self.log('capture_read_gap', milliseconds=j.get('milliseconds'))
 
@@ -906,7 +817,7 @@ class Bridge:
             # wall-clock check made after recognition can miss the same echo.
             if level(reference) > -65:
                 self.last_capture_render_ns = stamp
-            echo_risk = self.playing or (
+            echo_risk = self.playback.playing or (
                 self.last_capture_render_ns is not None
                 and 0 <= stamp - self.last_capture_render_ns < 3_000_000_000
             )
@@ -914,10 +825,12 @@ class Bridge:
                 self.metrics['stop_input_dbfs'] = round(level(stop_cleaned), 1)
                 keyword = self.fast_stop.feed(stop_cleaned)
                 if keyword and stamp - self.last_fast_stop_ns > 1_200_000_000:
-                    recent = self.playing or time.monotonic() - self.last_audio_end < 1
-                    render_text = self.last_spoken if recent else ''
-                    if time.monotonic() < self.previous_spoken_until:
-                        render_text += self.previous_spoken
+                    recent = (
+                        self.playback.playing or time.monotonic() - self.playback.last_audio_end < 1
+                    )
+                    render_text = self.playback.last_spoken if recent else ''
+                    if time.monotonic() < self.playback.previous_spoken_until:
+                        render_text += self.playback.previous_spoken
                     if can_fast_stop(keyword, render_text):
                         self.apply_fast_stop(keyword, stamp)
                     else:
@@ -936,13 +849,15 @@ class Bridge:
                 # Wake mode waits for textual keyword recognition until the
                 # conversation is awake. This is not offline keyword spotting.
                 now = time.monotonic()
-                self.turn_during_playback = self.playing
+                self.turn_during_playback = self.playback.playing
                 self.turn_echo_risk = echo_risk
                 self.turn_capture_started = now
-                self.turn_pause_token = self.pause_state['token'] if self.pause_state else None
+                self.turn_pause_token = (
+                    self.playback.pause_state['token'] if self.playback.pause_state else None
+                )
                 # Bounded by count, not clause-start age: a 30-second-old
                 # clause can still be audible or queued for recognition.
-                self.turn_reference = [text for _, text in tuple(self.spoken)]
+                self.turn_reference = [text for _, text in tuple(self.playback.spoken)]
                 # Only the acoustic speech gate can pause. Decode and reject
                 # reference fragments before permanently cancelling a turn.
                 self.live_turn = (
@@ -955,9 +870,9 @@ class Bridge:
             if (
                 self.vad.talking
                 and credible
-                and self.playing
+                and self.playback.playing
                 and self.awake
-                and self.pause_state is None
+                and self.playback.pause_state is None
             ):
                 self.turn_pause_token = self.pause_for_voice()
             if self.vad.talking or utterance is not None:
@@ -967,7 +882,9 @@ class Bridge:
                 self.metrics['utterances'] += 1
                 # Include clauses that started after this utterance began.
                 references = list(
-                    dict.fromkeys([*self.turn_reference, *[text for _, text in tuple(self.spoken)]])
+                    dict.fromkeys(
+                        [*self.turn_reference, *[text for _, text in tuple(self.playback.spoken)]]
+                    )
                 )[-64:]
                 evidence = {
                     'echo_risk': self.turn_echo_risk,
@@ -1034,7 +951,7 @@ class Bridge:
             'connected': self.connection is not None,
             'active': self.active,
             'calibrating': self.calibrating,
-            'playing': self.playing,
+            'playing': self.playback.playing,
             'generation': self.generation,
             'wake_mode': self.wake,
             'wake_word': WAKE_WORD,
@@ -1055,8 +972,8 @@ class Bridge:
             'screen_sleeping': self.screen_sleeping,
             'idle_sleep_seconds': 900,
             'asr_engine': getattr(getattr(self.speech, 'recognizer', None), 'engine', None),
-            'barge_in_enabled': self.device_can_pause,
-            'playback_paused': self.pause_state is not None,
+            'barge_in_enabled': self.playback.device_can_pause,
+            'playback_paused': self.playback.pause_state is not None,
             'announcement_active': self.announcement_generation is not None,
             'brain_provider': getattr(self.brain, 'selected', 'minimax')
             if self.brain
@@ -1083,133 +1000,13 @@ class Bridge:
             temporary.replace(PRIVATE / 'status.json')
 
     def play(self, pcm, text, generation, role='assistant'):
-        return self.play_stream(iter([pcm]), text, generation, role)
+        return self.playback.play(pcm, text, generation, role)
 
     def play_stream(self, chunks, text, generation, role='assistant', timing=None):
-        # 每句有独立 playback_id；发完 PCM 不等于播完，仍须等待设备 play_done。
-        iterator = iter(chunks)
-        prefill = []
-        count = 0
-        started = False
-        completed = False
-        try:
-            # Keep a short prebuffer before AudioTrack starts. Cloud audio can
-            # then continue to arrive while the queued PCM is being rendered.
-            while count < 3200 and self.valid(generation):
-                try:
-                    piece = next(iterator)
-                except StopIteration:
-                    break
-                if len(piece):
-                    self.diagnostics.mark(generation, 'first_pcm')
-                    prefill.append(piece)
-                    count += len(piece)
-            if not self.valid(generation):
-                return False
-            if not prefill:
-                raise MiniMaxError('No audio available for playback')
-            with self.done:
-                self.completed.discard(generation)
-            self.previous_spoken = self.last_spoken
-            self.previous_spoken_until = time.monotonic() + 1
-            self.wait_playback(generation)
-            if not self.valid(generation):
-                return False
-            self.playing = True
-            self.last_spoken = text
-            self.spoken.append((time.monotonic(), text))
-            self.playback_serial += 1
-            playback_id = self.playback_serial
-            self.event(
-                'play_begin',
-                generation=generation,
-                text=text,
-                mood=mood(text),
-                role='announcement' if generation == self.announcement_generation else role,
-                streaming=True,
-                playback_id=playback_id,
-                timings=timing.rows() if timing else [],
-            )
-            if timing:
-                timing.publish = lambda rows: (
-                    self.event(
-                        'caption_timing',
-                        generation=generation,
-                        playback_id=playback_id,
-                        timings=rows,
-                    )
-                    if self.valid(generation)
-                    else None
-                )
-            started = True
-            sequence = 0
-            written = 0
-            start = time.monotonic()
-            for pcm in itertools.chain(prefill, iterator):
-                start += self.wait_playback(generation)
-                if not self.valid(generation):
-                    return False
-                for offset in range(0, len(pcm), 320):
-                    start += self.wait_playback(generation)
-                    if not self.valid(generation):
-                        return False
-                    piece = pcm[offset : offset + 320].astype('<i2')
-                    self.send(Packet(SPEAKER, generation, sequence, written, 0, piece.tobytes()))
-                    # Fill 200 ms ahead on the device, then pace at real time.
-                    # A Mac-only prefill followed by just-in-time writes leaves
-                    # AudioTrack empty during minor cloud scheduling gaps.
-                    sequence += 1
-                    written += len(piece)
-                    deadline = start + max(0, written - 3200) / RATE
-                    while self.valid(generation) and time.monotonic() < deadline:
-                        waited = self.wait_playback(generation)
-                        start += waited
-                        deadline += waited
-                        time.sleep(min(0.01, max(0, deadline - time.monotonic())))
-            if not self.valid(generation):
-                return False
-            self.event('play_end', generation=generation, frames=written)
-            with self.done:
-                deadline = time.monotonic() + 4
-                while self.valid(generation) and generation not in self.completed:
-                    deadline += self.wait_playback(generation)
-                    if time.monotonic() >= deadline:
-                        break
-                    self.done.wait(0.1)
-                completed = generation in self.completed
-            if not completed and self.valid(generation):
-                self.log('playback_completion_timeout')
-                self.cancel('completion_timeout')
-                return False
-            return self.valid(generation)
-        except Exception as error:
-            self.diagnostics.failure(generation, self.diagnostics.current_stage(generation), error)
-            if self.valid(generation) and started:
-                self.cancel('audio_stream_error')
-                self.status('error', '这次播报没有完成，请再说一次')
-            raise
-        finally:
-            close = getattr(iterator, 'close', None)
-            if close:
-                close()
-            if timing:
-                timing.publish = None
+        return self.playback.play_stream(chunks, text, generation, role, timing)
 
     def speak(self, text, generation):
-        self.diagnostics.mark(generation, 'tts_start')
-        if isinstance(self.speech, DirectSpeech):
-            timing = CaptionTiming(text)
-            return self.play_stream(
-                self.speech.stream(text, lambda: self.valid(generation), timing.feed),
-                text,
-                generation,
-                timing=timing,
-            )
-        if hasattr(self.speech, 'stream'):
-            return self.play_stream(
-                self.speech.stream(text, lambda: self.valid(generation)), text, generation
-            )
-        return self.play(self.speech.synthesize(text), text, generation)
+        return self.playback.speak(text, generation)
 
     def startup_reference(self):
         # 开场口号同时提供扬声器参考，不再使用检测器的固定女声素材。
@@ -1409,7 +1206,7 @@ class Bridge:
             self.recognition_busy = True
             rejected = False
             try:
-                if not self.playing:
+                if not self.playback.playing:
                     self.status('thinking', '正在本机识别…')
                 self.diagnostics.mark(trace_id, 'asr_start')
                 text = self.speech.recognize(audio)
@@ -1429,12 +1226,12 @@ class Bridge:
                 risky = (
                     evidence['echo_risk']
                     if evidence is not None
-                    else (during_playback or time.monotonic() - self.last_audio_end < 8)
+                    else (during_playback or time.monotonic() - self.playback.last_audio_end < 8)
                 )
                 available = (
                     references
                     if evidence is not None
-                    else references + [line for _, line in tuple(self.spoken)]
+                    else references + [line for _, line in tuple(self.playback.spoken)]
                 )
                 self.metrics['last_voice_gate'] = {
                     'echo_risk': risky,
@@ -1495,7 +1292,7 @@ class Bridge:
                         if evidence
                         else None,
                     )
-                    if not self.playing:
+                    if not self.playback.playing:
                         self.status('listening', '我在听')
                     continue
                 if (self.echo_check_running or self.echo_check_failed) and clean not in {
@@ -1568,9 +1365,9 @@ class Bridge:
                 if self.valid(generation):
                     try:
                         if (
-                            self.pause_state
+                            self.playback.pause_state
                             and evidence
-                            and evidence.get('pause_token') == self.pause_state['token']
+                            and evidence.get('pause_token') == self.playback.pause_state['token']
                         ):
                             self.cancel('barge_asr_error')
                     except (OSError, EOFError):
@@ -1586,7 +1383,7 @@ class Bridge:
                     except (OSError, EOFError) as error:
                         self.log('playback_resume_disconnected', error_type=type(error).__name__)
 
-    def record_vision_metric(self, name, value=None, *, increment=False):
+    def record_metric(self, name, value=None, *, increment=False):
         self.metrics[name] = self.metrics.get(name, 0) + 1 if increment else value
 
     def request_snapshot(self):
@@ -1850,7 +1647,7 @@ def run_backend():
     def shutdown(*unused):
         stop.set()
         bridge.active = False
-        bridge.playing = False
+        bridge.playback.stop_output()
         bridge.announcement_generation = None
         try:
             bridge.cancel('shutdown')
