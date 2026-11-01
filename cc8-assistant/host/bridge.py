@@ -1200,7 +1200,12 @@ def run_backend():
     def retry_echo_check(*unused):
         # This signal can rerun the diagnostic on an already active session;
         # it deliberately cannot open the microphone or resume a stopped one.
-        if not bridge.active or bridge.calibrating or bridge.echo_check_running or bridge.playing:
+        if (
+            not bridge.active
+            or bridge.calibrating
+            or bridge.echo_check_running
+            or bridge.playback.playing
+        ):
             bridge.log('echo_self_check_retry_ignored')
             return
         generation = bridge.cancel('echo_check_retry')
