@@ -29,19 +29,8 @@ from dsp import (
 from fast_stop import FastStopDetector
 from brain_router import BrainRouter
 from announce import Announcement, AnnouncementServer, validate_text
-from vision import desktop_signature
-from vision_controller import VisionController, VisionHooks
-from playback_controller import PlaybackController, PlaybackHooks
-from capture_pipeline import CapturePipeline, CaptureHooks
-from echo_pipeline import EchoPipeline, EchoHooks
-from endpoint_pipeline import EndpointPipeline, EndpointHooks
-from recognition_worker import RecognitionWorker, RecognitionHooks
-from response_worker import ResponseWorker, ResponseHooks
-from calibration_controller import (
-    CalibrationController,
-    CalibrationHooks,
-    STARTUP_GREETING as STARTUP_GREETING,
-)
+from calibration_controller import STARTUP_GREETING as STARTUP_GREETING
+from composition import build_components
 from minimax_client import MiniMaxBrain, MiniMaxError
 from workspace import Workspace
 from diagnostics import TraceBook
@@ -121,197 +110,19 @@ class Bridge:
         if isinstance(self.brain, BrainRouter):
             self.brain.dot.device_control = self.control_device
             self.brain.dot.reminders = self.reminder_action
-        self.calibration = CalibrationController(
-            CalibrationHooks(
-                lock=self.guard,
-                generation=lambda: self.generation,
-                valid=lambda generation: self.valid(generation),
-                wake=lambda: self.wake,
-                speech=lambda: self.speech,
-                clear_frames=lambda: self.capture.echo.clear_calibration_frames(),
-                reset_activity=lambda: self.capture.endpoint.reset_voice_activity(),
-                startup_reference=lambda: self.startup_reference(),
-                play=lambda pcm, text, generation, role: self.play(pcm, text, generation, role),
-                speak=lambda text, generation: self.speak(text, generation),
-                align_reference=lambda generation: self.align_reference(generation),
-                check_echo=lambda generation: self.check_echo(generation),
-                recognition_pending=lambda: (
-                    self.recognition.busy or not self.recognition.queue.empty()
-                ),
-                talking=lambda: self.capture.endpoint.vad.talking,
-                status=lambda phase, message: self.status(phase, message),
-                save_status=lambda: self.save_status(),
-                log=lambda name, **fields: self.log(name, **fields),
-                failure=lambda message, error: self.failure(message, error),
-                metric=self.record_metric,
-                metric_value=lambda name: self.metrics.get(name, 0),
-            ),
+        components = build_components(
+            self,
+            echo_factory=lambda **kwargs: WebRtcEchoCanceller(**kwargs),
+            wake_pattern=WAKE_PATTERN,
+            fast_stop=fast_stop,
             echo_check=echo_check,
         )
-        self.visual = VisionController(
-            VisionHooks(
-                lock=self.guard,
-                connected=lambda: self.connection is not None,
-                calibrating=lambda: self.calibration.active,
-                has_transport=lambda: self.transport_hub is not None,
-                brain_ready=lambda: isinstance(self.brain, BrainRouter),
-                session_generation=lambda: self.generation,
-                valid=lambda generation: self.valid(generation),
-                cancel_session=lambda reason: self.cancel(reason),
-                touch=lambda: self.touch_activity(),
-                event=lambda name, **fields: self.event(name, **fields),
-                status=lambda phase, message: self.status(phase, message),
-                save_status=lambda: self.save_status(),
-                authorize=lambda challenge, nonce, generation: desktop_signature(
-                    self.transport_hub.pairing.token, challenge, nonce, generation
-                ),
-                enqueue=lambda job: self.enqueue_response(job),
-                answer=lambda text, generation, image: self.answer(text, generation, image=image),
-                answer_completed=lambda: self.brain.last_metrics.get('completed'),
-                metric=self.record_metric,
-                log=lambda name, **fields: self.log(name, **fields),
-            )
-        )
-        self.playback = PlaybackController(
-            PlaybackHooks(
-                lock=self.guard,
-                generation=lambda: self.generation,
-                active=lambda: self.active,
-                announcement_generation=lambda: self.announcement_generation,
-                valid=lambda generation: self.valid(generation),
-                cancel_session=lambda reason: self.cancel(reason),
-                event=lambda name, **fields: self.event(name, **fields),
-                send=lambda packet: self.send(packet),
-                status=lambda phase, message: self.status(phase, message),
-                log=lambda name, **fields: self.log(name, **fields),
-                metric=self.record_metric,
-                diagnostics=lambda: self.diagnostics,
-                trace=lambda: self.capture.endpoint.voice_trace,
-                echo_metrics=lambda: dict(
-                    input_dbfs=self.metrics.get('input_dbfs'),
-                    residual_dbfs=self.metrics.get('output_dbfs'),
-                    raw_coherence=round(self.capture.endpoint.near_speech.correlation, 3),
-                    residual_coherence=round(
-                        self.capture.endpoint.near_speech.residual_correlation, 3
-                    ),
-                ),
-                utterance_paused=lambda token: (
-                    self.capture.endpoint.vad.talking
-                    and self.capture.endpoint.turn_pause_token == token
-                ),
-                speech=lambda: self.speech,
-                cancel_timeline_pause=lambda: self.capture.echo.cancel_pause(),
-                pause_timeline=lambda nanos: self.capture.echo.pause_at(nanos),
-                resume_timeline=lambda nanos: self.capture.echo.resume_at(nanos),
-            )
-        )
-        self.capture = CapturePipeline(
-            CaptureHooks(
-                generation=lambda: self.generation,
-                epoch=lambda: self.epoch,
-                active=lambda: self.active,
-                calibrating=lambda: self.calibration.active,
-                diagnostics=lambda: self.diagnostics,
-                metric=self.record_metric,
-                add_metric=self.add_capture_metric,
-                log=lambda name, **fields: self.log(name, **fields),
-                save_status=lambda: self.save_status(),
-            ),
-            EchoPipeline(
-                EchoHooks(
-                    lock=self.guard,
-                    active=lambda: self.active,
-                    valid=lambda generation: self.valid(generation),
-                    factory=lambda **kwargs: WebRtcEchoCanceller(**kwargs),
-                    fast_stop_enabled=lambda: bool(self.capture.endpoint.fast_stop),
-                    metric=self.record_metric,
-                    log=lambda name, **fields: self.log(name, **fields),
-                )
-            ),
-            EndpointPipeline(
-                EndpointHooks(
-                    generation=lambda: self.generation,
-                    awake=lambda: self.awake,
-                    playing=lambda: self.playback.playing,
-                    last_audio_end=lambda: self.playback.last_audio_end,
-                    last_spoken=lambda: self.playback.last_spoken,
-                    previous_spoken=lambda: self.playback.previous_spoken,
-                    previous_spoken_until=lambda: self.playback.previous_spoken_until,
-                    recent_spoken=lambda: [text for _, text in tuple(self.playback.spoken)],
-                    pause_token=lambda: (
-                        self.playback.pause_state['token'] if self.playback.pause_state else None
-                    ),
-                    paused=lambda: self.playback.pause_state is not None,
-                    pause_voice=lambda: self.pause_for_voice(),
-                    cancel_session=lambda reason: self.cancel(reason),
-                    event=lambda name, **fields: self.event(name, **fields),
-                    status=lambda phase, message: self.status(phase, message),
-                    log=lambda name, **fields: self.log(name, **fields),
-                    save_status=lambda: self.save_status(),
-                    metric=self.record_metric,
-                    add_metric=self.add_capture_metric,
-                    metric_value=lambda name: self.metrics[name],
-                    diagnostics=lambda: self.diagnostics,
-                    enqueue=lambda job: self.enqueue_recognition(job),
-                    discard_recognition=lambda: self.discard_recognition(),
-                ),
-                fast_stop,
-            ),
-        )
-        self.recognition = RecognitionWorker(
-            RecognitionHooks(
-                valid=lambda generation: self.valid(generation),
-                diagnostics=lambda: self.diagnostics,
-                playing=lambda: self.playback.playing,
-                last_audio_end=lambda: self.playback.last_audio_end,
-                recent_spoken=lambda: [line for _, line in tuple(self.playback.spoken)],
-                pause_state=lambda: self.playback.pause_state,
-                speech=lambda: self.speech,
-                metric=self.record_metric,
-                set_metric_field=self.set_metric_field,
-                add_metric_field=self.add_metric_field,
-                record_echo_pair=self.record_echo_pair,
-                echo_running=lambda: self.calibration.running,
-                echo_failed=lambda: self.calibration.failed,
-                awake=lambda: self.awake,
-                wake=lambda: self.wake,
-                set_awake=self.set_awake,
-                wake_pattern=WAKE_PATTERN,
-                touch=lambda: self.touch_activity(),
-                event=lambda name, **fields: self.event(name, **fields),
-                status=lambda phase, message: self.status(phase, message),
-                log=lambda name, **fields: self.log(name, **fields),
-                cancel_session=lambda reason: self.cancel(reason),
-                begin_visual=lambda text, origin: self.begin_visual(text, origin),
-                enqueue_response=lambda job: self.enqueue_response(job),
-                failure=lambda message, error, **fields: self.failure(message, error, **fields),
-                resume_rejected=lambda token, generation: self.resume_after_rejection(
-                    token, generation
-                ),
-            )
-        )
-        self.response = ResponseWorker(
-            ResponseHooks(
-                valid=lambda generation: self.valid(generation),
-                diagnostics=lambda: self.diagnostics,
-                workspace=lambda: self.workspace,
-                brain=lambda: self.brain,
-                speech=lambda: self.speech,
-                active=lambda: self.active,
-                metric=self.record_metric,
-                dispatch=lambda job: self.respond_job(job),
-                answer=lambda text, generation: self.answer(text, generation),
-                answer_visual=lambda job: self.answer_visual(job),
-                read_announcement=lambda job: self.read_announcement(job),
-                finish_text=self.finish_text_response,
-                publish_workspace=lambda: self.publish_workspace(),
-                event=lambda name, **fields: self.event(name, **fields),
-                status=lambda phase, message: self.status(phase, message),
-                log=lambda name, **fields: self.log(name, **fields),
-                failure=lambda message, error: self.failure(message, error),
-                speak=lambda text, generation: self.speak(text, generation),
-            )
-        )
+        self.calibration = components.calibration
+        self.visual = components.visual
+        self.playback = components.playback
+        self.capture = components.capture
+        self.recognition = components.recognition
+        self.response = components.response
         self.recognition.start()
         self.response.start()
 

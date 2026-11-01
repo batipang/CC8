@@ -101,3 +101,10 @@ Bridge 仍协调会话、校准提示流程、识别/回答 worker 和任务；�
 唯一开场“汽车人，变形！”、1～6 秒 int16 有声校验、真正开播后才清采样、原 6.4 秒窗口、时移对齐、20 秒安静等待和最多 20 秒识别排空全部保留。旧代次 finally 不能清新会话 active 的回归保留。新增四项合成时钟流程测试覆盖通过、残留候选失败、识别未排空、取消/旧代次及输出异常，确认 running 总是释放且不新开麦克风。原内部状态测试只迁移拥有者路径，摄像头/播报校准忙时拒绝的断言保留。
 
 全套 installer 16、host 353（4 private skip）、tooling 47、Java 15 checks 与 Ruff / Java / strict 六模块通过；新动态校准模块未计入 strict 清单。Bridge 1159 行，仍待会话/设备事件、提醒与依赖装配职责收敛，F-06 未完成。未调用设备、云服务、私人音频或重载当前助手，待 CI。
+
+
+### 第七步附属纯重构：集中依赖装配
+
+将六组件的依赖绑定移入 236 行 composition.py；它是唯一可读取完整 Bridge 的装配根，只创建 passive 对象并返回 frozen Components，不写会话字段、不启动线程或提供方。Bridge 发布全部对象后才启动识别与回复消费者。各实际组件依旧只持有 frozen narrow Hooks；没有把 Bridge 作为混入对象供业务模块任意修改。Echo factory 显式注入，保持原 façade 的测试/提供方替换入口；动态查询仍指向唯一会话和真实所属组件。
+
+六份构造表达式经显式 session→self / factory / wake-pattern 名称归一后逐项 AST 完全相同；原全套 installer 16、host 353（4 private skip）、tooling 47、Java 15 checks 与质量再次通过。Bridge 缩至 970 行，装配移动与校准移动保持不同纯重构提交；仍不宣称 F-06 已完成。
