@@ -11,7 +11,7 @@
 
 `known_deployed_pair` 记录原现场助手 0.8.6 / code 31、后台 0.12.2、协议 2；它不是候选已部署的声明。相同协议表示声明的传输兼容，不代表每个可选功能、声学效果或物理切换已验收。破坏协议的改动必须改清单/兼容范围并补回归，不强迫所有组件版本号相同。
 
-工作中候选以 `python3 tools/release.py show` 和 CHANGELOG 的 Unreleased 为准：当前 P0 软件候选为后台 0.13.4 / p0-software-20261102.1，APK / 协议未升版，尚未建立对应 tag 或部署。下方 .1 命令用于 checkout 到该已标记源码时复验其原清单。
+工作中候选以 `python3 tools/release.py show` 和 CHANGELOG 的 Unreleased 为准：当前 P0 软件候选为后台 0.13.5 / p0-software-20261102.1，APK / 协议未升版，尚未建立对应 tag 或部署。下方 .1 命令用于 checkout 到该已标记源码时复验其原清单。
 
 ## 构建与内容核验
 
@@ -42,3 +42,10 @@ python3 tools/release.py verify artifacts/releases/foundation-20261102.1.json
 开发中可显式 `record --allow-dirty` 保存候选清单；它不能通过 verify 或绑定发布 tag。默认拒绝脏源码、缺失/过期回执，不把编译通过等同于设备验收。首次 tag 建立及实际记录结果见 VALIDATION；本文命令示例以实际存在的 tag 为准。
 
 回退仍须核对协议、原签名和已有 versionCode；Android 的降级限制不会因持有旧 APK 消失。工具不自动卸载、清数据或降级，P1-09 的升级回退演练单独进行。
+
+
+## P0 软件候选的交接范围
+
+`p0-software-20261102.1` 对应新增本地双唤醒、分轮诊断、固定语料评分、资源观察及分类失败/收尾修复的候选。最终标记/构建以实际 record / verify 结果为准，不能仅因本段写了名称就称已发布。使用原私钥引用构建，两个 APK 的独立版本仍为助手 0.8.7、检测器 1.0.1；host 版本见本页前文与 release.json。原配对和钥匙不迁入仓库。
+
+后续部署前须先在原运行目录明确停止旧服务并保留私有配置、签名与配对，再准备包含新增英文 KWS 的 voice profile；全局运行锁仍阻止两个工作区同时启动生产模型。没有自动升级原运行环境。真人基线用 score-asr，分轮计时用 measure，长时只读曲线用 observe，方法和缺口均见文档导航。真正声学/唤醒/物理切换/待机/登录与 72 小时的验收继续按 TODO，源码 tag 不关闭它们。

@@ -437,3 +437,12 @@ P0-05 观察软件经 [PR #33](https://github.com/batipang/CC8/pull/33) 的 [真
 沿实际 MiniMaxBrain→BrainRouter→ResponseWorker 复查，发现检索异常仍可能作为普通回答关闭成完成，failed 进度 payload 也曾整包进日志。新增两个测试方法：五类检索失败各 3 次、任意正文进度注入一次；正确 fixture 对旧实现确认 16 个预期断言失败且无 fixture error，修复后通过。现在检索失败上抛并保留 completed=false，仅记录白名单 kind，任务/search step 明确失败；不重试、不调用其他大脑或模型事实替代新查结果。查询准备的原关键词兜底和真实空结果语义保持。
 
 本机 installer 22、host 438（4 private-audio skip）、tooling 51、Java 15 checks，质量/strict 六模块通过；34 项定向错误/检索回归也通过。全为假提供方，无设备/网络/采集；候选后台 0.13.4 / p0-software-20261102.1，待 CI。
+
+
+安装报告修复经 [PR #35](https://github.com/batipang/CC8/pull/35) 的 [真实 CI 八项](https://github.com/batipang/CC8/actions/runs/41355759403) 通过并合入 25c24f2；没有进行真实安装。
+
+### P0-05 / P0-06：通知失败仍释放资源与正确错误阶段（未部署）
+
+旧实现的取消通知/提供方取消异常可跳过本地收尾，首次 play_begin 发送失败还会留下 playing。五项定向方法在旧实现复现七处失败/异常；另单项复现开场发送失败后残留 calibrating。修复先通知本地 waiter，普通通知失败只记录类型；Stop 用 finally 关闭采集/保存状态，未预期提供方错误仍抛出。输出的 begin/PCM/end/字幕 IO 分为 transport；iterator 内已分类错误不再包装成 TTS。仅输出失败结束校准，handover 保留校准重绑语义。
+
+六项新方法包括三个发送阶段、字幕回调/iterator 关闭、普通取消与手动停止、异常提供方取消以及开场失败/手动 transport 保留校准。没有真实通道、模型或采集，修复后 installer 22、host 444（4 private-audio skip）、tooling 51、Java 15 checks，格式/质量/strict 六模块通过。候选后台 0.13.5 / p0-software-20261102.1；待 CI，未替换当前助手，不把模拟故障当物理拔插验收。

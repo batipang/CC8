@@ -209,6 +209,10 @@ class SessionController:
     def cancel(self, reason='speech'):
         # 推进代次使旧模型、音频、字幕和看图结果失效，但不能撤销已执行的工具动作。
         with self.guard:
+            # A failed calibration output has no successor worker; unlike a
+            # transport handover, it must not leave capture stuck calibrating.
+            if reason in ('audio_stream_error', 'completion_timeout', 'playback_error'):
+                self.hooks.calibration().stop()
             self.hooks.diagnostics().finish(self.generation, 'cancelled')
             workspace_changed = self.hooks.workspace().cancel_generation(self.generation)
             self.generation += 1
@@ -219,16 +223,22 @@ class SessionController:
             self.hooks.visual().invalidate()
             self.hooks.playback().clear_cancelled_pause(was_playing)
             self.hooks.wake_reset('cancel')
+        # Wake local waiters independently of provider/transport cancellation.
+        self.hooks.playback().notify()
         if self.hooks.brain():
             self.hooks.brain().cancel()
         cancel_speech = getattr(self.hooks.speech(), 'cancel', None)
         if cancel_speech:
             cancel_speech()
-        if self.connection is not None:
-            self.hooks.event('cancel', generation=generation)
-        if workspace_changed:
-            self.hooks.publish_workspace()
-        self.hooks.playback().notify()
+        try:
+            if self.connection is not None:
+                self.hooks.event('cancel', generation=generation)
+            if workspace_changed:
+                self.hooks.publish_workspace()
+        except (OSError, EOFError, ValueError) as error:
+            # Local invalidation already succeeded; a broken notification must
+            # never prevent Stop from releasing capture or block an old waiter.
+            self.hooks.log('cancel_notification_failed', error_type=type(error).__name__)
         if was_playing:
             self.hooks.metric('interruptions', self.hooks.metric_value('interruptions') + 1)
             self.hooks.log('playback_cancelled', reason=reason, generation=generation)
@@ -238,9 +248,13 @@ class SessionController:
         self.active = False
         self.hooks.calibration().stop()
         self.screen_sleeping = False
-        self.hooks.cancel('session_stop')
-        self.hooks.capture().close()
-        self.hooks.save_status()
+        try:
+            self.hooks.cancel('session_stop')
+        finally:
+            try:
+                self.hooks.capture().close()
+            finally:
+                self.hooks.save_status()
 
     def set_awake(self, value):
         with self.guard:
