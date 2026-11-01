@@ -12,6 +12,7 @@
 - [构建、签名与测试](docs/DEVELOPMENT.md)
 - [语音助手配置与使用](cc8-assistant/README.md)
 - [离线检测器](cc8-diagnostics/README.md)
+- [返回桌面后一键打开助手](docs/DESKTOP_ENTRY.md)
 - [系统架构与 USB / Wi-Fi 通信](docs/ARCHITECTURE.md)
 - [已验证结果与尚未验证的边界](docs/VALIDATION.md)
 - [全面代码检查与修复记录](docs/CODE_REVIEW.md)

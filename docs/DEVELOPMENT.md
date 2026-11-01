@@ -37,7 +37,7 @@ python3 cc8-assistant/tools/build.py
 python3 device-access/cc8_install.py --check
 ```
 
-两个 Android 构建默认同时运行 `assembleRelease` 和 `lintRelease`。输出在 `artifacts/`，版本来自各自 `app/build.gradle`；当前检测器 1.0.1，助手 0.5.1。构建脚本写 `local.properties`，所有生成内容均忽略。
+两个 Android 构建默认同时运行 `assembleRelease` 和 `lintRelease`。输出在 `artifacts/`，版本来自各自 `app/build.gradle`；当前检测器 1.0.1，助手 0.5.2。构建脚本写 `local.properties`，所有生成内容均忽略。
 
 首次 APK 构建用 JDK keytool 生成 `cc8-diagnostics/signing/cc8-diagnostics-debug.jks`；仅用于个人开发，别名 `cc8-diagnostics`、开发密码 `android`。语音助手也使用这份本地开发签名。**现有设备签名私钥没有收录；新生成的证书不具备覆盖旧签名安装包的能力。** 自行保存长期更新所需的证书，勿提交到 Git。
 
@@ -62,3 +62,5 @@ python3 cc8-diagnostics/tools/test-audio.py
 ## 提交内容
 
 只提交源码、合成测试参考音、头像资源、模型校验清单、版本锁文件、文档及 Gradle wrapper。原厂固件、厂商应用反编译代码、下载的第三方工具树、模型权重、用户音视频、设备原始报告和任何登录 / 签名 / 配对秘密均不提交。
+
+更新已有设备时，可用环境变量 `CC8_SIGNING_KEYSTORE` 指向原项目的开发签名 JKS（保持原 alias / 密码设置）。设置了该变量但文件不存在时构建直接失败，不生成替代密钥；未设置则沿用默认本地开发签名。不要提交 JKS 或将签名文件复制到发布源码。

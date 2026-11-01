@@ -143,8 +143,8 @@ public final class CameraTestActivity extends Activity implements TextureView.Su
             if(!wanted){cover.setVisibility(View.VISIBLE);if(!"ready".equals(phase))cover.setText("摄像头已关闭\n图像未保存或上传");start.setEnabled(true);stop.setEnabled(false);}
         });
     }
-    @Override protected void onResume(){super.onResume();foreground=true;}
-    @Override protected void onPause(){foreground=false;stopTest("background");super.onPause();}
+    @Override protected void onResume(){super.onResume();foreground=true;DesktopEntryService.update(this,true);}
+    @Override protected void onPause(){foreground=false;stopTest("background");DesktopEntryService.update(this,false);super.onPause();}
     @Override protected void onDestroy(){stopTest("destroyed");if(thread!=null)thread.quitSafely();super.onDestroy();}
     @Override public void onSurfaceTextureAvailable(SurfaceTexture texture,int w,int h){surface=texture;openIfReady();}
     @Override public void onSurfaceTextureSizeChanged(SurfaceTexture texture,int w,int h){}

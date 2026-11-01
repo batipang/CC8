@@ -11,7 +11,8 @@ env['PATH']=str(Path(paths['java_home'])/'bin')+os.pathsep+env.get('PATH','')
 (project/'local.properties').write_text('sdk.dir='+paths['android_sdk']+'\n')
 signing=root/'cc8-diagnostics/signing'
 signing.mkdir(parents=True,exist_ok=True)
-key=signing/'cc8-diagnostics-debug.jks'
+key=Path(os.environ.get('CC8_SIGNING_KEYSTORE',str(signing/'cc8-diagnostics-debug.jks'))).expanduser().resolve()
+if os.environ.get('CC8_SIGNING_KEYSTORE') and not key.is_file():raise SystemExit('Configured signing keystore is missing; no replacement key will be generated')
 if not key.exists():
  subprocess.run([str(Path(paths['java_home'])/'bin/keytool'),'-genkeypair','-keystore',str(key),'-storepass','android','-keypass','android','-alias','cc8-diagnostics','-keyalg','RSA','-keysize','2048','-validity','10000','-dname','CN=CC8 Development, O=Personal Project, C=CN'],env=env,check=True)
 (root/'artifacts').mkdir(exist_ok=True)

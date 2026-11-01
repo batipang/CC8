@@ -91,7 +91,10 @@ final class VoiceSession {
                 DataInputStream in=new DataInputStream(connection.getInputStream());while(!closed&&foreground&&lifecycle==ticket)handle(Wire.read(in),this);
             }catch(Exception ignored){}finally{close();}
         }
-        void close(){if(closed)return;closed=true;queue.clear();try{connection.close();}catch(IOException ignored){}lost(this);}
+        void close(){
+            synchronized(this){if(closed)return;closed=true;queue.clear();}
+            TransportClose.asynchronously(connection);lost(this);
+        }
     }
     private void handle(Wire.Packet p,Link source)throws Exception {
         if(p.type==Wire.EVENT){JSONObject control=Wire.json(p);String name=control.optString("event");

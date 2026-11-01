@@ -1,6 +1,6 @@
 # 大黄蜂（Bumblebee）语音助手
 
-完整源码快照：Android APK **0.5.1**（versionCode 19）、Mac 后台 **0.8.1**。包名 `com.happyhome.cc8assistant`。默认 **Dot / Codex 做大脑，MiniMax ASR 做耳朵，MiniMax TTS 做嘴巴**，Mac 执行消回声与即时打断，CC8 负责录放和显示。
+完整源码快照：Android APK **0.5.2**（versionCode 20）、Mac 后台 **0.8.1**。包名 `com.happyhome.cc8assistant`。默认 **Dot / Codex 做大脑，MiniMax ASR 做耳朵，MiniMax TTS 做嘴巴**，Mac 执行消回声与即时打断，CC8 负责录放和显示。
 
 ## 构建与安装
 
@@ -10,7 +10,7 @@
 python3 device-access/installer-helper/build.py
 python3 cc8-assistant/tools/build.py
 python3 device-access/cc8_install.py --probe
-python3 device-access/cc8_install.py --install artifacts/cc8-assistant-0.5.1.apk --launch --shared-staging
+python3 device-access/cc8_install.py --install artifacts/cc8-assistant-0.5.2.apk --launch --shared-staging
 ```
 
 `--shared-staging` 的共享存储替换风险、安装条件和更新签名问题见[安装步骤](../docs/APK_INSTALL.md)。新克隆不会拥有原开发机签名，首次构建生成独立本地开发证书。
@@ -44,6 +44,10 @@ python3 cc8-assistant/host/launch.py --stop
 在 CC8 前台点“开始语音”，授权麦克风，安静等约 6 秒校准及提示语结束。开启唤醒模式时说“大黄蜂，介绍一下你自己”或“Bumblebee，常州属于哪个省？”。无唤醒模式可直接说话。正常音量插话应先暂停播报，识别新内容后回答；“停一下 / 停止 / 暂停”另有本地快速路径。
 
 点停止、离开前台或全部通道断开会停止采集。重连不会自动开麦。15 分钟无交互进入应用内黑屏待机，需已开启麦克风与 Mac 服务才能语音唤醒。
+
+## 桌面入口
+
+返回原厂桌面后，点击右侧“大黄蜂”悬浮按钮即可重新打开助手，不需要 USB 拉起；打开后麦克风保持关闭。按钮可上下拖动，设置位于顶部连接状态 → 桌面入口。详见[桌面入口说明](../docs/DESKTOP_ENTRY.md)。
 
 ## ASR 与音色
 

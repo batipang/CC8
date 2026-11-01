@@ -1,12 +1,15 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 <uses-permission android:name="android.permission.RECORD_AUDIO"/><uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/><uses-permission android:name="android.permission.INTERNET"/>
 <uses-permission android:name="android.permission.CAMERA"/>
+<uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+<uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
 <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
 <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
 <uses-permission android:name="android.permission.WAKE_LOCK"/>
 <uses-feature android:name="android.hardware.camera.any" android:required="false"/>
 <uses-feature android:name="android.hardware.microphone" android:required="false"/>
 <application android:allowBackup="false" android:icon="@drawable/ic_assistant" android:label="大黄蜂 · 个人助理" android:theme="@style/AssistantTheme" android:supportsRtl="true" android:usesCleartextTraffic="true">
+<service android:name=".DesktopEntryService" android:exported="false"/>
 <activity android:name=".CameraTestActivity" android:exported="false" android:configChanges="orientation|screenSize"/>
 <activity android:name=".MainActivity" android:exported="true" android:configChanges="orientation|screenSize"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity>
 </application></manifest>
