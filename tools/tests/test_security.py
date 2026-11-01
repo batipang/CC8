@@ -15,6 +15,8 @@ from tools import ci_tools, security
 
 class AuditTests(unittest.TestCase):
     def run_audit(self, folder, data, returncode=0):
+        (Path(folder) / 'requirements.txt').write_text('x==1\n')
+
         def run(command, **kwargs):
             Path(command[command.index('--output') + 1]).write_text(json.dumps(data))
             return subprocess.CompletedProcess(command, returncode)
@@ -30,13 +32,19 @@ class AuditTests(unittest.TestCase):
     def test_clean_inventory_passes(self):
         with tempfile.TemporaryDirectory() as folder:
             self.assertEqual(
-                self.run_audit(folder, {'dependencies': [{'name': 'x', 'vulns': []}]}), 0
+                self.run_audit(
+                    folder, {'dependencies': [{'name': 'x', 'version': '1', 'vulns': []}]}
+                ),
+                0,
             )
 
     def test_unknown_package_cannot_pass_by_being_skipped(self):
         with tempfile.TemporaryDirectory() as folder:
             self.assertEqual(
-                self.run_audit(folder, {'dependencies': [{'name': 'x', 'skip_reason': 'missing'}]}),
+                self.run_audit(
+                    folder,
+                    {'dependencies': [{'name': 'x', 'version': '1', 'skip_reason': 'missing'}]},
+                ),
                 1,
             )
 
@@ -44,13 +52,19 @@ class AuditTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             self.assertEqual(
                 self.run_audit(
-                    folder, {'dependencies': [{'name': 'x', 'vulns': [{'id': 'CVE-test'}]}]}
+                    folder,
+                    {
+                        'dependencies': [
+                            {'name': 'x', 'version': '1', 'vulns': [{'id': 'CVE-test'}]}
+                        ]
+                    },
                 ),
                 1,
             )
 
     def test_missing_or_stale_report_cannot_mask_audit_failure(self):
         with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / 'requirements.txt').write_text('x==1\n')
             report = Path(folder) / 'artifacts/security/audit-0.json'
             report.parent.mkdir(parents=True)
             report.write_text('{"dependencies": []}')
@@ -70,16 +84,42 @@ class AuditTests(unittest.TestCase):
 
         def run(command, **kwargs):
             commands.append(command)
-            Path(command[command.index('--output') + 1]).write_text('{"dependencies": []}')
+            Path(command[command.index('--output') + 1]).write_text(
+                '{"dependencies": [{"name":"x","version":"1","vulns":[]}]}'
+            )
             return subprocess.CompletedProcess(command, 1 if len(commands) == 1 else 0)
 
         with tempfile.TemporaryDirectory() as folder:
+            for requirements in security.REQUIREMENTS:
+                path = Path(folder) / requirements
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('x==1\n')
             with patch.object(security, 'ROOT', Path(folder)):
                 self.assertEqual(security.audit(run=run), 1)
         self.assertEqual(len(commands), 3)
         self.assertTrue(
             all(c.count('-r') == 1 and '--disable-pip' in c and '--fix' not in c for c in commands)
         )
+
+    def test_empty_successful_report_cannot_hide_unscanned_dependencies(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self.assertEqual(self.run_audit(folder, {'dependencies': []}), 1)
+
+    def test_wrong_package_or_version_is_rejected_even_without_advisories(self):
+        with tempfile.TemporaryDirectory() as folder:
+            for dependency in (
+                {'name': 'x', 'version': '2', 'vulns': []},
+                {'name': 'different', 'version': '1', 'vulns': []},
+            ):
+                self.assertEqual(self.run_audit(folder, {'dependencies': [dependency]}), 1)
+
+    def test_empty_unpinned_or_include_manifest_is_not_accepted_as_inventory(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'requirements.txt'
+            for source in ('# empty\n', 'x>=1\n', '-r elsewhere.txt\n'):
+                path.write_text(source)
+                with self.assertRaises(ValueError):
+                    security.pinned_inventory(path)
 
     def test_secret_scan_redacts_and_includes_all_history(self):
         run = Mock(return_value=subprocess.CompletedProcess([], 1))
