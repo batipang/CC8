@@ -241,7 +241,8 @@ class RouterTests(unittest.TestCase):
         dot.failure = DotError('failed')
         router = BrainRouter(mini, dot)
         router.select('dot')
-        self.assertIn('没有完成', ''.join(router.clauses('你好', [])))
+        with self.assertRaises(DotError):
+            list(router.clauses('你好', []))
         self.assertEqual(mini.requests, [])
 
     def test_unknown_provider_rejected(self):

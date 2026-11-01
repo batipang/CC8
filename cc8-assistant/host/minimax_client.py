@@ -15,6 +15,7 @@ import numpy as np
 import requests
 from web_search import now, wants_web, normalize, parse_plan, SpeechClauses
 from configuration import load_config
+from operation_failure import ClassifiedFailure
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -23,9 +24,9 @@ class Cancelled(RuntimeError):
     pass
 
 
-class MiniMaxError(RuntimeError):
-    def __init__(self, message, code=None, http_status=None):
-        super().__init__(message)
+class MiniMaxError(ClassifiedFailure):
+    def __init__(self, message, code=None, http_status=None, *, kind='provider_or_runtime'):
+        super().__init__(message, kind=kind)
         self.code = code
         self.http_status = http_status
 
@@ -255,10 +256,13 @@ class Transport:
             if not isinstance(text, str) or len(text) > 10000:
                 raise MiniMaxError('Invalid MiniMax ASR transcript')
             return text.strip()
-        except requests.RequestException:
+        except requests.RequestException as error:
             if slot.stopped.is_set() or not is_current():
                 raise Cancelled('Turn cancelled') from None
-            raise MiniMaxError('MiniMax ASR network request failed') from None
+            raise MiniMaxError(
+                'MiniMax ASR network request failed',
+                kind='timeout' if isinstance(error, requests.Timeout) else 'transport_or_io',
+            ) from None
         except (ValueError, TypeError, AttributeError):
             raise MiniMaxError('Invalid MiniMax ASR response') from None
         finally:
@@ -292,10 +296,13 @@ class Transport:
             if code != 0 or data.get('error'):
                 raise MiniMaxError('MiniMax API request failed', code=code)
             return data
-        except requests.RequestException:
+        except requests.RequestException as error:
             if slot.stopped.is_set() or not is_current():
                 raise Cancelled('Turn cancelled') from None
-            raise MiniMaxError('MiniMax network request failed') from None
+            raise MiniMaxError(
+                'MiniMax network request failed',
+                kind='timeout' if isinstance(error, requests.Timeout) else 'transport_or_io',
+            ) from None
         except (ValueError, TypeError):
             raise MiniMaxError('Invalid MiniMax JSON response') from None
         finally:
@@ -348,10 +355,13 @@ class Transport:
                 if event.get('error'):
                     raise MiniMaxError('MiniMax streaming error')
                 yield event
-        except requests.RequestException:
+        except requests.RequestException as error:
             if slot.stopped.is_set() or not is_current():
                 raise Cancelled('Turn cancelled') from None
-            raise MiniMaxError('MiniMax network request failed') from None
+            raise MiniMaxError(
+                'MiniMax network request failed',
+                kind='timeout' if isinstance(error, requests.Timeout) else 'transport_or_io',
+            ) from None
         except (ValueError, TypeError, AttributeError):
             raise MiniMaxError('Invalid MiniMax streaming response') from None
         finally:

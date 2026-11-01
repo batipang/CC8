@@ -13,9 +13,10 @@ import threading
 import time
 from typing import Callable
 from brain_router import BrainRouter
-from diagnostics import TraceBook
+from diagnostics import TraceBook, error_kind
+from operation_failure import OperationFailure
 from dsp import NearSpeechDetector, VoiceDetector
-from minimax_client import MiniMaxError
+from failure_feedback import feedback
 from release_info import RELEASE
 from session_controller import SessionView
 from playback_controller import PlaybackController
@@ -158,17 +159,26 @@ class StatusReporter:
     def failure(self, message, error, trace_key=None):
         state = self.hooks.session()
         key = state.generation if trace_key is None else trace_key
-        self.hooks.diagnostics().failure(key, self.hooks.diagnostics().current_stage(key), error)
-        # MiniMaxError messages are our own fixed strings, never provider
-        # bodies, user text, URLs or credentials. Other exception text is not logged.
+        stage = (
+            error.stage
+            if isinstance(error, OperationFailure)
+            else self.hooks.diagnostics().current_stage(key, default='runtime')
+        )
+        self.hooks.diagnostics().failure(key, stage, error)
+        record = self.hooks.diagnostics().failure_record(key)
+        # Only stable categories reach UI/logs, never provider text or URLs.
+        guidance = (
+            feedback(record['stage'], record['kind'])
+            if record
+            else feedback(stage, error_kind(error))
+        )
         self.hooks.log(
             'runtime_error',
             error_type=type(error).__name__,
-            reason=str(error) if isinstance(error, MiniMaxError) else None,
-            api_code=getattr(error, 'code', None),
-            http_status=getattr(error, 'http_status', None),
+            stage=guidance.stage,
+            kind=guidance.kind,
         )
         try:
-            self.hooks.status('error', message)
+            self.hooks.status('error', guidance.message)
         except (OSError, EOFError):
             pass

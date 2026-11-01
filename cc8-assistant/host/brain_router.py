@@ -2,6 +2,8 @@
 
 import re
 from dot_client import DotBrain, DotError, DotApprovalRequired
+from diagnostics import error_kind
+from operation_failure import OperationFailure
 from minimax_client import Cancelled
 
 DELEGATE = re.compile(
@@ -34,6 +36,7 @@ class BrainRouter:
         self.dot.close()
 
     def vision_clauses(self, text, image, history, is_current=lambda: True, on_web=None):
+        self.last_metrics = {'provider': 'dot', 'vision': True}
         # Camera input always goes to Dot, regardless of the text-chat selector.
         try:
             yield from self.dot.clauses(text, history, is_current, on_web, image=image)
@@ -47,12 +50,21 @@ class BrainRouter:
                 'completed': False,
                 'approval_required': True,
             }
-            yield 'Dot 看图需要额外权限，请到电脑端处理。'
+            raise
         except DotError:
             if not is_current():
                 raise Cancelled('Turn cancelled') from None
             self.last_metrics = {'provider': 'dot', 'vision': True, 'completed': False}
-            yield '画面已采集，但 Dot 这次没有完成图像分析，请稍后再试。'
+            raise
+        except Cancelled:
+            raise
+        except Exception as error:
+            if not is_current():
+                raise Cancelled('Turn cancelled') from None
+            self.last_metrics = {'provider': 'dot', 'vision': True, 'completed': False}
+            raise OperationFailure(
+                'Vision request failed', stage='brain', kind=error_kind(error)
+            ) from None
 
     def clauses(self, text, history, is_current=lambda: True, on_web=None):
         if not is_current():
@@ -61,6 +73,7 @@ class BrainRouter:
         provider = 'dot' if match else self.selected
         prompt = text[match.end() :].strip() if match else text
         target = self.dot if provider == 'dot' else self.minimax
+        self.last_metrics = {'provider': provider}
         if not prompt:
             if on_web:
                 on_web('clear', {})
@@ -72,10 +85,19 @@ class BrainRouter:
         except DotApprovalRequired:
             if not is_current():
                 raise Cancelled('Turn cancelled') from None
-            self.last_metrics = {'provider': 'dot', 'approval_required': True}
-            yield '这项任务需要额外的工具权限，当前语音连接未获批准，请在电脑端处理。'
+            self.last_metrics = {'provider': 'dot', 'completed': False, 'approval_required': True}
+            raise
         except DotError:
             if not is_current():
                 raise Cancelled('Turn cancelled') from None
             self.last_metrics = {'provider': 'dot', 'completed': False}
-            yield 'Dot 这次没有完成请求，请稍后重试，或切回 MiniMax。'
+            raise
+        except Cancelled:
+            raise
+        except Exception as error:
+            if not is_current():
+                raise Cancelled('Turn cancelled') from None
+            self.last_metrics = {'provider': provider, 'completed': False}
+            raise OperationFailure(
+                'Brain request failed', stage='brain', kind=error_kind(error)
+            ) from None

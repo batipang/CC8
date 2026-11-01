@@ -12,7 +12,9 @@ import sys
 import threading
 from typing import Callable
 from announce import Announcement
-from diagnostics import TraceBook
+from diagnostics import TraceBook, error_kind
+from failure_feedback import FailureSink, feedback
+from operation_failure import OperationFailure
 from reply_types import Reply, TextReply, VisualReply
 from session_ports import EventSink, MetricSink
 from workspace import Workspace
@@ -36,7 +38,7 @@ class ResponseHooks:
     event: EventSink
     status: Callable[[str, str], None]
     log: EventSink
-    failure: Callable[[str, BaseException], None]
+    failure: FailureSink
     speak: Callable[[str, int], bool]
 
 
@@ -81,7 +83,7 @@ class ResponseWorker:
                 self.hooks.dispatch(job)
             except Exception as error:
                 if self.hooks.valid(job.generation):
-                    self.hooks.failure('这次回答没有完成，请再说一次', error)
+                    self.hooks.failure('这次回答没有完成', error, trace_key=job.generation)
                 else:
                     self.hooks.log('response_worker_error', error_type=type(error).__name__)
 
@@ -194,6 +196,15 @@ class ResponseWorker:
                     completed = False
                     break
                 spoken.append(clause)
+        except Exception as error:
+            stage = error.stage if isinstance(error, OperationFailure) else 'brain'
+            self.hooks.diagnostics().failure(generation, stage, error)
+            # Persist only the fixed guidance in this RAM-only task receipt.
+            # A completed Dot receipt remains completed in Workspace.
+            self.hooks.workspace().task_finish(
+                task_id, 'failed', feedback(stage, error_kind(error)).message
+            )
+            raise
         finally:
             close = getattr(clauses, 'close', None)
             if close:
