@@ -136,6 +136,7 @@ class InstallerTests(unittest.TestCase):
                 with (
                     self.subTest(checksum=repr(checksum)),
                     patch.object(access.subprocess, 'check_output', return_value=metadata),
+                    patch.object(access, 'signature_preflight', return_value={}),
                     patch.object(access, 'install_stream'),
                     patch.object(
                         access, 'shell', side_effect=['package:/data/app/test/base.apk', checksum]
@@ -147,6 +148,7 @@ class InstallerTests(unittest.TestCase):
             digest = hashlib.sha256(apk.read_bytes()).hexdigest()
             with (
                 patch.object(access.subprocess, 'check_output', return_value=metadata),
+                patch.object(access, 'signature_preflight', return_value={}),
                 patch.object(access, 'install_stream'),
                 patch.object(
                     access,

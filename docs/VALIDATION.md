@@ -1,6 +1,6 @@
 # 当前验证记录
 
-最新仓库检查：Mac 后台源码 0.11.1，261 项后台测试中 257 通过、4 项私人录音测试跳过；Android 0.8.6 与检测器的构建 / lint 通过。此次未部署，详见[第二轮代码检查记录](CODE_REVIEW.md)。下文历史实机观察仍按各自版本解释。
+最初仓库整理检查：Mac 后台源码 0.11.1，261 项后台测试中 257 通过、4 项私人录音测试跳过；Android 0.8.6 与检测器的构建 / lint 通过，详见[第二轮代码检查记录](CODE_REVIEW.md)。后续验证按下文各批次记录解释；候选源码通过检查不等于已替换运行实例。
 
 整理日期：2026-11-01。本页区分此前已经完成的实机观察与本次源码整理检查，不包含设备唯一标识或原始私有日志。
 
@@ -252,7 +252,7 @@ main 的 [CI 运行](https://github.com/batipang/CC8/actions/runs/41320525409) �
 - 本机安装器 11、后台 335（331 通过、4 私人录音 skip）、工具 27、Java 音频 15 项通过；配置专项 19 项检查通过。包含来源/数值与秘密不入日志、权限/打开后再次核验、目录/符号链接/大小/深度/重复字段、迁移失败保留、写入/重置回滚、已有外部目录权限保留、真实最小 PATH 子进程和模型加载前失败。两份配置模块使 strict 范围增至 5，检查与真实提交钩子使用相同入口。
 - 使用真实 MiniMax 客户端编码与模拟 HTTP 响应核对模型、voice、speed、连接/读取 timeout；没有调用云端。登录 payload 只继承明确的非敏感白名单覆盖，API key 与其他环境秘密不进入 plist。已验证的 TLS 发现与 USB 配置返回实际绑定端口，改变端口仍要求原 USB 配对下发。
 - 两个 Android `assembleRelease` / `lintRelease` 本机通过，未安装；两构建器对缺失的显式签名引用均在生成证书前失败。335 项总数不包含模型准确率、真人语音、设备旁操作或长期观察；实际运行目录、进程与已装 APK 均未更新。
-# F-15 统一入口候选（2026-11-02，待 CI）
+# F-15 统一入口（2026-11-02）
 
 新增 `./cc8 setup / doctor / run`、dev/android/voice 三类 profile、只读就绪报告，以及跨工作区 OS 排他锁；旧版 bridge / enabled supervisor 也会被只读识别。直接 voice setup 和 bridge 都使用同一运行锁，不在模型准备/加载时互相修改环境。
 
@@ -261,4 +261,16 @@ main 的 [CI 运行](https://github.com/batipang/CC8/actions/runs/41320525409) �
 把当前候选的公开源码复制到临时干净目录，使用全新 owner HOME / venv 实际执行 `setup --profile dev`，27 项固定依赖和校验 Java formatter 安装成功；随后从 `/`、`PATH=/usr/bin:/bin`、显式 JDK 的条件运行 dev doctor，退出 0。原仓库 dev / Android doctor 通过；voice doctor / run 准确报告本仓库凭证/包版本不足及另一目录运行中，退出 2，不创建第二个后台。
 
 未在本轮重新安装 Android/voice 环境、验证云端请求或打开设备采集。当前运行实例仍是原目录后台 0.12.2 / APK 0.8.6，未升级或重启；此项不关闭 P0 的真人、物理切换、待机和长期运行验收。
+
+[PR #15](https://github.com/batipang/CC8/pull/15) 的 [真实 CI](https://github.com/batipang/CC8/actions/runs/41330787441) 八项全部通过并合入主分支；实际全套包含 installer 11、host 341（4 private skip）、tooling 40 与 Java 15 checks。
+
+# F-14 签名预检候选（2026-11-02，待 CI）
+
+安装前强制验证候选签名和同包名已装 APK 的完整证书集合；候选快照与安装字节绑定，已装包读取前后核对哈希/路径，任何读取失败、变化或签名不一致都在 helper / APK 写入前停止。新增 `--verify-apk` 只读入口和 [SIGNING.md](SIGNING.md)。
+
+本机全套离线检查：installer 16、host 341（4 private skip）、tooling 43、Java 15 checks；Ruff / Java formatting / 5 模块 strict mypy / actionlint 通过。真实 SDK 工具以构建出的 0.8.6 APK 验证 API 27、同证书匹配、临时新钥重签后拒绝、签名内容篡改后拒绝；未使用设备或原私钥做这些临时测试。两个 Android CI job 也加入这一真实 APK 检查。
+
+随后对当前正常 Android CC8（UID 2000 / AILABS_S6 / SDK 27）执行两轮只读预检：新仓库临时开发证书被正确拒绝；原运行目录的历史 0.8.1 APK 证书与现装助手匹配。后者只用于读证书，不安装或降级。临时设备 APK 已清理，未取回图像、录音或用户数据，当前服务/界面/采集状态未改动。待补原钥重建候选预检与真实 CI。
+
+再通过 `CC8_SIGNING_KEYSTORE` 引用原目录 JKS 构建本仓库助手候选：assembleRelease / lintRelease 通过，产物 SHA-256 为 `4c8ec602ecd5d4cada10ebda91be8eb5aa9e6e965fa8634e4f37aa85b4bf5198`；第三轮设备只读预检确认 `matching_installed_signers`。未复制或修改原私钥，未安装 APK。检测器 1.0.1 APK 也通过真实 SDK 同签名 / 换钥 / 篡改检查。剩余为 PR CI；实际升级与回退演练仍归 P1-09。
 
