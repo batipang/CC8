@@ -31,3 +31,8 @@ setup 可加 `--dry-run` 输出 argv 计划，不创建环境、不下载、不�
 桥接在模型加载前取得当前用户的 OS 排他锁，再取得本工作区锁，锁覆盖整个运行期，崩溃由 OS 释放；PID 文件不能授予所有权。不同目录的新版本只能有一份后台。为兼容尚未使用全局锁的旧版本，还只读核对本用户的 bridge / supervisor 进程及 enabled LaunchAgent；旧服务退避期也算占用。冲突只提示回原目录明确停止，不 kill / bootout / 读取另一目录的凭证。
 
 旧版本不遵循新全局锁，因此不能保证一个旧版启动器在新版本检查之后突然启动时也被锁约束；日常切换必须先明确停旧目录。新版本之间的并发竞争由 OS 锁仲裁，不依赖这项进程快照检查。此规则不授权自动迁移当前运行实例、升级 MLX 或覆盖原签名。
+
+
+## 分轮诊断采集
+
+`./cc8 measure --seconds 60 --condition quiet --distance 1m --partition acceptance` 只读取已运行后台的 owner IPC，聚合最近窗口之外的已观察请求，不启动模型、设备界面或采集。先看到“诊断采集已就绪”再开始操作。现有服务在其他运行目录时，显式 `--socket /absolute/runtime/device-access/private/voice-runtime/announce.sock`，不会迁移或重启它。Python stdlib 即可运行，详见 [采集格式、私有输出与限制](MEASUREMENT_RUNS.md)。

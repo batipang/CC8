@@ -361,3 +361,10 @@ run_backend 原体经显式工厂/目录/描述绑定后 AST 等价，原 façad
 SessionController 唯一拥有会话/代次/连接/待机与两把原锁；兼容 façade 方法和 IPC 只读 generation / guard。Bridge/入口/其他组件只调用所属命令，没有另一份会话状态；ACK generation 读取保持无锁，未引入新的锁顺序。合入基线 830454e 对同一合成操作的 16 份状态、12 条控制事件及全部指标完全一致；不是真实待机/拔插。另一个纯提交移入只读报告，合成固定时钟下 health 18 字段、status 48 字段和脱敏异常日志与会话基线一致，健康不带识别正文、异常 sentinel 不进日志。
 
 installer 16、host 356（4 private skip）、tooling 47、Java 15 checks、Ruff / Java / strict 六模块通过。Bridge 403 / Session 349 / 装配 363 / 报告 163 行；新动态模块不计入 strict。F-06 软件所有权已收敛、待 CI，声音同样本与实机部分仍开放；候选未替换当前助手，无设备、云服务或私人音频。P0 所有物理/真人项目仍须单独验收。
+
+
+### P0-01：分轮诊断软件（未更新运行安装）
+
+新增 DiagnosticRun / cc8 measure：默认排除第一窗口、200 个合成请求跨小窗口仍去重保留、阶段/终态冲突原子拒绝、10000 容量有界、白名单脱敏、覆盖缺口和任务/朗读终态分立。共享原汇总函数为独立纯重构提交；整体 IPC 截止时间为独立修复提交，持续滴流回归约 80 ms 内按总预算终止，不受每片重置延长。采集每 30 秒及退出时原子写 owner-only 文件，拒绝已有/替换/不私有目录，不开任何采集资源。
+
+installer 16、host 376（4 private skip）、tooling 47、Java 15 checks 与质量通过，新增 20 项覆盖跨窗口/去重/拒绝/容量、整体 deadline、真实虚拟 Unix IPC / 最小 PATH root CLI、文件权限/替换、Ctrl+C 和查询间断。另在 `/` 和 `/usr/bin:/bin`、系统 Python 3.9 下，对原 TmallGenie 运行后台仅执行 0.2 秒两次 diagnostics 读取：退出 0，排除历史 48 项，新样本 0，报告 0600；临时完整报告已删除，仅保留无 ID/正文的烟测摘要。没有升级或重启后台、没有发送开麦或设备指令。此结果不是真人样本或设备验收；P0-01 和其他物理项目仍开放，待 CI。

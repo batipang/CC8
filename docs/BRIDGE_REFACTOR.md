@@ -156,3 +156,6 @@ frozen SessionHooks 接收真实所属组件的 API / 只读 busy 查询与聚�
 在同一固定时钟、虚拟 provider、临时私有目录下，已提交会话拆分基线与候选的 health 18 字段、status 48 字段及脱敏错误 log 完全相同；合成识别文本不会进入 health，异常正文 sentinel 不会进入 log。全套 installer 16、host 356（4 private skip）、tooling 47、Java 15 checks 和质量通过。Bridge 403 行仅保留 façade / 已验证事件分派 / 指标聚合；SessionController 349、composition 363，其他新职责模块均少于 400 行。严格范围仍六模块，不能把声明的接口等同全模块 strict。
 
 F-06 的软件所有权拆分已收敛，待真实 CI；同样本 native / 声音与实机回归仍留待后续受控验收，本项复选框保持开放。下一步可以独立推进 P0 诊断、恢复及本地唤醒的软件工具；不得用上述合成对照替代真实声音、物理拔插或 15 分钟待机。
+
+
+第十步会话与报告已由 [PR #27](https://github.com/batipang/CC8/pull/27) 合入，[真实 CI](https://github.com/batipang/CC8/actions/runs/41343729276) 八项通过。F-06 软件分步合入完成，保留声音同样本 / 实机验收缺口，不以纯离线结果勾选整项。

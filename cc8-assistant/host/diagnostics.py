@@ -77,6 +77,26 @@ def percentiles(values):
     }
 
 
+def summarize_requests(samples):
+    counts = dict(Counter(r['outcome'] or 'pending' for r in samples))
+    terminal = sum(counts.get(k, 0) for k in ('completed', 'failed', 'cancelled'))
+    return {
+        'samples': len(samples),
+        'outcomes': counts,
+        'success_rate': counts.get('completed', 0) / terminal if terminal else None,
+        'latencies': {
+            name: percentiles(
+                [
+                    r['stages'][b] - r['stages'][a]
+                    for r in samples
+                    if a in r['stages'] and b in r['stages'] and r['stages'][b] >= r['stages'][a]
+                ]
+            )
+            for name, (a, b) in INTERVALS.items()
+        },
+    }
+
+
 class TraceBook:
     # 白名单内只记录阶段及单端耗时，不接收用户文本、音频、图片或任意 provider 字典。
     def __init__(self, limit=128, clock=time.monotonic):
@@ -201,27 +221,6 @@ class TraceBook:
         for row in rows:
             row.pop('started')
 
-        def summarize(samples):
-            counts = dict(Counter(r['outcome'] or 'pending' for r in samples))
-            terminal = sum(counts.get(k, 0) for k in ('completed', 'failed', 'cancelled'))
-            return {
-                'samples': len(samples),
-                'outcomes': counts,
-                'success_rate': counts.get('completed', 0) / terminal if terminal else None,
-                'latencies': {
-                    name: percentiles(
-                        [
-                            r['stages'][b] - r['stages'][a]
-                            for r in samples
-                            if a in r['stages']
-                            and b in r['stages']
-                            and r['stages'][b] >= r['stages'][a]
-                        ]
-                    )
-                    for name, (a, b) in INTERVALS.items()
-                },
-            }
-
         return {
             'schema': 1,
             'clock': 'mac_monotonic',
@@ -230,10 +229,12 @@ class TraceBook:
             'contains_content': False,
             'render_ack_is_audible_onset': False,
             'groups': {
-                o: summarize([r for r in rows if r['origin'] == o]) for o in sorted(ORIGINS)
+                o: summarize_requests([r for r in rows if r['origin'] == o])
+                for o in sorted(ORIGINS)
             },
             'scenarios': {
-                s: summarize([r for r in rows if r['scenario'] == s]) for s in sorted(SCENARIOS)
+                s: summarize_requests([r for r in rows if r['scenario'] == s])
+                for s in sorted(SCENARIOS)
             },
             'requests': rows,
         }
