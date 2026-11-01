@@ -6,7 +6,6 @@ read audio files. The companion APK never starts capture from a host command.
 
 from __future__ import annotations
 import argparse
-from dataclasses import dataclass
 from collections import deque
 import json
 import itertools
@@ -18,10 +17,8 @@ import signal
 import socket
 import subprocess
 import sys
-import tempfile
 import threading
 import time
-import wave
 import numpy as np
 
 from protocol import Packet, MIC, RENDER, EVENT, SPEAKER, decode_event, validate_device_event
@@ -42,15 +39,32 @@ from fast_stop import FastStopDetector, can_fast_stop
 from brain_router import BrainRouter
 from announce import Announcement, AnnouncementServer, validate_text
 from caption_timing import CaptionTiming
-from recognition import MandarinRecognizer
 from vision import CameraInbox, DesktopSnapshot, VisionError, visual_request, desktop_signature
-from minimax_client import MiniMaxBrain, MiniMaxVoice, MiniMaxError
+from minimax_client import MiniMaxBrain, MiniMaxError
 from workspace import Workspace
 from diagnostics import TraceBook
 from runtime_guard import RuntimeLease, RuntimeConflict
 from configuration import load_config
 from config_schema import ConfigError
 from release_info import RELEASE
+from speech_providers import (
+    LocalSpeech as LocalSpeech,
+    DirectSpeech as DirectSpeech,
+    model_path as model_path,
+    wav_samples as wav_samples,
+)
+from reply_types import (
+    Reply as Reply,
+    VisualReply as VisualReply,
+    TextReply as TextReply,
+    mood as mood,
+)
+from usb_transport import (
+    USBPipe as USBPipe,
+    usb_target as usb_target,
+    usb_present as usb_present,
+    connect_device as connect_device,
+)
 from dot_client import runtime_status as dot_runtime_status
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -61,120 +75,6 @@ STARTUP_GREETING = '汽车人，变形！'
 WAKE_PATTERN = re.compile(
     r'大黄蜂|大黃蜂|大黄峰|邦布比|班布比|(?<![A-Za-z])bumble[\s-]*bee(?![A-Za-z])', re.I
 )
-
-
-def model_path():
-    cache = (
-        Path.home()
-        / '.cache/huggingface/hub/models--mlx-community--whisper-large-v3-turbo/snapshots'
-    )
-    matches = sorted(p for p in cache.glob('*') if (p / 'weights.safetensors').exists())
-    if not matches:
-        raise RuntimeError('Local MLX speech model is missing')
-    return str(matches[-1])
-
-
-def wav_samples(path):
-    with wave.open(str(path), 'rb') as f:
-        if f.getframerate() != RATE or f.getnchannels() != 1 or f.getsampwidth() != 2:
-            raise ValueError('Expected 16 kHz mono PCM16')
-        return np.frombuffer(f.readframes(f.getnframes()), dtype='<i2').astype(float) / 32768
-
-
-class LocalSpeech:
-    def __init__(self, config=None):
-        settings = config or load_config()
-        self.recognizer = MandarinRecognizer(config=settings)
-        self.cache = {}
-
-    def recognize(self, samples):
-        return self.recognizer.recognize(samples)
-
-    def synthesize(self, text):
-        if text in self.cache:
-            return self.cache[text]
-        with tempfile.TemporaryDirectory(prefix='cc8-tts-') as folder:
-            source = Path(folder) / 'speech.aiff'
-            subprocess.run(
-                ['/usr/bin/say', '-v', 'Tingting', '-r', '185', '-o', str(source)],
-                input=text.encode(),
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                check=True,
-                timeout=30,
-            )
-            raw = subprocess.check_output(
-                [
-                    '/opt/homebrew/bin/ffmpeg',
-                    '-v',
-                    'error',
-                    '-i',
-                    str(source),
-                    '-ar',
-                    str(RATE),
-                    '-ac',
-                    '1',
-                    '-f',
-                    's16le',
-                    'pipe:1',
-                ],
-                stderr=subprocess.PIPE,
-                timeout=20,
-            )
-        pcm = np.frombuffer(raw, dtype='<i2').copy()
-        if len(pcm) == 0:
-            raise RuntimeError('Local TTS returned no samples')
-        if len(self.cache) >= 12:
-            self.cache.pop(next(iter(self.cache)))
-        self.cache[text] = pcm
-        return pcm
-
-
-class DirectSpeech(LocalSpeech):
-    def __init__(self, config=None):
-        settings = config or load_config()
-        super().__init__(config=settings)
-        self.voice = MiniMaxVoice(config=settings)
-
-    def cancel(self):
-        self.voice.cancel()
-        self.recognizer.cancel()
-
-    def stream(self, text, is_current=lambda: True, on_subtitle=None):
-        return self.voice.pcm(text, is_current, on_subtitle)
-
-    def synthesize(self, text):
-        chunks = list(self.stream(text))
-        if not chunks:
-            raise MiniMaxError('MiniMax returned no audio')
-        return np.concatenate(chunks)
-
-
-def mood(text):
-    if any(w in text for w in ['难过', '担心', '不开心', '烦恼', '辛苦', '害怕', '抱歉']):
-        return 'empathetic'
-    if any(w in text for w in ['放松', '呼吸', '慢慢', '平静', '休息']):
-        return 'calm'
-    if any(w in text for w in ['开心', '高兴', '太好了', '成功', '喜欢', '谢谢']):
-        return 'happy'
-    return 'friendly'
-
-
-@dataclass
-class Reply:
-    generation: int
-    text: str
-
-
-@dataclass
-class VisualReply(Reply):
-    origin: str = 'voice'
-    nonce: str = ''
-
-
-@dataclass
-class TextReply(Reply):
-    pass
 
 
 class Bridge:
@@ -2010,112 +1910,6 @@ class Bridge:
             voice = getattr(self.speech, 'voice', None)
             if voice:
                 self.metrics['last_speech_api'] = voice.last_metrics
-
-
-class USBPipe:
-    """Stock toybox netcat through the verified engineering shell prefix.
-
-    This firmware rejects ADB's direct tcp service after registering a forward.
-    The shell channel supports simultaneous raw stdin/stdout instead. No
-    helper, root command, additional APK or system setting is involved.
-    """
-
-    def __init__(self, argv):
-        self.child = subprocess.Popen(
-            argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0
-        )
-        self.error = None
-
-        def drain():
-            # Do not persist command output or private shell environment.
-            while self.child.stderr.read(8192):
-                pass
-
-        threading.Thread(target=drain, daemon=True).start()
-
-    def recv(self, count):
-        return os.read(self.child.stdout.fileno(), count)
-
-    def sendall(self, data):
-        view = memoryview(data)
-        while view:
-            sent = os.write(self.child.stdin.fileno(), view)
-            if sent <= 0:
-                raise EOFError('USB pipe closed')
-            view = view[sent:]
-
-    def shutdown(self, *unused):
-        self.close()
-
-    def close(self):
-        if self.child.poll() is None:
-            self.child.terminate()
-            try:
-                self.child.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                self.child.kill()
-                self.child.wait(timeout=2)
-        for stream in [self.child.stdin, self.child.stdout, self.child.stderr]:
-            try:
-                stream.close()
-            except OSError:
-                pass
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *unused):
-        self.close()
-
-
-def usb_target():
-    sys.path.insert(0, str(ROOT / 'device-access'))
-    import cc8_install as access
-
-    # A network ADB endpoint must never be classified as a plugged USB cable.
-    result = subprocess.run(
-        [str(access.ADB), 'devices', '-l'], capture_output=True, text=True, check=True, timeout=5
-    )
-    matches = []
-    for line in result.stdout.splitlines():
-        parts = line.split()
-        if (
-            len(parts) > 2
-            and parts[1] == 'device'
-            and ':' not in parts[0]
-            and 'model:AILABS_S6' in parts
-        ):
-            match = re.search(r'transport_id:(\d+)', line)
-            if match:
-                matches.append(match.group(1))
-    if len(matches) != 1:
-        raise RuntimeError('No unique physical CC8 USB transport')
-    return matches[0]
-
-
-def usb_present():
-    try:
-        usb_target()
-        return True
-    except (OSError, RuntimeError, subprocess.SubprocessError):
-        return False
-
-
-def connect_device():
-    sys.path.insert(0, str(ROOT / 'device-access'))
-    import cc8_install as access
-
-    transport = usb_target()
-    return USBPipe(
-        [
-            str(access.ADB),
-            '-t',
-            transport,
-            'shell',
-            '-T',
-            access.PREFIX + 'toybox nc -w 5 127.0.0.1 18765',
-        ]
-    )
 
 
 def main():

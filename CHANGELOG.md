@@ -1,6 +1,6 @@
 # Changelog
 
-## foundation-20261102.1 — source candidate
+## foundation-20261102.1 — source snapshot
 
 Independent components: assistant APK 0.8.7 / code 32, host 0.12.5,
 diagnostics APK 1.0.1 / code 2, wire protocol 2. See `release.json` and
