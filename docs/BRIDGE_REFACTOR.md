@@ -16,3 +16,15 @@ Bridge 仍有 2000 余行，本步不关闭 F-06。下一步依次梳理视觉�
 现有 guard / dsp_lock / write_lock / status_lock / done 及临界区在本步保持原位，没有新增嵌套获取顺序。后续拆分必须逐条审计锁调用链，再记录允许顺序和资源退出流程；不能仅凭提取文件宣称并发所有权已完成。新模块目标小于 400 行，Bridge 也应随后续步骤收敛。
 
 验证：拆分前后同一 installer 16、host 345（4 私人录音 skip）、tooling 47、Java 15 checks；Ruff / Java formatting / strict mypy 6 模块通过。没有新增或读取音频/图像，不把离线相等性当作声音场景实机验收。
+
+第一步 [PR #18](https://github.com/batipang/CC8/pull/18) 的 [真实 CI](https://github.com/batipang/CC8/actions/runs/41333342689) 八项通过并合入主分支。
+
+## 第二步：视觉生命周期
+
+`VisionController`（249 行）成为请求代次/nonce、设备挑战、CameraInbox 和桌面拍照 waiter 的唯一生产代码写入者。Bridge 保留 request_snapshot / cancel_snapshot / capture_snapshot / begin_visual / answer_visual 入口作为薄转发，协议字段、前台授权、5 秒预览、错误提示和取消结果保持一致。测试只将内部状态定位改到所属组件，原断言、拒绝条件和超时保留。
+
+组件通过 frozen `VisionHooks` 获取明确的会话命令、当前就绪位和发送/回答/指标回调；不传入整个 Bridge，不持有共享 metrics dict。会话 generation、连接、任务和音频仍归 Bridge；视觉组件不能打开麦克风或自己生成拍摄授权。回调通过 facade 动态解析，保留原有替换 provider/测试端口的能力。
+
+视觉锁顺序：共享会话 `guard` → `CameraInbox.lock`；begin/invalidate 的 inbox 操作完成后释放内锁，再发送设备事件。`CameraInbox.feed` 不调用会话回调，wait 的 valid 回调在 inbox 锁之外执行；snapshot 清理也先释放 inbox 锁再取会话 guard。与原实现相同，拍照线程只等待/接收一帧，桌面 waiter 始终在 finally 收尾；旧请求清理依赖 capture 身份，不能清除新请求。设备挑战更新仍由设备事件线程负责，session 失效与 capture 代次检查保留。此处仅覆盖视觉路径，不宣称全局 DSP/播放锁审计已完成。
+
+本步原 host 345 项通过（4 private skip），包含语音/按键看图、桌面拍照、取消/旧请求隔离、断线、final 通知异常释放 waiter；Ruff / Java formatting / 六模块 strict mypy 通过。新视觉模块尚不在六模块 strict 覆盖范围，Hooks 有显式接口类型但不冒充全模块类型验收。没有运行摄像头或调用 Dot；待真实 CI，F-06 整体继续保持未完成。

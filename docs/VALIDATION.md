@@ -290,3 +290,9 @@ main 的 [CI 运行](https://github.com/batipang/CC8/actions/runs/41320525409) �
 
 提取 provider 自有资源、USB 子进程流、工作项类型三个模块，保留 bridge 导出；12 个移动定义和未移动的 Bridge / main / run_backend 共全部顶层定义，拆分前后 AST 相同。共享会话/DSP/播放/视觉状态尚留 Bridge，本项保持未完成。所有原离线回归同样通过（16 / 345[4 skip] / 47 / 15 checks），六模块 strict mypy 与格式检查通过；未运行设备或声音对照。线程/资源边界及下一步见 [BRIDGE_REFACTOR.md](BRIDGE_REFACTOR.md)。
 
+[PR #18](https://github.com/batipang/CC8/pull/18) 的 [真实 CI](https://github.com/batipang/CC8/actions/runs/41333342689) 八项通过并合入主分支。
+
+# F-06 视觉生命周期候选（2026-11-02，待 CI）
+
+由 249 行 VisionController 拥有拍照/看图代次、nonce、挑战、inbox 与桌面 waiter，通过 frozen typed callback 接口协调会话，不传整个 Bridge 或共享指标字典。Bridge 入口保留薄转发；原全部 345 项 host 通过（4 私人录音 skip），视觉/桌面照片/取消/断线/异常收尾断言保留，仅更新内部状态路径。Ruff / Java formatting / 六模块 strict mypy 通过（视觉模块本身尚不在 strict 清单）。无摄像头、麦克风、模型调用或当前运行实例操作，F-06 整体未结项。
+

@@ -210,7 +210,7 @@ class BridgeVisionTests(unittest.TestCase):
         self.assertEqual(b.events[-1][0], 'vision_begin')
         b.on_event({'event': 'vision_cancel', 'vision_generation': b.job.generation})
         self.assertFalse(b.valid(b.job.generation))
-        self.assertIsNone(b.vision_generation)
+        self.assertIsNone(b.visual.generation)
 
     def test_cancel_for_old_picture_cannot_cancel_new_one(self):
         b = self.bridge()
@@ -219,10 +219,10 @@ class BridgeVisionTests(unittest.TestCase):
         b.begin_visual('第二张', 'button', 'b' * 32)
         new = b.generation
         b.on_event({'event': 'vision_cancel', 'vision_generation': old, 'nonce': 'a' * 32})
-        self.assertEqual(b.vision_generation, new)
+        self.assertEqual(b.visual.generation, new)
         self.assertTrue(b.valid(new))
         b.on_event({'event': 'vision_cancel', 'nonce': 'b' * 32})
-        self.assertIsNone(b.vision_generation)
+        self.assertIsNone(b.visual.generation)
 
     def test_microphone_start_cancels_old_visual_session(self):
         b = self.bridge()
@@ -230,7 +230,7 @@ class BridgeVisionTests(unittest.TestCase):
         old = b.generation
         with patch('bridge.WebRtcEchoCanceller'), patch.object(b, 'calibrate'):
             b.on_event({'event': 'session_start', 'epoch': 9})
-        self.assertIsNone(b.vision_generation)
+        self.assertIsNone(b.visual.generation)
         self.assertNotEqual(old, b.generation)
         self.assertFalse(b.valid(old))
 
@@ -241,7 +241,7 @@ class BridgeVisionTests(unittest.TestCase):
         b.begin_visual('看图', 'voice')
         old = b.generation
         b.on_event({'event': 'session_start', 'epoch': 9})
-        self.assertEqual(b.vision_generation, old)
+        self.assertEqual(b.visual.generation, old)
         self.assertTrue(b.valid(old))
 
     def test_calibration_and_unpaired_requests_cannot_capture(self):
@@ -257,8 +257,8 @@ class BridgeVisionTests(unittest.TestCase):
     def test_cancel_and_transport_switch_invalidate_inflight_picture(self):
         b = self.bridge()
         b.begin_visual('看图', 'button', 'a' * 32)
-        c = b.camera_inbox.begin(b.generation)
-        b.camera_inbox.feed(next(events(c)))
+        c = b.visual.inbox.begin(b.generation)
+        b.visual.inbox.feed(next(events(c)))
         b.cancel('test')
         self.assertTrue(c.done.is_set())
         self.assertFalse(c.data)
@@ -274,15 +274,15 @@ class BridgeVisionTests(unittest.TestCase):
         def event(name, **kw):
             old_event(name, **kw)
             if name == 'camera_capture':
-                c = b.camera_inbox.pending
+                c = b.visual.inbox.pending
                 for value in events(c):
                     b.on_event(value)
 
         b.event = event
         b.answer_visual(b.job)
         self.assertEqual(answers, [jpeg()])
-        self.assertIsNone(b.camera_inbox.pending)
-        self.assertIsNone(b.vision_generation)
+        self.assertIsNone(b.visual.inbox.pending)
+        self.assertIsNone(b.visual.generation)
         self.assertNotIn('image', b.metrics)
         self.assertEqual(b.events[-1][0], 'vision_done')
         self.assertFalse(b.active)
