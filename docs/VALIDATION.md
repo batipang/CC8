@@ -318,3 +318,13 @@ main 的 [CI 运行](https://github.com/batipang/CC8/actions/runs/41320525409) �
 
 当前完整离线 installer 16、host 346（4 private skip）、tooling 47、Java 15 checks，以及 Ruff / Java formatting / strict mypy 六模块通过；新动态/native 组件尚未加入 strict 清单，未冒充全模块类型覆盖。未部署、重启或打开设备采集，等待真实 CI。
 
+[PR #21](https://github.com/batipang/CC8/pull/21) 的 [真实 CI](https://github.com/batipang/CC8/actions/runs/41338562794) 全部通过并合入。首次 actionlint 下载 HTTP 504（未到代码检查）后，只重跑失败任务成功；校验版本/摘要与门槛未变。
+
+# F-06 识别队列/worker 候选（2026-11-02，待 CI）
+
+由 RecognitionWorker 拥有队列/溢出取消/丢弃、busy 与识别线程，Bridge 保留原入口，跨会话、provider、播放、指标和回复仅用明确端口。保留原现场七字段与旧回放路径、回声/停止/文本唤醒/恢复行为，未改门槛/上传规则、未把 KWS 误标已完成。原 host 347 项通过（4 private skip），Ruff / Java formatting / strict 六模块通过；新识别组件尚未在 strict 范围。
+
+线程故障、队列溢出、忙闲等待、旧代次和误暂停恢复的原断言保持，仅迁移内部字段路径；单独溢出用例冻结 Thread.start 后构建真实 façade，避免未初始化对象伪装队列拥有者。Bridge 1387 行，F-06 保持未完成。无设备、云端、私人音频或当前服务操作，待真实 CI。
+
+
+识别组件新增 one-shot 启动锁和两个并发启动的回归：只创建一个 worker、不调用 provider，另一个启动明确拒绝。加入后全 host 347 项通过（4 private skip）。

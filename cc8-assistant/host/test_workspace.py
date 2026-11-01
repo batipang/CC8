@@ -196,11 +196,18 @@ class WorkspaceTests(unittest.TestCase):
         b.announce = announce
         for field in ['calibrating', 'playing', 'response_busy', 'recognition_busy']:
             b.connection = object()
-            setattr(b.playback if field == 'playing' else b, field, True)
+            owner = (
+                b.playback
+                if field == 'playing'
+                else b.recognition
+                if field == 'recognition_busy'
+                else b
+            )
+            setattr(owner, 'busy' if field == 'recognition_busy' else field, True)
             b.reminder_poll = 0
             b.reminder_tick()
             self.assertEqual(jobs, [])
-            setattr(b.playback if field == 'playing' else b, field, False)
+            setattr(owner, 'busy' if field == 'recognition_busy' else field, False)
         b.connection = None
         b.reminder_poll = 0
         b.reminder_tick()

@@ -2,7 +2,6 @@
 
 import json
 import io
-import queue
 from contextlib import redirect_stdout
 import socket
 import tempfile
@@ -133,9 +132,8 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertEqual(rows[candidate]['outcome'], 'failed')
 
     def test_dropped_recognition_request_is_not_reported_as_still_pending(self):
-        bridge = object.__new__(Bridge)
-        bridge.queue = queue.Queue(maxsize=2)
-        bridge.diagnostics = TraceBook()
+        with patch('threading.Thread.start'):
+            bridge = Bridge(None, None)
         ids = []
         for _ in range(3):
             ident = bridge.diagnostics.begin('voice')

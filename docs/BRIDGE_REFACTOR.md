@@ -64,3 +64,15 @@ Bridge 仍协调会话、校准提示流程、识别/回答 worker 和任务；�
 锁顺序保持 session guard → DSP lock；Echo.process 仅在 DSP 锁内调用 native process，释放后才进入 Endpoint / pause / session cancel。包事件线程写 VAD/断句状态，校准/停止通过所属对象方法重置，未新增锁嵌套或修改估计参考时移、噪声阈值、断句和控制延迟参数。播放的参考时钟回调动态指向 EchoPipeline，不能写一份副本造成时钟分叉。
 
 同一组 64 对合成 render/mic 包在基线 `12c218c` 和新源码回放：7 份话语音频、参考音频的内容摘要与证据完全一致，计数同为 mic 8960 / render 10240 samples、0 gap、7 utterances；暂停推断和诊断使用固定合成输入，不读用户录音。原全套 installer 16、host 346（4 private skip）、tooling 47、Java 15 checks 与质量检查通过。新三个动态/native 模块未计入现有 strict 六模块范围。Bridge 仍为 1547 行，本项保持未完成；识别、任务/回答、校准与会话职责继续推进，待 CI。
+
+第四步 [PR #21](https://github.com/batipang/CC8/pull/21) 的 [真实 CI](https://github.com/batipang/CC8/actions/runs/41338562794) 已全部通过并合入。首次 quality job 在下载 pinned actionlint 时遇到 HTTP 504，未执行到代码检查；仅重跑失败任务后通过，未改版本、哈希或检查规则。
+
+## 第五步：识别队列与 worker（候选）
+
+`RecognitionWorker`（289 行）统一拥有容量 2 的识别队列、dequeue/drop/discard、busy 状态及识别线程。Bridge 的 enqueue_recognition / discard_recognition / work 仍为薄转发；health、待机、提醒和自检仅查询其就绪位/队列状态。worker 在整个宿主进程期运行，不自行开启采集、创建 provider 或启动第二份后台。
+
+通过 frozen RecognitionHooks 获取 provider/播放只读查询与会话、指标、视觉/回复提交命令；不传入 Bridge 或整个 metrics 字典。原七字段现场话语和旧离线回放的兼容路径、旧 generation 取消、队列溢出诊断、参考文本/参考 ASR 比较、停止指令、误暂停恢复及异常后继续处理均保留。明确 armed 的回声自检文本对仍在原聚合器中有界记录，不改成默认保存正常对话。当前仍为 legacy 文本唤醒规则，不宣称已实现本地 KWS。
+
+原 host 347 项通过（4 private skip），包括两轮识别间的恢复通知断线不杀死 worker、溢出请求回执、回声拒绝/保留人声、待机/提醒 busy 门槛。测试只移动内部队列/线程/状态定位，溢出用例改为冻结线程启动后构建实际 façade，原断言保留。Ruff / Java formatting / strict 六模块通过；识别组件本身未计入 strict 清单。Bridge 1387 行，回答/任务、校准/自检与会话仍待拆，F-06 未结项，待 CI。
+
+同一组件 start 以独立启动锁做 one-shot 检查；两个并发启动请求的回归确认只创建一个消费者，另一个明确拒绝，不触发 provider。此保护只约束新拆出的组件生命周期，不自动重建或重放队列。

@@ -89,7 +89,7 @@ class BargeInTests(unittest.TestCase):
         b = self.bridge(Speech())
         token = b.pause_for_voice()
         generation = b.generation
-        b.queue.put(
+        b.recognition.queue.put(
             (
                 generation,
                 np.ones(RATE),
@@ -115,7 +115,7 @@ class BargeInTests(unittest.TestCase):
         old = b.generation
         answered = threading.Event()
         b.speak = lambda text, generation: answered.set() or True
-        b.queue.put(
+        b.recognition.queue.put(
             (
                 old,
                 np.ones(RATE),
@@ -150,7 +150,7 @@ class BargeInTests(unittest.TestCase):
         b.answer = waiting_response
         b.enqueue_response(Reply(old, '旧回答'))
         self.assertTrue(entered.wait(1))
-        b.queue.put(
+        b.recognition.queue.put(
             (
                 old,
                 np.ones(RATE),
@@ -179,7 +179,7 @@ class BargeInTests(unittest.TestCase):
         b = self.bridge(Speech())
         token = b.pause_for_voice()
         old = b.generation
-        b.queue.put(
+        b.recognition.queue.put(
             (
                 old,
                 np.ones(RATE),

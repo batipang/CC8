@@ -33,7 +33,7 @@ class EndpointHooks:
     add_metric: Callable[[str, int], None]
     metric_value: Callable[[str], JsonValue]
     diagnostics: Callable[[], TraceBook]
-    enqueue: Callable[[tuple], None]
+    enqueue: Callable[[tuple[object, ...]], None]
     discard_recognition: Callable[[], None]
 
 
