@@ -13,6 +13,9 @@ Backend 0.12.6; APK and wire protocol versions stay independent and unchanged.
 - Fix self-check retry to query the playback owner after extraction; verify the
   actual registered signal ignores stopped or busy sessions without capture.
 
+- Bound read-only diagnostic IPC by one overall deadline, including slow
+  fragmented replies, without changing model/tool retry behavior.
+
 This candidate has not replaced the running installation.
 
 ## foundation-20261102.1 — source snapshot

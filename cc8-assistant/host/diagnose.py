@@ -3,25 +3,39 @@
 import argparse
 from datetime import datetime
 import json
+import math
 import os
 from pathlib import Path
 import socket
 import stat
+import time
 
 ROOT = Path(__file__).resolve().parents[2]
 PRIVATE = ROOT / 'device-access/private/voice-runtime'
 
 
-def query(path=PRIVATE / 'announce.sock', operation='diagnostics'):
+def query(path=PRIVATE / 'announce.sock', operation='diagnostics', *, timeout=5):
+    if type(timeout) not in (int, float) or not 0 < timeout <= 5 or not math.isfinite(timeout):
+        raise ValueError('Invalid diagnostics timeout')
+    deadline = time.monotonic() + timeout
     info = path.lstat()
     if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
         raise OSError('Unsafe diagnostics socket')
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
-        conn.settimeout(5)
+
+        def arm():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError('Diagnostics deadline expired')
+            conn.settimeout(remaining)
+
+        arm()
         conn.connect(str(path))
+        arm()
         conn.sendall((json.dumps({'operation': operation}) + '\n').encode())
         data = bytearray()
         while b'\n' not in data:
+            arm()
             block = conn.recv(4096)
             if not block:
                 raise OSError('Incomplete diagnostics response')
