@@ -160,7 +160,7 @@ class CaptureAndTransportTests(unittest.TestCase):
         def switched(*args):
             value.generation+=1
             return True
-        with patch.object(value,'play',return_value=True),patch.object(value,'align_reference',side_effect=switched),patch('bridge.time.sleep'):
+        with patch.object(value,'startup_reference',return_value=object()),patch.object(value,'play',return_value=True),patch.object(value,'align_reference',side_effect=switched),patch('bridge.time.sleep'):
             value.calibrate(generation)
         self.assertTrue(value.calibrating)
 

@@ -1,6 +1,9 @@
 # 大黄蜂（Bumblebee）语音助手
 
-完整源码快照：Android APK **0.8.6**（versionCode 31）、Mac 后台 **0.12.0**。包名 `com.happyhome.cc8assistant`。默认 **Dot / Codex 做大脑，MiniMax ASR 做耳朵，MiniMax TTS 做嘴巴**，Mac 执行消回声与即时打断，CC8 负责录放和显示。
+0.12.1：启动只用当前大黄蜂音色说“汽车人，变形！”，同一句音频用于回声校准，随后安静等待校准完成。普通启动不再播放固定女声参考或重复口号。
+
+
+完整源码快照：Android APK **0.8.6**（versionCode 31）、Mac 后台 **0.12.1**。包名 `com.happyhome.cc8assistant`。默认 **Dot / Codex 做大脑，MiniMax ASR 做耳朵，MiniMax TTS 做嘴巴**，Mac 执行消回声与即时打断，CC8 负责录放和显示。
 
 0.11.1 修复断线后的工作线程、Dot 最终回答判定、任务回执及提醒旧回执覆盖问题，兼容既有提醒文件。已于 2026-11-01 替换当前运行中的 Mac 后台并恢复语音会话；Android APK 保持 0.8.6。详情见[检查记录](../docs/CODE_REVIEW.md)和[部署验证](../docs/VALIDATION.md)。
 

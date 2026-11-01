@@ -41,6 +41,7 @@ ROOT = Path(__file__).resolve().parents[2]
 PRIVATE = ROOT/'device-access/private/voice-runtime'
 LIBRARY = ROOT/'.toolchains/cc8/speexdsp-1.2.1/libspeexdsp/.libs/libspeexdsp.dylib'
 WAKE_WORD = '大黄蜂'
+STARTUP_GREETING = '汽车人，变形！'
 WAKE_PATTERN = re.compile(r'大黄蜂|大黃蜂|大黄峰|邦布比|班布比|(?<![A-Za-z])bumble[\s-]*bee(?![A-Za-z])',re.I)
 
 
@@ -207,7 +208,7 @@ class Bridge:
 
     def health(self):
         # 白名单输出就绪位，不导出 metrics 内可能存在的自检文字和用户内容。
-        return {'ok':True,'bridge_version':'0.12.0','uptime_seconds':round(time.monotonic()-self.started_at,1),
+        return {'ok':True,'bridge_version':'0.12.1','uptime_seconds':round(time.monotonic()-self.started_at,1),
             'model_ready':True,'recognition_worker':self.worker.is_alive(),'response_worker':self.responder.is_alive(),
             'connected':self.connection is not None,'transport':self.transport_kind,'microphone_active':self.active,
             'calibrating':self.calibrating,'asr_engine':getattr(getattr(self.speech,'recognizer',None),'engine',None),
@@ -587,7 +588,7 @@ class Bridge:
         PRIVATE.mkdir(parents=True,exist_ok=True,mode=0o700);os.chmod(PRIVATE,0o700)
         data={'connected':self.connection is not None,'active':self.active,'calibrating':self.calibrating,
               'playing':self.playing,'generation':self.generation,'wake_mode':self.wake,'wake_word':WAKE_WORD,
-              'bridge_version':'0.12.0','desktop_camera_enabled':bool(self.desktop_challenge),'desktop_snapshot_active':self.desktop_snapshot is not None,'noise_profile':'moderate','speech_energy_floor_dbfs':NearSpeechDetector.MIN_DBFS,'speech_noise_margin_db':NearSpeechDetector.NOISE_MARGIN_DB,'speech_onset_ms':VoiceDetector.ONSET_FRAMES*10,'barge_confirm_min_ms':NearSpeechDetector.CONFIRM_MIN_FRAMES*10,'vision_active':self.vision_generation is not None,'vision_enabled':isinstance(self.brain,BrainRouter),'transport':self.transport_kind,**(self.transport_hub.diagnostics() if self.transport_hub else {}),'screen_sleeping':self.screen_sleeping,'idle_sleep_seconds':900,'asr_engine':getattr(getattr(self.speech,'recognizer',None),'engine',None),'barge_in_enabled':self.device_can_pause,'playback_paused':self.pause_state is not None,'announcement_active':self.announcement_generation is not None,'brain_provider':getattr(self.brain,'selected','minimax') if self.brain else 'echo test','dot_enabled':isinstance(self.brain,BrainRouter),'web_search_enabled':self.brain is not None,'fast_stop_enabled':self.fast_stop is not None,
+              'bridge_version':'0.12.1','desktop_camera_enabled':bool(self.desktop_challenge),'desktop_snapshot_active':self.desktop_snapshot is not None,'noise_profile':'moderate','speech_energy_floor_dbfs':NearSpeechDetector.MIN_DBFS,'speech_noise_margin_db':NearSpeechDetector.NOISE_MARGIN_DB,'speech_onset_ms':VoiceDetector.ONSET_FRAMES*10,'barge_confirm_min_ms':NearSpeechDetector.CONFIRM_MIN_FRAMES*10,'vision_active':self.vision_generation is not None,'vision_enabled':isinstance(self.brain,BrainRouter),'transport':self.transport_kind,**(self.transport_hub.diagnostics() if self.transport_hub else {}),'screen_sleeping':self.screen_sleeping,'idle_sleep_seconds':900,'asr_engine':getattr(getattr(self.speech,'recognizer',None),'engine',None),'barge_in_enabled':self.device_can_pause,'playback_paused':self.pause_state is not None,'announcement_active':self.announcement_generation is not None,'brain_provider':getattr(self.brain,'selected','minimax') if self.brain else 'echo test','dot_enabled':isinstance(self.brain,BrainRouter),'web_search_enabled':self.brain is not None,'fast_stop_enabled':self.fast_stop is not None,
               'fast_stop_input':'AEC3 without additional NS','fast_stop_gain':getattr(self.fast_stop,'gain',None),
               'aec_engine':'WebRTC AEC3 + NS; AGC disabled',
               'render_asr_comparison':True,
@@ -672,14 +673,28 @@ class Bridge:
             return self.play_stream(self.speech.stream(text,lambda:self.valid(generation)),text,generation)
         return self.play(self.speech.synthesize(text),text,generation)
 
+    def startup_reference(self):
+        # 开场口号同时提供扬声器参考，不再使用检测器的固定女声素材。
+        pcm=np.asarray(self.speech.synthesize(STARTUP_GREETING))
+        if pcm.ndim!=1 or pcm.dtype!=np.dtype('int16') or not RATE<=len(pcm)<=RATE*6 or not np.any(pcm):
+            raise ValueError('Invalid startup reference PCM')
+        return pcm
+
     def calibrate(self,generation):
         try:
-            self.status('calibrating','首次校准：请安静听完 6 秒声音')
-            ref=wav_samples(ROOT/'cc8-diagnostics/app/src/main/assets/reference.wav')[:RATE*6]
-            pcm=np.rint(ref*32768).astype(np.int16)
-            if not self.play(pcm,'先听一小段声音，校准后就可以聊天。',generation,'calibration'):return
-            # Retain reference for the room tail; continue adapting before VAD.
-            time.sleep(.4)
+            self.status('calibrating','正在准备大黄蜂开场音…')
+            pcm=self.startup_reference()
+            with self.guard:
+                if not self.valid(generation):return
+                # 云端合成可能耗时，时钟对齐只使用真正播放开始后的收音。
+                self.calibration_frames.clear()
+            started=time.monotonic()
+            self.status('calibrating','声音校准中，请稍候…')
+            if not self.play(pcm,STARTUP_GREETING,generation,'calibration'):return
+            if not self.valid(generation):return
+            self.status('calibrating','声音校准中，请稍候…')
+            # 保留原 6 秒采样窗口和房间尾音时间；后半段安静等待，不再播放额外提示。
+            time.sleep(max(.4,6.4-(time.monotonic()-started)))
             if not self.valid(generation):return
             if not self.align_reference(generation):return
             with self.guard:
@@ -690,8 +705,6 @@ class Bridge:
             elif self.wake:self.status('listening','请说“大黄蜂”或“Bumblebee”开始聊天')
             else:
                 self.status('listening','我在听，可以开始说话')
-                greeting='汽车人，变形！'
-                self.speak(greeting,generation)
             self.save_status();self.log('calibration_finished')
         except Exception as e:
             if self.valid(generation):self.failure('校准未完成，请停止后重试',e)
