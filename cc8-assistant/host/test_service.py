@@ -54,7 +54,8 @@ class ServiceTests(unittest.TestCase):
         self.assertNotIn('launch.py',' '.join(value['ProgramArguments']))
         self.assertEqual(value['KeepAlive'],{'SuccessfulExit':False})
         self.assertGreaterEqual(value['ThrottleInterval'],10)
-        self.assertNotIn('EnvironmentVariables',value)
+        self.assertEqual(set(value['EnvironmentVariables']),{'PATH'})
+        self.assertIn('/opt/homebrew/bin',value['EnvironmentVariables']['PATH'])
 
     def test_backoff_is_bounded_and_not_a_tight_restart_loop(self):
         self.assertEqual([service.retry_delay(n) for n in range(1,8)],[1,2,4,8,16,30,30])

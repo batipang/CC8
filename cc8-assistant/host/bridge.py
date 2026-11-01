@@ -36,6 +36,7 @@ from minimax_client import MiniMaxBrain, MiniMaxVoice, MiniMaxError
 from workspace import Workspace
 from diagnostics import TraceBook
 from process_lock import ProcessLease
+from dot_client import runtime_status as dot_runtime_status
 
 ROOT = Path(__file__).resolve().parents[2]
 PRIVATE = ROOT/'device-access/private/voice-runtime'
@@ -208,11 +209,11 @@ class Bridge:
 
     def health(self):
         # 白名单输出就绪位，不导出 metrics 内可能存在的自检文字和用户内容。
-        return {'ok':True,'bridge_version':'0.12.1','uptime_seconds':round(time.monotonic()-self.started_at,1),
+        return {'ok':True,'bridge_version':'0.12.2','uptime_seconds':round(time.monotonic()-self.started_at,1),
             'model_ready':True,'recognition_worker':self.worker.is_alive(),'response_worker':self.responder.is_alive(),
             'connected':self.connection is not None,'transport':self.transport_kind,'microphone_active':self.active,
             'calibrating':self.calibrating,'asr_engine':getattr(getattr(self.speech,'recognizer',None),'engine',None),
-            'brain_provider':getattr(self.brain,'selected','echo'),'playing':self.playing,
+            'brain_provider':getattr(self.brain,'selected','echo'),'dot_runtime':dot_runtime_status(),'playing':self.playing,
             'mic_frames':self.metrics.get('mic_frames',0),'render_frames':self.metrics.get('render_frames',0)}
 
     def diagnostics_report(self):
@@ -588,7 +589,7 @@ class Bridge:
         PRIVATE.mkdir(parents=True,exist_ok=True,mode=0o700);os.chmod(PRIVATE,0o700)
         data={'connected':self.connection is not None,'active':self.active,'calibrating':self.calibrating,
               'playing':self.playing,'generation':self.generation,'wake_mode':self.wake,'wake_word':WAKE_WORD,
-              'bridge_version':'0.12.1','desktop_camera_enabled':bool(self.desktop_challenge),'desktop_snapshot_active':self.desktop_snapshot is not None,'noise_profile':'moderate','speech_energy_floor_dbfs':NearSpeechDetector.MIN_DBFS,'speech_noise_margin_db':NearSpeechDetector.NOISE_MARGIN_DB,'speech_onset_ms':VoiceDetector.ONSET_FRAMES*10,'barge_confirm_min_ms':NearSpeechDetector.CONFIRM_MIN_FRAMES*10,'vision_active':self.vision_generation is not None,'vision_enabled':isinstance(self.brain,BrainRouter),'transport':self.transport_kind,**(self.transport_hub.diagnostics() if self.transport_hub else {}),'screen_sleeping':self.screen_sleeping,'idle_sleep_seconds':900,'asr_engine':getattr(getattr(self.speech,'recognizer',None),'engine',None),'barge_in_enabled':self.device_can_pause,'playback_paused':self.pause_state is not None,'announcement_active':self.announcement_generation is not None,'brain_provider':getattr(self.brain,'selected','minimax') if self.brain else 'echo test','dot_enabled':isinstance(self.brain,BrainRouter),'web_search_enabled':self.brain is not None,'fast_stop_enabled':self.fast_stop is not None,
+              'bridge_version':'0.12.2','desktop_camera_enabled':bool(self.desktop_challenge),'desktop_snapshot_active':self.desktop_snapshot is not None,'noise_profile':'moderate','speech_energy_floor_dbfs':NearSpeechDetector.MIN_DBFS,'speech_noise_margin_db':NearSpeechDetector.NOISE_MARGIN_DB,'speech_onset_ms':VoiceDetector.ONSET_FRAMES*10,'barge_confirm_min_ms':NearSpeechDetector.CONFIRM_MIN_FRAMES*10,'vision_active':self.vision_generation is not None,'vision_enabled':isinstance(self.brain,BrainRouter),'transport':self.transport_kind,**(self.transport_hub.diagnostics() if self.transport_hub else {}),'screen_sleeping':self.screen_sleeping,'idle_sleep_seconds':900,'asr_engine':getattr(getattr(self.speech,'recognizer',None),'engine',None),'barge_in_enabled':self.device_can_pause,'playback_paused':self.pause_state is not None,'announcement_active':self.announcement_generation is not None,'brain_provider':getattr(self.brain,'selected','minimax') if self.brain else 'echo test','dot_enabled':isinstance(self.brain,BrainRouter),'web_search_enabled':self.brain is not None,'fast_stop_enabled':self.fast_stop is not None,
               'fast_stop_input':'AEC3 without additional NS','fast_stop_gain':getattr(self.fast_stop,'gain',None),
               'aec_engine':'WebRTC AEC3 + NS; AGC disabled',
               'render_asr_comparison':True,

@@ -17,6 +17,7 @@ from voice_tools import VoiceTools, TOOLS
 from minimax_client import Cancelled
 from web_search import SpeechClauses,now,public_url
 from vision import jpeg_dimensions
+from runtime_env import command_path, runtime_environment
 
 ROOT=Path(__file__).resolve().parents[2]
 
@@ -53,7 +54,7 @@ class EventQueue(queue.Queue):
 
 
 def codex_command():
-    binary=shutil.which('codex')
+    binary=shutil.which('codex',path=command_path())
     if not binary:
         candidate=Path.home()/'.local/bin/codex'
         if candidate.is_file():binary=str(candidate)
@@ -62,6 +63,18 @@ def codex_command():
     # Overrides belong to this child only; never rewrite the desktop config.
     command=[binary,'app-server','--stdio','-c','web_search="live"']
     return command
+
+
+def runtime_status():
+    # 只报告依赖就绪位，不导出本机路径、环境变量或凭证，也不启动模型查询。
+    try:
+        binary=codex_command()[0]
+        with open(binary,'rb') as source:header=source.read(128)
+        node_required=header.startswith(b'#!') and b'node' in header.split(b'\n',1)[0]
+        node_available=shutil.which('node',path=command_path()) is not None
+        return {'codex_available':True,'node_required':node_required,'node_available':node_available,
+                'ready':not node_required or node_available}
+    except (DotError,OSError):return {'codex_available':False,'ready':False}
 
 
 class CodexRpc:
@@ -75,7 +88,7 @@ class CodexRpc:
             if self.failed or self.process.poll() is not None:raise DotError('Codex process is no longer connected')
             return
         self.process=self.popen(self.command or codex_command(),stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
-            cwd=ROOT,bufsize=0,start_new_session=True)
+            cwd=ROOT,bufsize=0,start_new_session=True,env=runtime_environment())
         def drain():
             while self.process.stderr.read(8192):pass
         threading.Thread(target=drain,daemon=True).start()

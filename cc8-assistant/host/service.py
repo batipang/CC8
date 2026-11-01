@@ -15,6 +15,7 @@ import time
 from diagnose import query
 from launch import ROOT, PRIVATE, BRIDGE, PYTHON, own_process
 from process_lock import ProcessLease, atomic_private_json
+from runtime_env import command_path
 
 LABEL = 'com.happyhome.cc8.'+hashlib.sha256(str(ROOT).encode()).hexdigest()[:12]
 PLIST = Path.home()/'Library/LaunchAgents'/f'{LABEL}.plist'
@@ -31,7 +32,8 @@ def agent_payload():
     # 明确停止先落盘 enabled=false，即使遇到拉起竞态也不会再启动语音后台。
     return {'Label': LABEL, 'RunAtLoad': True, 'KeepAlive': {'SuccessfulExit': False}, 'ThrottleInterval':10,
         'ProgramArguments': [str(PYTHON), str(Path(__file__).resolve()), 'run'],
-        'WorkingDirectory': str(ROOT), 'ProcessType': 'Background', 'Umask': 0o077}
+        'WorkingDirectory': str(ROOT), 'ProcessType': 'Background', 'Umask': 0o077,
+        'EnvironmentVariables': {'PATH': command_path()}}
 
 
 def disable():
