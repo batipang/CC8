@@ -1,0 +1,8 @@
+{
+  "version": "1.35.0",
+  "filename": "google-java-format-1.35.0-all-deps.jar",
+  "url": "https://github.com/google/google-java-format/releases/download/v1.35.0/google-java-format-1.35.0-all-deps.jar",
+  "sha256": "bfb7f9ead6cd328389bc2da53860443bc0e805dfd08cc889bfdf43b26cb2a6e8",
+  "size": 3609109,
+  "minimum_java": 21
+}

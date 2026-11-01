@@ -1,20 +1,17 @@
 """Exercise actual Android-free transport teardown under a UI-like caller."""
 
-import json
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from tools.java_toolchain import java_bin
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 class TransportCloseTests(unittest.TestCase):
     def test_tls_style_close_is_async_and_failure_does_not_reach_caller(self):
-        config = ROOT / '.toolchains/cc8/paths.json'
-        if not config.is_file():
-            self.skipTest('Local JDK unavailable')
-        java = Path(json.loads(config.read_text())['java_home']) / 'bin'
+        java = java_bin()
         source = (
             ROOT / 'cc8-assistant/app/src/main/java/com/happyhome/cc8assistant/TransportClose.java'
         )

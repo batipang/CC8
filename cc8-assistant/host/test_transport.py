@@ -14,6 +14,7 @@ from unittest.mock import patch
 from transport import Pairing, TransportHub, signature, private_ipv4
 from protocol import Packet, receive, SPEAKER, RENDER
 from bridge import Bridge, usb_target
+from tools.java_toolchain import java_bin
 
 
 class TransportTests(unittest.TestCase):
@@ -272,10 +273,7 @@ class RebindIdempotenceTests(unittest.TestCase):
 class NativeAuthTests(unittest.TestCase):
     def test_java_hmac_and_constant_time_hex_validation(self):
         root = Path(__file__).resolve().parents[2]
-        config = root / '.toolchains/cc8/paths.json'
-        if not config.exists():
-            self.skipTest('Local JDK unavailable')
-        java = Path(json.loads(config.read_text())['java_home']) / 'bin'
+        java = java_bin()
         source = (
             root / 'cc8-assistant/app/src/main/java/com/happyhome/cc8assistant/TransportAuth.java'
         )

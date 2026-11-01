@@ -29,7 +29,7 @@ class RuntimeEnvironmentTests(unittest.TestCase):
             codex.write_text('#!/usr/bin/env node\n')
             codex.chmod(0o700)
             with patch('runtime_env.FALLBACK_DIRS', (folder, '/usr/bin', '/bin')):
-                env = runtime_environment({'PATH': '/usr/bin:/bin'})
+                env = runtime_environment({'PATH': ''})
                 result = subprocess.run(
                     [str(codex), '--version'], env=env, capture_output=True, text=True, timeout=3
                 )

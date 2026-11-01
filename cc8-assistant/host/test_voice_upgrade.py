@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -8,6 +7,7 @@ import unittest
 from caption_timing import CaptionTiming
 from voice_tools import VoiceTools
 from bridge import Bridge
+from tools.java_toolchain import java_bin
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -139,9 +139,7 @@ class ToolTests(unittest.TestCase):
 
 class NativeAudioTests(unittest.TestCase):
     def test_short_writes_pause_resume_cancel_and_actual_frame_caption(self):
-        java = (
-            Path(json.loads((ROOT / '.toolchains/cc8/paths.json').read_text())['java_home']) / 'bin'
-        )
+        java = java_bin()
         source = ROOT / 'cc8-assistant/app/src/main/java/com/happyhome/cc8assistant'
         harness = """package com.happyhome.cc8assistant;
 import java.io.*;import java.util.*;

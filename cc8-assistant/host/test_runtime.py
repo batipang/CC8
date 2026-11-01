@@ -1,3 +1,5 @@
+import importlib.util
+import os
 import io
 import json
 import struct
@@ -203,14 +205,26 @@ class AudioTests(unittest.TestCase):
             aec.close()
         return onsets
 
+    @unittest.skipUnless(
+        os.environ.get('CC8_TEST_PRIVATE_AUDIO') == '1',
+        'Private audio fixtures require explicit --with-private-audio opt-in',
+    )
     def test_saved_far_end_only_does_not_trigger_after_calibration(self):
         self.assertEqual(self.replay('farend-only.wav', 6), [])
 
+    @unittest.skipUnless(
+        os.environ.get('CC8_TEST_PRIVATE_AUDIO') == '1',
+        'Private audio fixtures require explicit --with-private-audio opt-in',
+    )
     def test_saved_double_talk_still_triggers(self):
         onsets = self.replay('duplex-user-confirmed.wav', 3)
         self.assertGreaterEqual(len(onsets), 1)
         self.assertGreaterEqual(onsets[0], 3)
 
+    @unittest.skipUnless(
+        os.environ.get('CC8_TEST_PRIVATE_AUDIO') == '1',
+        'Private audio fixtures require explicit --with-private-audio opt-in',
+    )
     def test_recorded_residual_echo_suppression_does_not_mute_double_talk(self):
         base = ROOT / 'device-access/private/audio-assessment-20261031'
         if not (base / 'farend-only.wav').exists() or not LIBRARY.exists():
@@ -242,6 +256,14 @@ class AudioTests(unittest.TestCase):
             3,
         )
 
+    @unittest.skipUnless(
+        os.environ.get('CC8_TEST_PRIVATE_AUDIO') == '1',
+        'Private audio fixtures require explicit --with-private-audio opt-in',
+    )
+    @unittest.skipUnless(
+        importlib.util.find_spec('pywebrtc_audio') is not None,
+        'Optional native AEC3 dependency is not installed',
+    )
     def test_aec3_recorded_far_end_does_not_trigger_but_double_talk_does(self):
         base = ROOT / 'device-access/private/audio-assessment-20261031'
         if not (base / 'farend-only.wav').exists():

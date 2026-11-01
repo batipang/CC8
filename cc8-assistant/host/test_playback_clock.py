@@ -1,20 +1,17 @@
 """Run the actual Android-free Java presentation-clock helper with the JDK."""
 
-import json
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from tools.java_toolchain import java_bin
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 class PlaybackClockTests(unittest.TestCase):
     def test_live_stale_and_future_timestamp_paths(self):
-        config = ROOT / '.toolchains/cc8/paths.json'
-        if not config.exists():
-            self.skipTest('Local JDK is absent')
-        java = Path(json.loads(config.read_text())['java_home']) / 'bin'
+        java = java_bin()
         source = (
             ROOT / 'cc8-assistant/app/src/main/java/com/happyhome/cc8assistant/PlaybackClock.java'
         )

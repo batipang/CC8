@@ -27,3 +27,7 @@ device-access/private/
 .venv/
 .idea/
 .vscode/
+
+# Local quality-tool caches
+.ruff_cache/
+.pre-commit-cache/

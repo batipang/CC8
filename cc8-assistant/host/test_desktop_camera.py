@@ -16,6 +16,7 @@ from bridge import Bridge, VisualReply
 from camera import receive_photo, save_photo
 from vision import CameraInbox, DesktopSnapshot
 from test_vision import jpeg, events
+from tools.java_toolchain import java_bin
 
 
 class SnapshotBridgeTests(unittest.TestCase):
@@ -281,10 +282,7 @@ class NativeDesktopAuthorizationTests(unittest.TestCase):
         from vision import desktop_signature
 
         root = Path(__file__).resolve().parents[2]
-        config = root / '.toolchains/cc8/paths.json'
-        if not config.is_file():
-            self.skipTest('Local JDK unavailable')
-        java = Path(json.loads(config.read_text())['java_home']) / 'bin'
+        java = java_bin()
         source = root / 'cc8-assistant/app/src/main/java/com/happyhome/cc8assistant'
         harness = """package com.happyhome.cc8assistant;
 public class DesktopAuthCheck {

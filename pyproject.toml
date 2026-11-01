@@ -1,0 +1,15 @@
+[tool.ruff]
+required-version = "==0.17.3"
+target-version = "py311"
+line-length = 100
+force-exclude = true
+extend-exclude = [".toolchains", "artifacts", "device-access/private", "**/build", "**/signing"]
+
+[tool.ruff.lint]
+select = ["F", "E4", "E9", "E701", "E702", "E703"]
+
+[tool.ruff.format]
+quote-style = "single"
+indent-style = "space"
+line-ending = "lf"
+docstring-code-format = false
