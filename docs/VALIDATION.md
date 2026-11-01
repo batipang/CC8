@@ -274,3 +274,13 @@ main 的 [CI 运行](https://github.com/batipang/CC8/actions/runs/41320525409) �
 
 再通过 `CC8_SIGNING_KEYSTORE` 引用原目录 JKS 构建本仓库助手候选：assembleRelease / lintRelease 通过，产物 SHA-256 为 `4c8ec602ecd5d4cada10ebda91be8eb5aa9e6e965fa8634e4f37aa85b4bf5198`；第三轮设备只读预检确认 `matching_installed_signers`。未复制或修改原私钥，未安装 APK。检测器 1.0.1 APK 也通过真实 SDK 同签名 / 换钥 / 篡改检查。剩余为 PR CI；实际升级与回退演练仍归 P1-09。
 
+[PR #16](https://github.com/batipang/CC8/pull/16) 的 [真实 CI](https://github.com/batipang/CC8/actions/runs/41331554254) 八项全部通过并合入主分支，含两个工程实际 APK 的换钥 / 篡改拒绝；F-14 软件与原签名只读验收完成，未安装/降级。
+
+# F-10 独立版本与构建清单候选（2026-11-02，待 CI / tag）
+
+新增根 release.json：助手 0.8.7 / code 32、后台 0.12.5、检测器 1.0.1 / code 2、协议 2（设备接受 2～2）。Gradle、BuildConfig、Python 构建脚本、后台 health / status 和握手读取同一版本来源；原运行对 0.8.6 / 0.12.2 只是已知现场记录，不表示候选已部署。
+
+新增源码提交 / 脏状态 / manifest / APK 摘要的构建回执、实际包版本与签名核验、annotated tag / 本地 inventory 的 record / verify 工具。脏候选记录不通过 verify，旧提交/旧产物回执或修改的记录字段/路径拒绝；所有记录固定不宣称设备验收。版本信息纳入 strict mypy，第六模块无全局忽略。
+
+本机完整离线检查 installer 16、host 345（4 private-audio skip）、tooling 47、Java 15 checks；Ruff / Java formatting / strict mypy 6 模块 / actionlint 通过。两个 APK 均经原签名引用 assemble/lint，AAPT 实际版本和 SDK-27 签名与清单一致，脏源码候选 inventory 成功生成，尚不能算干净发布。后续在通过 CI 的合入提交上重建、建立 annotated 源码 tag 并复验 inventory；未部署或打开采集。
+

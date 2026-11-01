@@ -1,4 +1,10 @@
 plugins { id 'com.android.application' }
+def releaseManifest = new groovy.json.JsonSlurper().parse(rootProject.file('../release.json'))
+def component = releaseManifest.assistant
+assert releaseManifest.schema_version == 1
+assert component.version_code instanceof Integer && component.version_code > 0
+assert component.version ==~ /\d+\.\d+\.\d+/
+assert releaseManifest.protocol.version instanceof Integer && releaseManifest.protocol.version > 0
 android {
     namespace 'com.happyhome.cc8assistant'
     compileSdk 35
@@ -6,9 +12,11 @@ android {
         applicationId 'com.happyhome.cc8assistant'
         minSdk 21
         targetSdk 28
-        versionCode 31
-        versionName '0.8.6'
+        versionCode component.version_code
+        versionName component.version
+        buildConfigField 'int', 'CC8_PROTOCOL', releaseManifest.protocol.version.toString()
     }
+    buildFeatures { buildConfig true }
     signingConfigs {
         diagnostic {
             storeFile rootProject.file(System.getenv('CC8_SIGNING_KEYSTORE') ?: '../cc8-diagnostics/signing/cc8-diagnostics-debug.jks')

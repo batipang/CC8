@@ -17,6 +17,7 @@
 - [CI、密钥扫描、依赖审计与更新边界](docs/CI_SECURITY.md)
 - [配置来源、私有覆盖、迁移与恢复](docs/CONFIGURATION.md)
 - [统一 setup / doctor / run 与单实例规则](docs/COMMANDS.md)
+- [独立版本、兼容性与构建回执](docs/RELEASES.md)
 - [语音助手配置与使用](cc8-assistant/README.md)
 - [方案一界面、任务与提醒](docs/WORKSPACE.md)
 - [功能迭代列表](docs/ROADMAP.md)

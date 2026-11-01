@@ -46,7 +46,7 @@ python -m pre_commit run --all-files
 
 Python 固定 Ruff 0.17.3、100 列、单引号、4 空格；检查 F/E4/E9 和多语句规则。Java 固定 google-java-format 1.35.0、JDK 21+，不自动重排/删除 import、不重写长字符串或 Javadoc。设置来源：[Ruff 配置](https://docs.astral.sh/ruff/configuration/)、[Java formatter](https://github.com/google/google-java-format/releases/tag/v1.35.0)、[本地 pre-commit hooks](https://pre-commit.com/#repository-local-hooks)。
 
-Python 检查同时运行固定 mypy 2.4.1：`python -m mypy` 从 pyproject.toml 读取 strict=true，覆盖 protocol.py、transport.py、workspace.py 以及新增 config_schema.py / configuration.py。本地 quality、提交钩子和 CI 使用同一入口，不设全局忽略或 Any 兜底。协议递归 JSON、字节流 Protocol、传输事件/通道、任务/提醒 TypedDict 和配置快照明确输入输出；反序列化后的少量 cast 紧接运行时结构校验并写明理由。注解不能替代不可信 JSON、权限、代次和数值的运行时校验；bridge、DSP、平台集成等尚不在严格类型覆盖中。
+Python 检查同时运行固定 mypy 2.4.1：`python -m mypy` 从 pyproject.toml 读取 strict=true，覆盖 protocol.py、transport.py、workspace.py、config_schema.py、configuration.py 和 release_info.py。本地 quality、提交钩子和 CI 使用同一入口，不设全局忽略或 Any 兜底。协议递归 JSON、字节流 Protocol、传输事件/通道、任务/提醒 TypedDict 和配置/版本快照明确输入输出；反序列化后的少量 cast 紧接运行时结构校验并写明理由。注解不能替代不可信 JSON、权限、代次和数值的运行时校验；bridge、DSP、平台集成等尚不在严格类型覆盖中。
 
 非敏感配置、环境优先级、登录服务继承与两个 APK 的签名引用统一入口见 [CONFIGURATION.md](CONFIGURATION.md)。指定签名文件缺失时两个工程均失败，不生成替代密钥；此项不代替 F-14 的安装前证书比对。
 
@@ -85,7 +85,7 @@ python3 cc8-assistant/tools/build.py
 python3 device-access/cc8_install.py --check
 ```
 
-两个 Android 构建默认同时运行 `assembleRelease` 和 `lintRelease`。输出在 `artifacts/`，版本来自各自 `app/build.gradle`；当前检测器 1.0.1，助手 0.8.6。构建脚本写 `local.properties`，所有生成内容均忽略。
+两个 Android 构建默认同时运行 `assembleRelease` 和 `lintRelease`。输出在 `artifacts/`，组件独立版本统一来自根目录 `release.json`；当前检测器 1.0.1，助手候选 0.8.7。构建脚本写 `local.properties` 和产物回执，所有生成内容均忽略。版本、tag 与清单验证见 [RELEASES.md](RELEASES.md)。
 
 首次 APK 构建用 JDK keytool 生成 `cc8-diagnostics/signing/cc8-diagnostics-debug.jks`；仅用于个人开发，别名 `cc8-diagnostics`、开发密码 `android`。语音助手也使用这份本地开发签名。**现有设备签名私钥没有收录；新生成的证书不具备覆盖旧签名安装包的能力。** 自行保存长期更新所需的证书，勿提交到 Git。
 

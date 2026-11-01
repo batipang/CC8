@@ -264,7 +264,7 @@ final class VoiceSession {
       Wire.put(hello, "supports_playback_pause", true);
       Wire.put(hello, "desktop_camera_version", 1);
       Wire.put(hello, "desktop_camera_challenge", desktopCameraAuth.challenge());
-      Wire.put(hello, "protocol", 2);
+      Wire.put(hello, "protocol", BuildConfig.CC8_PROTOCOL);
       Wire.put(hello, "sample_rate", 16000);
       Wire.put(hello, "capture_active", captureWasActive);
       Wire.put(hello, "wake_mode", wakeMode);
@@ -367,7 +367,7 @@ final class VoiceSession {
                 "cc8-" + kind + "-writer")
             .start();
         JSONObject hello = Wire.event("transport_hello");
-        Wire.put(hello, "protocol", 2);
+        Wire.put(hello, "protocol", BuildConfig.CC8_PROTOCOL);
         event(hello);
         DataInputStream in = new DataInputStream(connection.getInputStream());
         while (!closed && foreground && lifecycle == ticket) handle(Wire.read(in), this);

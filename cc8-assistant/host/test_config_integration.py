@@ -158,10 +158,11 @@ class ConfigurationIntegrationTests(unittest.TestCase):
             with self.subTest(project=project), tempfile.TemporaryDirectory() as folder:
                 root = Path(folder)
                 config = self.fixture(folder, signing_keystore='missing-original.jks')
-                for name in ('configuration.py', 'config_schema.py'):
+                for name in ('configuration.py', 'config_schema.py', 'release_info.py'):
                     shutil.copyfile(
                         ROOT / 'cc8-assistant/host' / name, root / 'cc8-assistant/host' / name
                     )
+                shutil.copyfile(ROOT / 'release.json', root / 'release.json')
                 script = root / project / 'tools/build.py'
                 script.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(ROOT / project / 'tools/build.py', script)
