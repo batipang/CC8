@@ -1,0 +1,259 @@
+"""Exercise the real supervisor with isolated synthetic worker processes.
+
+Wait gates are accelerated; the unhealthy case advances its startup budget. No launchctl, models, global runtime lease,
+real backend, device UI or capture is used; fixture PIDs are path-verified.
+"""
+
+import json
+import os
+from pathlib import Path
+import shlex
+import signal
+import subprocess
+import sys
+import tempfile
+import textwrap
+import threading
+import time
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+import diagnose
+import launch
+import service
+from process_lock import atomic_private_json
+
+HOST = Path(__file__).resolve().parent
+DUMMY = """
+import json, os, socket
+from pathlib import Path
+from process_lock import ProcessLease, atomic_private_json
+root = Path(__file__).resolve().parent
+private = root / 'p'
+with (private / 'pids').open('a') as journal:
+    journal.write(str(os.getpid()) + '\\n')
+try:
+    lease = ProcessLease(private / 'worker.lock')
+    lease.__enter__()
+except BlockingIOError:
+    (private / 'overlap').write_text('overlap')
+    raise SystemExit(99)
+(private / 'bridge.pid').write_text(str(os.getpid()))
+path = private / 'announce.sock'
+path.unlink(missing_ok=True)
+server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+server.bind(str(path))
+path.chmod(0o600)
+server.listen(1)
+mode = (private / 'mode').read_text()
+print('synthetic backend only', flush=True)
+index = 0
+while True:
+    with server.accept()[0] as peer:
+        peer.settimeout(1)
+        data = bytearray()
+        while b'\\n' not in data and len(data) <= 4096:
+            block = peer.recv(4096)
+            if not block:
+                raise SystemExit(98)
+            data.extend(block)
+        if json.loads(data)['operation'] != 'health':
+            raise SystemExit(97)
+        peer.sendall((json.dumps({'ok': True, 'model_ready': mode != 'unhealthy', 'recognition_worker': True, 'response_worker': True}) + '\\n').encode())
+    if mode == 'disable':
+        atomic_private_json(private / 'enabled.json', {'enabled': False})
+        while True:
+            import time
+            time.sleep(1)
+    index += 1
+    if mode == 'crash' and index >= 2:
+        os._exit(7)
+"""
+
+
+def fixture_owned(pid, script):
+    if type(pid) is not int or pid <= 0:
+        return False
+    result = subprocess.run(
+        ['ps', '-p', str(pid), '-o', 'uid=', '-o', 'command='],
+        capture_output=True,
+        text=True,
+        timeout=2,
+    )
+    try:
+        owner, command = result.stdout.strip().split(None, 1)
+        args = shlex.split(command)
+        return (
+            result.returncode == 0 and int(owner) == os.getuid() and args[1:] == ['-u', str(script)]
+        )
+    except ValueError:
+        return False
+
+
+def cleanup(root):
+    try:
+        pids = (root / 'p/pids').read_text().splitlines()
+    except OSError:
+        return
+    for raw in pids[:20]:
+        try:
+            pid = int(raw)
+        except ValueError:
+            continue
+        if fixture_owned(pid, root / 'bridge.py'):
+            os.kill(pid, signal.SIGTERM)
+            deadline = time.monotonic() + 1
+            while time.monotonic() < deadline and fixture_owned(pid, root / 'bridge.py'):
+                time.sleep(0.02)
+            if fixture_owned(pid, root / 'bridge.py'):
+                os.kill(pid, signal.SIGKILL)
+
+
+def exercise(root):
+    private = root / 'p'
+    marker = private / 'enabled.json'
+    original_enabled = service.enabled
+    mode = (private / 'mode').read_text()
+    clock_offset = [0]
+    stop = threading.Event()
+    backoffs, phases, spawned = [], [], []
+    pending_backoff = [False]
+    deadline = time.monotonic() + 10
+
+    class Gate:
+        def is_set(self):
+            return stop.is_set()
+
+        def wait(self, seconds):
+            if time.monotonic() > deadline:
+                raise TimeoutError('Synthetic supervisor deadline')
+            if pending_backoff[0]:
+                pending_backoff[0] = False
+                backoffs.append(seconds)
+                if len(backoffs) == 10:
+                    stop.set()
+            return stop.wait(min(seconds, 0.02))
+
+    def health(operation):
+        result = diagnose.query(private / 'announce.sock', operation, timeout=0.5)
+        if result.get('model_ready') is False:
+            clock_offset[0] = 200
+        return result
+
+    with (
+        patch.object(service, 'ROOT', root),
+        patch.object(service, 'PRIVATE', private),
+        patch.object(service, 'BRIDGE', root / 'bridge.py'),
+        patch.object(service, 'PYTHON', Path(sys.executable)),
+        patch.object(launch, 'BRIDGE', root / 'bridge.py'),
+        patch.object(service, 'enabled', side_effect=lambda: original_enabled(marker)),
+        # Global ownership is tested elsewhere; a fake worker must never use or
+        # contend with the real assistant's model/runtime lease.
+        patch.object(service, 'ensure_available'),
+        patch.object(service, 'query', side_effect=health),
+        patch.object(
+            service,
+            'time',
+            SimpleNamespace(
+                monotonic=lambda: time.monotonic() + clock_offset[0],
+                time=time.time,
+                sleep=time.sleep,
+            ),
+        ),
+    ):
+        supervisor = service.Supervisor()
+        supervisor.stop = Gate()
+        original_start, original_state = supervisor.start_child, supervisor.state
+
+        def start():
+            if any(fixture_owned(pid, root / 'bridge.py') for pid in spawned):
+                raise AssertionError('Previous synthetic worker still alive')
+            with patch.dict(
+                os.environ,
+                {'PATH': '/usr/bin:/bin', 'HOME': str(root), 'PYTHONPATH': str(HOST)},
+                clear=True,
+            ):
+                original_start()
+            spawned.append(supervisor.pid)
+
+        def state(phase, failures):
+            original_state(phase, failures)
+            phases.append(phase)
+            pending_backoff[0] = phase == 'backoff'
+            if mode == 'unhealthy' and phase == 'backoff':
+                (private / 'mode').write_text('disable')
+
+        supervisor.start_child = start
+        supervisor.state = state
+        supervisor.run()
+        alive = sum(fixture_owned(pid, root / 'bridge.py') for pid in spawned)
+    print(
+        json.dumps(
+            {
+                'spawned': len(spawned),
+                'backoffs': backoffs,
+                'ready': phases.count('ready'),
+                'unhealthy': phases.count('unhealthy'),
+                'final': phases[-1],
+                'alive': alive,
+                'overlap': (private / 'overlap').exists(),
+                'enabled': original_enabled(marker),
+            }
+        )
+    )
+
+
+class SupervisorProcessTests(unittest.TestCase):
+    def check_mode(self, mode):
+        with tempfile.TemporaryDirectory(prefix='cc8-sv-', dir='/tmp') as folder:
+            root = Path(folder)
+            private = root / 'p'
+            private.mkdir(mode=0o700)
+            atomic_private_json(private / 'enabled.json', {'enabled': True})
+            (private / 'mode').write_text(mode)
+            (root / 'bridge.py').write_text(textwrap.dedent(DUMMY))
+            try:
+                result = subprocess.run(
+                    [sys.executable, str(Path(__file__).resolve()), '--worker', str(root)],
+                    cwd='/',
+                    env={'PATH': '/usr/bin:/bin', 'HOME': folder, 'PYTHONPATH': str(HOST)},
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr[-2000:])
+                report = json.loads(result.stdout)
+                self.assertEqual(report['alive'], 0)
+                self.assertFalse(report['overlap'])
+                self.assertEqual(report['final'], 'stopped')
+                return report
+            finally:
+                cleanup(root)
+
+    def test_ten_real_child_crashes_recover_serially_with_bounded_backoff(self):
+        report = self.check_mode('crash')
+        self.assertEqual(report['spawned'], 10)
+        self.assertEqual(report['backoffs'], [1, 2, 4, 8, 16, 30, 30, 30, 30, 30])
+        self.assertGreaterEqual(report['ready'], 10)
+
+    def test_unhealthy_live_child_is_replaced_before_a_healthy_disabled_stop(self):
+        report = self.check_mode('unhealthy')
+        self.assertEqual(report['spawned'], 2)
+        self.assertEqual(report['backoffs'], [1])
+        self.assertGreaterEqual(report['unhealthy'], 2)
+        self.assertGreaterEqual(report['ready'], 1)
+        self.assertFalse(report['enabled'])
+
+    def test_disable_marker_terminates_real_child_without_restart(self):
+        report = self.check_mode('disable')
+        self.assertEqual(report['spawned'], 1)
+        self.assertEqual(report['backoffs'], [])
+        self.assertFalse(report['enabled'])
+
+
+if __name__ == '__main__':
+    if len(sys.argv) == 3 and sys.argv[1] == '--worker':
+        exercise(Path(sys.argv[2]))
+    else:
+        unittest.main()

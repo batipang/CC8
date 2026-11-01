@@ -368,3 +368,12 @@ installer 16、host 356（4 private skip）、tooling 47、Java 15 checks、Ruff
 新增 DiagnosticRun / cc8 measure：默认排除第一窗口、200 个合成请求跨小窗口仍去重保留、阶段/终态冲突原子拒绝、10000 容量有界、白名单脱敏、覆盖缺口和任务/朗读终态分立。共享原汇总函数为独立纯重构提交；整体 IPC 截止时间为独立修复提交，持续滴流回归约 80 ms 内按总预算终止，不受每片重置延长。采集每 30 秒及退出时原子写 owner-only 文件，拒绝已有/替换/不私有目录，不开任何采集资源。
 
 installer 16、host 376（4 private skip）、tooling 47、Java 15 checks 与质量通过，新增 20 项覆盖跨窗口/去重/拒绝/容量、整体 deadline、真实虚拟 Unix IPC / 最小 PATH root CLI、文件权限/替换、Ctrl+C 和查询间断。另在 `/` 和 `/usr/bin:/bin`、系统 Python 3.9 下，对原 TmallGenie 运行后台仅执行 0.2 秒两次 diagnostics 读取：退出 0，排除历史 48 项，新样本 0，报告 0600；临时完整报告已删除，仅保留无 ID/正文的烟测摘要。没有升级或重启后台、没有发送开麦或设备指令。此结果不是真人样本或设备验收；P0-01 和其他物理项目仍开放，待 CI。
+
+
+P0-01 分轮诊断已由 [PR #28](https://github.com/batipang/CC8/pull/28) 合入，[真实 CI](https://github.com/batipang/CC8/actions/runs/41345296627) 八项通过；不改变此前明确的真人/实机缺口。
+
+### P0-02：隔离真实模拟进程生命周期（未动运行服务）
+
+新增三项回归，运行真实 Supervisor / Popen / OS worker lock / owner health IPC / PID 路径核验 / SIGTERM 与 child wait：十次异常退出串行恢复，disabled 标记终止且不再拉起，存活但三次不健康后替换并由健康实例按 disabled 停止。每次启动检查全部已创建 fixture PID 均已退出，worker OS 锁额外捕获重叠；结束核验无遗留、无 overlap、状态 stopped。所有子进程只运行临时合成脚本，最小环境无凭证/模型配置，临时进程结束后目录清除。
+
+wait gate 加速但退避请求仍断言为 1/2/4/8/16/30/30/30/30/30；不健康用例前移初始化计时预算。全局模型锁检查在此 fixture 明确替换，避免与现有真实后台争用；该检查的真实覆盖仍是 F-15 单独测试。本轮约 3 秒是加速软件回归，不是生产恢复时延。没有 launchctl、模型加载、UI/麦克风/相机、真实后台重启或私有音视频。installer 16、host 379（4 private skip）、tooling 47、Java 15 checks 与质量通过；待 CI。P0-02 的真实登录/睡眠/完整十组验收仍开放。
