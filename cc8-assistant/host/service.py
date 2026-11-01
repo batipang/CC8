@@ -19,6 +19,7 @@ from process_lock import ProcessLease, atomic_private_json
 from runtime_env import command_path
 from configuration import load_config
 from config_schema import ConfigError
+from runtime_guard import ensure_available, RuntimeConflict
 
 LABEL = 'com.happyhome.cc8.' + hashlib.sha256(str(ROOT).encode()).hexdigest()[:12]
 PLIST = Path.home() / 'Library/LaunchAgents' / f'{LABEL}.plist'
@@ -61,6 +62,7 @@ def disable():
 
 
 def install():
+    ensure_available(ROOT)
     if not PYTHON.is_file() or not BRIDGE.is_file():
         raise RuntimeError('Voice environment missing')
     PRIVATE.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -179,6 +181,13 @@ class Supervisor:
                 # 可接管已在当前目录正常运行的手动服务，避免安装登录服务时重复加载模型。
                 self.pid = read_pid()
                 if self.pid is None:
+                    try:
+                        ensure_available(ROOT)
+                    except RuntimeConflict:
+                        self.state('other_runtime', failures)
+                        if self.stop.wait(30):
+                            break
+                        continue
                     self.start_child()
                 started = time.monotonic()
                 bad_health = 0
@@ -231,7 +240,7 @@ def main():
     if args.action in ('install', 'start'):
         try:
             install()
-        except ConfigError as error:
+        except (ConfigError, RuntimeConflict) as error:
             parser.error(str(error))
         print('登录后台已启用；不打开设备界面或麦克风。')
     elif args.action in ('stop', 'uninstall'):

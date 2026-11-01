@@ -1,0 +1,10 @@
+#!/usr/bin/env python3
+"""Workspace-local CC8 command; requires only Python stdlib to show help/doctor."""
+
+from pathlib import Path
+import runpy
+import sys
+
+root = Path(__file__).resolve().parent
+sys.path.insert(0, str(root / 'tools'))
+runpy.run_path(str(root / 'tools/cc8.py'), run_name='__main__')

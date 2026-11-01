@@ -2,6 +2,8 @@
 
 ## 环境
 
+统一的 `./cc8 setup` / `doctor` / `run` 用法与单实例限制见 [COMMANDS.md](COMMANDS.md)；以下独立脚本仍可使用。
+
 当前验证平台是 macOS / Apple Silicon。Android 部分使用 JDK 21、Gradle 8.11.1、Android Gradle Plugin 8.9.2、compileSdk 35、Build Tools 35.0.0；设备运行 SDK 27。两个示例 APK 都设置 minSdk 21、targetSdk 28，并在调用较新 API 时处理兼容性。安装助手特意限定 SDK 27 / AILABS_S6。
 
 Python 安装工具和构建脚本使用 Python 3.10+；语音后台使用 Python **3.13**，其原生依赖和轮子校验针对 Apple Silicon / CPython 3.13。尚未验证 Windows、Linux 或 Intel Mac 的完整语音运行环境。

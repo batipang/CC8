@@ -17,6 +17,8 @@ import venv
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS = ROOT / '.toolchains/cc8'
 RESOURCES = ROOT / 'cc8-assistant/host/resources'
+sys.path.insert(0, str(ROOT / 'cc8-assistant/host'))
+from runtime_guard import RuntimeLease, RuntimeConflict  # noqa: E402
 
 
 def digest(path):
@@ -89,20 +91,19 @@ def prepare_models(sensevoice=False):
             download(url, destination / name, expected)
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        '--sensevoice', action='store_true', help='Also download optional local ASR'
-    )
-    args = parser.parse_args()
+def prepare(sensevoice=False):
     if (
         sys.version_info[:2] != (3, 13)
         or platform.system() != 'Darwin'
         or platform.machine() != 'arm64'
     ):
-        parser.error('This pinned runtime requires CPython 3.13 on Apple Silicon macOS')
+        raise RuntimeError('This pinned runtime requires CPython 3.13 on Apple Silicon macOS')
     TOOLS.mkdir(parents=True, exist_ok=True)
     environment = TOOLS / 'voice-venv'
+    if environment.is_symlink() or not environment.resolve().is_relative_to(ROOT.resolve()):
+        raise RuntimeError(
+            'Voice environment must be local to this checkout, not an external symlink'
+        )
     if not (environment / 'bin/python').is_file():
         venv.create(environment, with_pip=True)
     python = environment / 'bin/python'
@@ -138,10 +139,29 @@ def main():
         ],
         check=True,
     )
-    prepare_models(args.sensevoice)
+    prepare_models(sensevoice)
     print(
         'Voice environment ready. Configure MiniMax credentials and Codex CLI, then run launch.py.'
     )
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        '--sensevoice', action='store_true', help='Also download optional local ASR'
+    )
+    args = parser.parse_args()
+    try:
+        # Direct execution uses the same guard as the unified CLI. Hold it through
+        # pip/model preparation so no cooperating worker can load partial updates.
+        with RuntimeLease(ROOT):
+            prepare(args.sensevoice)
+    except BlockingIOError:
+        parser.exit(
+            2, 'Another CC8 runtime or setup owns the lease; stop it before changing dependencies\n'
+        )
+    except (RuntimeError, RuntimeConflict) as error:
+        parser.exit(2, str(error) + '\n')
 
 
 if __name__ == '__main__':
