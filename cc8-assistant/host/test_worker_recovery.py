@@ -67,11 +67,11 @@ class WorkerRecoveryTests(unittest.TestCase):
         b.enqueue_response = lambda job: answered.set()
         evidence = {'echo_risk': False, 'pause_token': 1, 'captured_at': time.monotonic()}
         with patch('threading.excepthook'):
-            b.queue.put((b.generation, [], False, [], evidence))
+            b.recognition.queue.put((b.generation, [], False, [], evidence))
             self.assertTrue(disconnected.wait(1))
-            b.queue.put((b.generation, [], False, [], evidence))
+            b.recognition.queue.put((b.generation, [], False, [], evidence))
             self.assertTrue(answered.wait(1), 'recognition worker died while resuming playback')
-        self.assertTrue(b.worker.is_alive())
+        self.assertTrue(b.recognition.worker.is_alive())
 
     def test_announcement_always_finishes_waiter_even_if_status_write_fails(self):
         b = self.bridge()

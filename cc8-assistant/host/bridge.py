@@ -27,17 +27,17 @@ from dsp import (
     WebRtcEchoCanceller,
     VoiceDetector,
     NearSpeechDetector,
-    resembles_playback,
 )
 from fast_stop import FastStopDetector
 from brain_router import BrainRouter
 from announce import Announcement, AnnouncementServer, validate_text
-from vision import visual_request, desktop_signature
+from vision import desktop_signature
 from vision_controller import VisionController, VisionHooks
 from playback_controller import PlaybackController, PlaybackHooks
 from capture_pipeline import CapturePipeline, CaptureHooks
 from echo_pipeline import EchoPipeline, EchoHooks
 from endpoint_pipeline import EndpointPipeline, EndpointHooks
+from recognition_worker import RecognitionWorker, RecognitionHooks
 from minimax_client import MiniMaxBrain, MiniMaxError
 from workspace import Workspace
 from diagnostics import TraceBook
@@ -104,7 +104,6 @@ class Bridge:
         self.wake = False
         self.awake = True
         self.history = deque(maxlen=8)
-        self.queue = queue.Queue(maxsize=2)
         self.metrics = {
             'mic_frames': 0,
             'render_frames': 0,
@@ -126,7 +125,6 @@ class Bridge:
         self.echo_check_pending = echo_check
         self.echo_check_running = False
         self.echo_check_failed = False
-        self.recognition_busy = False
         self.visual = VisionController(
             VisionHooks(
                 lock=self.guard,
@@ -237,8 +235,39 @@ class Bridge:
                 fast_stop,
             ),
         )
-        self.worker = threading.Thread(target=self.work, daemon=True)
-        self.worker.start()
+        self.recognition = RecognitionWorker(
+            RecognitionHooks(
+                valid=lambda generation: self.valid(generation),
+                diagnostics=lambda: self.diagnostics,
+                playing=lambda: self.playback.playing,
+                last_audio_end=lambda: self.playback.last_audio_end,
+                recent_spoken=lambda: [line for _, line in tuple(self.playback.spoken)],
+                pause_state=lambda: self.playback.pause_state,
+                speech=lambda: self.speech,
+                metric=self.record_metric,
+                set_metric_field=self.set_metric_field,
+                add_metric_field=self.add_metric_field,
+                record_echo_pair=self.record_echo_pair,
+                echo_running=lambda: self.echo_check_running,
+                echo_failed=lambda: self.echo_check_failed,
+                awake=lambda: self.awake,
+                wake=lambda: self.wake,
+                set_awake=self.set_awake,
+                wake_pattern=WAKE_PATTERN,
+                touch=lambda: self.touch_activity(),
+                event=lambda name, **fields: self.event(name, **fields),
+                status=lambda phase, message: self.status(phase, message),
+                log=lambda name, **fields: self.log(name, **fields),
+                cancel_session=lambda reason: self.cancel(reason),
+                begin_visual=lambda text, origin: self.begin_visual(text, origin),
+                enqueue_response=lambda job: self.enqueue_response(job),
+                failure=lambda message, error, **fields: self.failure(message, error, **fields),
+                resume_rejected=lambda token, generation: self.resume_after_rejection(
+                    token, generation
+                ),
+            )
+        )
+        self.recognition.start()
         self.responder = threading.Thread(target=self.respond_work, daemon=True)
         self.responder.start()
 
@@ -322,7 +351,7 @@ class Bridge:
             and not self.calibrating
             and not self.playback.playing
             and not self.response_busy
-            and not self.recognition_busy
+            and not self.recognition.busy
             and not self.screen_sleeping
             and time.monotonic() - self.last_interaction >= 900
         ):
@@ -353,7 +382,7 @@ class Bridge:
             'protocol_version': RELEASE.protocol_version,
             'uptime_seconds': round(time.monotonic() - self.started_at, 1),
             'model_ready': True,
-            'recognition_worker': self.worker.is_alive(),
+            'recognition_worker': self.recognition.worker.is_alive(),
             'response_worker': self.responder.is_alive(),
             'connected': self.connection is not None,
             'transport': self.transport_kind,
@@ -416,7 +445,7 @@ class Bridge:
                 or self.calibrating
                 or self.playback.playing
                 or self.response_busy
-                or self.recognition_busy
+                or self.recognition.busy
                 or self.text_generation is not None
                 or self.visual.generation is not None
                 or self.announcement_generation is not None
@@ -768,23 +797,10 @@ class Bridge:
         self.metrics[name] += amount
 
     def discard_recognition(self):
-        while True:
-            try:
-                self.queue.get_nowait()
-            except queue.Empty:
-                break
+        return self.recognition.discard()
 
     def enqueue_recognition(self, job):
-        try:
-            self.queue.put_nowait(job)
-        except queue.Full:
-            try:
-                old = self.queue.get_nowait()
-                if len(old) > 6:
-                    self.diagnostics.finish(old[6], 'cancelled')
-            except queue.Empty:
-                pass
-            self.queue.put_nowait(job)
+        return self.recognition.enqueue(job)
 
     def apply_fast_stop(self, keyword, stamp):
         return self.capture.endpoint.apply_fast_stop(keyword, stamp)
@@ -951,8 +967,8 @@ class Bridge:
             while (
                 self.valid(generation)
                 and (
-                    self.recognition_busy
-                    or not self.queue.empty()
+                    self.recognition.busy
+                    or not self.recognition.queue.empty()
                     or self.capture.endpoint.vad.talking
                 )
                 and time.monotonic() < drain
@@ -962,8 +978,8 @@ class Bridge:
                 report['state'] = 'interrupted'
                 return
             complete = (
-                not self.recognition_busy
-                and self.queue.empty()
+                not self.recognition.busy
+                and self.recognition.queue.empty()
                 and not self.capture.endpoint.vad.talking
             )
             passed = complete and report['unmatched_candidates'] == 0
@@ -1007,198 +1023,22 @@ class Bridge:
             pass
 
     def work(self):
-        while True:
-            job = self.queue.get()
-            generation, audio = job[:2]
-            during_playback = job[2] if len(job) > 2 else False
-            references = job[3] if len(job) > 3 else []
-            evidence = job[4] if len(job) > 4 else None
-            render_audio = job[5] if len(job) > 5 else None
-            if not self.valid(generation):
-                if len(job) > 6:
-                    self.diagnostics.finish(job[6], 'cancelled')
-                continue
-            trace_id = job[6] if len(job) > 6 else self.diagnostics.begin('voice')
-            accepted = False
-            self.recognition_busy = True
-            rejected = False
-            try:
-                if not self.playback.playing:
-                    self.status('thinking', '正在本机识别…')
-                self.diagnostics.mark(trace_id, 'asr_start')
-                text = self.speech.recognize(audio)
-                self.diagnostics.mark(trace_id, 'asr_end')
-                asr = getattr(self.speech, 'recognizer', None)
-                if asr:
-                    self.metrics['last_asr'] = dict(asr.last_metrics)
-                if not self.valid(generation):
-                    continue
-                clean = re.sub(r'\W', '', text)
-                if not clean or clean in ['谢谢观看', '感谢观看', '字幕由Amaraorg社区提供']:
-                    rejected = True
-                    self.status('listening', '我在听')
-                    continue
-                # Production jobs always carry immutable capture evidence.
-                # The legacy fallback is only for old offline replay jobs.
-                risky = (
-                    evidence['echo_risk']
-                    if evidence is not None
-                    else (during_playback or time.monotonic() - self.playback.last_audio_end < 8)
-                )
-                available = (
-                    references
-                    if evidence is not None
-                    else references + [line for _, line in tuple(self.playback.spoken)]
-                )
-                self.metrics['last_voice_gate'] = {
-                    'echo_risk': risky,
-                    'references': len(available),
-                    'characters': len(clean),
-                    'capture_age_ms': round((time.monotonic() - evidence['captured_at']) * 1000)
-                    if evidence
-                    else None,
-                    'rejected': False,
-                }
-                echo = (
-                    risky
-                    and (len(clean) > 2 or during_playback)
-                    and resembles_playback(text, available)
-                )
-                render_text = ''
-                if (
-                    risky
-                    and not echo
-                    and render_audio is not None
-                    and len(render_audio) >= RATE // 3
-                    and np.count_nonzero(np.abs(render_audio) > 0.001) >= RATE // 5
-                ):
-                    # Decode only the captured render interval, not the entire
-                    # answer. ASR may spell TTS names/numbers differently from
-                    # their captions. This stays local and sequential.
-                    self.metrics['render_asr_checks'] = self.metrics.get('render_asr_checks', 0) + 1
-                    render_text = self.speech.recognize(render_audio)
-                    if not self.valid(generation):
-                        continue
-                    echo = bool(render_text) and resembles_playback(text, [render_text])
-                    if echo:
-                        self.metrics['render_asr_rejections'] = (
-                            self.metrics.get('render_asr_rejections', 0) + 1
-                        )
-                if risky and ('明镜与点点' in clean or '明镜与点栏目' in clean):
-                    echo = True
-                if self.echo_check_running and render_text:
-                    # Diagnostic only: user was explicitly asked to be quiet.
-                    # Bounded text pairs help diagnose a failed self-check;
-                    # no PCM and no normal conversations are persisted.
-                    pairs = self.metrics['echo_self_check']['diagnostic_text_pairs']
-                    if len(pairs) < 8:
-                        pairs.append(
-                            {'heard': text[:200], 'render_asr': render_text[:200], 'rejected': echo}
-                        )
-                if echo:
-                    rejected = True
-                    self.metrics['last_voice_gate']['rejected'] = True
-                    self.metrics['echo_transcripts_rejected'] = (
-                        self.metrics.get('echo_transcripts_rejected', 0) + 1
-                    )
-                    self.log(
-                        'reference_like_transcript_rejected',
-                        characters=len(clean),
-                        references=len(available),
-                        capture_age_ms=round((time.monotonic() - evidence['captured_at']) * 1000)
-                        if evidence
-                        else None,
-                    )
-                    if not self.playback.playing:
-                        self.status('listening', '我在听')
-                    continue
-                if (self.echo_check_running or self.echo_check_failed) and clean not in {
-                    '停',
-                    '停下',
-                    '停一下',
-                    '停止',
-                    '暂停',
-                    '打住',
-                    '等等',
-                    '别说了',
-                    '听我说',
-                }:
-                    if self.echo_check_running:
-                        self.metrics['echo_self_check']['unmatched_candidates'] += 1
-                    self.log(
-                        'echo_self_check_candidate_withheld',
-                        characters=len(clean),
-                        echo_risk=risky,
-                        references=len(available),
-                    )
-                    continue
-                if not self.awake:
-                    found = WAKE_PATTERN.search(text)
-                    if not found:
-                        rejected = True
-                        self.status('listening', '请说“大黄蜂”或“Bumblebee”开始聊天')
-                        continue
-                    self.touch_activity()
-                    self.awake = True
-                    text = text[found.end() :].lstrip('，。 ,') or '你好'
-                    generation = self.cancel('wake_word')
-                if self.wake and '休息' in text and (WAKE_PATTERN.search(text) or len(text) < 8):
-                    self.awake = False
-                    self.cancel('wake_sleep')
-                    self.status('listening', '请说“大黄蜂”或“Bumblebee”开始聊天')
-                    continue
-                if risky:
-                    generation = self.cancel('verified_voice')
-                self.diagnostics.bind(trace_id, generation)
-                accepted = True
-                self.touch_activity()
-                self.event('transcript', text=text)
-                self.log(
-                    'user_turn_recognized',
-                    characters=len(text),
-                    echo_risk=risky,
-                    references=len(available),
-                )
-                if re.sub(r'\W', '', text) in {
-                    '停',
-                    '停下',
-                    '停一下',
-                    '停止',
-                    '暂停',
-                    '打住',
-                    '等等',
-                    '别说了',
-                    '听我说',
-                }:
-                    self.diagnostics.finish(trace_id, 'completed')
-                    self.status('listening', '已停止播报，我在听')
-                    continue
-                if visual_request(text):
-                    self.begin_visual(text, 'voice')
-                else:
-                    self.enqueue_response(Reply(generation, text))
-            except Exception as e:
-                self.diagnostics.failure(trace_id, 'asr', e)
-                if self.valid(generation):
-                    try:
-                        if (
-                            self.playback.pause_state
-                            and evidence
-                            and evidence.get('pause_token') == self.playback.pause_state['token']
-                        ):
-                            self.cancel('barge_asr_error')
-                    except (OSError, EOFError):
-                        pass
-                    self.failure('这次识别没有完成，请再说一次', e, trace_key=trace_id)
-            finally:
-                self.recognition_busy = False
-                if not accepted:
-                    self.diagnostics.finish(trace_id, 'rejected' if rejected else 'cancelled')
-                if evidence and rejected:
-                    try:
-                        self.resume_after_rejection(evidence.get('pause_token'), generation)
-                    except (OSError, EOFError) as error:
-                        self.log('playback_resume_disconnected', error_type=type(error).__name__)
+        return self.recognition.work()
+
+    def set_awake(self, value):
+        self.awake = value
+
+    def set_metric_field(self, name, field, value):
+        self.metrics[name][field] = value
+
+    def add_metric_field(self, name, field, value):
+        self.metrics[name][field] += value
+
+    def record_echo_pair(self, text, render_text, echo):
+        # Only the explicitly armed echo diagnostic records these bounded pairs.
+        pairs = self.metrics['echo_self_check']['diagnostic_text_pairs']
+        if len(pairs) < 8:
+            pairs.append({'heard': text[:200], 'render_asr': render_text[:200], 'rejected': echo})
 
     def record_metric(self, name, value=None, *, increment=False):
         self.metrics[name] = self.metrics.get(name, 0) + 1 if increment else value

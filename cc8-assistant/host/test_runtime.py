@@ -340,7 +340,7 @@ class CancellationTests(unittest.TestCase):
 
         b = self.bridge(Speech())
         b.playback.playing = True
-        b.queue.put((b.generation, np.ones(RATE), True, ['我在。你可以开始说话。']))
+        b.recognition.queue.put((b.generation, np.ones(RATE), True, ['我在。你可以开始说话。']))
         self.assertTrue(completed.wait(1))
         time.sleep(0.05)
         self.assertTrue(b.playback.playing)
@@ -363,7 +363,7 @@ class CancellationTests(unittest.TestCase):
                 '这次联网查询没有成功，我暂时无法核实最新信息。请稍后让我再查一次。',
             )
         )
-        b.queue.put((b.generation, np.ones(RATE), False, []))
+        b.recognition.queue.put((b.generation, np.ones(RATE), False, []))
         self.assertTrue(completed.wait(1))
         time.sleep(0.05)
         self.assertFalse(
@@ -381,7 +381,7 @@ class CancellationTests(unittest.TestCase):
         b = self.bridge(Speech())
         b.playback.last_audio_end = time.monotonic() - 120
         refs = ['国产GPU沐曦第三季度实现单季扭亏。']
-        b.queue.put(
+        b.recognition.queue.put(
             (
                 b.generation,
                 np.ones(RATE),
@@ -416,7 +416,7 @@ class CancellationTests(unittest.TestCase):
         b = self.bridge(Speech())
         b.brain = Brain()
         b.speak = lambda text, generation: answered.set() or True
-        b.queue.put(
+        b.recognition.queue.put(
             (
                 b.generation,
                 np.ones(RATE),
@@ -444,7 +444,7 @@ class CancellationTests(unittest.TestCase):
         b = self.bridge(Speech())
         b.awake = False
         b.wake = True
-        b.queue.put(
+        b.recognition.queue.put(
             (
                 b.generation,
                 np.ones(RATE),
@@ -476,7 +476,7 @@ class CancellationTests(unittest.TestCase):
         b.brain = Brain()
         b.echo_check_running = True
         b.metrics['echo_self_check'] = {'unmatched_candidates': 0}
-        b.queue.put(
+        b.recognition.queue.put(
             (
                 b.generation,
                 np.ones(RATE),
@@ -507,7 +507,7 @@ class CancellationTests(unittest.TestCase):
 
         speech = Speech()
         b = self.bridge(speech)
-        b.queue.put(
+        b.recognition.queue.put(
             (
                 b.generation,
                 np.ones(RATE),
@@ -546,7 +546,7 @@ class CancellationTests(unittest.TestCase):
         b = self.bridge(Speech())
         b.brain = Brain()
         b.speak = lambda *args: answered.set() or True
-        b.queue.put(
+        b.recognition.queue.put(
             (
                 b.generation,
                 np.ones(RATE),
@@ -576,7 +576,7 @@ class CancellationTests(unittest.TestCase):
                 return '扬声器的声音'
 
         b = self.bridge(Speech())
-        b.queue.put(
+        b.recognition.queue.put(
             (
                 b.generation,
                 np.ones(RATE),
@@ -605,7 +605,7 @@ class CancellationTests(unittest.TestCase):
                 return '旧的问题'
 
         b = self.bridge(SlowSpeech())
-        b.queue.put((b.generation, np.ones(RATE)))
+        b.recognition.queue.put((b.generation, np.ones(RATE)))
         self.assertTrue(started.wait(1))
         b.cancel('new_speech')
         release.set()
@@ -646,7 +646,7 @@ class WakeRoutingTests(unittest.TestCase):
         b.awake = awake
         b.save_status = lambda: None
         b.speak = lambda *args: answered.set() or True
-        b.queue.put(
+        b.recognition.queue.put(
             (
                 b.generation,
                 np.ones(RATE),
@@ -729,7 +729,7 @@ class CaptureEvidenceTests(unittest.TestCase):
                 (np.ones(FRAME) * 1200).astype('<i2').tobytes(),
             )
         )
-        job = b.queue.get_nowait()
+        job = b.recognition.queue.get_nowait()
         self.assertTrue(job[4]['echo_risk'])
         self.assertFalse(job[2])
         self.assertIn('较早开始的一段长播报。', job[3])
@@ -765,7 +765,7 @@ class CaptureEvidenceTests(unittest.TestCase):
         b.process_microphone(
             Packet(MIC, 1, 0, 0, 1_000_000_000, np.ones(320, dtype='<i2').tobytes())
         )
-        job = b.queue.get_nowait()
+        job = b.recognition.queue.get_nowait()
         self.assertFalse(job[4]['echo_risk'])
         self.assertEqual(b.generation, 101)
 
@@ -906,7 +906,7 @@ class FastStopTests(unittest.TestCase):
         b.active = True
         b.playback.playing = True
         b.save_status = lambda: None
-        b.queue.put((b.generation, np.ones(RATE)))
+        b.recognition.queue.put((b.generation, np.ones(RATE)))
         self.assertTrue(started.wait(1))
         b.apply_fast_stop('停一下', 10_000_000_000)
         release.set()
