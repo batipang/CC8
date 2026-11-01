@@ -457,6 +457,6 @@ CI 通过的干净源码 5f1c087cfa8c4cdea42758dd26b7f0597b1c31ef 已包含在 m
 
 ### P0-01：可选设备播放头回执（未部署）
 
-后台 0.13.6 / APK 0.8.8 code 33 增加双端能力协商、首个非零 PCM 帧播放进度和 Mac 单端回执阶段。九项新回归含平台无关 Java 编译执行、真实读线程提前回执、发布/取消并发、旧端和非法/过期/重复事件。新增同步曾被原取消回归发现会阻塞，已改为组件短时锁并保留原用例。全套 installer 22、host 453（4 private skip）、tooling 51、Java 15 checks，格式/lint/strict 七模块通过。没有访问设备、私人录音或云服务；Android 构建和 CI 结果随后追加。方法和计时限制见 [PLAYOUT_RECEIPT](PLAYOUT_RECEIPT.md)，不作为声学起声或物理验收证据。
+后台 0.13.6 / APK 0.8.8 code 33 增加双端能力协商、首个非零 PCM 帧播放进度和 Mac 单端回执阶段。九项新回归含平台无关 Java 编译执行、真实读线程提前回执、发布/取消并发、旧端和非法/过期/重复事件。新增同步曾被原取消回归发现会阻塞，已改为组件短时锁并保留原用例。全套 installer 22、host 453（4 private skip）、tooling 51、Java 15 checks，格式/lint/strict 七模块通过。没有访问设备、私人录音或云服务；两个 Android 工程已使用原 JKS 路径引用完成 assembleRelease / lintRelease，check-apk 实际核对包版本、API 27 签名与旧原证书集合一致；没有安装。合入由 [PR #39](https://github.com/batipang/CC8/pull/39) 必需 CI 把关，结果以该 PR 为准。方法和计时限制见 [PLAYOUT_RECEIPT](PLAYOUT_RECEIPT.md)，不作为声学起声或物理验收证据。
 
 真实提交钩子额外检出新 strict 模块的 numpy 类型依赖未列入独立 hook 环境；已补同 requirements-dev 的 numpy 2.3.4 固定版本，不改变运行依赖、关闭规则或跳过检查。
