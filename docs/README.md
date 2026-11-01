@@ -1,6 +1,6 @@
 # 文档导航
 
-本目录不维护第二份任务清单：[TODO](TODO.md) 是功能/工程/验收唯一明细，[ROADMAP](ROADMAP.md) 是概览，[ToFix](ToFix.md) 是合并索引。源码候选不等于当前安装；先看 [RELEASES](RELEASES.md) 和 [VALIDATION](VALIDATION.md)。
+本目录不维护第二份任务清单：[TODO](TODO.md) 是功能/工程/验收唯一明细，[ROADMAP](ROADMAP.md) 是概览，[ToFix](ToFix.md) 是合并索引。本轮 [P0 软件候选交接](P0_SOFTWARE_HANDOFF.md) 汇总已核验源码/产物与待补实机输入。源码候选不等于当前安装；先看 [RELEASES](RELEASES.md) 和 [VALIDATION](VALIDATION.md)。
 
 | 阅读目的 | 入口 |
 | --- | --- |
