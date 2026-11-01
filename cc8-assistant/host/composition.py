@@ -21,6 +21,7 @@ from response_worker import ResponseWorker, ResponseHooks
 from fast_stop import FastStopDetector
 from announcement_controller import AnnouncementController, AnnouncementHooks
 from reminder_scheduler import ReminderScheduler, ReminderHooks
+from device_controller import DeviceController, DeviceControlHooks
 
 if TYPE_CHECKING:
     from bridge import Bridge
@@ -36,6 +37,7 @@ class Components:
     response: ResponseWorker
     announcements: AnnouncementController
     reminders: ReminderScheduler
+    device: DeviceController
 
 
 def build_components(
@@ -275,6 +277,23 @@ def build_components(
             announce=lambda text: session.announce(text),
         )
     )
+    device = DeviceController(
+        DeviceControlHooks(
+            lock=session.guard,
+            connected=lambda: session.connection is not None,
+            cancel_session=lambda reason: session.cancel(reason),
+            event=lambda name, **fields: session.event(name, **fields),
+            touch=lambda: session.touch_activity(),
+        )
+    )
     return Components(
-        calibration, visual, playback, capture, recognition, response, announcements, reminders
+        calibration,
+        visual,
+        playback,
+        capture,
+        recognition,
+        response,
+        announcements,
+        reminders,
+        device,
     )

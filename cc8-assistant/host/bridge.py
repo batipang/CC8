@@ -102,8 +102,6 @@ class Bridge:
         self.status_lock = threading.Lock()
         self.last_interaction = time.monotonic()
         self.screen_sleeping = False
-        self.device_requests = {}
-        self.device_request_serial = 0
         if isinstance(self.brain, BrainRouter):
             self.brain.dot.device_control = self.control_device
             self.brain.dot.reminders = self.reminder_action
@@ -122,6 +120,7 @@ class Bridge:
         self.response = components.response
         self.announcements = components.announcements
         self.reminders = components.reminders
+        self.device = components.device
         self.recognition.start()
         self.response.start()
 
@@ -279,32 +278,7 @@ class Bridge:
         return self.reminders.tick()
 
     def control_device(self, action, percent=None):
-        if action not in ('status', 'volume', 'stop', 'wake_screen'):
-            raise ValueError('Unsupported device action')
-        if self.connection is None:
-            raise RuntimeError('CC8 disconnected')
-        if action == 'stop':
-            self.cancel('dot_device_stop')
-        with self.guard:
-            self.device_request_serial += 1
-            ident = str(self.device_request_serial)
-            waiter = queue.Queue(maxsize=1)
-            self.device_requests[ident] = waiter
-        try:
-            fields = {'request_id': ident, 'action': action}
-            if percent is not None:
-                fields['percent'] = percent
-            self.event('device_control', **fields)
-            try:
-                result = waiter.get(timeout=5)
-                if result.get('ok') and action == 'wake_screen':
-                    self.touch_activity()
-                return result
-            except queue.Empty:
-                raise RuntimeError('CC8 control was not acknowledged') from None
-        finally:
-            with self.guard:
-                self.device_requests.pop(ident, None)
+        return self.device.control(action, percent)
 
     def pause_for_voice(self):
         return self.playback.pause_for_voice()
@@ -449,28 +423,7 @@ class Bridge:
             else:
                 self.on_event({**j, 'event': 'session_start'})
         elif event == 'device_control_result':
-            with self.guard:
-                waiter = self.device_requests.get(str(j.get('request_id')))
-            if waiter:
-                try:
-                    waiter.put_nowait(
-                        {
-                            k: v
-                            for k, v in j.items()
-                            if k
-                            in (
-                                'ok',
-                                'volume_percent',
-                                'microphone_active',
-                                'foreground',
-                                'error',
-                                'transport',
-                                'wifi_ready',
-                            )
-                        }
-                    )
-                except queue.Full:
-                    pass
+            self.device.receive(j)
         elif event == 'screen_touch':
             self.touch_activity()
         elif event == 'settings':

@@ -117,3 +117,12 @@ AnnouncementController 拥有播报 generation 与完成回执，ReminderSchedul
 原文每段最多 120 字、不经 LLM 改写、队列满显式拒绝、无论状态写入成败总释放 waiter、与麦克风状态独立均保持。提醒同原 guard 事务内检查连接及所有 busy 标志，只在有到期事项时触摸屏幕/提交播报；重复/过期回执、编辑提醒后旧 revision 隔离及存储失败回滚仍由原 Workspace 验证，不启动捕获、不后台打开界面。
 
 原全套 installer 16、host 353（4 private skip）、tooling 47、Java 15 checks 和质量通过；原断言只移动内部状态路径。Bridge 876 行，装配 280 行。严格六模块范围不变，未接设备/提供方或替换运行版本；F-06 与实机 P0 均开放，待 CI。
+
+
+### 第八步附属：设备控制回执
+
+75 行 DeviceController 统一拥有单调请求序号、单槽 waiter 与回执字段白名单；Bridge 保留 control_device，同一验证过的设备事件委托 receive。只有 status / volume / stop / wake_screen，原 5 秒等待和 finally 清理不变，无开麦/拍照入口。会话 guard 只保护注册/取出/删除 waiter，不在等待远端回执时持有。
+
+新增三项真实调用线程/虚拟通道回归：两个并发音量请求倒序确认仍正确路由，未知 ID 忽略且无关字段过滤；发送断线或等待超时均删除 waiter；非法动作/无连接在发包前拒绝，不开启捕获。未使用真实等待 5 秒、提供方或设备。installer 16、host 356（4 private skip）、tooling 47、Java 15 checks 与质量通过。Bridge 829 行、装配 299 行，新动态模块不计入 strict 六模块清单。
+
+第七步校准与装配已通过 [PR #24](https://github.com/batipang/CC8/pull/24) 的 [真实 CI](https://github.com/batipang/CC8/actions/runs/41342127824) 八项检查并合入。
