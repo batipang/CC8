@@ -308,3 +308,13 @@ main 的 [CI 运行](https://github.com/batipang/CC8/actions/runs/41320525409) �
 
 修复后完整离线 installer 16、host 346（4 private skip）、tooling 47、Java 15 checks；Ruff / Java formatting / strict mypy 六模块通过。后台候选版本独立升至 0.12.6 / foundation-20261102.2，APK 0.8.7 / 协议 2 不变，旧 .1 tag 仍指原 0.12.5 快照。本轮未构建/安装设备包、升级/重启运行实例或打开采集；待真实 CI，不关闭 F-06 和 P0。
 
+[PR #20](https://github.com/batipang/CC8/pull/20) 的 [真实 CI](https://github.com/batipang/CC8/actions/runs/41336074661) 八项全部通过并合入，Linux / macOS 均运行新死锁回归；不代表旧运行实例已经获得修复。
+
+# F-06 收音三层候选（2026-11-02，待 CI）
+
+有界包调度、AEC/参考资源、VAD/断句证据分别归 CapturePipeline / EchoPipeline / EndpointPipeline，通过 frozen hooks 和 CleanFrame 交互。原协议验证、纳秒时钟、80/120 ms lookahead、64 包上限、校准播放窗口、stop AEC/NS 分支及所有门槛保留；Bridge 入口和校准提示流程保持。新模块 103 / 140 / 180 行，Bridge 1547 行，F-06 仍未完成。
+
+基线 `12c218ca5a1d76377e36d6c9786304a0fec4796c` 与候选输入相同的 64 对合成包、固定时钟、假 AEC / VAD：7 段话语与参考内容摘要、generation、echo/pause 证据和计数完全相同（mic 8960、render 10240 samples、0 gap、7 utterances）。这是离线行为对照，不是实机 AEC 或真人准确率结论。没有读取私人音频或调用 provider。
+
+当前完整离线 installer 16、host 346（4 private skip）、tooling 47、Java 15 checks，以及 Ruff / Java formatting / strict mypy 六模块通过；新动态/native 组件尚未加入 strict 清单，未冒充全模块类型覆盖。未部署、重启或打开设备采集，等待真实 CI。
+

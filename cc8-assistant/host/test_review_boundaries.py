@@ -217,7 +217,7 @@ class CaptureAndTransportTests(unittest.TestCase):
         value.on_packet(Packet(MIC, 1, nanos=100, data=b'\0' * 320))
         with self.assertRaises(ValueError):
             value.on_packet(Packet(MIC, 1, nanos=99, data=b'\0' * 320))
-        value.pending_mic.clear()
+        value.capture.pending_mic.clear()
         for nanos in range(64):
             value.on_packet(Packet(MIC, 1, nanos=nanos, data=b'\0' * 320))
         with self.assertRaises(ValueError):
@@ -240,11 +240,11 @@ class CaptureAndTransportTests(unittest.TestCase):
         value.connection = object()
         value.calibrating = True
         state = object()
-        value.aec = state
-        value.calibration_frames = [('new',)]
+        value.capture.echo.aec = state
+        value.capture.echo.calibration_frames = [('new',)]
         self.assertFalse(value.align_reference(value.generation - 1))
-        self.assertIs(value.aec, state)
-        self.assertEqual(value.calibration_frames, [('new',)])
+        self.assertIs(value.capture.echo.aec, state)
+        self.assertEqual(value.capture.echo.calibration_frames, [('new',)])
         self.assertTrue(value.calibrating)
 
     def test_cancel_during_alignment_cannot_finish_the_next_calibration(self):

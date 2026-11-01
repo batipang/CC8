@@ -348,7 +348,7 @@ class HandoverTests(unittest.TestCase):
         self.assertTrue(b.active)
         self.assertEqual(b.epoch, 12)
         self.assertGreater(b.generation, old)
-        self.assertEqual(b.capture_lookahead_ns, 120_000_000)
+        self.assertEqual(b.capture.capture_lookahead_ns, 120_000_000)
         b.send(Packet(SPEAKER, old, data=b'\0\0'))
         self.assertFalse(new.sent)
         b.event('caption_timing', generation=old, timings=[])
@@ -365,7 +365,7 @@ class HandoverTests(unittest.TestCase):
             def close(self):
                 closed.append(True)
 
-        b.aec = Aec()
+        b.capture.echo.aec = Aec()
         b.change_transport(None)
         self.assertFalse(b.active)
         self.assertTrue(closed)

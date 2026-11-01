@@ -48,3 +48,19 @@ Bridge 仍有 2000 余行，本步不关闭 F-06。下一步依次梳理视觉�
 输出路径允许顺序为 session guard → completion Condition；完成循环不会持 Condition 调暂停、valid 或取消回调。设备 ACK 的 generation 回调是明确的无锁只读取值，不能未经审计改成获取会话 guard。字幕 iterator / publish 回调仍在 finally 释放；收到设备 app 的 play_done 仍不是物理扬声器出声时间的证明。
 
 新增 `test_playback_lock.py` 在无设备的子进程内，用两个真实线程和 pause 映射的 started 读取屏障控制并发：修复前 6.2 秒有界失败并报告锁循环，修复后约 0.17 秒通过，同时断言旧到期不会再次推进/取消新 generation。子进程最长 12 秒，异常和活线程都使测试失败，不掩盖后台线程异常。整套离线 installer 16、host 346（4 private skip）、tooling 47、Java 15 checks 通过，质量检查通过。后台候选独立升为 0.12.6 / foundation-20261102.2；未部署，待 CI。
+
+第三步的纯重构与独立修复已由 [PR #20](https://github.com/batipang/CC8/pull/20) 合入，[真实 CI](https://github.com/batipang/CC8/actions/runs/41336074661) 八项通过，包含 Linux/macOS 的新子进程死锁回归。
+
+## 第四步：包、参考与断句三层（候选）
+
+| 模块 | 所有权 | 明确边界 |
+| --- | --- | --- |
+| CapturePipeline（103 行） | 有界麦克风包 lookahead、序号与设备纳秒时间戳调度 | USB 80 ms / Wi-Fi 120 ms、64 包上限和非单调拒绝保留；只接收现有会话包，不打开设备 |
+| EchoPipeline（140 行） | RenderTimeline、参考偏移、校准样本、native AEC / stop AEC 和 DSP 锁 | 创建/关闭/预热经既有 factory，暂停时钟以方法端口操作；只有获准前台采样进入 RAM 校准窗口 |
+| EndpointPipeline（180 行） | VAD、near-speech、参考片段、local stop 与当前话语证据 | 接受 frozen CleanFrame 字段，不持有 Bridge / metrics dict /识别队列；只向既有排队入口发送同样七字段话语 |
+
+Bridge 仍协调会话、校准提示流程、识别/回答 worker 和任务；其 process_microphone / apply_fast_stop / align_reference / on_packet 入口保留，事件先经过原协议验证。内部原字段改由所属组件写入，测试只移动设置/断言路径，校准取消与旧会话隔离断言保留。纯回声帧不落盘，包的接收不授权开启采集。真实本地唤醒仍是 P0-03，当前只是保留原 text-based wake 行为。
+
+锁顺序保持 session guard → DSP lock；Echo.process 仅在 DSP 锁内调用 native process，释放后才进入 Endpoint / pause / session cancel。包事件线程写 VAD/断句状态，校准/停止通过所属对象方法重置，未新增锁嵌套或修改估计参考时移、噪声阈值、断句和控制延迟参数。播放的参考时钟回调动态指向 EchoPipeline，不能写一份副本造成时钟分叉。
+
+同一组 64 对合成 render/mic 包在基线 `12c218c` 和新源码回放：7 份话语音频、参考音频的内容摘要与证据完全一致，计数同为 mic 8960 / render 10240 samples、0 gap、7 utterances；暂停推断和诊断使用固定合成输入，不读用户录音。原全套 installer 16、host 346（4 private skip）、tooling 47、Java 15 checks 与质量检查通过。新三个动态/native 模块未计入现有 strict 六模块范围。Bridge 仍为 1547 行，本项保持未完成；识别、任务/回答、校准与会话职责继续推进，待 CI。
