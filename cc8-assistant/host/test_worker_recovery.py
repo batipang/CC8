@@ -130,10 +130,10 @@ class WorkerRecoveryTests(unittest.TestCase):
 
     def test_snapshot_waiter_finishes_when_final_device_notification_disconnects(self):
         b = self.bridge()
-        capture = b.camera_inbox.begin(b.generation)
+        capture = b.visual.inbox.begin(b.generation)
         job = DesktopSnapshot(b.generation, capture.ident)
-        b.desktop_snapshot = job
-        b.vision_generation = b.generation
+        b.visual.snapshot_job = job
+        b.visual.generation = b.generation
 
         def event(name, **fields):
             if name == 'vision_done':
@@ -142,12 +142,12 @@ class WorkerRecoveryTests(unittest.TestCase):
         b.event = event
         # Synthetic bytes suffice here: image validation is covered by CameraInbox.
         with (
-            patch.object(b.camera_inbox, 'wait', return_value=b'synthetic-frame'),
+            patch.object(b.visual.inbox, 'wait', return_value=b'synthetic-frame'),
             self.assertRaises(EOFError),
         ):
             b.capture_snapshot(job, capture)
         self.assertTrue(job.done.is_set())
-        self.assertIsNone(b.desktop_snapshot)
+        self.assertIsNone(b.visual.snapshot_job)
 
 
 if __name__ == '__main__':

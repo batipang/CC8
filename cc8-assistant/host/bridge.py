@@ -39,7 +39,8 @@ from fast_stop import FastStopDetector, can_fast_stop
 from brain_router import BrainRouter
 from announce import Announcement, AnnouncementServer, validate_text
 from caption_timing import CaptionTiming
-from vision import CameraInbox, DesktopSnapshot, VisionError, visual_request, desktop_signature
+from vision import visual_request, desktop_signature
+from vision_controller import VisionController, VisionHooks
 from minimax_client import MiniMaxBrain, MiniMaxError
 from workspace import Workspace
 from diagnostics import TraceBook
@@ -100,11 +101,6 @@ class Bridge:
         self.capture_lookahead_ns = 80_000_000
         self.write_lock = threading.Lock()
         self.guard = threading.RLock()
-        self.camera_inbox = CameraInbox()
-        self.desktop_snapshot = None
-        self.desktop_challenge = ''
-        self.vision_generation = None
-        self.vision_nonce = ''
         self.active = False
         self.epoch = 0
         self.generation = 100
@@ -172,6 +168,30 @@ class Bridge:
         self.echo_check_running = False
         self.echo_check_failed = False
         self.recognition_busy = False
+        self.visual = VisionController(
+            VisionHooks(
+                lock=self.guard,
+                connected=lambda: self.connection is not None,
+                calibrating=lambda: self.calibrating,
+                has_transport=lambda: self.transport_hub is not None,
+                brain_ready=lambda: isinstance(self.brain, BrainRouter),
+                session_generation=lambda: self.generation,
+                valid=lambda generation: self.valid(generation),
+                cancel_session=lambda reason: self.cancel(reason),
+                touch=lambda: self.touch_activity(),
+                event=lambda name, **fields: self.event(name, **fields),
+                status=lambda phase, message: self.status(phase, message),
+                save_status=lambda: self.save_status(),
+                authorize=lambda challenge, nonce, generation: desktop_signature(
+                    self.transport_hub.pairing.token, challenge, nonce, generation
+                ),
+                enqueue=lambda job: self.enqueue_response(job),
+                answer=lambda text, generation, image: self.answer(text, generation, image=image),
+                answer_completed=lambda: self.brain.last_metrics.get('completed'),
+                metric=self.record_vision_metric,
+                log=lambda name, **fields: self.log(name, **fields),
+            )
+        )
         self.worker = threading.Thread(target=self.work, daemon=True)
         self.worker.start()
         self.responder = threading.Thread(target=self.respond_work, daemon=True)
@@ -213,7 +233,7 @@ class Bridge:
         except (OSError, EOFError):
             pass
         self.connection = channel
-        self.desktop_challenge = ''
+        self.visual.clear_challenge()
         self.rebind_seen = False
         self.transport_kind = channel.kind if channel else 'none'
         self.capture_lookahead_ns = 120_000_000 if self.transport_kind == 'wifi' else 80_000_000
@@ -245,7 +265,7 @@ class Bridge:
                 self.active
                 or generation == self.text_generation
                 or generation == self.announcement_generation
-                or generation == self.vision_generation
+                or generation == self.visual.generation
             )
             and self.connection is not None
             and generation == self.generation
@@ -360,7 +380,7 @@ class Bridge:
                 or self.response_busy
                 or self.recognition_busy
                 or self.text_generation is not None
-                or self.vision_generation is not None
+                or self.visual.generation is not None
                 or self.announcement_generation is not None
                 or self.vad.talking
                 or not self.response_queue.empty()
@@ -544,16 +564,8 @@ class Bridge:
             was_playing = self.playing
             self.playing = False
             self.announcement_generation = None
-            self.vision_generation = None
             self.text_generation = None
-            self.vision_nonce = ''
-            self.camera_inbox.cancel()
-            job = self.desktop_snapshot
-            self.desktop_snapshot = None
-            if job is not None:
-                job.image = None
-                job.result = 'interrupted'
-                job.done.set()
+            self.visual.invalidate()
             self.pause_state = None
             self.pause_token = 0
             self.timeline.cancel_pause()
@@ -602,7 +614,7 @@ class Bridge:
             'camera_image_end',
             'camera_error',
         ):
-            self.camera_inbox.feed(j)
+            self.visual.feed(j)
         elif event == 'vision_request':
             nonce = j.get('nonce')
             if isinstance(nonce, str) and re.fullmatch('[a-f0-9]{32}', nonce):
@@ -612,21 +624,11 @@ class Bridge:
                     nonce,
                 )
         elif event == 'vision_cancel':
-            if self.vision_generation is not None and (
-                j.get('vision_generation') == self.vision_generation
-                or (j.get('nonce') and j.get('nonce') == self.vision_nonce)
-            ):
+            if self.visual.matches_cancel(j):
                 self.cancel('vision_cancel')
                 self.status('listening' if self.active else 'idle', '已停止看图')
         elif event == 'device_ready':
-            challenge = j.get('desktop_camera_challenge')
-            self.desktop_challenge = (
-                challenge
-                if j.get('desktop_camera_version') == 1
-                and isinstance(challenge, str)
-                and re.fullmatch('[a-f0-9]{32}', challenge)
-                else ''
-            )
+            self.visual.update_peer(j)
             self.device_can_pause = bool(j.get('supports_playback_pause'))
             if self.active and not j.get('capture_active', False):
                 self.stop()
@@ -743,7 +745,7 @@ class Bridge:
             # Both describe the same native recording epoch; never restart it.
             if self.active and int(j['epoch']) == self.epoch:
                 return
-            if self.vision_generation is not None or self.text_generation is not None:
+            if self.visual.generation is not None or self.text_generation is not None:
                 self.cancel('microphone_start')
             if self.active or self.announcement_generation is not None:
                 self.stop()
@@ -802,7 +804,7 @@ class Bridge:
                 self.active
                 or self.text_generation is not None
                 or self.announcement_generation is not None
-                or self.vision_generation is not None
+                or self.visual.generation is not None
             ):
                 self.cancel('button')
                 self.status('listening' if self.active else 'idle', '播报已停止')
@@ -1039,14 +1041,14 @@ class Bridge:
             'bridge_version': RELEASE.backend_version,
             'release_id': RELEASE.release_id,
             'protocol_version': RELEASE.protocol_version,
-            'desktop_camera_enabled': bool(self.desktop_challenge),
-            'desktop_snapshot_active': self.desktop_snapshot is not None,
+            'desktop_camera_enabled': bool(self.visual.challenge),
+            'desktop_snapshot_active': self.visual.snapshot_job is not None,
             'noise_profile': 'moderate',
             'speech_energy_floor_dbfs': NearSpeechDetector.MIN_DBFS,
             'speech_noise_margin_db': NearSpeechDetector.NOISE_MARGIN_DB,
             'speech_onset_ms': VoiceDetector.ONSET_FRAMES * 10,
             'barge_confirm_min_ms': NearSpeechDetector.CONFIRM_MIN_FRAMES * 10,
-            'vision_active': self.vision_generation is not None,
+            'vision_active': self.visual.generation is not None,
             'vision_enabled': isinstance(self.brain, BrainRouter),
             'transport': self.transport_kind,
             **(self.transport_hub.diagnostics() if self.transport_hub else {}),
@@ -1584,165 +1586,23 @@ class Bridge:
                     except (OSError, EOFError) as error:
                         self.log('playback_resume_disconnected', error_type=type(error).__name__)
 
+    def record_vision_metric(self, name, value=None, *, increment=False):
+        self.metrics[name] = self.metrics.get(name, 0) + 1 if increment else value
+
     def request_snapshot(self):
-        # Only the owner-local desktop IPC invokes this; no autonomous model camera tool.
-        with self.guard:
-            if (
-                self.connection is None
-                or self.calibrating
-                or self.vision_generation is not None
-                or not self.desktop_challenge
-                or self.transport_hub is None
-            ):
-                raise RuntimeError('Camera unavailable or busy')
-            generation = self.cancel('desktop_snapshot')
-            capture = self.camera_inbox.begin(generation)
-            job = DesktopSnapshot(generation, capture.ident)
-            self.desktop_snapshot = job
-            self.vision_generation = generation
-            self.vision_nonce = capture.ident
-            self.touch_activity()
-            authorization = desktop_signature(
-                self.transport_hub.pairing.token, self.desktop_challenge, capture.ident, generation
-            )
-            self.event(
-                'vision_begin',
-                generation=generation,
-                origin='desktop',
-                nonce=capture.ident,
-                camera_auth=authorization,
-            )
-            threading.Thread(target=self.capture_snapshot, args=(job, capture), daemon=True).start()
-        self.save_status()
-        return job
+        return self.visual.request_snapshot()
 
     def cancel_snapshot(self, job):
-        with self.guard:
-            if self.desktop_snapshot is job and self.generation == job.generation:
-                self.cancel('desktop_snapshot_cancel')
+        return self.visual.cancel_snapshot(job)
 
     def capture_snapshot(self, job, capture):
-        generation = job.generation
-        current = lambda: self.desktop_snapshot is job and self.valid(generation)
-        try:
-            if not current():
-                return
-            self.status('thinking', 'Dot 请求拍照 · 预览 5 秒后返回当前聊天')
-            self.event(
-                'camera_capture',
-                generation=generation,
-                request_id=capture.ident,
-                origin='desktop',
-                nonce=capture.ident,
-            )
-            image = self.camera_inbox.wait(capture, current)
-            with self.guard:
-                if not current():
-                    return
-                job.image = image
-                job.result = 'completed'
-                self.metrics['desktop_snapshots_captured'] = (
-                    self.metrics.get('desktop_snapshots_captured', 0) + 1
-                )
-        except Exception as error:
-            if current():
-                job.result = 'failed'
-                job.error = (
-                    str(error)[:60] if isinstance(error, VisionError) else type(error).__name__
-                )
-        finally:
-            self.camera_inbox.cancel_capture(capture)
-            with self.guard:
-                try:
-                    if self.desktop_snapshot is job:
-                        self.desktop_snapshot = None
-                        if self.vision_generation == generation:
-                            self.vision_generation = None
-                            self.vision_nonce = ''
-                            if self.connection is not None:
-                                self.event(
-                                    'vision_done',
-                                    generation=generation,
-                                    result=job.result,
-                                    origin='desktop',
-                                )
-                finally:
-                    job.done.set()
-            self.save_status()
+        return self.visual.capture_snapshot(job, capture)
 
     def begin_visual(self, text, origin, nonce=''):
-        if self.connection is None or self.calibrating or not isinstance(self.brain, BrainRouter):
-            self.event('vision_unavailable', message='请先连接 Mac、结束校准，并确认 Dot 可用')
-            return
-        with self.guard:
-            generation = self.cancel('vision_request')
-            self.vision_generation = generation
-            self.vision_nonce = nonce
-            self.touch_activity()
-            self.event('vision_begin', generation=generation, nonce=nonce)
-            self.enqueue_response(VisualReply(generation, text, origin, nonce))
-        self.save_status()
+        return self.visual.begin_visual(text, origin, nonce)
 
     def answer_visual(self, job):
-        generation = job.generation
-        outcome = 'cancelled'
-        image = None
-        capture = None
-        try:
-            with self.guard:
-                if not self.valid(generation):
-                    return
-                capture = self.camera_inbox.begin(generation)
-            self.status('thinking', '正在打开摄像头 · 预览 5 秒后拍摄给 Dot')
-            self.event(
-                'camera_capture',
-                generation=generation,
-                request_id=capture.ident,
-                origin=job.origin,
-                nonce=job.nonce,
-            )
-            image = self.camera_inbox.wait(capture, lambda: self.valid(generation))
-            if not self.valid(generation):
-                return
-            self.metrics['vision_frames_received'] = (
-                self.metrics.get('vision_frames_received', 0) + 1
-            )
-            self.log(
-                'vision_frame_received',
-                bytes=len(image),
-                width=capture.width,
-                height=capture.height,
-            )
-            self.answer(job.text, generation, image=image)
-            outcome = 'failed' if self.brain.last_metrics.get('completed') is False else 'completed'
-            if outcome == 'completed' and self.valid(generation):
-                self.metrics['vision_dot_completed'] = (
-                    self.metrics.get('vision_dot_completed', 0) + 1
-                )
-        except Exception as error:
-            outcome = 'failed'
-            if self.valid(generation):
-                self.metrics['vision_last_error'] = (
-                    str(error)[:60] if isinstance(error, VisionError) else type(error).__name__
-                )
-                message = (
-                    '没有取得新画面，请检查镜头或摄像头权限后重试'
-                    if isinstance(error, VisionError)
-                    else '这次看图没有完成，请稍后重试'
-                )
-                self.event('dot_result', generation=generation, text=message, truncated=False)
-                self.status('idle', message)
-        finally:
-            image = None
-            if capture is not None:
-                self.camera_inbox.cancel_capture(capture)
-            if self.vision_generation == generation:
-                self.vision_generation = None
-                self.vision_nonce = ''
-                self.metrics['vision_last_result'] = outcome
-                if self.connection is not None:
-                    self.event('vision_done', generation=generation, result=outcome)
-            self.save_status()
+        return self.visual.answer_visual(job)
 
     def enqueue_response(self, job):
         while True:

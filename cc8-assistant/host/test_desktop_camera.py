@@ -23,7 +23,7 @@ class SnapshotBridgeTests(unittest.TestCase):
     def bridge(self):
         b = Bridge(None, None)
         b.connection = object()
-        b.desktop_challenge = 'c' * 32
+        b.visual.challenge = 'c' * 32
         b.transport_hub = SimpleNamespace(pairing=SimpleNamespace(token='a' * 64))
         b.save_status = lambda: None
         b.events = []
@@ -39,7 +39,7 @@ class SnapshotBridgeTests(unittest.TestCase):
             original(name, **kw)
             if name == 'camera_capture':
                 self.assertEqual(kw['origin'], 'desktop')
-                c = b.camera_inbox.pending
+                c = b.visual.inbox.pending
                 for value in events(c):
                     b.on_event(value)
 
@@ -49,9 +49,9 @@ class SnapshotBridgeTests(unittest.TestCase):
         self.assertEqual(job.result, 'completed')
         self.assertEqual(job.image, jpeg())
         self.assertFalse(b.active)
-        self.assertIsNone(b.desktop_snapshot)
-        self.assertIsNone(b.vision_generation)
-        self.assertIsNone(b.camera_inbox.pending)
+        self.assertIsNone(b.visual.snapshot_job)
+        self.assertIsNone(b.visual.generation)
+        self.assertIsNone(b.visual.inbox.pending)
         self.assertFalse(any(name in ('play_begin', 'session_start') for name, _ in b.events))
 
     def test_existing_microphone_remains_enabled(self):
@@ -60,7 +60,7 @@ class SnapshotBridgeTests(unittest.TestCase):
 
         def event(name, **kw):
             if name == 'camera_capture':
-                for value in events(b.camera_inbox.pending):
+                for value in events(b.visual.inbox.pending):
                     b.on_event(value)
 
         b.event = event
@@ -70,12 +70,12 @@ class SnapshotBridgeTests(unittest.TestCase):
 
     def test_camera_busy_calibration_and_disconnect_reject_new_request(self):
         for field, value in [
-            ('vision_generation', 123),
+            ('visual.generation', 123),
             ('calibrating', True),
             ('connection', None),
         ]:
             b = self.bridge()
-            setattr(b, field, value)
+            setattr(b.visual if field.startswith('visual.') else b, field.split('.')[-1], value)
             with self.assertRaises(RuntimeError):
                 b.request_snapshot()
 
@@ -94,7 +94,7 @@ class SnapshotBridgeTests(unittest.TestCase):
         b.cancel_snapshot(old)
         new = b.request_snapshot()
         b.cancel_snapshot(old)
-        self.assertIs(b.desktop_snapshot, new)
+        self.assertIs(b.visual.snapshot_job, new)
         self.assertFalse(new.done.is_set())
         b.cancel_snapshot(new)
 
@@ -102,9 +102,9 @@ class SnapshotBridgeTests(unittest.TestCase):
         b = self.bridge()
         old = b.generation
         b.cancel('new')
-        current = b.camera_inbox.begin(b.generation)
+        current = b.visual.inbox.begin(b.generation)
         b.answer_visual(VisualReply(old, 'old'))
-        self.assertIs(b.camera_inbox.pending, current)
+        self.assertIs(b.visual.inbox.pending, current)
 
     def test_old_cleanup_cannot_clear_current_inbox(self):
         inbox = CameraInbox()
