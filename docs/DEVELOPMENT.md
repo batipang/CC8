@@ -46,7 +46,7 @@ Python 固定 Ruff 0.17.3、100 列、单引号、4 空格；检查 F/E4/E9 和�
 
 Java JAR 留在忽略的 .toolchains/cc8/quality，下载大小和 SHA-256 锁在 tools/resources/google-java-format.json；缺失/损坏时 check 失败，只有显式 setup 才下载。1.35.0 对部分注释需要二次格式化，因此 format 有界执行两遍并最终只读检查，仍不稳定则失败。Python 检查/格式化排除工具链、产物、私有数据、构建目录与签名目录。钩子使用独立 Python 环境，仅检查，不调用模型、设备或安装 APK。
 
-纯格式基线提交登记在 .git-blame-ignore-revs；可用 `git config --local blame.ignoreRevsFile .git-blame-ignore-revs` 在当前仓库启用，不修改全局配置。F-07 的本地工具与钩子已验证，CI 中执行这些命令的验收留给 F-05，当前没有工作流，不能称为 CI 已通过。
+纯格式基线提交登记在 .git-blame-ignore-revs；可用 `git config --local blame.ignoreRevsFile .git-blame-ignore-revs` 在当前仓库启用，不修改全局配置。CI 复用上述检查命令，平台、工作流状态和安全扫描说明见 [CI_SECURITY.md](CI_SECURITY.md)；本地通过与真实 CI 结果分别记录。
 
 ## Android 工具链
 

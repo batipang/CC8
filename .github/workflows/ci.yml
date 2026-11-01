@@ -1,0 +1,162 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 3 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Offline tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install lightweight test dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Run offline suites (private audio is opt-in and skipped)
+        run: |
+          python -m pip check
+          python tools/test_all.py
+
+  quality:
+    name: Python, Java and workflow checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: python -m pip install -r requirements-dev.txt
+      - name: Install checksum-pinned format and workflow tools
+        run: |
+          python tools/quality.py setup
+          python tools/ci_tools.py setup actionlint
+      - name: Read-only checks (same rules as pre-commit)
+        run: |
+          python tools/quality.py check
+          "$(python tools/ci_tools.py path actionlint)" -shellcheck=
+          git diff --exit-code
+
+  android:
+    name: Android (${{ matrix.project }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [cc8-assistant, cc8-diagnostics]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          gradle-version: '8.11.1'
+          cache-disabled: true
+      - name: Prepare SDK and ignored build configuration
+        run: |
+          sdkmanager 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
+          python3 scripts/configure-toolchain.py \
+            --java-home "$JAVA_HOME" --android-sdk "$ANDROID_HOME" \
+            --gradle "$(command -v gradle)"
+      - name: Compile and lint with a disposable CI certificate
+        env:
+          CC8_CI_PROJECT: ${{ matrix.project }}
+        run: python3 "$CC8_CI_PROJECT/tools/build.py"
+      - name: Keep lint reports (no APK or signing keys)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lint-${{ matrix.project }}
+          path: ${{ matrix.project }}/app/build/reports/lint-results-release.*
+          if-no-files-found: ignore
+          retention-days: 7
+
+  secrets:
+    name: Redacted history secret scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: python3 tools/ci_tools.py setup gitleaks
+      - run: python3 tools/security.py secrets
+
+  dependencies:
+    name: Pinned Python dependency audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - run: python -m pip install -r requirements-security.txt
+      - run: python tools/security.py audit
+      - name: Keep package audit reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: python-dependency-audit
+          path: artifacts/security/audit-*.json
+          if-no-files-found: error
+          retention-days: 7
+
+  gate:
+    name: Required checks
+    if: always()
+    needs: [tests, quality, android, secrets, dependencies]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require every suite to succeed, including matrix children
+        env:
+          CHECK_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          results = json.loads(os.environ['CHECK_RESULTS'])
+          failed = [name for name, value in results.items() if value['result'] != 'success']
+          if failed:
+              raise SystemExit('Required suites failed/skipped/cancelled: ' + ', '.join(failed))
+          print('All required checks passed')
+          PY
