@@ -11,6 +11,8 @@ import os
 from pathlib import Path
 import threading
 import time
+import uuid
+from runtime_resources import ResourceSampler
 from typing import Callable
 from brain_router import BrainRouter
 from diagnostics import TraceBook, error_kind
@@ -56,6 +58,8 @@ class StatusReporter:
         self.hooks = hooks
         self.started_at = started_at
         self.status_lock = threading.Lock()
+        self.instance = uuid.uuid4().hex
+        self.resources = ResourceSampler()
 
     def log(self, event, **fields):
         print(
@@ -75,6 +79,8 @@ class StatusReporter:
             'release_id': RELEASE.release_id,
             'protocol_version': RELEASE.protocol_version,
             'uptime_seconds': round(time.monotonic() - self.started_at, 1),
+            'runtime_instance': self.instance,
+            'resources': self.resources.sample(),
             'model_ready': True,
             'local_wake_ready': self.hooks.wake().ready,
             'waiting_for_wake': state.active
