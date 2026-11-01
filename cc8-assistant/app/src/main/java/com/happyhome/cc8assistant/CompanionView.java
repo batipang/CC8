@@ -35,7 +35,7 @@ final class CompanionView extends View {
     private void ring(Canvas c,float radius,float start,float sweep,int color,float width,int alpha){oval.set(300-radius,300-radius,300+radius,300+radius);if(width>=6){stroke(color,width+21,9);c.drawArc(oval,start,sweep,false,p);stroke(color,width+10,25);c.drawArc(oval,start,sweep,false,p);}stroke(color,width,alpha);c.drawArc(oval,start,sweep,false,p);}
     private void secondPoint(Canvas c,float degrees){
         double angle=(degrees-90)*Math.PI/180;float x=300+(float)Math.cos(angle)*296,y=300+(float)Math.sin(angle)*296;
-        p.setStyle(Paint.Style.FILL);p.setColor(CYAN);p.setAlpha(24);c.drawCircle(x,y,12,p);p.setAlpha(70);c.drawCircle(x,y,7,p);p.setAlpha(255);c.drawCircle(x,y,3.3f,p);
+        p.setStyle(Paint.Style.FILL);p.setColor(CYAN);p.setAlpha(40);c.drawCircle(x,y,12,p);p.setAlpha(110);c.drawCircle(x,y,8,p);p.setAlpha(255);c.drawCircle(x,y,4.5f,p);p.setColor(Color.rgb(217,250,255));c.drawCircle(x,y,2,p);
     }
     private void clockMarker(Canvas c,float degrees,float inner,float width){
         double angle=(degrees-90)*Math.PI/180;float x=(float)Math.cos(angle),y=(float)Math.sin(angle);
@@ -50,7 +50,10 @@ final class CompanionView extends View {
         ring(c,320,0,360,BLUE,1,30);ring(c,296,0,360,BLUE,2,230);stroke(CYAN,1.3f,linked?225:100);c.drawLines(ticks,p);
         // Short, heavier hour marker and long minute marker share the same yellow.
         clockMarker(c,hourDegrees,263,12);clockMarker(c,minuteDegrees,239,8);
-        ring(c,296,seconds*6-101,11,CYAN,3,170);secondPoint(c,seconds*6);
+        // A brighter leading stroke and a tapered 36-degree tail remain tied to real seconds.
+        ring(c,296,seconds*6-126,18,CYAN,3,70);
+        ring(c,296,seconds*6-108,12,CYAN,4,150);
+        ring(c,296,seconds*6-96,6,CYAN,6,255);secondPoint(c,seconds*6);
         ring(c,232,0,360,BLUE,1.2f,180);stroke(CYAN,1.6f,170);p.setStrokeCap(Paint.Cap.ROUND);p.setPathEffect(dots);oval.set(56,56,544,544);c.drawOval(oval,p);p.setPathEffect(null);
         c.save();c.translate(70,89);c.scale(430f/1254,400f/1254);avatar.draw(c,playback,mood,SystemClock.uptimeMillis());c.restore();
         c.restore();

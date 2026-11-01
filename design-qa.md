@@ -90,3 +90,10 @@ The owner's latest direction replaces the 0.8.3 amber/cyan time arcs with two bo
 Release build and lint pass; signed stock installation and installed hash are verified. Both microphone and camera are off during this UI check; local screenshots remain ignored. This drawing-only change does not expand audio acceptance claims.
 
 final result: passed
+
+
+## 0.8.5 brighter seconds sweep (2026-11-01)
+
+The owner requests a clearer seconds stroke while preserving short/long yellow hour and minute markers, with zero seconds at twelve o'clock. Inspect the 0.8.4 and 0.8.5 idle captures at 1280×800: the new leading stroke is thicker and brighter, with a 36-degree tapered tail and larger white-centered point. The head and surrounding layout remain unobstructed, and no numeric clock returns. Minute-boundary frames show the point passing across the top at 17:37→17:38, consistent with the system wall clock. The 49-character announcement completed, caption42sp and caption/progress separation remain intact. Screenshots and microphone/camera-off state are verified; native build/lint and signed installation pass. Progress redesigns are separate, uninstalled selection previews.
+
+final result: passed
