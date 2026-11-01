@@ -6,8 +6,8 @@ android {
         applicationId 'com.happyhome.cc8assistant'
         minSdk 21
         targetSdk 28
-        versionCode 21
-        versionName '0.5.3'
+        versionCode 22
+        versionName '0.6.0'
     }
     signingConfigs {
         diagnostic {

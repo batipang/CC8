@@ -16,8 +16,9 @@ import org.json.JSONObject;
 import org.json.JSONArray;
 
 final class VoiceSession {
-    interface Listener {void link(boolean connected);void state(String phase,String message);void caption(String text,String mood);void microphone(boolean active);void playback(boolean active);void heard(String text);void sources(JSONArray items,String retrievedAt);void brain(String provider);void recognition(String engine);void dotResult(String text,boolean truncated);void screen(boolean sleeping);}
+    interface Listener {void link(boolean connected);void state(String phase,String message);void caption(String text,String mood);void microphone(boolean active);void playback(boolean active);void heard(String text);void sources(JSONArray items,String retrievedAt);void brain(String provider);void recognition(String engine);void dotResult(String text,boolean truncated);void screen(boolean sleeping);void vision(boolean active,String message);void cameraCapture(JSONObject request);}
     private final Context context;private final Listener listener;private final Object routeLock=new Object();private final Object captureResourceLock=new Object();private final LanConnector lan;private volatile Link activeLink,usbLink,wifiLink;private volatile String wifiError="";private boolean receiverRegistered;private volatile boolean usbPhysical,wakeMode=true;
+    private volatile boolean visual;private volatile int visualGeneration;private volatile String pendingVisionNonce="",visionRequestId="";
     private volatile boolean foreground,recording,announcement;private volatile int announcementGeneration;private volatile ServerSocket server;private volatile Socket socket;private volatile DataOutputStream output;private volatile AudioRecord recorder;private volatile Player player;
     private volatile float inputLevel=0;private volatile CaptionProgress lastCaption=CaptionProgress.empty();
     private volatile int epoch=0,minimumGeneration=0,lifecycle=0;private volatile long micFrames=0,renderFrames=0;private volatile String phase="idle";
@@ -25,6 +26,7 @@ final class VoiceSession {
     boolean isRecording(){return recording;}
     boolean isConnected(){Link link=activeLink;return link!=null&&!link.closed;}
     String transportName(){Link link=activeLink;return link==null?"none":link.kind;}
+    boolean isVisual(){return visual||!pendingVisionNonce.isEmpty();}
     boolean wifiPaired(){return lan.paired();}
     private final BroadcastReceiver usbState=new BroadcastReceiver(){public void onReceive(Context ignored,Intent event){
         if("android.hardware.usb.action.USB_STATE".equals(event.getAction())){usbPhysical=event.getBooleanExtra("connected",false);Link link=usbLink;if(!usbPhysical&&link!=null)link.close();}
@@ -36,6 +38,7 @@ final class VoiceSession {
         if(lan.paired())lan.acquire();new Thread(()->accept(ticket),"cc8-usb-listener").start();new Thread(()->wifiLoop(ticket),"cc8-wifi-link").start();
     }
     void pause(){
+        cancelVision();
         ServerSocket listener;synchronized(routeLock){foreground=false;lifecycle++;listener=server;server=null;}lan.cancelPending();stopMicrophone();cancelPlayback();closeSocket();if(listener!=null)try{listener.close();}catch(IOException ignored){}
         if(receiverRegistered){context.unregisterReceiver(usbState);receiverRegistered=false;}lan.release();
     }
@@ -63,6 +66,7 @@ final class VoiceSession {
             if(!foreground||next.closed||next.ticket!=lifecycle)return;next.ready=true;
             boolean changed=activeLink!=next;boolean captureWasActive=recording;int captureEpoch=epoch;
             if(changed){
+                if(visual){visual=false;listener.vision(false,"连接切换，请重新看图");}
                 cancelPlayback();announcement=false;listener.playback(false);listener.caption("","attentive");minimumGeneration=0;
                 activeLink=next;socket=next.connection;output=next.out;phase=recording?"listening":"idle";
             }
@@ -78,7 +82,7 @@ final class VoiceSession {
             activeLink=null;socket=null;output=null;
             Link backup=usbLink!=null&&usbLink.ready&&!usbLink.closed?usbLink:wifiLink!=null&&wifiLink.ready&&!wifiLink.closed?wifiLink:null;
             if(foreground&&backup!=null)try{select(backup);return;}catch(IOException ignored){}
-            stopMicrophone();cancelPlayback();listener.link(false);if(foreground)listener.state("idle","连接已断开，正在自动重连 · 麦克风已关闭");
+            cancelVision();stopMicrophone();cancelPlayback();listener.link(false);if(foreground)listener.state("idle","连接已断开，正在自动重连 · 麦克风已关闭");
         }
     }
     private final class Link implements Runnable {
@@ -113,22 +117,34 @@ final class VoiceSession {
             else if("screen_sleep".equals(event)){if(recording)listener.screen(true);}
             else if("screen_wake".equals(event)){listener.screen(false);}
             else if("device_control".equals(event)){deviceControl(j);}
+            else if("vision_begin".equals(event)){
+                String nonce=j.optString("nonce");if(visual&&p.generation==visualGeneration)return;if(!foreground||p.generation<minimumGeneration||(!recording&&!nonce.equals(pendingVisionNonce))||(nonce.isEmpty()&&!recording))return;
+                visual=true;visualGeneration=p.generation;visionRequestId="";listener.dotResult("",false);listener.caption("正在拍摄当前画面，交给 Dot 分析。","attentive");listener.screen(false);listener.vision(true,"正在拍摄 · 本次图片交给 Dot 分析");final int waitingGeneration=visualGeneration;new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(()->{if(visual&&visualGeneration==waitingGeneration&&visionRequestId.isEmpty()){cancelVision();listener.state(recording?"listening":"idle","拍摄请求超时，请重试");}},15000);
+            }
+            else if("camera_capture".equals(event)){
+                if(!foreground||!visual||p.generation!=visualGeneration||p.generation<minimumGeneration)return;
+                String nonce=j.optString("nonce");String ident=j.optString("request_id");if(!visionRequestId.isEmpty()||!ident.matches("[a-f0-9]{32}"))return;visionRequestId=ident;Wire.put(j,"vision_generation",p.generation);boolean allowed="button".equals(j.optString("origin"))?!nonce.isEmpty()&&nonce.equals(pendingVisionNonce):"voice".equals(j.optString("origin"))&&recording;
+                pendingVisionNonce="";if(!allowed){cameraFailed(j,"request_not_authorized");return;}
+                Wire.put(j,"vision_generation",p.generation);listener.cameraCapture(j);
+            }
+            else if("vision_done".equals(event)){if(visual&&p.generation==visualGeneration){visual=false;pendingVisionNonce="";listener.vision(false,"completed".equals(j.optString("result"))?"看图已结束 · 摄像头关闭":"看图未完成 · 摄像头关闭");}}
+            else if("vision_unavailable".equals(event)){visual=false;pendingVisionNonce="";listener.vision(false,j.optString("message","看图暂不可用"));}
             else if("caption_timing".equals(event)){Player current=player;if(current!=null&&current.generation==p.generation&&current.playbackId==j.optInt("playback_id",-1))current.timings=timings(j.optJSONArray("timings"),current.text.length());}
             else if("ping".equals(event)){send(Wire.event("pong"));}
-            else if("status".equals(event)){if(recording||announcement){phase=j.optString("phase","listening");listener.state(phase,j.optString("message"));}}
+            else if("status".equals(event)){if(recording||announcement||visual){phase=j.optString("phase","listening");listener.state(phase,j.optString("message"));}}
             else if("transcript".equals(event)){if(recording)listener.heard(j.optString("text"));}
             else if("announcement_begin".equals(event)){if(foreground&&p.generation>=minimumGeneration){announcement=true;announcementGeneration=p.generation;listener.playback(true);}}
             else if("announcement_done".equals(event)){if(announcement&&p.generation==announcementGeneration){announcement=false;listener.playback(false);phase=recording?"listening":"idle";listener.state(phase,"completed".equals(j.optString("result"))?(recording?"播报已结束，我在听":"播报已结束 · 麦克风关闭"):(recording?"播报未完成，我在听":"播报未完成 · 麦克风关闭"));}}
             else if("brain_provider".equals(event)){listener.brain(j.optString("provider","minimax"));}
-            else if("dot_result".equals(event)){if(recording&&p.generation>=minimumGeneration)listener.dotResult(j.optString("text"),j.optBoolean("truncated"));}
-            else if("web_sources".equals(event)){if(recording&&p.generation>=minimumGeneration)listener.sources(j.optJSONArray("items"),j.optString("retrieved_at"));}
-            else if("cancel".equals(event)){minimumGeneration=Math.max(minimumGeneration,p.generation);announcement=false;listener.playback(false);cancelPlayback();listener.caption("","attentive");if(recording)listener.state("listening","我在听，你继续说");else{phase="idle";listener.state("idle","播报已停止 · 麦克风关闭");}}
+            else if("dot_result".equals(event)){if((recording||visual)&&p.generation>=minimumGeneration)listener.dotResult(j.optString("text"),j.optBoolean("truncated"));}
+            else if("web_sources".equals(event)){if((recording||visual)&&p.generation>=minimumGeneration)listener.sources(j.optJSONArray("items"),j.optString("retrieved_at"));}
+            else if("cancel".equals(event)){if(p.generation<minimumGeneration||(visual&&p.generation<visualGeneration))return;minimumGeneration=Math.max(minimumGeneration,p.generation);if(visual){visual=false;listener.vision(false,"已停止看图 · 摄像头关闭");}announcement=false;listener.playback(false);cancelPlayback();listener.caption("","attentive");if(recording)listener.state("listening","我在听，你继续说");else{phase="idle";listener.state("idle","播报已停止 · 麦克风关闭");}}
             else if("playback_pause".equals(event)){Player current=player;if(recording&&current!=null&&current.generation==p.generation&&p.generation>=minimumGeneration)current.pauseForVoice(j.optInt("token"));}
             else if("playback_resume".equals(event)){Player current=player;if(recording&&current!=null&&current.generation==p.generation&&p.generation>=minimumGeneration)current.resumeAfterNoise(j.optInt("token"));}
             else if("play_begin".equals(event)){
-                boolean permitted=recording||(announcement&&p.generation==announcementGeneration&&"announcement".equals(j.optString("role")));if(!foreground||!permitted||p.generation<minimumGeneration)return;cancelPlayback();Player next=new Player(p.generation,j.optString("text"),j.optString("mood","friendly"),j.optString("role","assistant"),j.optInt("playback_id"),timings(j.optJSONArray("timings"),j.optString("text").length()));player=next;next.start();
+                boolean permitted=recording||(visual&&p.generation==visualGeneration)||(announcement&&p.generation==announcementGeneration&&"announcement".equals(j.optString("role")));if(!foreground||!permitted||p.generation<minimumGeneration)return;cancelPlayback();Player next=new Player(p.generation,j.optString("text"),j.optString("mood","friendly"),j.optString("role","assistant"),j.optInt("playback_id"),timings(j.optJSONArray("timings"),j.optString("text").length()));player=next;next.start();
             }else if("play_end".equals(event)){Player current=player;if(current!=null&&current.generation==p.generation)current.ended=true;}
-        }else if(p.type==Wire.SPEAKER){Player current=player;if((recording||announcement)&&current!=null&&current.generation==p.generation&&p.generation>=minimumGeneration)current.offer(p.data);}
+        }else if(p.type==Wire.SPEAKER){Player current=player;if((recording||announcement||visual)&&current!=null&&current.generation==p.generation&&p.generation>=minimumGeneration)current.offer(p.data);}
     }
     private void send(JSONObject j){try{sendPacket(Wire.EVENT,epoch,0,0,System.nanoTime(),Wire.jsonBytes(j));}catch(IOException ignored){}}
     private void sendPacket(int type,int generation,long sequence,long frame,long nanos,byte[] bytes)throws IOException {
@@ -141,12 +157,39 @@ final class VoiceSession {
         }
     }
 
+    boolean isVisionRequestCurrent(JSONObject request){return foreground&&visual&&visualGeneration==request.optInt("vision_generation",-1)&&visionRequestId.equals(request.optString("request_id"));}
+    void requestVision(){
+        if(!foreground||!isConnected()||visual||!pendingVisionNonce.isEmpty())return;
+        pendingVisionNonce=java.util.UUID.randomUUID().toString().replace("-","");JSONObject e=Wire.event("vision_request");Wire.put(e,"nonce",pendingVisionNonce);send(e);listener.vision(true,"正在请求拍摄 · 图片将交给 Dot");final String nonce=pendingVisionNonce;new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(()->{if(!nonce.isEmpty()&&nonce.equals(pendingVisionNonce)){cancelVision();listener.state(recording?"listening":"idle","拍摄请求超时，请重试");}},15000);
+    }
+    void cancelVision(){
+        boolean had=visual||!pendingVisionNonce.isEmpty();int stoppedGeneration=visual?visualGeneration:-1;String stoppedNonce=pendingVisionNonce;if(visual)minimumGeneration=Math.max(minimumGeneration,visualGeneration+1);visual=false;pendingVisionNonce="";visionRequestId="";
+        if(had){cancelPlayback();JSONObject stopped=Wire.event("vision_cancel");Wire.put(stopped,"vision_generation",stoppedGeneration);Wire.put(stopped,"nonce",stoppedNonce);send(stopped);listener.vision(false,"已取消看图 · 摄像头关闭");}
+    }
+    void cameraFailed(JSONObject request,String reason){
+        JSONObject e=Wire.event("camera_error");Wire.put(e,"request_id",request.optString("request_id"));Wire.put(e,"vision_generation",request.optInt("vision_generation",visualGeneration));Wire.put(e,"error",reason);send(e);
+    }
+    void imageReady(JSONObject request,byte[] jpeg,int width,int height){
+        final int gen=request.optInt("vision_generation",-1);final String ident=request.optString("request_id");
+        new Thread(()->{
+            try{
+                byte[] hash=java.security.MessageDigest.getInstance("SHA-256").digest(jpeg);StringBuilder hex=new StringBuilder();for(byte b:hash)hex.append(String.format(java.util.Locale.ROOT,"%02x",b&255));
+                JSONObject head=Wire.event("camera_image_begin");Wire.put(head,"bytes",jpeg.length);Wire.put(head,"width",width);Wire.put(head,"height",height);Wire.put(head,"sha256",hex.toString());sendImageEvent(head,gen,ident);
+                int index=0;for(int at=0;at<jpeg.length;at+=12288){JSONObject chunk=Wire.event("camera_image_chunk");Wire.put(chunk,"index",index++);Wire.put(chunk,"data",android.util.Base64.encodeToString(java.util.Arrays.copyOfRange(jpeg,at,Math.min(jpeg.length,at+12288)),android.util.Base64.NO_WRAP));sendImageEvent(chunk,gen,ident);}
+                sendImageEvent(Wire.event("camera_image_end"),gen,ident);
+            }catch(Exception error){if(visual&&visualGeneration==gen)cameraFailed(request,"image_transfer_failed");}
+        },"cc8-camera-transfer").start();
+    }
+    private void sendImageEvent(JSONObject e,int gen,String ident)throws IOException{
+        synchronized(routeLock){if(!foreground||!visual||gen!=visualGeneration||gen<minimumGeneration)throw new IOException("Stale camera request");Wire.put(e,"request_id",ident);Wire.put(e,"vision_generation",gen);sendPacket(Wire.EVENT,epoch,0,0,System.nanoTime(),Wire.jsonBytes(e));}
+    }
     void settings(boolean wake){wakeMode=wake;JSONObject e=Wire.event("settings");Wire.put(e,"wake_mode",wake);send(e);}
     void brain(String provider){JSONObject e=Wire.event("settings");Wire.put(e,"brain_provider",provider);send(e);}
-    void interrupt(){announcement=false;listener.playback(false);cancelPlayback();listener.caption("","attentive");send(Wire.event("interrupt"));if(recording)listener.state("listening","我在听，你继续说");else{phase="idle";listener.state("idle","播报已停止 · 麦克风关闭");}}
+    void interrupt(){cancelVision();announcement=false;listener.playback(false);cancelPlayback();listener.caption("","attentive");send(Wire.event("interrupt"));if(recording)listener.state("listening","我在听，你继续说");else{phase="idle";listener.state("idle","播报已停止 · 麦克风关闭");}}
     @SuppressLint("MissingPermission") // Only MainActivity's authorized foreground opening or Start action may call; checked again here.
     void startMicrophone(){
         if(!foreground||recording||!isConnected())return;
+        cancelVision();
         if(context.checkCallingOrSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){listener.state("error","请先允许麦克风权限");return;}
         announcement=false;listener.playback(false);cancelPlayback();final int mine;synchronized(this){if(!foreground||recording||!isConnected())return;recording=true;mine=++epoch;micFrames=0;renderFrames=0;minimumGeneration=0;}listener.microphone(true);listener.state("calibrating","正在准备音频，请保持安静");
         new Thread(()->{synchronized(captureResourceLock){
@@ -186,7 +229,7 @@ final class VoiceSession {
     float mouthLevel(){Player p=player;return p==null?0:p.level();}
     String mood(){Player p=player;return p==null?"attentive":p.mood;}
     long playbackHead(){Player p=player;AudioTrack t=p==null?null:p.track;try{return t==null?0:t.getPlaybackHeadPosition()&0xffffffffL;}catch(IllegalStateException ignored){return 0;}}
-    JSONObject snapshot(){JSONObject j=Wire.event("snapshot");Wire.put(j,"foreground",foreground);Wire.put(j,"connected",isConnected());Wire.put(j,"transport",transportName());Wire.put(j,"usb_connected",usbLink!=null&&!usbLink.closed);Wire.put(j,"usb_physical",usbPhysical);Wire.put(j,"wifi_ready",wifiLink!=null&&wifiLink.ready&&!wifiLink.closed);Wire.put(j,"wifi_paired",lan.paired());Wire.put(j,"wifi_error",wifiError);Wire.put(j,"microphone_active",recording);Wire.put(j,"announcement_active",announcement);Wire.put(j,"mic_frames",micFrames);Wire.put(j,"render_frames",renderFrames);Wire.put(j,"playback_head",playbackHead());Wire.put(j,"playback_paused",player!=null&&player.paused);Wire.put(j,"phase",phase);Wire.put(j,"raw_audio_saved",false);return j;}
+    JSONObject snapshot(){JSONObject j=Wire.event("snapshot");Wire.put(j,"foreground",foreground);Wire.put(j,"connected",isConnected());Wire.put(j,"transport",transportName());Wire.put(j,"usb_connected",usbLink!=null&&!usbLink.closed);Wire.put(j,"usb_physical",usbPhysical);Wire.put(j,"wifi_ready",wifiLink!=null&&wifiLink.ready&&!wifiLink.closed);Wire.put(j,"wifi_paired",lan.paired());Wire.put(j,"wifi_error",wifiError);Wire.put(j,"microphone_active",recording);Wire.put(j,"announcement_active",announcement);Wire.put(j,"vision_active",isVisual());Wire.put(j,"mic_frames",micFrames);Wire.put(j,"render_frames",renderFrames);Wire.put(j,"playback_head",playbackHead());Wire.put(j,"playback_paused",player!=null&&player.paused);Wire.put(j,"phase",phase);Wire.put(j,"raw_audio_saved",false);return j;}
 
     static final class CaptionProgress {
         final int id;final String text;final float position;final boolean timed,playing,paused;
@@ -231,7 +274,7 @@ final class VoiceSession {
         }
         void waitIfPaused()throws InterruptedException{synchronized(this){while(paused&&allowed())wait(30);}}
         float level(){try{if(paused)return 0;AudioTrack t=track;if(t==null||stopped||t.getPlayState()!=AudioTrack.PLAYSTATE_PLAYING)return 0;long head=t.getPlaybackHeadPosition()&0xffffffffL;Envelope e=envelopes.peek();while(e!=null&&head>=e.end){envelopes.poll();e=envelopes.peek();}return e!=null&&head>=e.start?e.value:0;}catch(IllegalStateException ignored){return 0;}}
-        public boolean allowed(){return !stopped&&foreground&&(recording||("announcement".equals(role)&&announcement&&generation==announcementGeneration));}
+        public boolean allowed(){return !stopped&&foreground&&(recording||(visual&&generation==visualGeneration)||("announcement".equals(role)&&announcement&&generation==announcementGeneration));}
         public boolean paused(){return paused;}
         public void awaitReady()throws InterruptedException{waitIfPaused();}
         public int write(short[] samples,int offset,int count){writeNanos=System.nanoTime();return track.write(samples,offset,count);}
@@ -248,7 +291,7 @@ final class VoiceSession {
                 int min=AudioTrack.getMinBufferSize(16000,AudioFormat.CHANNEL_OUT_MONO,AudioFormat.ENCODING_PCM_16BIT);
                 t=new AudioTrack(AudioManager.STREAM_MUSIC,16000,AudioFormat.CHANNEL_OUT_MONO,AudioFormat.ENCODING_PCM_16BIT,Math.max(min*2,3200),AudioTrack.MODE_STREAM);track=t;
                 if(t.getState()!=AudioTrack.STATE_INITIALIZED)throw new IOException("播放初始化失败");t.setVolume(.35f);t.play();
-                if(!allowed())return;if(paused){t.pause();waitIfPaused();}if(!allowed())return;listener.caption(text,mood);listener.state("calibration".equals(role)?"calibrating":"speaking","calibration".equals(role)?"首次校准：请安静听完这段声音":"announcement".equals(role)&&!recording?"正在播报 · 点击打断可停止":"正在回答 · 你可以开口打断");
+                if(!allowed())return;if(paused){t.pause();waitIfPaused();}if(!allowed())return;listener.caption(text,mood);listener.state("calibration".equals(role)?"calibrating":"speaking","calibration".equals(role)?"首次校准：请安静听完这段声音":"announcement".equals(role)&&!recording?"正在播报 · 点击打断可停止":visual&&!recording?"正在看图回答 · 点击停止看图可打断":"正在回答 · 你可以开口打断");
                 long sequence=0;
                 while(allowed()){
                     waitIfPaused();if(!allowed())break;

@@ -79,7 +79,7 @@ python3 device-access/cc8_install.py --install artifacts/cc8-diagnostics-1.0.1.a
 
 ```sh
 python3 cc8-assistant/tools/build.py
-python3 device-access/cc8_install.py --install artifacts/cc8-assistant-0.5.3.apk --launch --shared-staging
+python3 device-access/cc8_install.py --install artifacts/cc8-assistant-0.6.0.apk --launch --shared-staging
 ```
 
 安装其他单 APK 时替换 `--install` 后的路径。不想启动就省略 `--launch`。没有桌面入口的 APK 不能使用 `--launch`。
