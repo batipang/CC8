@@ -284,6 +284,8 @@ class DotBrain:
                     if item.get('type')=='agentMessage':
                         value=item.get('text') or ''
                         if not isinstance(value,str) or len(value)>64000:raise DotError('Codex answer exceeds size limit')
+                        if item.get('phase') is None and item.get('id') in phases:
+                            item={**item,'phase':phases[item['id']]}
                         messages.append(item)
                 elif event.get('method')=='turn/completed':
                     value=p.get('turn') or {}
@@ -295,19 +297,24 @@ class DotBrain:
             if not completed:self._interrupt(turn);raise DotError('Codex turn timed out')
             if turn.stopped.is_set() or not is_current():raise Cancelled('Turn cancelled')
             finals=[m for m in messages if m.get('phase')=='final_answer']
-            chosen=(finals or messages)[-1] if (finals or messages) else {}
+            # Completion fallback is only for servers with no phase metadata.
+            # A completed turn with commentary alone is not a final answer.
+            phase_aware=any(p is not None for p in phases.values()) or any(m.get('phase') is not None for m in messages)
+            candidates=finals if phase_aware else messages
+            chosen=candidates[-1] if candidates else {}
             raw_answer=chosen.get('text','');answer=raw_answer.strip()
             if not answer:
                 if self.rpc.approval_seen.is_set():raise DotApprovalRequired('Codex task needs desktop approval')
                 raise DotError('Codex returned no final answer')
-            if on_web:on_web('dot_result',{'text':answer[:10000],'truncated':len(answer)>10000})
-            if self.last_metrics.get('web_search_calls') and on_web:
-                sources=answer_sources(answer)
-                if sources:on_web('sources',{'items':sources,'retrieved_at':now()})
             if stream_id is not None:
                 if chosen.get('id')!=stream_id or not raw_answer.startswith(stream_text):raise DotError('Final answer changed after streaming')
                 pieces=speech.feed(raw_answer[len(stream_text):],final=True)
             else:pieces=speech.feed(answer,final=True)
+            # Validate the authoritative answer before closing the task receipt.
+            if on_web:on_web('dot_result',{'text':answer[:10000],'truncated':len(answer)>10000})
+            if self.last_metrics.get('web_search_calls') and on_web:
+                sources=answer_sources(answer)
+                if sources:on_web('sources',{'items':sources,'retrieved_at':now()})
             for piece in speakable(pieces):
                 if not is_current() or turn.stopped.is_set():raise Cancelled('Turn cancelled')
                 yield piece

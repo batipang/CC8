@@ -27,11 +27,33 @@ class StreamTests(unittest.TestCase):
         self.assertEqual(''.join(stream),'这是第二句。');self.assertTrue(brain.last_metrics['completed'])
         self.assertEqual(next(v['text'] for k,v in updates if k=='dot_result'),'这是第一句。这是第二句。')
     def test_changed_authoritative_final_is_reported_as_failure(self):
-        rpc=StreamRpc();stream=DotBrain(rpc).clauses('测试',[]);self.assertEqual(next(stream),'这是第一句。');rpc.complete('改过的内容。')
+        rpc=StreamRpc();updates=[];stream=DotBrain(rpc).clauses('测试',[],on_web=lambda k,v:updates.append(k));self.assertEqual(next(stream),'这是第一句。');rpc.complete('改过的内容。')
         with self.assertRaises(DotError):list(stream)
+        self.assertNotIn('dot_result',updates)
+    def test_explicit_nonfinal_messages_cannot_become_completed_answers(self):
+        class CompletedRpc(FakeRpc):
+            def request(self,method,params,timeout=15):
+                if method!='turn/start':return super().request(method,params,timeout)
+                for item in self.items:
+                    self.events.put({'method':'item/completed','params':{'threadId':'voice-thread','turnId':'t','item':item}})
+                self.events.put({'method':'turn/completed','params':{'threadId':'voice-thread','turn':{'id':'t','status':'completed'}}})
+                return {'turn':{'id':'t'}}
+        for extra in ([],[{'type':'agentMessage','text':'阶段不明确的内容'}]):
+            with self.subTest(extra=extra):
+                rpc=CompletedRpc();rpc.items=[{'type':'agentMessage','phase':'commentary','text':'尚在处理的过程说明'}]+extra;updates=[]
+                with self.assertRaises(DotError):list(DotBrain(rpc).clauses('测试',[],on_web=lambda k,v:updates.append(k)))
+                self.assertNotIn('dot_result',updates)
+        rpc=CompletedRpc();rpc.items=[{'type':'agentMessage','text':'旧协议的最终回答。'}]
+        self.assertEqual(''.join(DotBrain(rpc).clauses('测试',[])),'旧协议的最终回答。')
     def test_cancel_after_first_sentence_stops_remaining_speech(self):
         rpc=StreamRpc();brain=DotBrain(rpc);stream=brain.clauses('测试',[]);next(stream);brain.cancel();rpc.complete()
         with self.assertRaises(Cancelled):list(stream)
+    def test_final_phase_from_started_item_survives_missing_completion_phase(self):
+        rpc=StreamRpc();brain=DotBrain(rpc);stream=brain.clauses('测试',[])
+        self.assertEqual(next(stream),'这是第一句。')
+        rpc.event('item/completed',item={'id':'final','type':'agentMessage','text':'这是第一句。这是第二句。'})
+        rpc.event('turn/completed',turn={'id':'stream-turn','status':'completed'})
+        self.assertEqual(''.join(stream),'这是第二句。');self.assertTrue(brain.last_metrics['completed'])
     def test_failed_turn_after_stream_cannot_publish_success_receipt(self):
         rpc=StreamRpc();brain=DotBrain(rpc);updates=[];stream=brain.clauses('测试',[],on_web=lambda k,v:updates.append(k));next(stream);rpc.complete(status='failed')
         with self.assertRaises(DotError):list(stream)

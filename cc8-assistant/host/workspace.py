@@ -26,10 +26,13 @@ class Workspace:
         if self.path and self.path.exists():
             # Do not silently replace a corrupt reminder store with an empty one.
             data=json.loads(self.path.read_text())
-            if data.get('version')!=1 or not isinstance(data.get('reminders'),list) or len(data['reminders'])>64:
+            if not isinstance(data,dict) or data.get('version')!=1 or not isinstance(data.get('reminders'),list) or len(data['reminders'])>64:
                 raise ValueError('Invalid reminder store')
             self.reminders=data['reminders']
-            for item in self.reminders:self._validate(item,existing=True)
+            for item in self.reminders:
+                self._validate(item,existing=True)
+                item.setdefault('revision',0);item.setdefault('repeat','none')
+            if len({r['id'] for r in self.reminders})!=len(self.reminders):raise ValueError('Duplicate reminder ID')
             if sum(r['status']=='pending' for r in self.reminders)>32:raise ValueError('Too many pending reminders')
 
     def _save(self):
@@ -52,7 +55,8 @@ class Workspace:
         try:result=datetime.fromisoformat(value)
         except ValueError:raise ValueError('提醒时间格式不正确') from None
         if result.tzinfo is None:raise ValueError('提醒时间必须包含时区')
-        return result.astimezone(ZONE)
+        try:return result.astimezone(ZONE)
+        except OverflowError:raise ValueError('提醒时间超出可用范围') from None
 
     def _validate(self,item,existing=False):
         if not isinstance(item,dict):raise ValueError('Invalid reminder')
@@ -66,6 +70,8 @@ class Workspace:
         if not existing and (due<=self.now() or due>self.now()+timedelta(days=366*5)):raise ValueError('请选择未来五年内的提醒时间')
         if existing and (not isinstance(item.get('id'),str) or len(item['id'])!=16 or item.get('status') not in ('pending','delivered','cancelled')):
             raise ValueError('Invalid reminder record')
+        if type(item.get('revision',0)) is not int or item.get('revision',0)<0:raise ValueError('Invalid reminder revision')
+        if 'retry_after' in item:self._date(item['retry_after'])
         return due
 
     def snapshot(self):
@@ -121,7 +127,7 @@ class Workspace:
             if action=='create':
                 if len([r for r in self.reminders if r['status']=='pending'])>=32:raise ValueError('最多保留 32 条待提醒事项')
                 item={'id':uuid.uuid4().hex[:16],'title':args.get('title'),'due':args.get('due'),
-                      'repeat':args.get('repeat','none'),'status':'pending'}
+                      'repeat':args.get('repeat','none'),'status':'pending','revision':1}
                 item['due']=self._validate(item).isoformat(timespec='seconds');self.reminders.append(item)
                 if len(self.reminders)>64:self.reminders=[r for r in self.reminders if r['status']=='pending']+self.reminders[-16:]
                 # Stable unique IDs, even after pruning completed records.
@@ -133,6 +139,7 @@ class Workspace:
                 else:
                     candidate={**item,**{k:v for k,v in args.items() if k in ('title','due','repeat')}}
                     candidate['due']=self._validate(candidate).isoformat(timespec='seconds');item.update(candidate);item.pop('retry_after',None)
+                item['revision']=item.get('revision',0)+1
             else:raise ValueError('不支持的提醒操作')
             try:self._save()
             except Exception:
@@ -146,10 +153,12 @@ class Workspace:
                          if r['status']=='pending' and self._date(r['due'])<=now
                          and (not r.get('retry_after') or self._date(r['retry_after'])<=now)),None)
 
-    def delivered(self,ident,success):
+    def delivered(self,ident,success,*,revision):
         with self.lock:
             item=next((r for r in self.reminders if r['id']==ident and r['status']=='pending'),None)
-            if item is None:return
+            # Bind playback receipts to the exact scheduled occurrence. Editing,
+            # snoozing or advancing a repeat invalidates all older receipts.
+            if item is None or type(revision) is not int or item.get('revision',0)!=revision:return False
             before=deepcopy(self.reminders)
             if not success:item['retry_after']=(self.now()+timedelta(minutes=5)).isoformat(timespec='seconds')
             elif item['repeat']=='none':item['status']='delivered'
@@ -157,6 +166,8 @@ class Workspace:
                 due=self._date(item['due']);step=7 if item['repeat']=='weekly' else 1
                 while due<=self.now() or (item['repeat']=='weekdays' and due.weekday()>4):due+=timedelta(days=step)
                 item['due']=due.isoformat(timespec='seconds');item.pop('retry_after',None)
+            item['revision']=revision+1
             try:self._save()
             except Exception:
                 self.reminders=before;raise
+            return True

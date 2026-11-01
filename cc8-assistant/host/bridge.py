@@ -189,6 +189,13 @@ class Bridge:
         if self.active and not self.calibrating and not self.playing and not self.response_busy and not self.recognition_busy and not self.screen_sleeping and time.monotonic()-self.last_interaction>=900:
             self.awake=False;self.screen_sleeping=True;self.event('screen_sleep');self.log('screen_idle_sleep')
 
+    def heartbeat_tick(self):
+        try:
+            if self.connection is not None:self.idle_tick();self.event('ping')
+        except (OSError,EOFError,ValueError,RuntimeError) as error:
+            # A failed send or reminder-store write must not end the timer thread.
+            self.log('heartbeat_retry',error_type=type(error).__name__)
+
     def publish_workspace(self):
         if self.connection is not None:self.event('workspace',**self.workspace.snapshot())
 
@@ -212,7 +219,7 @@ class Bridge:
             job=self.reminder_job
             if job is not None:
                 if not job.done.is_set():return
-                self.workspace.delivered(job.reminder_id,job.result=='completed');self.reminder_job=None;self.publish_workspace()
+                self.workspace.delivered(job.reminder_id,job.result=='completed',revision=job.reminder_revision);self.reminder_job=None;self.publish_workspace()
             if time.monotonic()<self.reminder_poll:return
             self.reminder_poll=time.monotonic()+5
             if (self.connection is None or self.calibrating or self.playing or self.response_busy or self.recognition_busy or self.text_generation is not None
@@ -220,7 +227,7 @@ class Bridge:
                     or self.vad.talking or not self.response_queue.empty()):return
             item=self.workspace.due()
             if item is None:return
-            self.touch_activity();job=self.announce('提醒你：'+item['title']);job.reminder_id=item['id'];self.reminder_job=job
+            self.touch_activity();job=self.announce('提醒你：'+item['title']);job.reminder_id=item['id'];job.reminder_revision=item['revision'];self.reminder_job=job
 
     def control_device(self,action,percent=None):
         if action not in ('status','volume','stop','wake_screen'):raise ValueError('Unsupported device action')
@@ -304,7 +311,8 @@ class Bridge:
                 except (OSError,EOFError):pass
             if self.announcement_generation==generation:self.announcement_generation=None
             self.metrics['last_announcement']={'status':job.result,'characters':len(job.text)}
-            self.save_status();job.done.set()
+            try:self.save_status()
+            finally:job.done.set()
 
     def cancel(self,reason='speech'):
         with self.guard:
@@ -539,7 +547,7 @@ class Bridge:
         PRIVATE.mkdir(parents=True,exist_ok=True,mode=0o700);os.chmod(PRIVATE,0o700)
         data={'connected':self.connection is not None,'active':self.active,'calibrating':self.calibrating,
               'playing':self.playing,'generation':self.generation,'wake_mode':self.wake,'wake_word':WAKE_WORD,
-              'bridge_version':'0.11.0','desktop_camera_enabled':bool(self.desktop_challenge),'desktop_snapshot_active':self.desktop_snapshot is not None,'noise_profile':'moderate','speech_energy_floor_dbfs':NearSpeechDetector.MIN_DBFS,'speech_noise_margin_db':NearSpeechDetector.NOISE_MARGIN_DB,'speech_onset_ms':VoiceDetector.ONSET_FRAMES*10,'barge_confirm_min_ms':NearSpeechDetector.CONFIRM_MIN_FRAMES*10,'vision_active':self.vision_generation is not None,'vision_enabled':isinstance(self.brain,BrainRouter),'transport':self.transport_kind,**(self.transport_hub.diagnostics() if self.transport_hub else {}),'screen_sleeping':self.screen_sleeping,'idle_sleep_seconds':900,'asr_engine':getattr(getattr(self.speech,'recognizer',None),'engine',None),'barge_in_enabled':self.device_can_pause,'playback_paused':self.pause_state is not None,'announcement_active':self.announcement_generation is not None,'brain_provider':getattr(self.brain,'selected','minimax') if self.brain else 'echo test','dot_enabled':isinstance(self.brain,BrainRouter),'web_search_enabled':self.brain is not None,'fast_stop_enabled':self.fast_stop is not None,
+              'bridge_version':'0.11.1','desktop_camera_enabled':bool(self.desktop_challenge),'desktop_snapshot_active':self.desktop_snapshot is not None,'noise_profile':'moderate','speech_energy_floor_dbfs':NearSpeechDetector.MIN_DBFS,'speech_noise_margin_db':NearSpeechDetector.NOISE_MARGIN_DB,'speech_onset_ms':VoiceDetector.ONSET_FRAMES*10,'barge_confirm_min_ms':NearSpeechDetector.CONFIRM_MIN_FRAMES*10,'vision_active':self.vision_generation is not None,'vision_enabled':isinstance(self.brain,BrainRouter),'transport':self.transport_kind,**(self.transport_hub.diagnostics() if self.transport_hub else {}),'screen_sleeping':self.screen_sleeping,'idle_sleep_seconds':900,'asr_engine':getattr(getattr(self.speech,'recognizer',None),'engine',None),'barge_in_enabled':self.device_can_pause,'playback_paused':self.pause_state is not None,'announcement_active':self.announcement_generation is not None,'brain_provider':getattr(self.brain,'selected','minimax') if self.brain else 'echo test','dot_enabled':isinstance(self.brain,BrainRouter),'web_search_enabled':self.brain is not None,'fast_stop_enabled':self.fast_stop is not None,
               'fast_stop_input':'AEC3 without additional NS','fast_stop_gain':getattr(self.fast_stop,'gain',None),
               'aec_engine':'WebRTC AEC3 + NS; AGC disabled',
               'render_asr_comparison':True,
@@ -788,11 +796,15 @@ class Bridge:
                 else:self.enqueue_response(Reply(generation,text))
             except Exception as e:
                 if self.valid(generation):
-                    if self.pause_state and evidence and evidence.get('pause_token')==self.pause_state['token']:self.cancel('barge_asr_error')
+                    try:
+                        if self.pause_state and evidence and evidence.get('pause_token')==self.pause_state['token']:self.cancel('barge_asr_error')
+                    except (OSError,EOFError):pass
                     self.failure('这次识别没有完成，请再说一次',e)
             finally:
                 self.recognition_busy=False
-                if evidence and rejected:self.resume_after_rejection(evidence.get('pause_token'),generation)
+                if evidence and rejected:
+                    try:self.resume_after_rejection(evidence.get('pause_token'),generation)
+                    except (OSError,EOFError) as error:self.log('playback_resume_disconnected',error_type=type(error).__name__)
 
 
     def request_snapshot(self):
@@ -830,12 +842,13 @@ class Bridge:
         finally:
             self.camera_inbox.cancel_capture(capture)
             with self.guard:
-                if self.desktop_snapshot is job:
-                    self.desktop_snapshot=None
-                    if self.vision_generation==generation:
-                        self.vision_generation=None;self.vision_nonce=''
-                        if self.connection is not None:self.event('vision_done',generation=generation,result=job.result,origin='desktop')
-                job.done.set()
+                try:
+                    if self.desktop_snapshot is job:
+                        self.desktop_snapshot=None
+                        if self.vision_generation==generation:
+                            self.vision_generation=None;self.vision_nonce=''
+                            if self.connection is not None:self.event('vision_done',generation=generation,result=job.result,origin='desktop')
+                finally:job.done.set()
             self.save_status()
 
     def begin_visual(self,text,origin,nonce=''):
@@ -889,23 +902,26 @@ class Bridge:
     def respond_work(self):
         while True:
             job=self.response_queue.get()
-            if isinstance(job,Announcement):self.read_announcement(job);continue
-            if not self.valid(job.generation):continue
-            self.response_busy=True
-            try:
-                if isinstance(job,VisualReply):self.answer_visual(job)
-                else:self.answer(job.text,job.generation)
+            try:self.respond_job(job)
             except Exception as error:
                 if self.valid(job.generation):self.failure('这次回答没有完成，请再说一次',error)
-            finally:
-                self.response_busy=False
-                if isinstance(job,TextReply) and self.text_generation==job.generation:
-                    self.text_generation=None
-                    if self.connection is not None:self.event('text_done',generation=job.generation)
+                else:self.log('response_worker_error',error_type=type(error).__name__)
+
+    def respond_job(self,job):
+        if isinstance(job,Announcement):self.read_announcement(job);return
+        if not self.valid(job.generation):return
+        self.response_busy=True
+        try:
+            if isinstance(job,VisualReply):self.answer_visual(job)
+            else:self.answer(job.text,job.generation)
+        finally:
+            self.response_busy=False
+            if isinstance(job,TextReply) and self.text_generation==job.generation:
+                self.text_generation=None
+                if self.connection is not None:self.event('text_done',generation=job.generation)
 
     def answer(self,text,generation,image=None):
-        task_id=self.workspace.task_start(generation,text);self.publish_workspace();result_text=['']
-        self.status('thinking','正在准备回答…')
+        task_id=self.workspace.task_start(generation,text);result_text=[''];clauses=None
         def web_update(kind,payload):
             if not self.valid(generation):return
             if kind=='progress':
@@ -913,10 +929,12 @@ class Bridge:
                 self.workspace.task_stage(task_id,'analysis','连接助理' if '连接' in message else '分析请求','running');self.publish_workspace()
                 self.event('status',generation=generation,phase='thinking',message=message)
             elif kind=='dot_result':
-                result_text[0]=payload.get('text','');self.event('dot_result',generation=generation,**payload)
+                result_text[0]=payload.get('text','')
                 # The Dot turn receipt closes the task, independently of the
-                # remaining spoken audio. Stopping narration cannot undo work.
-                self.workspace.task_finish(task_id,'completed',result_text[0]);self.publish_workspace()
+                # remaining audio or device delivery. A disconnected display
+                # cannot turn successfully executed work into a failed task.
+                self.workspace.task_finish(task_id,'completed',result_text[0])
+                self.event('dot_result',generation=generation,**payload);self.publish_workspace()
             elif kind=='task_stage':
                 self.workspace.task_stage(task_id,payload['id'],payload['title'],payload['status']);self.publish_workspace()
             elif kind=='searching':
@@ -928,11 +946,12 @@ class Bridge:
                 if kind=='clear':self.event('dot_result',generation=generation,text='',truncated=False)
                 if kind=='sources':
                     self.workspace.task_stage(task_id,'search','检索来源已返回','completed');self.publish_workspace();self.log('web_search_ready',sources=len(payload['items']))
-        clauses=(self.brain.vision_clauses(text,image,self.history,lambda:self.valid(generation),web_update) if image is not None
-                 else self.brain.clauses(text,self.history,lambda:self.valid(generation),web_update) if self.brain
-                 else iter(['语音识别已完成。你刚才说：'+text]))
         completed=True;spoken=[]
         try:
+            self.publish_workspace();self.status('thinking','正在准备回答…')
+            clauses=(self.brain.vision_clauses(text,image,self.history,lambda:self.valid(generation),web_update) if image is not None
+                     else self.brain.clauses(text,self.history,lambda:self.valid(generation),web_update) if self.brain
+                     else iter(['语音识别已完成。你刚才说：'+text]))
             for clause in clauses:
                 if not self.valid(generation):completed=False;break
                 if not self.speak(clause,generation):completed=False;break
@@ -1065,9 +1084,7 @@ def main():
     signal.signal(signal.SIGUSR1,retry_echo_check)
     def heartbeat():
         while not stop.wait(5):
-            try:
-                if bridge.connection:bridge.idle_tick();bridge.event('ping')
-            except OSError:pass
+            bridge.heartbeat_tick()
     threading.Thread(target=heartbeat,daemon=True).start()
     print('Waiting for CC8: USB priority, paired TLS Wi-Fi standby. Capture requires foreground Start.',flush=True)
     while not stop.is_set():
