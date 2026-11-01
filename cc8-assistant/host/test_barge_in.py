@@ -21,33 +21,33 @@ class Sink:
 class BargeInTests(unittest.TestCase):
     def bridge(self, speech=None):
         b = Bridge(speech, None)
-        b.connection = Sink()
-        b.active = True
+        b.session.connection = Sink()
+        b.session.active = True
         b.playback.device_can_pause = True
         b.playback.playing = True
         b.save_status = lambda: None
         return b
 
     def events(self, b):
-        return [json.loads(p.data) for p in b.connection.packets if p.kind == EVENT]
+        return [json.loads(p.data) for p in b.session.connection.packets if p.kind == EVENT]
 
     def test_tentative_pause_keeps_generation_and_can_resume(self):
         b = self.bridge()
-        generation = b.generation
+        generation = b.session.generation
         token = b.pause_for_voice()
         self.assertIsNotNone(token)
-        self.assertEqual(b.generation, generation)
+        self.assertEqual(b.session.generation, generation)
         self.assertTrue(b.playback.playing)
         b.resume_after_rejection(token, generation)
         self.assertIsNone(b.playback.pause_state)
-        self.assertEqual(b.generation, generation)
+        self.assertEqual(b.session.generation, generation)
         self.assertEqual(
             [e['event'] for e in self.events(b)], ['playback_pause', 'playback_resume']
         )
 
     def test_cancel_prevents_late_rejection_from_resuming(self):
         b = self.bridge()
-        generation = b.generation
+        generation = b.session.generation
         token = b.pause_for_voice()
         b.cancel('new_question')
         b.resume_after_rejection(token, generation)
@@ -59,10 +59,10 @@ class BargeInTests(unittest.TestCase):
         token = b.pause_for_voice()
         b.capture.endpoint.vad.talking = True
         b.capture.endpoint.turn_pause_token = token
-        b.resume_after_rejection(token, b.generation)
+        b.resume_after_rejection(token, b.session.generation)
         self.assertIsNotNone(b.playback.pause_state)
         b.capture.endpoint.vad.talking = False
-        b.resume_after_rejection(token, b.generation)
+        b.resume_after_rejection(token, b.session.generation)
         self.assertIsNone(b.playback.pause_state)
 
     def test_unsupported_device_and_inactive_mic_do_not_pause(self):
@@ -70,13 +70,13 @@ class BargeInTests(unittest.TestCase):
         b.playback.device_can_pause = False
         self.assertIsNone(b.pause_for_voice())
         b.playback.device_can_pause = True
-        b.active = False
+        b.session.active = False
         self.assertIsNone(b.pause_for_voice())
 
     def test_old_pause_ack_does_not_retime_new_audio(self):
         b = self.bridge()
         token = b.pause_for_voice()
-        old = b.generation
+        old = b.session.generation
         b.cancel('next')
         b.on_event({'event': 'playback_paused', 'token': token, 'generation': old, 'nanos': 1000})
         self.assertIsNone(b.capture.echo.timeline.paused_at)
@@ -88,7 +88,7 @@ class BargeInTests(unittest.TestCase):
 
         b = self.bridge(Speech())
         token = b.pause_for_voice()
-        generation = b.generation
+        generation = b.session.generation
         b.recognition.queue.put(
             (
                 generation,
@@ -102,7 +102,7 @@ class BargeInTests(unittest.TestCase):
         while b.playback.pause_state and time.monotonic() < deadline:
             time.sleep(0.01)
         self.assertIsNone(b.playback.pause_state)
-        self.assertEqual(b.generation, generation)
+        self.assertEqual(b.session.generation, generation)
         self.assertFalse(any(e['event'] == 'transcript' for e in self.events(b)))
 
     def test_empty_asr_resumes_and_new_question_cancels_old_turn(self):
@@ -112,7 +112,7 @@ class BargeInTests(unittest.TestCase):
 
         b = self.bridge(Speech())
         token = b.pause_for_voice()
-        old = b.generation
+        old = b.session.generation
         answered = threading.Event()
         b.speak = lambda text, generation: answered.set() or True
         b.recognition.queue.put(
@@ -125,7 +125,7 @@ class BargeInTests(unittest.TestCase):
             )
         )
         self.assertTrue(answered.wait(1))
-        self.assertGreater(b.generation, old)
+        self.assertGreater(b.session.generation, old)
         self.assertFalse(any(e['event'] == 'playback_resume' for e in self.events(b)))
 
     def test_asr_can_run_while_old_speech_waits_for_pause_resolution(self):
@@ -139,7 +139,7 @@ class BargeInTests(unittest.TestCase):
                 return ''
 
         b = self.bridge(Speech())
-        old = b.generation
+        old = b.session.generation
         token = b.pause_for_voice()
 
         def waiting_response(text, generation):
@@ -166,9 +166,9 @@ class BargeInTests(unittest.TestCase):
         b = self.bridge()
         b.pause_for_voice()
         b.playback.pause_state['started'] -= 21
-        old = b.generation
+        old = b.session.generation
         b.wait_playback(old)
-        self.assertGreater(b.generation, old)
+        self.assertGreater(b.session.generation, old)
         self.assertIsNone(b.playback.pause_state)
 
     def test_asr_failure_stops_old_audio_instead_of_resuming(self):
@@ -178,7 +178,7 @@ class BargeInTests(unittest.TestCase):
 
         b = self.bridge(Speech())
         token = b.pause_for_voice()
-        old = b.generation
+        old = b.session.generation
         b.recognition.queue.put(
             (
                 old,
@@ -189,9 +189,9 @@ class BargeInTests(unittest.TestCase):
             )
         )
         deadline = time.monotonic() + 1
-        while b.generation == old and time.monotonic() < deadline:
+        while b.session.generation == old and time.monotonic() < deadline:
             time.sleep(0.01)
-        self.assertGreater(b.generation, old)
+        self.assertGreater(b.session.generation, old)
         self.assertFalse(b.playback.playing)
         self.assertFalse(any(e['event'] == 'playback_resume' for e in self.events(b)))
 
@@ -201,13 +201,13 @@ class BargeInTests(unittest.TestCase):
         done = threading.Event()
 
         def play():
-            b.play_stream(iter([np.ones(320, dtype=np.int16)]), 'test', b.generation)
+            b.play_stream(iter([np.ones(320, dtype=np.int16)]), 'test', b.session.generation)
             done.set()
 
         thread = threading.Thread(target=play, daemon=True)
         thread.start()
         time.sleep(0.05)
-        self.assertFalse(any(p.kind == SPEAKER for p in b.connection.packets))
+        self.assertFalse(any(p.kind == SPEAKER for p in b.session.connection.packets))
         b.cancel('stop')
         self.assertTrue(done.wait(1))
 

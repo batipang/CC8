@@ -19,6 +19,7 @@ from endpoint_pipeline import EndpointPipeline, EndpointHooks
 from recognition_worker import RecognitionWorker, RecognitionHooks
 from response_worker import ResponseWorker, ResponseHooks
 from fast_stop import FastStopDetector
+from session_controller import SessionController, SessionHooks
 from announcement_controller import AnnouncementController, AnnouncementHooks
 from reminder_scheduler import ReminderScheduler, ReminderHooks
 from device_controller import DeviceController, DeviceControlHooks
@@ -41,7 +42,7 @@ class Components:
 
 
 def build_components(
-    session: Bridge,
+    host: Bridge,
     *,
     echo_factory: EchoFactory,
     wake_pattern: Pattern[str],
@@ -50,240 +51,236 @@ def build_components(
 ) -> Components:
     calibration = CalibrationController(
         CalibrationHooks(
-            lock=session.guard,
-            generation=lambda: session.generation,
-            valid=lambda generation: session.valid(generation),
-            wake=lambda: session.wake,
-            speech=lambda: session.speech,
-            clear_frames=lambda: session.capture.echo.clear_calibration_frames(),
-            reset_activity=lambda: session.capture.endpoint.reset_voice_activity(),
-            startup_reference=lambda: session.startup_reference(),
-            play=lambda pcm, text, generation, role: session.play(pcm, text, generation, role),
-            speak=lambda text, generation: session.speak(text, generation),
-            align_reference=lambda generation: session.align_reference(generation),
-            check_echo=lambda generation: session.check_echo(generation),
-            recognition_pending=lambda: (
-                session.recognition.busy or not session.recognition.queue.empty()
-            ),
-            talking=lambda: session.capture.endpoint.vad.talking,
-            status=lambda phase, message: session.status(phase, message),
-            save_status=lambda: session.save_status(),
-            log=lambda name, **fields: session.log(name, **fields),
-            failure=lambda message, error: session.failure(message, error),
-            metric=session.record_metric,
-            metric_value=lambda name: session.metrics.get(name, 0),
+            lock=host.session.guard,
+            generation=lambda: host.session.generation,
+            valid=lambda generation: host.valid(generation),
+            wake=lambda: host.session.wake,
+            speech=lambda: host.speech,
+            clear_frames=lambda: host.capture.echo.clear_calibration_frames(),
+            reset_activity=lambda: host.capture.endpoint.reset_voice_activity(),
+            startup_reference=lambda: host.startup_reference(),
+            play=lambda pcm, text, generation, role: host.play(pcm, text, generation, role),
+            speak=lambda text, generation: host.speak(text, generation),
+            align_reference=lambda generation: host.align_reference(generation),
+            check_echo=lambda generation: host.check_echo(generation),
+            recognition_pending=lambda: host.recognition.busy or not host.recognition.queue.empty(),
+            talking=lambda: host.capture.endpoint.vad.talking,
+            status=lambda phase, message: host.status(phase, message),
+            save_status=lambda: host.save_status(),
+            log=lambda name, **fields: host.log(name, **fields),
+            failure=lambda message, error: host.failure(message, error),
+            metric=host.record_metric,
+            metric_value=lambda name: host.metrics.get(name, 0),
         ),
         echo_check=echo_check,
     )
     visual = VisionController(
         VisionHooks(
-            lock=session.guard,
-            connected=lambda: session.connection is not None,
-            calibrating=lambda: session.calibration.active,
-            has_transport=lambda: session.transport_hub is not None,
-            brain_ready=lambda: isinstance(session.brain, BrainRouter),
-            session_generation=lambda: session.generation,
-            valid=lambda generation: session.valid(generation),
-            cancel_session=lambda reason: session.cancel(reason),
-            touch=lambda: session.touch_activity(),
-            event=lambda name, **fields: session.event(name, **fields),
-            status=lambda phase, message: session.status(phase, message),
-            save_status=lambda: session.save_status(),
+            lock=host.session.guard,
+            connected=lambda: host.session.connection is not None,
+            calibrating=lambda: host.calibration.active,
+            has_transport=lambda: host.transport_hub is not None,
+            brain_ready=lambda: isinstance(host.brain, BrainRouter),
+            session_generation=lambda: host.session.generation,
+            valid=lambda generation: host.valid(generation),
+            cancel_session=lambda reason: host.cancel(reason),
+            touch=lambda: host.touch_activity(),
+            event=lambda name, **fields: host.event(name, **fields),
+            status=lambda phase, message: host.status(phase, message),
+            save_status=lambda: host.save_status(),
             authorize=lambda challenge, nonce, generation: desktop_signature(
-                session.transport_hub.pairing.token, challenge, nonce, generation
+                host.transport_hub.pairing.token, challenge, nonce, generation
             ),
-            enqueue=lambda job: session.enqueue_response(job),
-            answer=lambda text, generation, image: session.answer(text, generation, image=image),
-            answer_completed=lambda: session.brain.last_metrics.get('completed'),
-            metric=session.record_metric,
-            log=lambda name, **fields: session.log(name, **fields),
+            enqueue=lambda job: host.enqueue_response(job),
+            answer=lambda text, generation, image: host.answer(text, generation, image=image),
+            answer_completed=lambda: host.brain.last_metrics.get('completed'),
+            metric=host.record_metric,
+            log=lambda name, **fields: host.log(name, **fields),
         )
     )
     playback = PlaybackController(
         PlaybackHooks(
-            lock=session.guard,
-            generation=lambda: session.generation,
-            active=lambda: session.active,
-            announcement_generation=lambda: session.announcements.generation,
-            valid=lambda generation: session.valid(generation),
-            cancel_session=lambda reason: session.cancel(reason),
-            event=lambda name, **fields: session.event(name, **fields),
-            send=lambda packet: session.send(packet),
-            status=lambda phase, message: session.status(phase, message),
-            log=lambda name, **fields: session.log(name, **fields),
-            metric=session.record_metric,
-            diagnostics=lambda: session.diagnostics,
-            trace=lambda: session.capture.endpoint.voice_trace,
+            lock=host.session.guard,
+            generation=lambda: host.session.generation,
+            active=lambda: host.session.active,
+            announcement_generation=lambda: host.announcements.generation,
+            valid=lambda generation: host.valid(generation),
+            cancel_session=lambda reason: host.cancel(reason),
+            event=lambda name, **fields: host.event(name, **fields),
+            send=lambda packet: host.send(packet),
+            status=lambda phase, message: host.status(phase, message),
+            log=lambda name, **fields: host.log(name, **fields),
+            metric=host.record_metric,
+            diagnostics=lambda: host.diagnostics,
+            trace=lambda: host.capture.endpoint.voice_trace,
             echo_metrics=lambda: dict(
-                input_dbfs=session.metrics.get('input_dbfs'),
-                residual_dbfs=session.metrics.get('output_dbfs'),
-                raw_coherence=round(session.capture.endpoint.near_speech.correlation, 3),
-                residual_coherence=round(
-                    session.capture.endpoint.near_speech.residual_correlation, 3
-                ),
+                input_dbfs=host.metrics.get('input_dbfs'),
+                residual_dbfs=host.metrics.get('output_dbfs'),
+                raw_coherence=round(host.capture.endpoint.near_speech.correlation, 3),
+                residual_coherence=round(host.capture.endpoint.near_speech.residual_correlation, 3),
             ),
             utterance_paused=lambda token: (
-                session.capture.endpoint.vad.talking
-                and session.capture.endpoint.turn_pause_token == token
+                host.capture.endpoint.vad.talking
+                and host.capture.endpoint.turn_pause_token == token
             ),
-            speech=lambda: session.speech,
-            cancel_timeline_pause=lambda: session.capture.echo.cancel_pause(),
-            pause_timeline=lambda nanos: session.capture.echo.pause_at(nanos),
-            resume_timeline=lambda nanos: session.capture.echo.resume_at(nanos),
+            speech=lambda: host.speech,
+            cancel_timeline_pause=lambda: host.capture.echo.cancel_pause(),
+            pause_timeline=lambda nanos: host.capture.echo.pause_at(nanos),
+            resume_timeline=lambda nanos: host.capture.echo.resume_at(nanos),
         )
     )
     capture = CapturePipeline(
         CaptureHooks(
-            generation=lambda: session.generation,
-            epoch=lambda: session.epoch,
-            active=lambda: session.active,
-            calibrating=lambda: session.calibration.active,
-            diagnostics=lambda: session.diagnostics,
-            metric=session.record_metric,
-            add_metric=session.add_capture_metric,
-            log=lambda name, **fields: session.log(name, **fields),
-            save_status=lambda: session.save_status(),
+            generation=lambda: host.session.generation,
+            epoch=lambda: host.session.epoch,
+            active=lambda: host.session.active,
+            calibrating=lambda: host.calibration.active,
+            diagnostics=lambda: host.diagnostics,
+            metric=host.record_metric,
+            add_metric=host.add_capture_metric,
+            log=lambda name, **fields: host.log(name, **fields),
+            save_status=lambda: host.save_status(),
         ),
         EchoPipeline(
             EchoHooks(
-                lock=session.guard,
-                active=lambda: session.active,
-                valid=lambda generation: session.valid(generation),
+                lock=host.session.guard,
+                active=lambda: host.session.active,
+                valid=lambda generation: host.valid(generation),
                 factory=lambda **kwargs: echo_factory(**kwargs),
-                fast_stop_enabled=lambda: bool(session.capture.endpoint.fast_stop),
-                metric=session.record_metric,
-                log=lambda name, **fields: session.log(name, **fields),
+                fast_stop_enabled=lambda: bool(host.capture.endpoint.fast_stop),
+                metric=host.record_metric,
+                log=lambda name, **fields: host.log(name, **fields),
             )
         ),
         EndpointPipeline(
             EndpointHooks(
-                generation=lambda: session.generation,
-                awake=lambda: session.awake,
-                playing=lambda: session.playback.playing,
-                last_audio_end=lambda: session.playback.last_audio_end,
-                last_spoken=lambda: session.playback.last_spoken,
-                previous_spoken=lambda: session.playback.previous_spoken,
-                previous_spoken_until=lambda: session.playback.previous_spoken_until,
-                recent_spoken=lambda: [text for _, text in tuple(session.playback.spoken)],
+                generation=lambda: host.session.generation,
+                awake=lambda: host.session.awake,
+                playing=lambda: host.playback.playing,
+                last_audio_end=lambda: host.playback.last_audio_end,
+                last_spoken=lambda: host.playback.last_spoken,
+                previous_spoken=lambda: host.playback.previous_spoken,
+                previous_spoken_until=lambda: host.playback.previous_spoken_until,
+                recent_spoken=lambda: [text for _, text in tuple(host.playback.spoken)],
                 pause_token=lambda: (
-                    session.playback.pause_state['token'] if session.playback.pause_state else None
+                    host.playback.pause_state['token'] if host.playback.pause_state else None
                 ),
-                paused=lambda: session.playback.pause_state is not None,
-                pause_voice=lambda: session.pause_for_voice(),
-                cancel_session=lambda reason: session.cancel(reason),
-                event=lambda name, **fields: session.event(name, **fields),
-                status=lambda phase, message: session.status(phase, message),
-                log=lambda name, **fields: session.log(name, **fields),
-                save_status=lambda: session.save_status(),
-                metric=session.record_metric,
-                add_metric=session.add_capture_metric,
-                metric_value=lambda name: session.metrics[name],
-                diagnostics=lambda: session.diagnostics,
-                enqueue=lambda job: session.enqueue_recognition(job),
-                discard_recognition=lambda: session.discard_recognition(),
+                paused=lambda: host.playback.pause_state is not None,
+                pause_voice=lambda: host.pause_for_voice(),
+                cancel_session=lambda reason: host.cancel(reason),
+                event=lambda name, **fields: host.event(name, **fields),
+                status=lambda phase, message: host.status(phase, message),
+                log=lambda name, **fields: host.log(name, **fields),
+                save_status=lambda: host.save_status(),
+                metric=host.record_metric,
+                add_metric=host.add_capture_metric,
+                metric_value=lambda name: host.metrics[name],
+                diagnostics=lambda: host.diagnostics,
+                enqueue=lambda job: host.enqueue_recognition(job),
+                discard_recognition=lambda: host.discard_recognition(),
             ),
             fast_stop,
         ),
     )
     recognition = RecognitionWorker(
         RecognitionHooks(
-            valid=lambda generation: session.valid(generation),
-            diagnostics=lambda: session.diagnostics,
-            playing=lambda: session.playback.playing,
-            last_audio_end=lambda: session.playback.last_audio_end,
-            recent_spoken=lambda: [line for _, line in tuple(session.playback.spoken)],
-            pause_state=lambda: session.playback.pause_state,
-            speech=lambda: session.speech,
-            metric=session.record_metric,
-            set_metric_field=session.set_metric_field,
-            add_metric_field=session.add_metric_field,
-            record_echo_pair=session.record_echo_pair,
-            echo_running=lambda: session.calibration.running,
-            echo_failed=lambda: session.calibration.failed,
-            awake=lambda: session.awake,
-            wake=lambda: session.wake,
-            set_awake=session.set_awake,
+            valid=lambda generation: host.valid(generation),
+            diagnostics=lambda: host.diagnostics,
+            playing=lambda: host.playback.playing,
+            last_audio_end=lambda: host.playback.last_audio_end,
+            recent_spoken=lambda: [line for _, line in tuple(host.playback.spoken)],
+            pause_state=lambda: host.playback.pause_state,
+            speech=lambda: host.speech,
+            metric=host.record_metric,
+            set_metric_field=host.set_metric_field,
+            add_metric_field=host.add_metric_field,
+            record_echo_pair=host.record_echo_pair,
+            echo_running=lambda: host.calibration.running,
+            echo_failed=lambda: host.calibration.failed,
+            awake=lambda: host.session.awake,
+            wake=lambda: host.session.wake,
+            set_awake=host.set_awake,
             wake_pattern=wake_pattern,
-            touch=lambda: session.touch_activity(),
-            event=lambda name, **fields: session.event(name, **fields),
-            status=lambda phase, message: session.status(phase, message),
-            log=lambda name, **fields: session.log(name, **fields),
-            cancel_session=lambda reason: session.cancel(reason),
-            begin_visual=lambda text, origin: session.begin_visual(text, origin),
-            enqueue_response=lambda job: session.enqueue_response(job),
-            failure=lambda message, error, **fields: session.failure(message, error, **fields),
-            resume_rejected=lambda token, generation: session.resume_after_rejection(
+            touch=lambda: host.touch_activity(),
+            event=lambda name, **fields: host.event(name, **fields),
+            status=lambda phase, message: host.status(phase, message),
+            log=lambda name, **fields: host.log(name, **fields),
+            cancel_session=lambda reason: host.cancel(reason),
+            begin_visual=lambda text, origin: host.begin_visual(text, origin),
+            enqueue_response=lambda job: host.enqueue_response(job),
+            failure=lambda message, error, **fields: host.failure(message, error, **fields),
+            resume_rejected=lambda token, generation: host.resume_after_rejection(
                 token, generation
             ),
         )
     )
     response = ResponseWorker(
         ResponseHooks(
-            valid=lambda generation: session.valid(generation),
-            diagnostics=lambda: session.diagnostics,
-            workspace=lambda: session.workspace,
-            brain=lambda: session.brain,
-            speech=lambda: session.speech,
-            active=lambda: session.active,
-            metric=session.record_metric,
-            dispatch=lambda job: session.respond_job(job),
-            answer=lambda text, generation: session.answer(text, generation),
-            answer_visual=lambda job: session.answer_visual(job),
-            read_announcement=lambda job: session.read_announcement(job),
-            finish_text=session.finish_text_response,
-            publish_workspace=lambda: session.publish_workspace(),
-            event=lambda name, **fields: session.event(name, **fields),
-            status=lambda phase, message: session.status(phase, message),
-            log=lambda name, **fields: session.log(name, **fields),
-            failure=lambda message, error: session.failure(message, error),
-            speak=lambda text, generation: session.speak(text, generation),
+            valid=lambda generation: host.valid(generation),
+            diagnostics=lambda: host.diagnostics,
+            workspace=lambda: host.workspace,
+            brain=lambda: host.brain,
+            speech=lambda: host.speech,
+            active=lambda: host.session.active,
+            metric=host.record_metric,
+            dispatch=lambda job: host.respond_job(job),
+            answer=lambda text, generation: host.answer(text, generation),
+            answer_visual=lambda job: host.answer_visual(job),
+            read_announcement=lambda job: host.read_announcement(job),
+            finish_text=host.finish_text_response,
+            publish_workspace=lambda: host.publish_workspace(),
+            event=lambda name, **fields: host.event(name, **fields),
+            status=lambda phase, message: host.status(phase, message),
+            log=lambda name, **fields: host.log(name, **fields),
+            failure=lambda message, error: host.failure(message, error),
+            speak=lambda text, generation: host.speak(text, generation),
         )
     )
     announcements = AnnouncementController(
         AnnouncementHooks(
-            lock=session.guard,
-            connected=lambda: session.connection is not None,
-            calibration_busy=lambda: session.calibration.active or session.calibration.running,
-            cancel_session=lambda reason: session.cancel(reason),
-            valid=lambda generation: session.valid(generation),
-            offer=lambda job: session.response.offer(job),
-            diagnostics=lambda: session.diagnostics,
-            event=lambda name, **fields: session.event(name, **fields),
-            status=lambda phase, message: session.status(phase, message),
-            speak=lambda text, generation: session.speak(text, generation),
-            failure=lambda message, error: session.failure(message, error),
-            metric=session.record_metric,
-            save_status=lambda: session.save_status(),
+            lock=host.session.guard,
+            connected=lambda: host.session.connection is not None,
+            calibration_busy=lambda: host.calibration.active or host.calibration.running,
+            cancel_session=lambda reason: host.cancel(reason),
+            valid=lambda generation: host.valid(generation),
+            offer=lambda job: host.response.offer(job),
+            diagnostics=lambda: host.diagnostics,
+            event=lambda name, **fields: host.event(name, **fields),
+            status=lambda phase, message: host.status(phase, message),
+            speak=lambda text, generation: host.speak(text, generation),
+            failure=lambda message, error: host.failure(message, error),
+            metric=host.record_metric,
+            save_status=lambda: host.save_status(),
         )
     )
     reminders = ReminderScheduler(
         ReminderHooks(
-            lock=session.guard,
-            workspace=lambda: session.workspace,
-            publish_workspace=lambda: session.publish_workspace(),
+            lock=host.session.guard,
+            workspace=lambda: host.workspace,
+            publish_workspace=lambda: host.publish_workspace(),
             can_deliver=lambda: (
-                session.connection is not None
-                and not session.calibration.active
-                and not session.playback.playing
-                and not session.response.busy
-                and not session.recognition.busy
-                and session.text_generation is None
-                and session.visual.generation is None
-                and session.announcements.generation is None
-                and not session.capture.endpoint.vad.talking
-                and session.response.queue.empty()
+                host.session.connection is not None
+                and not host.calibration.active
+                and not host.playback.playing
+                and not host.response.busy
+                and not host.recognition.busy
+                and host.session.text_generation is None
+                and host.visual.generation is None
+                and host.announcements.generation is None
+                and not host.capture.endpoint.vad.talking
+                and host.response.queue.empty()
             ),
-            touch=lambda: session.touch_activity(),
-            announce=lambda text: session.announce(text),
+            touch=lambda: host.touch_activity(),
+            announce=lambda text: host.announce(text),
         )
     )
     device = DeviceController(
         DeviceControlHooks(
-            lock=session.guard,
-            connected=lambda: session.connection is not None,
-            cancel_session=lambda reason: session.cancel(reason),
-            event=lambda name, **fields: session.event(name, **fields),
-            touch=lambda: session.touch_activity(),
+            lock=host.session.guard,
+            connected=lambda: host.session.connection is not None,
+            cancel_session=lambda reason: host.cancel(reason),
+            event=lambda name, **fields: host.event(name, **fields),
+            touch=lambda: host.touch_activity(),
         )
     )
     return Components(
@@ -296,4 +293,38 @@ def build_components(
         announcements,
         reminders,
         device,
+    )
+
+
+def build_session(host: Bridge) -> SessionController:
+    return SessionController(
+        SessionHooks(
+            diagnostics=lambda: host.diagnostics,
+            workspace=lambda: host.workspace,
+            playback=lambda: host.playback,
+            capture=lambda: host.capture,
+            visual=lambda: host.visual,
+            calibration=lambda: host.calibration,
+            announcements=lambda: host.announcements,
+            brain=lambda: host.brain,
+            speech=lambda: host.speech,
+            response_busy=lambda: host.response.busy,
+            recognition_busy=lambda: host.recognition.busy,
+            send=lambda packet: host.send(packet),
+            event=lambda name, **fields: host.event(name, **fields),
+            status=lambda phase, message: host.status(phase, message),
+            valid=lambda generation: host.valid(generation),
+            cancel=lambda reason: host.cancel(reason),
+            stop=lambda: host.stop(),
+            touch_activity=lambda: host.touch_activity(),
+            reminder_tick=lambda: host.reminder_tick(),
+            save_status=lambda: host.save_status(),
+            publish_workspace=lambda: host.publish_workspace(),
+            enqueue_response=lambda job: host.enqueue_response(job),
+            route_event=lambda event: host.on_event(event),
+            calibrate=lambda: host.calibrate,
+            log=lambda name, **fields: host.log(name, **fields),
+            metric=host.record_metric,
+            metric_value=lambda name: host.metrics.get(name, 0),
+        )
     )

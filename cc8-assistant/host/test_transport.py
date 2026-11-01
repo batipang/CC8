@@ -333,21 +333,21 @@ class HandoverTests(unittest.TestCase):
     def bridge(self):
         b = Bridge(None, None)
         b.save_status = lambda: None
-        b.connection = FakeChannel('usb')
-        b.transport_kind = 'usb'
+        b.session.connection = FakeChannel('usb')
+        b.session.transport_kind = 'usb'
         return b
 
     def test_existing_capture_epoch_is_preserved_and_old_audio_is_discarded(self):
         b = self.bridge()
-        b.active = True
-        b.epoch = 12
+        b.session.active = True
+        b.session.epoch = 12
         b.playback.playing = True
-        old = b.generation
+        old = b.session.generation
         new = FakeChannel('wifi')
         b.change_transport(new)
-        self.assertTrue(b.active)
-        self.assertEqual(b.epoch, 12)
-        self.assertGreater(b.generation, old)
+        self.assertTrue(b.session.active)
+        self.assertEqual(b.session.epoch, 12)
+        self.assertGreater(b.session.generation, old)
         self.assertEqual(b.capture.capture_lookahead_ns, 120_000_000)
         b.send(Packet(SPEAKER, old, data=b'\0\0'))
         self.assertFalse(new.sent)
@@ -358,7 +358,7 @@ class HandoverTests(unittest.TestCase):
 
     def test_losing_all_routes_stops_capture_and_reconnect_does_not_enable_it(self):
         b = self.bridge()
-        b.active = True
+        b.session.active = True
         closed = []
 
         class Aec:
@@ -367,23 +367,23 @@ class HandoverTests(unittest.TestCase):
 
         b.capture.echo.aec = Aec()
         b.change_transport(None)
-        self.assertFalse(b.active)
+        self.assertFalse(b.session.active)
         self.assertTrue(closed)
         b.change_transport(FakeChannel('wifi'))
-        self.assertFalse(b.active)
+        self.assertFalse(b.session.active)
         b.on_event(
             {'event': 'device_ready', 'capture_active': False, 'supports_playback_pause': True}
         )
-        self.assertFalse(b.active)
+        self.assertFalse(b.session.active)
 
     def test_rebind_of_same_user_enabled_epoch_does_not_start_new_capture(self):
         b = self.bridge()
-        b.active = True
-        b.epoch = 2
-        old = b.generation
+        b.session.active = True
+        b.session.epoch = 2
+        old = b.session.generation
         b.on_event({'event': 'session_rebind', 'capture_active': True, 'epoch': 2})
-        self.assertTrue(b.active)
-        self.assertEqual(b.generation, old)
+        self.assertTrue(b.session.active)
+        self.assertEqual(b.session.generation, old)
 
 
 class RebindIdempotenceTests(unittest.TestCase):
@@ -391,7 +391,7 @@ class RebindIdempotenceTests(unittest.TestCase):
         for order in [('session_rebind', 'session_start'), ('session_start', 'session_rebind')]:
             with self.subTest(order=order):
                 b = Bridge(None, None)
-                b.connection = FakeChannel('usb')
+                b.session.connection = FakeChannel('usb')
                 b.save_status = lambda: None
                 began = threading.Event()
                 with (
@@ -404,22 +404,22 @@ class RebindIdempotenceTests(unittest.TestCase):
                         b.on_event({'event': event, 'capture_active': True, 'epoch': 7})
                     self.assertTrue(began.wait(1))
                     self.assertEqual(calibrate.call_count, 1)
-                    generation = b.generation
+                    generation = b.session.generation
                     b.on_event({'event': 'session_start', 'epoch': 7})
-                    self.assertEqual(b.generation, generation)
+                    self.assertEqual(b.session.generation, generation)
                     self.assertEqual(calibrate.call_count, 1)
                     b.on_event({'event': 'session_start', 'epoch': 8})
                     deadline = time.monotonic() + 1
                     while calibrate.call_count < 2 and time.monotonic() < deadline:
                         time.sleep(0.01)
                     self.assertEqual(calibrate.call_count, 2)
-                    self.assertEqual(b.epoch, 8)
+                    self.assertEqual(b.session.epoch, 8)
 
     def test_duplicate_rebind_during_calibration_starts_only_one_calibration(self):
         b = Bridge(None, None)
-        b.connection = FakeChannel('wifi')
-        b.active = True
-        b.epoch = 3
+        b.session.connection = FakeChannel('wifi')
+        b.session.active = True
+        b.session.epoch = 3
         b.calibration.active = True
         began = threading.Event()
         with patch.object(b, 'calibrate', side_effect=lambda generation: began.set()) as calibrate:

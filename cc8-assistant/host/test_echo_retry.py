@@ -58,28 +58,28 @@ class EchoRetryTests(unittest.TestCase):
             with self.subTest(
                 active=active, calibrating=calibrating, running=running, playing=playing
             ):
-                session.active = active
+                session.session.active = active
                 session.calibration.active = calibrating
                 session.calibration.running = running
                 session.playback.playing = playing
-                generation = session.generation
+                generation = session.session.generation
                 with patch('bridge.threading.Thread') as worker:
                     handler()
                 worker.assert_not_called()
-                self.assertEqual(session.generation, generation)
-                self.assertEqual(session.active, active)
-        session.active = True
+                self.assertEqual(session.session.generation, generation)
+                self.assertEqual(session.session.active, active)
+        session.session.active = True
         session.calibration.active = session.calibration.running = session.playback.playing = False
-        session.connection = object()
-        generation = session.generation
+        session.session.connection = object()
+        generation = session.session.generation
         with patch('bridge.threading.Thread') as worker:
             handler()
-        self.assertTrue(session.active)
-        self.assertEqual(session.generation, generation + 1)
+        self.assertTrue(session.session.active)
+        self.assertEqual(session.session.generation, generation + 1)
         self.assertTrue(session.calibration.active)
         self.assertTrue(session.calibration.pending)
         worker.assert_called_once_with(
-            target=session.calibrate, args=(session.generation,), daemon=True
+            target=session.calibrate, args=(session.session.generation,), daemon=True
         )
         worker.return_value.start.assert_called_once_with()
 

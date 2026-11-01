@@ -110,7 +110,7 @@ def run_backend(dependencies: BackendDependencies):
 
     def shutdown(*unused):
         stop.set()
-        bridge.active = False
+        bridge.session.deactivate()
         bridge.playback.stop_output()
         bridge.announcements.invalidate()
         try:
@@ -125,7 +125,7 @@ def run_backend(dependencies: BackendDependencies):
         cancel_speech = getattr(bridge.speech, 'cancel', None)
         if cancel_speech:
             cancel_speech()
-        c = bridge.connection
+        c = bridge.session.connection
         if c:
             try:
                 c.shutdown(socket.SHUT_RDWR)
@@ -140,7 +140,7 @@ def run_backend(dependencies: BackendDependencies):
         # This signal can rerun the diagnostic on an already active session;
         # it deliberately cannot open the microphone or resume a stopped one.
         if (
-            not bridge.active
+            not bridge.session.active
             or bridge.calibration.active
             or bridge.calibration.running
             or bridge.playback.playing
@@ -185,7 +185,7 @@ def run_backend(dependencies: BackendDependencies):
         if stop.is_set():
             break
     hub.close()
-    bridge.connection = None
-    if bridge.active:
+    bridge.session.unbind()
+    if bridge.session.active:
         bridge.stop()
     bridge.save_status()

@@ -197,12 +197,12 @@ class CaptureAndTransportTests(unittest.TestCase):
 
     def test_late_stop_from_previous_microphone_does_not_close_new_session(self):
         value = self.bridge()
-        value.active = True
-        value.epoch = 8
+        value.session.active = True
+        value.session.epoch = 8
         value.on_event({'event': 'session_stop', 'epoch': 6})
-        self.assertTrue(value.active)
+        self.assertTrue(value.session.active)
         value.on_event({'event': 'session_stop', 'epoch': 8})
-        self.assertFalse(value.active)
+        self.assertFalse(value.session.active)
 
     def test_malformed_device_events_fail_as_protocol_errors(self):
         value = self.bridge()
@@ -212,8 +212,8 @@ class CaptureAndTransportTests(unittest.TestCase):
 
     def test_lookahead_rejects_non_monotonic_or_stalled_capture_clock(self):
         value = self.bridge()
-        value.active = True
-        value.epoch = 1
+        value.session.active = True
+        value.session.epoch = 1
         value.on_packet(Packet(MIC, 1, nanos=100, data=b'\0' * 320))
         with self.assertRaises(ValueError):
             value.on_packet(Packet(MIC, 1, nanos=99, data=b'\0' * 320))
@@ -230,32 +230,32 @@ class CaptureAndTransportTests(unittest.TestCase):
             value.on_event({'event': 'play_done', 'generation': old})
         self.assertEqual(value.playback.completed, set())
         self.assertTrue(value.playback.playing)
-        value.on_event({'event': 'play_done', 'generation': value.generation})
-        self.assertEqual(value.playback.completed, {value.generation})
+        value.on_event({'event': 'play_done', 'generation': value.session.generation})
+        self.assertEqual(value.playback.completed, {value.session.generation})
         self.assertFalse(value.playback.playing)
 
     def test_old_calibration_cannot_replace_new_session_echo_state(self):
         value = self.bridge()
-        value.active = True
-        value.connection = object()
+        value.session.active = True
+        value.session.connection = object()
         value.calibration.active = True
         state = object()
         value.capture.echo.aec = state
         value.capture.echo.calibration_frames = [('new',)]
-        self.assertFalse(value.align_reference(value.generation - 1))
+        self.assertFalse(value.align_reference(value.session.generation - 1))
         self.assertIs(value.capture.echo.aec, state)
         self.assertEqual(value.capture.echo.calibration_frames, [('new',)])
         self.assertTrue(value.calibration.active)
 
     def test_cancel_during_alignment_cannot_finish_the_next_calibration(self):
         value = self.bridge()
-        value.active = True
-        value.connection = object()
+        value.session.active = True
+        value.session.connection = object()
         value.calibration.active = True
-        generation = value.generation
+        generation = value.session.generation
 
         def switched(*args):
-            value.generation += 1
+            value.session.generation += 1
             return True
 
         with (

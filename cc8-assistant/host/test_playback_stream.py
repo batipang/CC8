@@ -12,7 +12,7 @@ from test_runtime import Fragmented
 class StreamPlaybackTests(unittest.TestCase):
     def bridge(self, on_packet=None):
         bridge = Bridge(None, None)
-        bridge.active = True
+        bridge.session.active = True
         bridge.save_status = lambda: None
 
         class Sink:
@@ -32,14 +32,14 @@ class StreamPlaybackTests(unittest.TestCase):
                 elif p.kind == EVENT and json.loads(p.data).get('event') == 'play_end':
                     bridge.on_event({'event': 'play_done', 'generation': p.generation})
 
-        bridge.connection = Sink()
+        bridge.session.connection = Sink()
         return bridge
 
     def test_streamed_pcm_preserves_frame_count_and_completion(self):
         b = self.bridge()
         pcm = np.arange(480, dtype=np.int16)
-        self.assertTrue(b.play_stream(iter([pcm[:170], pcm[170:]]), 'test', b.generation))
-        packets = b.connection.packets
+        self.assertTrue(b.play_stream(iter([pcm[:170], pcm[170:]]), 'test', b.session.generation))
+        packets = b.session.connection.packets
         raw = b''.join(p.data for p in packets if p.kind == SPEAKER)
         self.assertEqual(raw, pcm.astype('<i2').tobytes())
         self.assertEqual(json.loads(packets[-1].data)['frames'], 480)
@@ -63,15 +63,15 @@ class StreamPlaybackTests(unittest.TestCase):
 
         b = self.bridge(on_packet)
         chunks = Chunks()
-        self.assertFalse(b.play_stream(chunks, 'test', b.generation))
+        self.assertFalse(b.play_stream(chunks, 'test', b.session.generation))
         self.assertTrue(chunks.closed)
-        for thread in b.connection.callbacks:
+        for thread in b.session.connection.callbacks:
             thread.join(1)
-        self.assertEqual(len([p for p in b.connection.packets if p.kind == SPEAKER]), 1)
+        self.assertEqual(len([p for p in b.session.connection.packets if p.kind == SPEAKER]), 1)
         self.assertFalse(
             any(
                 p.kind == EVENT and json.loads(p.data).get('event') == 'play_end'
-                for p in b.connection.packets
+                for p in b.session.connection.packets
             )
         )
 
@@ -81,13 +81,13 @@ class StreamPlaybackTests(unittest.TestCase):
             raise MiniMaxError('Simulated network stream failure')
 
         b = self.bridge()
-        generation = b.generation
+        generation = b.session.generation
         with self.assertRaises(MiniMaxError):
             b.play_stream(failing(), 'test', generation)
-        self.assertGreater(b.generation, generation)
+        self.assertGreater(b.session.generation, generation)
         self.assertFalse(b.playback.playing)
-        self.assertTrue(b.active)
-        events = [json.loads(p.data) for p in b.connection.packets if p.kind == EVENT]
+        self.assertTrue(b.session.active)
+        events = [json.loads(p.data) for p in b.session.connection.packets if p.kind == EVENT]
         self.assertTrue(any(e.get('event') == 'cancel' for e in events))
         self.assertTrue(any(e.get('phase') == 'error' for e in events))
 

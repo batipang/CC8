@@ -13,8 +13,8 @@ from vision import DesktopSnapshot
 class WorkerRecoveryTests(unittest.TestCase):
     def bridge(self, speech=None):
         b = Bridge(speech, None)
-        b.connection = object()
-        b.active = True
+        b.session.connection = object()
+        b.session.active = True
         b.event = lambda *a, **k: None
         b.save_status = lambda: None
         b.log = lambda *a, **k: None
@@ -31,15 +31,15 @@ class WorkerRecoveryTests(unittest.TestCase):
                 raise EOFError('closed transport')
 
         b.event = event
-        b.text_generation = b.generation
+        b.session.text_generation = b.session.generation
         b.answer = lambda text, generation: answered.set() if text == 'second' else None
         with patch('threading.excepthook'):
-            b.enqueue_response(TextReply(b.generation, 'first'))
+            b.enqueue_response(TextReply(b.session.generation, 'first'))
             self.assertTrue(disconnected.wait(1))
-            b.enqueue_response(Reply(b.generation, 'second'))
+            b.enqueue_response(Reply(b.session.generation, 'second'))
             self.assertTrue(answered.wait(1), 'response worker died during text cleanup')
         self.assertTrue(b.response.worker.is_alive())
-        self.assertIsNone(b.text_generation)
+        self.assertIsNone(b.session.text_generation)
 
     def test_resume_disconnect_does_not_kill_recognition_worker(self):
         class Speech:
@@ -54,7 +54,7 @@ class WorkerRecoveryTests(unittest.TestCase):
         b.playback.playing = True
         b.playback.pause_state = {
             'token': 1,
-            'generation': b.generation,
+            'generation': b.session.generation,
             'started': time.monotonic(),
         }
 
@@ -67,17 +67,17 @@ class WorkerRecoveryTests(unittest.TestCase):
         b.enqueue_response = lambda job: answered.set()
         evidence = {'echo_risk': False, 'pause_token': 1, 'captured_at': time.monotonic()}
         with patch('threading.excepthook'):
-            b.recognition.queue.put((b.generation, [], False, [], evidence))
+            b.recognition.queue.put((b.session.generation, [], False, [], evidence))
             self.assertTrue(disconnected.wait(1))
-            b.recognition.queue.put((b.generation, [], False, [], evidence))
+            b.recognition.queue.put((b.session.generation, [], False, [], evidence))
             self.assertTrue(answered.wait(1), 'recognition worker died while resuming playback')
         self.assertTrue(b.recognition.worker.is_alive())
 
     def test_announcement_always_finishes_waiter_even_if_status_write_fails(self):
         b = self.bridge()
-        b.announcements.generation = b.generation
+        b.announcements.generation = b.session.generation
         b.speak = lambda *a: True
-        job = Announcement(b.generation, '测试')
+        job = Announcement(b.session.generation, '测试')
         with (
             patch.object(b, 'save_status', side_effect=OSError('disk full')),
             self.assertRaises(OSError),
@@ -99,7 +99,7 @@ class WorkerRecoveryTests(unittest.TestCase):
                 b.heartbeat_tick()
                 self.assertEqual(tick.call_count, 2)
         self.assertEqual(calls, ['ping'] * 3)
-        self.assertTrue(b.active)
+        self.assertTrue(b.session.active)
 
     def test_failed_first_workspace_send_does_not_leave_task_running(self):
         b = self.bridge()
@@ -107,7 +107,7 @@ class WorkerRecoveryTests(unittest.TestCase):
             patch.object(b, 'publish_workspace', side_effect=EOFError('closed')),
             self.assertRaises(EOFError),
         ):
-            b.answer('测试', b.generation)
+            b.answer('测试', b.session.generation)
         self.assertEqual(b.workspace.snapshot()['tasks'][0]['status'], 'failed')
 
     def test_completed_dot_work_survives_failed_result_notification(self):
@@ -127,17 +127,17 @@ class WorkerRecoveryTests(unittest.TestCase):
 
         b.event = event
         with self.assertRaises(EOFError):
-            b.answer('测试', b.generation)
+            b.answer('测试', b.session.generation)
         task = b.workspace.snapshot()['tasks'][0]
         self.assertEqual(task['status'], 'completed')
         self.assertEqual(task['result'], '已完成的结果')
 
     def test_snapshot_waiter_finishes_when_final_device_notification_disconnects(self):
         b = self.bridge()
-        capture = b.visual.inbox.begin(b.generation)
-        job = DesktopSnapshot(b.generation, capture.ident)
+        capture = b.visual.inbox.begin(b.session.generation)
+        job = DesktopSnapshot(b.session.generation, capture.ident)
         b.visual.snapshot_job = job
-        b.visual.generation = b.generation
+        b.visual.generation = b.session.generation
 
         def event(name, **fields):
             if name == 'vision_done':

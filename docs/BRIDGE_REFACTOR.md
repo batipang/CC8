@@ -136,3 +136,14 @@ AnnouncementController 拥有播报 generation 与完成回执，ReminderSchedul
 
 
 第八步已由 [PR #25](https://github.com/batipang/CC8/pull/25) 合入，[真实 CI](https://github.com/batipang/CC8/actions/runs/41342487933) 八项通过。
+
+
+## 第十步：会话代次与前台生命周期（候选）
+
+329 行 SessionController 唯一拥有 active / epoch / generation / wake / awake、连接选择、rebind 去重、文字请求代次、待机时间与会话/写锁；Bridge 不保留另一份可写会话副本。开始/停止、设备 ready / settings / rebind、手动中断与切换转为会话命令；组件取消、重置/关闭和任务回执经明确接口协调。Bridge 保留同签名外部方法，以及 owner IPC 用到的只读 generation / guard 兼容面。
+
+frozen SessionHooks 接收真实所属组件的 API / 只读 busy 查询与聚合器命令，不接完整 Bridge 或 metrics dict；只有 composition.py 绑定完整宿主。所有会话字段写入收敛在所属模块，进程退出只调用 deactivate / unbind，ACK 取 generation 继续无锁，取消仍是 guard → 组件锁；没有新增锁嵌套、provider 重试或麦克风授权。校准线程仍动态取原 façade 方法，保留替换点和旧代次隔离。
+
+同一组合成操作在合入基线 830454e 与候选运行：16 份会话快照、12 条控制事件及全部指标完全相同，覆盖双 Start 去重、rebind、旧 epoch Stop、15 分钟条件模拟、唤醒屏幕、USB/Wi-Fi 切换、全丢失后恢复不自开麦及文字请求取消。此处是模拟推进时间，不冒充真实 15 分钟待机或物理切换。原全套 installer 16、host 356（4 private skip）、tooling 47、Java 15 checks 与质量通过；测试仅迁移内部状态路径。Bridge 501 行、composition 330 行，状态报告等聚合职责继续收敛；新动态模块仍未计入 strict 六模块清单。无部署/设备/云服务/私人录音，F-06 未结束，待 CI。
+
+第九步后台入口已由 [PR #26](https://github.com/batipang/CC8/pull/26) 合入，[真实 CI](https://github.com/batipang/CC8/actions/runs/41342730902) 八项通过。

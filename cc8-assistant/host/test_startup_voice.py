@@ -12,8 +12,8 @@ class StartupVoiceTests(unittest.TestCase):
     def bridge(self):
         speech = SimpleNamespace(synthesize=Mock(return_value=np.ones(RATE * 2, dtype=np.int16)))
         value = Bridge(speech, None)
-        value.active = True
-        value.connection = object()
+        value.session.active = True
+        value.session.connection = object()
         value.calibration.active = True
         value.play = Mock(return_value=True)
         value.speak = Mock()
@@ -27,7 +27,7 @@ class StartupVoiceTests(unittest.TestCase):
         for wake in (False, True):
             with self.subTest(wake=wake):
                 value = self.bridge()
-                value.wake = wake
+                value.session.wake = wake
                 with (
                     patch(
                         'bridge.wav_samples',
@@ -35,16 +35,16 @@ class StartupVoiceTests(unittest.TestCase):
                     ),
                     patch('bridge.time.sleep') as sleep,
                 ):
-                    value.calibrate(value.generation)
+                    value.calibrate(value.session.generation)
                 value.speech.synthesize.assert_called_once_with('汽车人，变形！')
                 value.play.assert_called_once()
                 self.assertEqual(
                     value.play.call_args.args[1:],
-                    (STARTUP_GREETING, value.generation, 'calibration'),
+                    (STARTUP_GREETING, value.session.generation, 'calibration'),
                 )
                 self.assertEqual(len(value.play.call_args.args[0]), RATE * 2)
                 value.speak.assert_not_called()
-                value.align_reference.assert_called_once_with(value.generation)
+                value.align_reference.assert_called_once_with(value.session.generation)
                 self.assertFalse(value.calibration.active)
                 self.assertGreater(sleep.call_args.args[0], 6)
 
@@ -59,15 +59,15 @@ class StartupVoiceTests(unittest.TestCase):
 
         value.play.side_effect = play
         with patch('bridge.time.sleep'):
-            value.calibrate(value.generation)
+            value.calibrate(value.session.generation)
         self.assertEqual(value.capture.echo.calibration_frames, [('actual-playback',)])
 
     def test_cancelled_synthesis_cannot_clear_or_play_new_session(self):
         value = self.bridge()
-        generation = value.generation
+        generation = value.session.generation
 
         def synthesize(text):
-            value.generation += 1
+            value.session.generation += 1
             value.capture.echo.calibration_frames = [('new-session',)]
             return np.ones(RATE * 2, dtype=np.int16)
 
@@ -83,7 +83,7 @@ class StartupVoiceTests(unittest.TestCase):
         value.failure = Mock()
         value.speech.synthesize.side_effect = RuntimeError()
         with patch('bridge.wav_samples') as old:
-            value.calibrate(value.generation)
+            value.calibrate(value.session.generation)
         old.assert_not_called()
         value.play.assert_not_called()
         value.failure.assert_called_once()

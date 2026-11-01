@@ -190,12 +190,12 @@ class WorkspaceTests(unittest.TestCase):
         b.publish_workspace = lambda: None
 
         def announce(text):
-            jobs.append(Announcement(b.generation, text))
+            jobs.append(Announcement(b.session.generation, text))
             return jobs[-1]
 
         b.announce = announce
         for field in ['calibrating', 'playing', 'response_busy', 'recognition_busy']:
-            b.connection = object()
+            b.session.connection = object()
             owner = (
                 b.playback
                 if field == 'playing'
@@ -228,15 +228,15 @@ class WorkspaceTests(unittest.TestCase):
                 else field,
                 False,
             )
-        b.connection = None
+        b.session.connection = None
         b.reminders.poll = 0
         b.reminder_tick()
         self.assertEqual(jobs, [])
-        b.connection = object()
+        b.session.connection = object()
         b.reminders.poll = 0
         b.reminder_tick()
         self.assertEqual(len(jobs), 1)
-        self.assertFalse(b.active)
+        self.assertFalse(b.session.active)
         b.reminder_tick()
         self.assertEqual(len(jobs), 1)
         jobs[0].result = 'completed'
@@ -251,9 +251,9 @@ class WorkspaceTests(unittest.TestCase):
                 item = self.create(board)
                 self.time += timedelta(hours=2)
                 b = Bridge(None, None, workspace=board)
-                b.connection = object()
+                b.session.connection = object()
                 b.publish_workspace = lambda: None
-                b.announce = lambda text: Announcement(b.generation, text)
+                b.announce = lambda text: Announcement(b.session.generation, text)
                 b.reminder_tick()
                 job = b.reminders.job
                 updated = board.reminder(
@@ -311,28 +311,28 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_text_request_works_without_microphone_and_interrupt_invalidates_queued_work(self):
         b = Bridge(None, None)
-        b.connection = object()
+        b.session.connection = object()
         events = []
         b.event = lambda event, **fields: events.append((event, fields))
         b.enqueue_response = lambda job: setattr(b, 'queued_text', job)
         result = b.submit_text('请帮我查询')
-        self.assertFalse(b.active)
+        self.assertFalse(b.session.active)
         self.assertTrue(b.valid(result['generation']))
         self.assertEqual(b.queued_text.text, '请帮我查询')
         self.assertTrue(any(e == 'text_begin' for e, _ in events))
         b.on_event({'event': 'interrupt'})
         self.assertFalse(b.valid(result['generation']))
-        self.assertIsNone(b.text_generation)
-        self.assertFalse(b.active)
+        self.assertIsNone(b.session.text_generation)
+        self.assertFalse(b.session.active)
 
     def test_invalid_text_cannot_cancel_current_work_or_start_capture(self):
         b = Bridge(None, None)
-        old = b.generation
+        old = b.session.generation
         for value in ['', None, 'x' * 6001, 'bad\x00text']:
             with self.assertRaises(ValueError):
                 b.submit_text(value)
-        self.assertEqual(b.generation, old)
-        self.assertFalse(b.active)
+        self.assertEqual(b.session.generation, old)
+        self.assertFalse(b.session.active)
 
     def test_stopping_narration_does_not_cancel_already_completed_dot_work(self):
         class Brain:
@@ -346,8 +346,8 @@ class WorkspaceTests(unittest.TestCase):
                 yield '实际工作已完成'
 
         b = Bridge(None, Brain())
-        b.connection = object()
-        b.active = True
+        b.session.connection = object()
+        b.session.active = True
         b.event = lambda *a, **k: None
 
         def stop_speaking(*args):
@@ -355,7 +355,7 @@ class WorkspaceTests(unittest.TestCase):
             return False
 
         b.speak = stop_speaking
-        b.answer('测试', b.generation)
+        b.answer('测试', b.session.generation)
         self.assertEqual(b.workspace.snapshot()['tasks'][0]['status'], 'completed')
 
 

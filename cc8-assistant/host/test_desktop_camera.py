@@ -22,7 +22,7 @@ from tools.java_toolchain import java_bin
 class SnapshotBridgeTests(unittest.TestCase):
     def bridge(self):
         b = Bridge(None, None)
-        b.connection = object()
+        b.session.connection = object()
         b.visual.challenge = 'c' * 32
         b.transport_hub = SimpleNamespace(pairing=SimpleNamespace(token='a' * 64))
         b.save_status = lambda: None
@@ -48,7 +48,7 @@ class SnapshotBridgeTests(unittest.TestCase):
         self.assertTrue(job.done.wait(2))
         self.assertEqual(job.result, 'completed')
         self.assertEqual(job.image, jpeg())
-        self.assertFalse(b.active)
+        self.assertFalse(b.session.active)
         self.assertIsNone(b.visual.snapshot_job)
         self.assertIsNone(b.visual.generation)
         self.assertIsNone(b.visual.inbox.pending)
@@ -56,7 +56,7 @@ class SnapshotBridgeTests(unittest.TestCase):
 
     def test_existing_microphone_remains_enabled(self):
         b = self.bridge()
-        b.active = True
+        b.session.active = True
 
         def event(name, **kw):
             if name == 'camera_capture':
@@ -66,13 +66,13 @@ class SnapshotBridgeTests(unittest.TestCase):
         b.event = event
         job = b.request_snapshot()
         self.assertTrue(job.done.wait(2))
-        self.assertTrue(b.active)
+        self.assertTrue(b.session.active)
 
     def test_camera_busy_calibration_and_disconnect_reject_new_request(self):
         for field, value in [
             ('visual.generation', 123),
             ('calibration.active', True),
-            ('connection', None),
+            ('session.connection', None),
         ]:
             b = self.bridge()
             owner = (
@@ -80,6 +80,8 @@ class SnapshotBridgeTests(unittest.TestCase):
                 if field.startswith('visual.')
                 else b.calibration
                 if field.startswith('calibration.')
+                else b.session
+                if field.startswith('session.')
                 else b
             )
             setattr(owner, field.split('.')[-1], value)
@@ -107,9 +109,9 @@ class SnapshotBridgeTests(unittest.TestCase):
 
     def test_stale_visual_job_cannot_replace_new_inbox(self):
         b = self.bridge()
-        old = b.generation
+        old = b.session.generation
         b.cancel('new')
-        current = b.visual.inbox.begin(b.generation)
+        current = b.visual.inbox.begin(b.session.generation)
         b.answer_visual(VisualReply(old, 'old'))
         self.assertIs(b.visual.inbox.pending, current)
 

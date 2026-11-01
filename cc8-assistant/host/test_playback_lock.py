@@ -16,12 +16,12 @@ REPRODUCTION = textwrap.dedent("""
     from bridge import Bridge
 
     bridge = Bridge(None, None)
-    bridge.active = True
-    bridge.connection = object()
+    bridge.session.active = True
+    bridge.session.connection = object()
     bridge.send = lambda packet: None
     bridge.log = lambda *args, **fields: None
     owner = getattr(bridge, 'playback', bridge)
-    generation = bridge.generation
+    generation = bridge.session.generation
     ready = threading.Event()
     deadline_read = threading.Event()
     proceed = threading.Event()
@@ -48,7 +48,7 @@ REPRODUCTION = textwrap.dedent("""
     def control():
         # Owner requests such as a snapshot hold this outer reentrant guard
         # while cancelling the preceding audio generation.
-        with bridge.guard:
+        with bridge.session.guard:
             ready.set()
             if not deadline_read.wait(3):
                 raise RuntimeError('renderer did not reach completion deadline')
@@ -77,7 +77,7 @@ REPRODUCTION = textwrap.dedent("""
     assert not any(worker.is_alive() for worker in workers), 'session/done lock cycle'
     assert not errors, errors
     assert results == [False], results
-    assert bridge.generation == generation + 1, 'expired output cancelled the new generation'
+    assert bridge.session.generation == generation + 1, 'expired output cancelled the new generation'
     assert owner.playing is False
     print('completed without deadlock or stale cancellation')
 """)

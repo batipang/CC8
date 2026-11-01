@@ -11,8 +11,8 @@ class CalibrationFlowTests(unittest.TestCase):
     def session(self):
         with patch('threading.Thread.start'):
             session = Bridge(None, None)
-        session.active = True
-        session.connection = object()
+        session.session.active = True
+        session.session.connection = object()
         session.event = Mock()
         session.log = Mock()
         session.save_status = Mock()
@@ -28,7 +28,7 @@ class CalibrationFlowTests(unittest.TestCase):
 
         clock = SimpleNamespace(monotonic=lambda: now[0], sleep=sleep)
         with patch('calibration_controller.time', clock):
-            session.check_echo(session.generation)
+            session.check_echo(session.session.generation)
 
     def test_quiet_check_finishes_and_preserves_existing_microphone(self):
         session = self.session()
@@ -37,7 +37,7 @@ class CalibrationFlowTests(unittest.TestCase):
         self.assertEqual(report['state'], 'passed')
         self.assertGreaterEqual(report['seconds'], 20)
         self.assertEqual(session.speak.call_count, 5)
-        self.assertTrue(session.active)
+        self.assertTrue(session.session.active)
         self.assertFalse(session.calibration.running)
         self.assertFalse(session.calibration.failed)
 
@@ -60,7 +60,7 @@ class CalibrationFlowTests(unittest.TestCase):
                 )
                 self.assertFalse(session.calibration.running)
                 self.assertTrue(session.calibration.failed)
-                self.assertTrue(session.active)
+                self.assertTrue(session.session.active)
 
     def test_cancelled_playback_finishes_report_without_starting_more_speech(self):
         for invalidate in (False, True):
@@ -69,7 +69,7 @@ class CalibrationFlowTests(unittest.TestCase):
 
                 def speak(*unused):
                     if invalidate:
-                        session.generation += 1
+                        session.session.generation += 1
                     return False
 
                 session.speak.side_effect = speak
@@ -77,7 +77,7 @@ class CalibrationFlowTests(unittest.TestCase):
                 self.assertEqual(session.metrics['echo_self_check']['state'], 'interrupted')
                 self.assertEqual(session.speak.call_count, 1)
                 self.assertFalse(session.calibration.running)
-                self.assertTrue(session.active)
+                self.assertTrue(session.session.active)
 
     def test_output_exception_records_failure_and_releases_running_state(self):
         session = self.session()
@@ -87,7 +87,7 @@ class CalibrationFlowTests(unittest.TestCase):
         self.assertEqual(session.metrics['echo_self_check']['state'], 'error')
         self.assertTrue(session.calibration.failed)
         self.assertFalse(session.calibration.running)
-        self.assertTrue(session.active)
+        self.assertTrue(session.session.active)
         self.assertEqual(session.save_status.call_count, 2)
 
 

@@ -39,7 +39,7 @@ class AnnouncementTests(unittest.TestCase):
                 elif p.kind == EVENT and json.loads(p.data).get('event') == 'play_end':
                     b.on_event({'event': 'play_done', 'generation': p.generation})
 
-        b.connection = Sink()
+        b.session.connection = Sink()
         return b
 
     def test_announcement_plays_without_starting_microphone(self):
@@ -47,12 +47,12 @@ class AnnouncementTests(unittest.TestCase):
         job = b.announce('常州是2026年苏超亚军！')
         self.assertTrue(job.done.wait(2))
         self.assertEqual(job.result, 'completed')
-        self.assertFalse(b.active)
-        events = [json.loads(p.data) for p in b.connection.packets if p.kind == EVENT]
+        self.assertFalse(b.session.active)
+        events = [json.loads(p.data) for p in b.session.connection.packets if p.kind == EVENT]
         begin = next(e for e in events if e['event'] == 'play_begin')
         self.assertEqual(begin['role'], 'announcement')
         self.assertEqual(begin['text'], job.text)
-        self.assertTrue(any(p.kind == SPEAKER for p in b.connection.packets))
+        self.assertTrue(any(p.kind == SPEAKER for p in b.session.connection.packets))
         self.assertIsNone(b.announcements.generation)
         self.assertFalse(any(e['event'] == 'session_start' for e in events))
 
@@ -61,17 +61,17 @@ class AnnouncementTests(unittest.TestCase):
         job = b.announce('测试')
         self.assertTrue(job.done.wait(2))
         self.assertEqual(job.result, 'interrupted')
-        self.assertFalse(b.active)
+        self.assertFalse(b.session.active)
         self.assertFalse(b.valid(job.generation))
         self.assertIsNone(b.announcements.generation)
 
     def test_microphone_state_is_preserved_if_already_active(self):
         b = self.bridge()
-        b.active = True
+        b.session.active = True
         job = b.announce('测试')
         self.assertTrue(job.done.wait(2))
         self.assertEqual(job.result, 'completed')
-        self.assertTrue(b.active)
+        self.assertTrue(b.session.active)
 
     def test_disconnect_and_calibration_are_rejected(self):
         b = self.bridge()
@@ -79,7 +79,7 @@ class AnnouncementTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             b.announce('测试')
         b.calibration.active = False
-        b.connection = None
+        b.session.connection = None
         with self.assertRaises(RuntimeError):
             b.announce('测试')
 
@@ -102,7 +102,7 @@ class AnnouncementTests(unittest.TestCase):
                     client.sendall(json.dumps({'text': '测试'}).encode() + b'\n')
                     result = json.loads(client.recv(4096))
                     self.assertEqual(result['status'], 'completed')
-                self.assertFalse(b.active)
+                self.assertFalse(b.session.active)
             finally:
                 server.close()
             self.assertFalse(path.exists())
