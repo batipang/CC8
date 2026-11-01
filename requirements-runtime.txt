@@ -1,3 +1,2 @@
-# Discovery entry for Dependabot. Actual runtime preparation uses the included lock.
-# Apple Silicon / CPython 3.13 only; do not install into the lightweight test environment.
--r cc8-assistant/host/requirements-runtime.lock
+# Dependabot discovery entry; do not install into the lightweight test environment.
+-r cc8-assistant/host/requirements-runtime.txt

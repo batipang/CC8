@@ -44,7 +44,7 @@ secrets 扫描**已经提交的历史**，不等于扫描所有未提交文件�
 
 ## 更新与下载来源
 
-Dependabot 每周检查根目录 pip 清单、GitHub Actions 和两个 Gradle 工程，只创建 PR，不自动合并、发布或安装。`requirements-runtime.txt` 通过 `-r` 引用原 runtime lock，供 pip 更新发现，不复制第二份版本列表；不能把它装进轻量开发环境。跨清单更新、Ruff required-version、pre-commit 锁版和原生资源校验值应一起审查，不能为了通过 CI 取消版本约束。
+Dependabot 每周检查根目录 pip 清单、GitHub Actions 和两个 Gradle 工程，只创建 PR，不自动合并、发布或安装。运行依赖版本唯一来源为 `cc8-assistant/host/requirements-runtime.txt`（标准命名便于更新器发现），原 `.lock` 路径保留为 `-r` 兼容入口；根目录同名文件用于跨目录发现，不复制版本列表，不能装进轻量开发环境。首次 updater 未取回非标准 `.lock` 引用的真实失败记录保留在验证日志，修复不以忽略整个运行清单代替。跨清单更新、Ruff required-version、pre-commit 锁版和原生资源校验值应一起审查，不能为了通过 CI 取消版本约束。
 
 | 来源 | 更新/校验方式 | 不包含的承诺 |
 | --- | --- | --- |

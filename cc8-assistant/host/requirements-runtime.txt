@@ -1,0 +1,27 @@
+# Canonical Apple Silicon / CPython 3.13 runtime pins.
+certifi==2026.10.23
+charset-normalizer==3.5.2
+filelock==4.2.5
+fsspec==2026.9.0
+hf-xet==1.8.0
+huggingface-hub==0.36.0
+idna==3.20
+llvmlite==0.45.1
+mlx==0.29.4
+mlx-metal==0.29.4
+mlx-whisper==0.4.3
+numba==0.62.1
+numpy==2.3.4
+packaging==26.3
+pywebrtc-audio==0.2.0
+pyyaml==6.0.3
+regex==2026.9.29
+requests==2.34.2
+scipy==1.16.3
+sherpa-onnx==2.0.1
+sherpa-onnx-core==2.0.1
+tiktoken==0.12.0
+tqdm==4.67.1
+typing-extensions==4.16.0
+urllib3==2.8.0
+webrtcvad-wheels==2.0.14.post1
