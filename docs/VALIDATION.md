@@ -403,3 +403,12 @@ P0-06 经 [PR #31](https://github.com/batipang/CC8/pull/31) 的 [真实 CI 八�
 新增 75 条通用语料：五类各 3 调参 / 12 验收，四种距离/背景组合 300 位；空模板全部 unmeasured。CER/WER S/D/I、关键字段和人工意图标注分开，缺测和未标注不当正确；A/B 要求样本/场景/source/标注覆盖一致。输出只留静态语料编号、计数/差值，无转录或实际字段值。
 
 12 项新增回归覆盖已知编辑距离和小字串穷举不变量、负数/小数及纠错句、缺测/失败/缺标注、分组隔离、A/B 拒绝、schema/预算、owner 文件/链接/FIFO/JSON、真实 root CLI 私有结果与不覆盖。实际系统 Python 3.9.6 在 / 与最小 PATH 执行空模板→评分，300 missing、0 observed、0600，无设备/模型/网络；临时文件清理。完整 installer 16、host 425（4 private-audio skip）、tooling 51、Java 15 checks；质量/strict 六模块/脱敏扫描通过。待 CI，未采样真人或调整阈值，P0-04 不结项；见 [ASR_EVALUATION](ASR_EVALUATION.md)。
+
+
+P0-04 评分软件经 [PR #32](https://github.com/batipang/CC8/pull/32) 的 [真实 CI 八项](https://github.com/batipang/CC8/actions/runs/41353667824) 通过并合入 9806b27。没有新增真人成绩。
+
+### P0-05：只读资源曲线与 native 持续输入（未部署）
+
+0.13.2 / runtime-observation-20261102.1 候选 health 增加仅自身资源快照和随机实例标识；cc8 observe 最长 72 小时 / 6000 采样，原子私有检查点、重启分段、完整/缺口/取消状态。只读取 health，不发设备/工具/服务管理指令。旧后台缺资源字段明确 partial；Python 线程不冒充 native 总线程，探测 FD 误差/轮询间隙/休眠或调时限制均记录。11 项新回归含实际自身进程数值与真实 Unix fixture / 最小 PATH CLI。完整 installer 16、host 436（4 private-audio skip）、tooling 51、Java 15 checks 及质量/strict 六模块通过，待 CI。
+
+隔离 actual dual-KWS eval 额外输入 1800 秒合成低电平噪声，40.589 秒挂钟、native 40.061 秒，无触发；峰值约 112.3 MiB，模拟 600/1200/1800 秒点 RSS 均约 88.5 MiB。不是实时 30 分钟或 72 小时验收，未采麦、调用云端或保存声音。详见 [RUNTIME_OBSERVATION](RUNTIME_OBSERVATION.md)，未更动运行助手。

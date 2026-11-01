@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased — failure-feedback-20261102.1
+## Unreleased — runtime-observation-20261102.1
 
-Backend 0.13.1; APK and wire protocol versions stay independent and unchanged.
+Backend 0.13.2; APK and wire protocol versions stay independent and unchanged.
 
 - Split vision and speaker/pause lifecycle ownership behind explicit session
   ports, preserving foreground authorization and existing audio parameters.
@@ -36,6 +36,10 @@ Backend 0.13.1; APK and wire protocol versions stay independent and unchanged.
 - Add a fixed 15-calibration/60-acceptance generic ASR corpus and private
   `cc8 score-asr` reports, with missing coverage, explicit field annotations,
   paired A/B and no recording, upload or automatic acceptance claim.
+
+- Add bounded owner-process gauges to health and `cc8 observe` for private
+  resource curves, runtime segments and explicit sampling/legacy-data gaps.
+  Observation never starts capture, executes tasks or restarts services.
 
 This candidate has not replaced the running installation.
 
