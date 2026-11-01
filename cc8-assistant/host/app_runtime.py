@@ -16,9 +16,7 @@ import socket
 import subprocess
 import threading
 from typing import Callable
-import numpy as np
 from config_schema import ConfigError
-from dsp import RATE
 
 
 @dataclass(frozen=True)
@@ -29,6 +27,7 @@ class BackendDependencies:
     direct_speech: Callable[..., object]
     local_speech: Callable[..., object]
     fast_stop: Callable[..., object]
+    wake_detector: Callable[..., object]
     brain_router: Callable[..., object]
     minimax_brain: Callable[..., object]
     bridge: Callable[..., object]
@@ -66,9 +65,12 @@ def run_backend(dependencies: BackendDependencies):
         if args.brain == 'minimax'
         else dependencies.local_speech(config=config)
     )
-    print('Loading local Chinese ASR (' + speech.recognizer.engine + ')…', flush=True)
-    speech.recognize(np.zeros(RATE, dtype=np.float32))
-    print('Local ASR ready; raw microphone audio is not saved.', flush=True)
+    print(
+        'ASR provider configured ('
+        + str(speech.recognizer.engine)
+        + '); requests require an accepted utterance.',
+        flush=True,
+    )
     if args.speech_smoke:
         phrase = '你好，语音链路已准备好。'
         pcm = speech.synthesize(phrase)
@@ -82,12 +84,15 @@ def run_backend(dependencies: BackendDependencies):
         else 'Streaming stop commands disabled.',
         flush=True,
     )
+    wake_detector = dependencies.wake_detector(fast_stop)
     bridge = dependencies.bridge(
         speech,
         dependencies.brain_router(dependencies.minimax_brain(config=config), selected=config.brain)
         if args.brain == 'minimax'
         else None,
         fast_stop=fast_stop,
+        wake_detector=wake_detector,
+        wake_window_seconds=config.wake_window_seconds,
         echo_check=args.echo_check_after_start,
         workspace=dependencies.workspace(dependencies.private / 'reminders.json'),
     )

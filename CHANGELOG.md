@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased — foundation-20261102.2
+## Unreleased — local-wake-20261102.1
 
-Backend 0.12.6; APK and wire protocol versions stay independent and unchanged.
+Backend 0.13.0; APK and wire protocol versions stay independent and unchanged.
 
 - Split vision and speaker/pause lifecycle ownership behind explicit session
   ports, preserving foreground authorization and existing audio parameters.
@@ -19,6 +19,13 @@ Backend 0.12.6; APK and wire protocol versions stay independent and unchanged.
 - Add `cc8 measure` for bounded content-free diagnostic runs, initial history
   exclusion, request deduplication, partial-coverage receipts and atomic private
   checkpoints. Collection never starts capture or model requests.
+
+- Detect 大黄蜂 / Bumblebee locally before cloud ASR, with a bounded idle
+  conversation window and a second worker-side authorization gate. Keep the
+  same-utterance prefix buffer, continuous mode and existing stop/reconnect rules.
+- Reuse Chinese stop-model weights through an independent native stream; pin a
+  dedicated English BPE KWS archive after bilingual-model synthesis checks.
+  Document model provenance, resource measurements and human acceptance gaps.
 
 This candidate has not replaced the running installation.
 

@@ -441,7 +441,7 @@ class CancellationTests(unittest.TestCase):
         ]
         self.assertIn('别讲新闻了，给我讲个故事', transcripts)
 
-    def test_echo_cannot_trigger_wake_word_before_filtering(self):
+    def test_asleep_echo_cannot_call_asr_or_wake(self):
         done = threading.Event()
 
         class Speech:
@@ -461,7 +461,7 @@ class CancellationTests(unittest.TestCase):
                 {'echo_risk': True, 'captured_at': time.monotonic() - 70},
             )
         )
-        self.assertTrue(done.wait(1))
+        self.assertFalse(done.wait(0.05))
         time.sleep(0.05)
         self.assertFalse(b.session.awake)
 
@@ -636,7 +636,7 @@ class CancellationTests(unittest.TestCase):
 
 
 class WakeRoutingTests(unittest.TestCase):
-    def run_turn(self, text, awake=False):
+    def run_turn(self, text, awake=False, local_keyword='大黄蜂'):
         recognized = threading.Event()
         answered = threading.Event()
 
@@ -658,24 +658,37 @@ class WakeRoutingTests(unittest.TestCase):
                 self.requests.append(value)
                 yield '你好。'
 
+        class LocalDetector:
+            def feed(self, audio):
+                return local_keyword
+
+            def reset(self, **unused):
+                pass
+
         brain = Brain()
-        b = Bridge(Speech(), brain)
+        b = Bridge(Speech(), brain, wake_detector=LocalDetector())
         b.session.connection = Sink()
         b.session.active = True
         b.session.wake = True
         b.session.awake = awake
         b.save_status = lambda: None
         b.speak = lambda *args: answered.set() or True
+        if not awake:
+            self.assertEqual(b.wake.feed(np.zeros(320), b.session.generation), bool(local_keyword))
+        local_wake = b.wake.claim_prefix()
         b.recognition.queue.put(
             (
                 b.session.generation,
                 np.ones(RATE),
                 False,
                 [],
-                {'echo_risk': False, 'captured_at': time.monotonic()},
+                {'echo_risk': False, 'captured_at': time.monotonic(), 'local_wake': local_wake},
             )
         )
-        self.assertTrue(recognized.wait(1))
+        if awake or local_keyword:
+            self.assertTrue(recognized.wait(1))
+        else:
+            self.assertFalse(recognized.wait(0.05))
         return b, brain, answered
 
     def test_new_wake_word_strips_prefix_and_routes_same_utterance(self):
@@ -686,12 +699,12 @@ class WakeRoutingTests(unittest.TestCase):
 
     def test_old_wake_word_no_longer_wakes(self):
         for word in ['小薄荷', '贾维斯', 'JARVIS', 'bumblebees']:
-            b, brain, done = self.run_turn(word + '，介绍一下你自己')
+            b, brain, done = self.run_turn(word + '，介绍一下你自己', local_keyword='')
             self.assertFalse(done.wait(0.1))
             self.assertFalse(b.session.awake)
             self.assertEqual(brain.requests, [])
 
-    def test_english_and_common_asr_spelling_can_wake(self):
+    def test_local_wake_prefix_handles_english_and_asr_spellings(self):
         for word in ['Bumblebee', 'BUMBLEBEE', 'bumble bee', '邦布比', '大黃蜂']:
             b, brain, done = self.run_turn(word + '，你好')
             self.assertTrue(done.wait(1))
@@ -870,6 +883,7 @@ class FastStopTests(unittest.TestCase):
 
         detector = FastStopDetector.__new__(FastStopDetector)
         detector.gain = 2
+        detector.engine_lock = threading.RLock()
         detector.stream = Stream()
         detector.detector = Detector()
         detector.samples = 0

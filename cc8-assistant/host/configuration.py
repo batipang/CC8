@@ -44,6 +44,7 @@ class RuntimeConfig:
     tls_port: int
     connect_timeout: int
     read_timeout: int
+    wake_window_seconds: int
     credential_file: Path
     signing_keystore: Path | None
     profile: Path
@@ -66,6 +67,7 @@ class RuntimeConfig:
             'tls_port': self.tls_port,
             'connect_timeout': self.connect_timeout,
             'read_timeout': self.read_timeout,
+            'wake_window_seconds': self.wake_window_seconds,
             'credential_reference_configured': bool(self.credential_file),
             'signing_reference_configured': self.signing_keystore is not None,
             'sources': dict(self.sources),
@@ -180,6 +182,7 @@ def load_config(root: Path = ROOT, environ: Mapping[str, str] | None = None) -> 
         tls_port=cast(int, values['tls_port']),
         connect_timeout=cast(int, values['connect_timeout']),
         read_timeout=cast(int, values['read_timeout']),
+        wake_window_seconds=cast(int, values['wake_window_seconds']),
         credential_file=_path(cast(str, values['credential_file']), root, 'credential_file'),
         signing_keystore=_path(cast(str, values['signing_keystore']), root, 'signing_keystore')
         if values['signing_keystore'] is not None

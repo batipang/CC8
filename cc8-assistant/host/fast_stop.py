@@ -7,8 +7,7 @@ through this fast route. General conversational interruption still uses ASR.
 
 from pathlib import Path
 import re
-import time
-import numpy as np
+from streaming_keywords import StreamingKeywords, validated_gain
 
 ROOT = Path(__file__).resolve().parents[2]
 MODEL = ROOT / '.toolchains/cc8/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20'
@@ -47,35 +46,10 @@ def keyword_spotter(model=MODEL):
     )
 
 
-class FastStopDetector:
-    # 本地流式关键词提供停止快路径，不替代一般话语 ASR 或近端语音确认。
-    def __init__(self, gain=2.0):
-        if not 1 <= gain <= 4:
-            raise ValueError('Fast-stop gain must be between 1 and 4')
-        self.gain = float(gain)
-        self.detector = keyword_spotter()
-        self.stream = self.detector.create_stream()
-        self.samples = 0
-        self.compute_seconds = 0.0
+class FastStopDetector(StreamingKeywords):
+    # 停止与唤醒拥有独立流；只共享不可变模型及串行 native 访问锁。
+    KEYWORDS = frozenset(COMMANDS)
 
-    def reset(self):
-        self.stream = self.detector.create_stream()
-        self.samples = 0
-        self.compute_seconds = 0.0
-
-    def feed(self, pcm):
-        start = time.perf_counter()
-        self.stream.accept_waveform(
-            16000, np.clip(np.asarray(pcm, dtype=np.float32) * self.gain, -0.98, 0.98)
-        )
-        self.samples += len(pcm)
-        keyword = ''
-        while self.detector.is_ready(self.stream):
-            self.detector.decode_stream(self.stream)
-            result = self.detector.get_result(self.stream)
-            if result:
-                self.detector.reset_stream(self.stream)
-                if result in COMMANDS:
-                    keyword = result
-        self.compute_seconds += time.perf_counter() - start
-        return keyword
+    def __init__(self, gain=2.0, *, model=MODEL):
+        gain = validated_gain(gain)
+        super().__init__(keyword_spotter(model), gain)

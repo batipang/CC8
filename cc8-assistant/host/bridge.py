@@ -16,6 +16,7 @@ from protocol import EVENT, decode_event, validate_device_event
 from transport import Pairing, TransportHub
 from dsp import WebRtcEchoCanceller
 from fast_stop import FastStopDetector
+from local_wake import WakeDetector
 from brain_router import BrainRouter
 from announce import AnnouncementServer
 from calibration_controller import STARTUP_GREETING as STARTUP_GREETING
@@ -56,7 +57,15 @@ class Bridge:
     # Mac 端协调收音、消回声/断句、ASR、大脑及 TTS。
     # epoch 标识设备录音会话；generation 标识可被打断的回答，两者不可互换。
     def __init__(
-        self, speech, brain, library=LIBRARY, fast_stop=None, echo_check=False, workspace=None
+        self,
+        speech,
+        brain,
+        library=LIBRARY,
+        fast_stop=None,
+        echo_check=False,
+        workspace=None,
+        wake_detector=None,
+        wake_window_seconds=60,
     ):
         self.diagnostics = TraceBook()
         started_at = time.monotonic()
@@ -83,6 +92,8 @@ class Bridge:
             wake_pattern=WAKE_PATTERN,
             fast_stop=fast_stop,
             echo_check=echo_check,
+            wake_detector=wake_detector,
+            wake_window_seconds=wake_window_seconds,
             started_at=started_at,
             private_directory=lambda: PRIVATE,
             wake_word=WAKE_WORD,
@@ -98,6 +109,7 @@ class Bridge:
         self.reminders = components.reminders
         self.device = components.device
         self.reporting = components.reporting
+        self.wake = components.wake
         self.recognition.start()
         self.response.start()
 
@@ -386,6 +398,7 @@ def run_backend():
             direct_speech=DirectSpeech,
             local_speech=LocalSpeech,
             fast_stop=FastStopDetector,
+            wake_detector=WakeDetector.load,
             brain_router=BrainRouter,
             minimax_brain=MiniMaxBrain,
             bridge=Bridge,

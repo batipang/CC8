@@ -22,8 +22,12 @@ class EchoRetryTests(unittest.TestCase):
             tempfile.TemporaryDirectory() as folder,
             patch.object(bridge, 'PRIVATE', Path(folder)),
             patch.object(sys, 'argv', ['bridge.py', '--no-fast-stop']),
-            patch('bridge.load_config', return_value=SimpleNamespace(brain='dot', tls_port=18766)),
-            patch('bridge.DirectSpeech'),
+            patch(
+                'bridge.load_config',
+                return_value=SimpleNamespace(brain='dot', tls_port=18766, wake_window_seconds=60),
+            ),
+            patch('bridge.DirectSpeech') as speech_factory,
+            patch('bridge.WakeDetector'),
             patch('bridge.MiniMaxBrain'),
             patch('bridge.BrainRouter'),
             patch('bridge.Workspace'),
@@ -40,6 +44,7 @@ class EchoRetryTests(unittest.TestCase):
             self.assertRaises(StopIteration),
         ):
             bridge.run_backend()
+        speech_factory.return_value.recognize.assert_not_called()
         return handlers[signal.SIGUSR1]
 
     def test_signal_retry_checks_real_playback_owner_and_never_starts_capture(self):

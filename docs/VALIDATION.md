@@ -377,3 +377,10 @@ P0-01 分轮诊断已由 [PR #28](https://github.com/batipang/CC8/pull/28) 合�
 新增三项回归，运行真实 Supervisor / Popen / OS worker lock / owner health IPC / PID 路径核验 / SIGTERM 与 child wait：十次异常退出串行恢复，disabled 标记终止且不再拉起，存活但三次不健康后替换并由健康实例按 disabled 停止。每次启动检查全部已创建 fixture PID 均已退出，worker OS 锁额外捕获重叠；结束核验无遗留、无 overlap、状态 stopped。所有子进程只运行临时合成脚本，最小环境无凭证/模型配置，临时进程结束后目录清除。
 
 wait gate 加速但退避请求仍断言为 1/2/4/8/16/30/30/30/30/30；不健康用例前移初始化计时预算。全局模型锁检查在此 fixture 明确替换，避免与现有真实后台争用；该检查的真实覆盖仍是 F-15 单独测试。本轮约 3 秒是加速软件回归，不是生产恢复时延。没有 launchctl、模型加载、UI/麦克风/相机、真实后台重启或私有音视频。installer 16、host 379（4 private skip）、tooling 47、Java 15 checks 与质量通过；待 CI。P0-02 的真实登录/睡眠/完整十组验收仍开放。
+
+
+### P0-03：本地双唤醒词软件候选（未部署）
+
+后台候选 0.13.0 / local-wake-20261102.1，APK 0.8.7 与协议 2 不变。中文独立 stream 共享既有停止模型和 engine lock，英文专用 GigaSpeech BPE KWS；原停止参数未改变。双重云识别门控、有界空闲窗口、同句缓冲、无唤醒词/应用内黑屏、旧代次与 native 重置竞态均有合成流水线/并发回归。英文固定归档 SHA 为本机官方 HTTPS 下载计算，来源明确记录，权重不入 Git。
+
+实际本机全套 installer 16、host 402（4 private-audio skip）、tooling 51、Java 15 checks；Ruff / Java formatting / strict 六模块通过。真实两个权重在隔离 eval 环境执行 5 正样本 / 3 负样本和 10 秒低电平噪声检查；合成音而非真人，无麦克风、云请求或私有音频。加载 0.571 秒、进程峰值 RSS 108.0 MiB、10 秒 native 计算 0.2123 秒仅为本轮开发机观测。模型许可、资源、断线/停止规则和待补真人矩阵见 [LOCAL_WAKE](LOCAL_WAKE.md)。未运行新后台、安装 APK 或启用设备采集；待 CI，P0-03 及实体验收均不关闭。

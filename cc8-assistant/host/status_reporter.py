@@ -24,11 +24,13 @@ from calibration_controller import CalibrationController
 from vision_controller import VisionController
 from announcement_controller import AnnouncementController
 from session_ports import EventSink
+from wake_controller import WakeController
 
 
 @dataclass(frozen=True)
 class ReportingHooks:
     session: Callable[[], SessionView]
+    wake: Callable[[], WakeController]
     diagnostics: Callable[[], TraceBook]
     playback: Callable[[], PlaybackController]
     capture: Callable[[], CapturePipeline]
@@ -73,6 +75,10 @@ class StatusReporter:
             'protocol_version': RELEASE.protocol_version,
             'uptime_seconds': round(time.monotonic() - self.started_at, 1),
             'model_ready': True,
+            'local_wake_ready': self.hooks.wake().ready,
+            'waiting_for_wake': state.active
+            and not self.hooks.calibration().active
+            and not state.awake,
             'recognition_worker': self.hooks.recognition_alive(),
             'response_worker': self.hooks.response_alive(),
             'connected': state.connected,
@@ -100,6 +106,11 @@ class StatusReporter:
             'generation': state.generation,
             'wake_mode': state.wake,
             'wake_word': self.hooks.wake_word,
+            'local_wake_ready': self.hooks.wake().ready,
+            'waiting_for_wake': state.active
+            and not self.hooks.calibration().active
+            and not state.awake,
+            'wake_window_seconds': self.hooks.wake().window_seconds,
             'bridge_version': RELEASE.backend_version,
             'release_id': RELEASE.release_id,
             'protocol_version': RELEASE.protocol_version,

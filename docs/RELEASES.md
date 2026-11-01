@@ -11,7 +11,7 @@
 
 `known_deployed_pair` 记录原现场助手 0.8.6 / code 31、后台 0.12.2、协议 2；它不是候选已部署的声明。相同协议表示声明的传输兼容，不代表每个可选功能、声学效果或物理切换已验收。破坏协议的改动必须改清单/兼容范围并补回归，不强迫所有组件版本号相同。
 
-工作中候选以 `python3 tools/release.py show` 和 CHANGELOG 的 Unreleased 为准：当前锁循环修复候选为后台 0.12.6 / foundation-20261102.2，APK / 协议未升版，尚未建立对应 tag 或部署。下方 .1 命令用于 checkout 到该已标记源码时复验其原清单。
+工作中候选以 `python3 tools/release.py show` 和 CHANGELOG 的 Unreleased 为准：当前本地唤醒候选为后台 0.13.0 / local-wake-20261102.1，APK / 协议未升版，尚未建立对应 tag 或部署。下方 .1 命令用于 checkout 到该已标记源码时复验其原清单。
 
 ## 构建与内容核验
 
