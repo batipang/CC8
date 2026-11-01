@@ -81,3 +81,12 @@ The portrait, full orbit footprint, independent waveform, status, task/reminder 
 The actual announcement completed; all eight status samples report a fully visible current caption line and no caption/rail overlap. First and final native screenshots were visually inspected; the seconds point moves between frames and the rail advances with playback. Both capture devices remain off during this check. Build/lint and seven relevant playback/timing tests pass. The current task receipt reflects real service history, not seeded design content. No new P0/P1/P2 visual defects found; cropped neighboring caption context at the viewport edge remains the same P3 detail documented in 0.8.2.
 
 final result: passed
+
+
+## 0.8.4 yellow clock markers (2026-11-01)
+
+The owner's latest direction replaces the 0.8.3 amber/cyan time arcs with two bold yellow radial lines and removes the visible digital clock. On the physical 1280×800 screen, the short heavier hour marker and longer minute marker occupy the orbit annulus, leaving the portrait unobstructed. At system time 17:31 they point between five and six o'clock, and just past the bottom minute mark, respectively. Two native maintenance screenshots at seconds44 and49 confirm that the outer cyan second point and trail continue moving. There is no remaining digital readout or backing box. The full ring, independent waveform, caption viewport, progress rail and dock retain their layout. No new visual defects found.
+
+Release build and lint pass; signed stock installation and installed hash are verified. Both microphone and camera are off during this UI check; local screenshots remain ignored. This drawing-only change does not expand audio acceptance claims.
+
+final result: passed
