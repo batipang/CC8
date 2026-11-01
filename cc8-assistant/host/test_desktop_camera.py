@@ -71,11 +71,18 @@ class SnapshotBridgeTests(unittest.TestCase):
     def test_camera_busy_calibration_and_disconnect_reject_new_request(self):
         for field, value in [
             ('visual.generation', 123),
-            ('calibrating', True),
+            ('calibration.active', True),
             ('connection', None),
         ]:
             b = self.bridge()
-            setattr(b.visual if field.startswith('visual.') else b, field.split('.')[-1], value)
+            owner = (
+                b.visual
+                if field.startswith('visual.')
+                else b.calibration
+                if field.startswith('calibration.')
+                else b
+            )
+            setattr(owner, field.split('.')[-1], value)
             with self.assertRaises(RuntimeError):
                 b.request_snapshot()
 

@@ -420,7 +420,7 @@ class RebindIdempotenceTests(unittest.TestCase):
         b.connection = FakeChannel('wifi')
         b.active = True
         b.epoch = 3
-        b.calibrating = True
+        b.calibration.active = True
         began = threading.Event()
         with patch.object(b, 'calibrate', side_effect=lambda generation: began.set()) as calibrate:
             value = {'event': 'session_rebind', 'capture_active': True, 'epoch': 3}

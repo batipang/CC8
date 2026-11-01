@@ -75,10 +75,10 @@ class AnnouncementTests(unittest.TestCase):
 
     def test_disconnect_and_calibration_are_rejected(self):
         b = self.bridge()
-        b.calibrating = True
+        b.calibration.active = True
         with self.assertRaises(RuntimeError):
             b.announce('测试')
-        b.calibrating = False
+        b.calibration.active = False
         b.connection = None
         with self.assertRaises(RuntimeError):
             b.announce('测试')

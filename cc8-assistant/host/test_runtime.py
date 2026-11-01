@@ -474,7 +474,7 @@ class CancellationTests(unittest.TestCase):
 
         b = self.bridge(Speech())
         b.brain = Brain()
-        b.echo_check_running = True
+        b.calibration.running = True
         b.metrics['echo_self_check'] = {'unmatched_candidates': 0}
         b.recognition.queue.put(
             (
@@ -789,7 +789,7 @@ class FastStopTests(unittest.TestCase):
         b.playback.playing = True
         b.playback.last_spoken = spoken
         b.capture.echo.aec = AEC()
-        b.calibrating = calibrating
+        b.calibration.active = calibrating
         b.save_status = lambda: None
         return b
 

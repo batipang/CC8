@@ -271,7 +271,7 @@ class ProviderSettingsTests(unittest.TestCase):
 
     def test_provider_change_cannot_interrupt_calibration(self):
         b = self.bridge()
-        b.calibrating = True
+        b.calibration.active = True
         old = b.generation
         b.on_event({'event': 'settings', 'brain_provider': 'dot'})
         self.assertEqual(b.brain.selected, 'dot')

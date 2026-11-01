@@ -336,3 +336,11 @@ ResponseWorker 接管有界队列、单消费者、busy 与 RAM-only 历史；�
 
 
 F-06 独立缺陷回归：实际注册的 SIGUSR1 handler 在第三步之后漏迁移 bridge.playing，负向测试两处确认 AttributeError；修复查询 playback.playing 后，新测试验证四种应忽略状态和一个允许状态，线程/语音提供方与设备均替身，未发送真实信号或启用采集。此修复与第六步纯重构分开提交。
+
+
+### F-06 第七步：校准 / 显式自检（未部署）
+
+参考 PCM 校验、开场音、真正开播后的采样窗口和旧 generation 隔离保留；CalibrationController 通过明确端口管理状态，不打开捕获或读取声音文件。新增有界合成时钟测试完整运行通过/残留候选失败/识别排空不完整/取消/异常路径，无真实 sleep 或提供方。installer 16、host 353（4 private skip）、tooling 47、Java 15 checks、Ruff / Java / strict 六模块通过。校准新模块本身未声称 strict 验收，真实 AEC/唤醒/声音体验仍待用户配合。Bridge 1159 行，F-06 未结束，待 CI。
+
+
+第七步另一个纯重构提交集中六组件装配：六份绑定构造 AST 在明确名称映射后完全一致，线程启动顺序保持全部组件发布后再启动。全套离线与质量复验通过，计数同上；Bridge 970 行，composition.py 236 行。未部署。
