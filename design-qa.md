@@ -97,3 +97,16 @@ final result: passed
 The owner requests a clearer seconds stroke while preserving short/long yellow hour and minute markers, with zero seconds at twelve o'clock. Inspect the 0.8.4 and 0.8.5 idle captures at 1280×800: the new leading stroke is thicker and brighter, with a 36-degree tapered tail and larger white-centered point. The head and surrounding layout remain unobstructed, and no numeric clock returns. Minute-boundary frames show the point passing across the top at 17:37→17:38, consistent with the system wall clock. The 49-character announcement completed, caption42sp and caption/progress separation remain intact. Screenshots and microphone/camera-off state are verified; native build/lint and signed installation pass. Progress redesigns are separate, uninstalled selection previews.
 
 final result: passed
+
+
+## 0.8.6 selected energy bar and full three-line captions (2026-11-01)
+
+Resolved the selected visual to the SECOND displayed image from the prior three-option exploration, saved as docs/design/playback-energy-selected.png. The owner's new feedback explicitly supersedes 42sp captions and requests a cleaner seconds tail. A refined reference, docs/design/playback-energy-three-lines.png, was generated with those constraints before implementation; the final built-in prompt and source roles are archived in docs/design/PLAYBACK_ENERGY.md.
+
+Compared the refined reference and the native speaking capture together, at the same landscape surface and around 60% playback. The implementation uses 20 slanted cyan cells, hollow upcoming outlines, cut-corner thin frame and amber diagonal gate. It preserves the existing native progress position and elapsed-time area; differences in actual captions/tasks and animation phase are intentional, and mock task content is not seeded. The portrait, ring footprint, independent waveform, status position, large auxiliary fonts and dock stay in place. The stepped outer tail becomes a single smooth 12-degree arc with a small point, driven by actual seconds; no digital clock returns.
+
+The six-line 97-character announcement shows exactly three whole lines per page. All 12 samples report 36sp, three full visible lines, a fully visible active line and no progress overlap. The visible long-caption window is 147px within the allocated 153px; scroll changes from 0 to 144. First, middle and final native frames show no partial fourth line or clipped final-page context. Final-build three-line text with explicit newlines also completes: three full lines, 36sp, 153px window, no overlap; its native screenshot was inspected. The two cases exercise both wrapped pagination and an exactly-three-line caption.
+
+Release build/lint, seven related timing/playback regressions, original-signature stock update and final installed hash pass. Mic/camera remain off during maintenance QA; raw screenshots stay ignored. No new P0/P1/P2 issues found. Minor system-font and raster mock optical differences remain P3; live content and real clock phase differ naturally. Caption size and clipping now follow the latest owner's three-line instruction rather than the earlier 42sp requirement.
+
+final result: passed
