@@ -7,7 +7,8 @@ constructors are passive; Bridge publishes the bundle before starting workers.
 
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Pattern
+from typing import TYPE_CHECKING, Pattern, Callable
+from pathlib import Path
 from brain_router import BrainRouter
 from vision import desktop_signature
 from calibration_controller import CalibrationController, CalibrationHooks
@@ -20,6 +21,7 @@ from recognition_worker import RecognitionWorker, RecognitionHooks
 from response_worker import ResponseWorker, ResponseHooks
 from fast_stop import FastStopDetector
 from session_controller import SessionController, SessionHooks
+from status_reporter import StatusReporter, ReportingHooks
 from announcement_controller import AnnouncementController, AnnouncementHooks
 from reminder_scheduler import ReminderScheduler, ReminderHooks
 from device_controller import DeviceController, DeviceControlHooks
@@ -39,6 +41,7 @@ class Components:
     announcements: AnnouncementController
     reminders: ReminderScheduler
     device: DeviceController
+    reporting: StatusReporter
 
 
 def build_components(
@@ -48,6 +51,10 @@ def build_components(
     wake_pattern: Pattern[str],
     fast_stop: FastStopDetector | None,
     echo_check: bool,
+    started_at: float,
+    private_directory: Callable[[], Path],
+    wake_word: str,
+    dot_runtime: Callable[[], dict[str, object]],
 ) -> Components:
     calibration = CalibrationController(
         CalibrationHooks(
@@ -283,6 +290,31 @@ def build_components(
             touch=lambda: host.touch_activity(),
         )
     )
+    reporting = StatusReporter(
+        ReportingHooks(
+            session=lambda: host.session.snapshot(),
+            diagnostics=lambda: host.diagnostics,
+            playback=lambda: host.playback,
+            capture=lambda: host.capture,
+            calibration=lambda: host.calibration,
+            visual=lambda: host.visual,
+            announcements=lambda: host.announcements,
+            brain=lambda: host.brain,
+            speech=lambda: host.speech,
+            recognition_alive=lambda: host.recognition.worker.is_alive(),
+            response_alive=lambda: host.response.worker.is_alive(),
+            metrics=lambda: dict(host.metrics),
+            transport_diagnostics=lambda: (
+                host.transport_hub.diagnostics() if host.transport_hub else {}
+            ),
+            dot_runtime=dot_runtime,
+            private_directory=private_directory,
+            wake_word=wake_word,
+            log=lambda name, **fields: host.log(name, **fields),
+            status=lambda phase, message: host.status(phase, message),
+        ),
+        started_at=started_at,
+    )
     return Components(
         calibration,
         visual,
@@ -293,6 +325,7 @@ def build_components(
         announcements,
         reminders,
         device,
+        reporting,
     )
 
 

@@ -354,3 +354,10 @@ F-06 独立缺陷回归：实际注册的 SIGUSR1 handler 在第三步之后漏�
 ### F-06 第九步：进程运行入口（未部署）
 
 run_backend 原体经显式工厂/目录/描述绑定后 AST 等价，原 façade 和锁覆盖保留；app_runtime 191 行、Bridge 699 行。installer 16、host 356（4 private skip）、tooling 47、Java 15 checks 和质量通过，含实际信号注册、启动错误先于 provider、最小 PATH 和 USB 排除网络/多设备。动态入口新模块不计入 strict 六模块。没有运行新后台或更动部署，F-06 保持开放，待 CI。
+
+
+### F-06 第十步：会话与只读报告（未部署）
+
+SessionController 唯一拥有会话/代次/连接/待机与两把原锁；兼容 façade 方法和 IPC 只读 generation / guard。Bridge/入口/其他组件只调用所属命令，没有另一份会话状态；ACK generation 读取保持无锁，未引入新的锁顺序。合入基线 830454e 对同一合成操作的 16 份状态、12 条控制事件及全部指标完全一致；不是真实待机/拔插。另一个纯提交移入只读报告，合成固定时钟下 health 18 字段、status 48 字段和脱敏异常日志与会话基线一致，健康不带识别正文、异常 sentinel 不进日志。
+
+installer 16、host 356（4 private skip）、tooling 47、Java 15 checks、Ruff / Java / strict 六模块通过。Bridge 403 / Session 349 / 装配 363 / 报告 163 行；新动态模块不计入 strict。F-06 软件所有权已收敛、待 CI，声音同样本与实机部分仍开放；候选未替换当前助手，无设备、云服务或私人音频。P0 所有物理/真人项目仍须单独验收。

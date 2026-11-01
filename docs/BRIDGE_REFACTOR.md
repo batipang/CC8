@@ -147,3 +147,12 @@ frozen SessionHooks 接收真实所属组件的 API / 只读 busy 查询与聚�
 同一组合成操作在合入基线 830454e 与候选运行：16 份会话快照、12 条控制事件及全部指标完全相同，覆盖双 Start 去重、rebind、旧 epoch Stop、15 分钟条件模拟、唤醒屏幕、USB/Wi-Fi 切换、全丢失后恢复不自开麦及文字请求取消。此处是模拟推进时间，不冒充真实 15 分钟待机或物理切换。原全套 installer 16、host 356（4 private skip）、tooling 47、Java 15 checks 与质量通过；测试仅迁移内部状态路径。Bridge 501 行、composition 330 行，状态报告等聚合职责继续收敛；新动态模块仍未计入 strict 六模块清单。无部署/设备/云服务/私人录音，F-06 未结束，待 CI。
 
 第九步后台入口已由 [PR #26](https://github.com/batipang/CC8/pull/26) 合入，[真实 CI](https://github.com/batipang/CC8/actions/runs/41342730902) 八项通过。
+
+
+### 第十步附属纯重构：只读状态报告
+
+163 行 StatusReporter 拥有状态写入锁、原进程起点、白名单健康字段和错误输出；SessionController 提供 frozen SessionView，只读获取会话标量，不取得 guard 或改变状态。各组件查询仍来自实际所有者，聚合指标以 dict 副本提供；原私有状态文件字段、目录模式、临时文件替换和错误正文脱敏保持，未增加正常聊天持久化或音频保存。原名称/文字唤醒拼写常量集中在 assistant_identity，名字与匹配规则原样保留；不能据此宣称专用本地唤醒已实现。
+
+在同一固定时钟、虚拟 provider、临时私有目录下，已提交会话拆分基线与候选的 health 18 字段、status 48 字段及脱敏错误 log 完全相同；合成识别文本不会进入 health，异常正文 sentinel 不会进入 log。全套 installer 16、host 356（4 private skip）、tooling 47、Java 15 checks 和质量通过。Bridge 403 行仅保留 façade / 已验证事件分派 / 指标聚合；SessionController 349、composition 363，其他新职责模块均少于 400 行。严格范围仍六模块，不能把声明的接口等同全模块 strict。
+
+F-06 的软件所有权拆分已收敛，待真实 CI；同样本 native / 声音与实机回归仍留待后续受控验收，本项复选框保持开放。下一步可以独立推进 P0 诊断、恢复及本地唤醒的软件工具；不得用上述合成对照替代真实声音、物理拔插或 15 分钟待机。

@@ -23,6 +23,16 @@ from session_ports import EventSink, MetricSink
 
 
 @dataclass(frozen=True)
+class SessionView:
+    connected: bool
+    active: bool
+    generation: int
+    transport_kind: str
+    wake: bool
+    screen_sleeping: bool
+
+
+@dataclass(frozen=True)
 class SessionHooks:
     diagnostics: Callable[[], TraceBook]
     workspace: Callable[[], Workspace]
@@ -69,6 +79,16 @@ class SessionController:
         self.awake = True
         self.last_interaction = time.monotonic()
         self.screen_sleeping = False
+
+    def snapshot(self) -> SessionView:
+        return SessionView(
+            self.connection is not None,
+            self.active,
+            self.generation,
+            self.transport_kind,
+            self.wake,
+            self.screen_sleeping,
+        )
 
     def deactivate(self):
         self.active = False

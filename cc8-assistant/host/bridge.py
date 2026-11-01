@@ -5,34 +5,28 @@ read audio files. The companion APK never starts capture from a host command.
 """
 
 from __future__ import annotations
-import json
-import os
 from pathlib import Path
 import re
 import signal as signal
 import subprocess as subprocess
-import threading
+import threading as threading
 import time
 
 from protocol import EVENT, decode_event, validate_device_event
 from transport import Pairing, TransportHub
-from dsp import (
-    WebRtcEchoCanceller,
-    VoiceDetector,
-    NearSpeechDetector,
-)
+from dsp import WebRtcEchoCanceller
 from fast_stop import FastStopDetector
 from brain_router import BrainRouter
 from announce import AnnouncementServer
 from calibration_controller import STARTUP_GREETING as STARTUP_GREETING
 from composition import build_components, build_session
+from assistant_identity import WAKE_WORD as WAKE_WORD, WAKE_PATTERN as WAKE_PATTERN
 from app_runtime import BackendDependencies, run_backend as run_app
-from minimax_client import MiniMaxBrain, MiniMaxError
+from minimax_client import MiniMaxBrain
 from workspace import Workspace
 from diagnostics import TraceBook
 from runtime_guard import RuntimeLease, RuntimeConflict
 from configuration import load_config
-from release_info import RELEASE
 from speech_providers import (
     LocalSpeech as LocalSpeech,
     DirectSpeech as DirectSpeech,
@@ -56,10 +50,6 @@ from dot_client import runtime_status as dot_runtime_status
 ROOT = Path(__file__).resolve().parents[2]
 PRIVATE = ROOT / 'device-access/private/voice-runtime'
 LIBRARY = ROOT / '.toolchains/cc8/speexdsp-1.2.1/libspeexdsp/.libs/libspeexdsp.dylib'
-WAKE_WORD = '大黄蜂'
-WAKE_PATTERN = re.compile(
-    r'大黄蜂|大黃蜂|大黄峰|邦布比|班布比|(?<![A-Za-z])bumble[\s-]*bee(?![A-Za-z])', re.I
-)
 
 
 class Bridge:
@@ -69,7 +59,7 @@ class Bridge:
         self, speech, brain, library=LIBRARY, fast_stop=None, echo_check=False, workspace=None
     ):
         self.diagnostics = TraceBook()
-        self.started_at = time.monotonic()
+        started_at = time.monotonic()
         self.speech = speech
         self.brain = brain
         self.library = library
@@ -83,7 +73,6 @@ class Bridge:
             'utterances': 0,
             'raw_audio_saved': False,
         }
-        self.status_lock = threading.Lock()
         self.session = build_session(self)
         if isinstance(self.brain, BrainRouter):
             self.brain.dot.device_control = self.control_device
@@ -94,6 +83,10 @@ class Bridge:
             wake_pattern=WAKE_PATTERN,
             fast_stop=fast_stop,
             echo_check=echo_check,
+            started_at=started_at,
+            private_directory=lambda: PRIVATE,
+            wake_word=WAKE_WORD,
+            dot_runtime=lambda: dot_runtime_status(),
         )
         self.calibration = components.calibration
         self.visual = components.visual
@@ -104,6 +97,7 @@ class Bridge:
         self.announcements = components.announcements
         self.reminders = components.reminders
         self.device = components.device
+        self.reporting = components.reporting
         self.recognition.start()
         self.response.start()
 
@@ -116,13 +110,7 @@ class Bridge:
         return self.session.guard
 
     def log(self, event, **fields):
-        print(
-            json.dumps(
-                {'event': event, 'monotonic_seconds': round(time.monotonic(), 3), **fields},
-                ensure_ascii=False,
-            ),
-            flush=True,
-        )
+        return self.reporting.log(event, **fields)
 
     def send(self, p):
         return self.session.send(p)
@@ -159,27 +147,7 @@ class Bridge:
             self.event('workspace', **self.workspace.snapshot())
 
     def health(self):
-        # 白名单输出就绪位，不导出 metrics 内可能存在的自检文字和用户内容。
-        return {
-            'ok': True,
-            'bridge_version': RELEASE.backend_version,
-            'release_id': RELEASE.release_id,
-            'protocol_version': RELEASE.protocol_version,
-            'uptime_seconds': round(time.monotonic() - self.started_at, 1),
-            'model_ready': True,
-            'recognition_worker': self.recognition.worker.is_alive(),
-            'response_worker': self.response.worker.is_alive(),
-            'connected': self.session.connection is not None,
-            'transport': self.session.transport_kind,
-            'microphone_active': self.session.active,
-            'calibrating': self.calibration.active,
-            'asr_engine': getattr(getattr(self.speech, 'recognizer', None), 'engine', None),
-            'brain_provider': getattr(self.brain, 'selected', 'echo'),
-            'dot_runtime': dot_runtime_status(),
-            'playing': self.playback.playing,
-            'mic_frames': self.metrics.get('mic_frames', 0),
-            'render_frames': self.metrics.get('render_frames', 0),
-        }
+        return self.reporting.health()
 
     def diagnostics_report(self):
         return {'ok': True, 'health': self.health(), **self.diagnostics.report()}
@@ -320,59 +288,7 @@ class Bridge:
         return self.capture.endpoint.apply_fast_stop(keyword, stamp)
 
     def save_status(self):
-        PRIVATE.mkdir(parents=True, exist_ok=True, mode=0o700)
-        os.chmod(PRIVATE, 0o700)
-        data = {
-            'connected': self.session.connection is not None,
-            'active': self.session.active,
-            'calibrating': self.calibration.active,
-            'playing': self.playback.playing,
-            'generation': self.session.generation,
-            'wake_mode': self.session.wake,
-            'wake_word': WAKE_WORD,
-            'bridge_version': RELEASE.backend_version,
-            'release_id': RELEASE.release_id,
-            'protocol_version': RELEASE.protocol_version,
-            'desktop_camera_enabled': bool(self.visual.challenge),
-            'desktop_snapshot_active': self.visual.snapshot_job is not None,
-            'noise_profile': 'moderate',
-            'speech_energy_floor_dbfs': NearSpeechDetector.MIN_DBFS,
-            'speech_noise_margin_db': NearSpeechDetector.NOISE_MARGIN_DB,
-            'speech_onset_ms': VoiceDetector.ONSET_FRAMES * 10,
-            'barge_confirm_min_ms': NearSpeechDetector.CONFIRM_MIN_FRAMES * 10,
-            'vision_active': self.visual.generation is not None,
-            'vision_enabled': isinstance(self.brain, BrainRouter),
-            'transport': self.session.transport_kind,
-            **(self.transport_hub.diagnostics() if self.transport_hub else {}),
-            'screen_sleeping': self.session.screen_sleeping,
-            'idle_sleep_seconds': 900,
-            'asr_engine': getattr(getattr(self.speech, 'recognizer', None), 'engine', None),
-            'barge_in_enabled': self.playback.device_can_pause,
-            'playback_paused': self.playback.pause_state is not None,
-            'announcement_active': self.announcements.generation is not None,
-            'brain_provider': getattr(self.brain, 'selected', 'minimax')
-            if self.brain
-            else 'echo test',
-            'dot_enabled': isinstance(self.brain, BrainRouter),
-            'web_search_enabled': self.brain is not None,
-            'fast_stop_enabled': self.capture.endpoint.fast_stop is not None,
-            'fast_stop_input': 'AEC3 without additional NS',
-            'fast_stop_gain': getattr(self.capture.endpoint.fast_stop, 'gain', None),
-            'aec_engine': 'WebRTC AEC3 + NS; AGC disabled',
-            'render_asr_comparison': True,
-            'residual_echo_suppression': True,
-            'echo_check_pending': self.calibration.pending,
-            'echo_check_failed': self.calibration.failed,
-            'speech_voice': getattr(getattr(self.speech, 'voice', None), 'voice', None),
-            'speech_speed': getattr(getattr(self.speech, 'voice', None), 'speed', None),
-            'speech_pitch': getattr(getattr(self.speech, 'voice', None), 'pitch', None),
-            'speech_emotion': getattr(getattr(self.speech, 'voice', None), 'emotion', None),
-            **self.metrics,
-        }
-        with self.status_lock:
-            temporary = PRIVATE / 'status.tmp'
-            temporary.write_text(json.dumps(data, indent=2) + '\n')
-            temporary.replace(PRIVATE / 'status.json')
+        return self.reporting.save_status()
 
     def play(self, pcm, text, generation, role='assistant'):
         return self.playback.play(pcm, text, generation, role)
@@ -396,21 +312,7 @@ class Bridge:
         return self.capture.echo.align_reference(generation)
 
     def failure(self, message, error, trace_key=None):
-        key = self.session.generation if trace_key is None else trace_key
-        self.diagnostics.failure(key, self.diagnostics.current_stage(key), error)
-        # MiniMaxError messages are our own fixed strings, never provider
-        # bodies, user text, URLs or credentials. Other exception text is not logged.
-        self.log(
-            'runtime_error',
-            error_type=type(error).__name__,
-            reason=str(error) if isinstance(error, MiniMaxError) else None,
-            api_code=getattr(error, 'code', None),
-            http_status=getattr(error, 'http_status', None),
-        )
-        try:
-            self.status('error', message)
-        except (OSError, EOFError):
-            pass
+        return self.reporting.failure(message, error, trace_key)
 
     def work(self):
         return self.recognition.work()
