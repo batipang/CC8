@@ -246,11 +246,11 @@ class BridgeVisionTests(unittest.TestCase):
 
     def test_calibration_and_unpaired_requests_cannot_capture(self):
         b = self.bridge()
-        b.calibrating = True
+        b.calibration.active = True
         b.on_event({'event': 'vision_request', 'nonce': 'a' * 32})
         self.assertFalse(hasattr(b, 'job'))
         self.assertEqual(b.events[-1][0], 'vision_unavailable')
-        b.calibrating = False
+        b.calibration.active = False
         b.on_event({'event': 'vision_request', 'nonce': 'bad'})
         self.assertFalse(hasattr(b, 'job'))
 

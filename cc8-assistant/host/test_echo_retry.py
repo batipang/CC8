@@ -59,8 +59,8 @@ class EchoRetryTests(unittest.TestCase):
                 active=active, calibrating=calibrating, running=running, playing=playing
             ):
                 session.active = active
-                session.calibrating = calibrating
-                session.echo_check_running = running
+                session.calibration.active = calibrating
+                session.calibration.running = running
                 session.playback.playing = playing
                 generation = session.generation
                 with patch('bridge.threading.Thread') as worker:
@@ -69,15 +69,15 @@ class EchoRetryTests(unittest.TestCase):
                 self.assertEqual(session.generation, generation)
                 self.assertEqual(session.active, active)
         session.active = True
-        session.calibrating = session.echo_check_running = session.playback.playing = False
+        session.calibration.active = session.calibration.running = session.playback.playing = False
         session.connection = object()
         generation = session.generation
         with patch('bridge.threading.Thread') as worker:
             handler()
         self.assertTrue(session.active)
         self.assertEqual(session.generation, generation + 1)
-        self.assertTrue(session.calibrating)
-        self.assertTrue(session.echo_check_pending)
+        self.assertTrue(session.calibration.active)
+        self.assertTrue(session.calibration.pending)
         worker.assert_called_once_with(
             target=session.calibrate, args=(session.generation,), daemon=True
         )

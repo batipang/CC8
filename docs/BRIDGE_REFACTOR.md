@@ -90,3 +90,14 @@ Bridge 仍协调会话、校准提示流程、识别/回答 worker 和任务；�
 ### 独立修复：自检重试播放状态
 
 审计发现第三步拆分后，run_backend 的 SIGUSR1 自检重试仍读已移除的 bridge.playing。新增回归拦截实际 signal 注册，用真实 Bridge / 合成事件循环且禁用线程/provider/设备，在播放中和有效空闲会话两条路径复现 AttributeError。独立修复为查询 playback.playing；同一回归同时确认麦克风已停、校准中、自检中或播放中均不派发线程、不推进代次，只有原先已 active 的空闲会话重试校准，不授权新采集。后台候选仍属未发布的 0.12.6；运行中版本未动。
+
+
+第六步与独立重试修复已由 [PR #23](https://github.com/batipang/CC8/pull/23) 合入，[真实 CI](https://github.com/batipang/CC8/actions/runs/41341727093) 八项通过。修复后的全量 host 为 349（4 private skip）。第五步 [PR #22](https://github.com/batipang/CC8/pull/22) 的 [CI](https://github.com/batipang/CC8/actions/runs/41341068368) 同样全部通过。
+
+## 第七步：开场校准和回声自检（候选）
+
+`CalibrationController`（193 行）拥有校准 active 和显式自检 pending / running / failed，只通过 frozen Hooks 查询会话/识别忙闲与调用参考时钟、播放、诊断命令。构造不派发线程。Bridge 保留 startup_reference / calibrate / check_echo 入口；前台开始、Stop 和已获准的自检重试通过 begin / stop / prepare_retry 修改状态。自检局部报告仍经原指标聚合入口发布，识别拒绝/有界文本对的计数位置不变；不传原始 metrics 或 DSP 对象。
+
+唯一开场“汽车人，变形！”、1～6 秒 int16 有声校验、真正开播后才清采样、原 6.4 秒窗口、时移对齐、20 秒安静等待和最多 20 秒识别排空全部保留。旧代次 finally 不能清新会话 active 的回归保留。新增四项合成时钟流程测试覆盖通过、残留候选失败、识别未排空、取消/旧代次及输出异常，确认 running 总是释放且不新开麦克风。原内部状态测试只迁移拥有者路径，摄像头/播报校准忙时拒绝的断言保留。
+
+全套 installer 16、host 353（4 private skip）、tooling 47、Java 15 checks 与 Ruff / Java / strict 六模块通过；新动态校准模块未计入 strict 清单。Bridge 1159 行，仍待会话/设备事件、提醒与依赖装配职责收敛，F-06 未完成。未调用设备、云服务、私人音频或重载当前助手，待 CI。

@@ -238,20 +238,20 @@ class CaptureAndTransportTests(unittest.TestCase):
         value = self.bridge()
         value.active = True
         value.connection = object()
-        value.calibrating = True
+        value.calibration.active = True
         state = object()
         value.capture.echo.aec = state
         value.capture.echo.calibration_frames = [('new',)]
         self.assertFalse(value.align_reference(value.generation - 1))
         self.assertIs(value.capture.echo.aec, state)
         self.assertEqual(value.capture.echo.calibration_frames, [('new',)])
-        self.assertTrue(value.calibrating)
+        self.assertTrue(value.calibration.active)
 
     def test_cancel_during_alignment_cannot_finish_the_next_calibration(self):
         value = self.bridge()
         value.active = True
         value.connection = object()
-        value.calibrating = True
+        value.calibration.active = True
         generation = value.generation
 
         def switched(*args):
@@ -265,7 +265,7 @@ class CaptureAndTransportTests(unittest.TestCase):
             patch('bridge.time.sleep'),
         ):
             value.calibrate(generation)
-        self.assertTrue(value.calibrating)
+        self.assertTrue(value.calibration.active)
 
     def test_partial_hub_start_failure_closes_already_bound_tcp_socket(self):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as occupied:

@@ -37,6 +37,11 @@ from echo_pipeline import EchoPipeline, EchoHooks
 from endpoint_pipeline import EndpointPipeline, EndpointHooks
 from recognition_worker import RecognitionWorker, RecognitionHooks
 from response_worker import ResponseWorker, ResponseHooks
+from calibration_controller import (
+    CalibrationController,
+    CalibrationHooks,
+    STARTUP_GREETING as STARTUP_GREETING,
+)
 from minimax_client import MiniMaxBrain, MiniMaxError
 from workspace import Workspace
 from diagnostics import TraceBook
@@ -68,7 +73,6 @@ ROOT = Path(__file__).resolve().parents[2]
 PRIVATE = ROOT / 'device-access/private/voice-runtime'
 LIBRARY = ROOT / '.toolchains/cc8/speexdsp-1.2.1/libspeexdsp/.libs/libspeexdsp.dylib'
 WAKE_WORD = '大黄蜂'
-STARTUP_GREETING = '汽车人，变形！'
 WAKE_PATTERN = re.compile(
     r'大黄蜂|大黃蜂|大黄峰|邦布比|班布比|(?<![A-Za-z])bumble[\s-]*bee(?![A-Za-z])', re.I
 )
@@ -98,7 +102,6 @@ class Bridge:
         self.active = False
         self.epoch = 0
         self.generation = 100
-        self.calibrating = False
         self.announcement_generation = None
         self.wake = False
         self.awake = True
@@ -118,14 +121,38 @@ class Bridge:
         if isinstance(self.brain, BrainRouter):
             self.brain.dot.device_control = self.control_device
             self.brain.dot.reminders = self.reminder_action
-        self.echo_check_pending = echo_check
-        self.echo_check_running = False
-        self.echo_check_failed = False
+        self.calibration = CalibrationController(
+            CalibrationHooks(
+                lock=self.guard,
+                generation=lambda: self.generation,
+                valid=lambda generation: self.valid(generation),
+                wake=lambda: self.wake,
+                speech=lambda: self.speech,
+                clear_frames=lambda: self.capture.echo.clear_calibration_frames(),
+                reset_activity=lambda: self.capture.endpoint.reset_voice_activity(),
+                startup_reference=lambda: self.startup_reference(),
+                play=lambda pcm, text, generation, role: self.play(pcm, text, generation, role),
+                speak=lambda text, generation: self.speak(text, generation),
+                align_reference=lambda generation: self.align_reference(generation),
+                check_echo=lambda generation: self.check_echo(generation),
+                recognition_pending=lambda: (
+                    self.recognition.busy or not self.recognition.queue.empty()
+                ),
+                talking=lambda: self.capture.endpoint.vad.talking,
+                status=lambda phase, message: self.status(phase, message),
+                save_status=lambda: self.save_status(),
+                log=lambda name, **fields: self.log(name, **fields),
+                failure=lambda message, error: self.failure(message, error),
+                metric=self.record_metric,
+                metric_value=lambda name: self.metrics.get(name, 0),
+            ),
+            echo_check=echo_check,
+        )
         self.visual = VisionController(
             VisionHooks(
                 lock=self.guard,
                 connected=lambda: self.connection is not None,
-                calibrating=lambda: self.calibrating,
+                calibrating=lambda: self.calibration.active,
                 has_transport=lambda: self.transport_hub is not None,
                 brain_ready=lambda: isinstance(self.brain, BrainRouter),
                 session_generation=lambda: self.generation,
@@ -183,7 +210,7 @@ class Bridge:
                 generation=lambda: self.generation,
                 epoch=lambda: self.epoch,
                 active=lambda: self.active,
-                calibrating=lambda: self.calibrating,
+                calibrating=lambda: self.calibration.active,
                 diagnostics=lambda: self.diagnostics,
                 metric=self.record_metric,
                 add_metric=self.add_capture_metric,
@@ -244,8 +271,8 @@ class Bridge:
                 set_metric_field=self.set_metric_field,
                 add_metric_field=self.add_metric_field,
                 record_echo_pair=self.record_echo_pair,
-                echo_running=lambda: self.echo_check_running,
-                echo_failed=lambda: self.echo_check_failed,
+                echo_running=lambda: self.calibration.running,
+                echo_failed=lambda: self.calibration.failed,
                 awake=lambda: self.awake,
                 wake=lambda: self.wake,
                 set_awake=self.set_awake,
@@ -365,7 +392,7 @@ class Bridge:
         self.reminder_tick()
         if (
             self.active
-            and not self.calibrating
+            and not self.calibration.active
             and not self.playback.playing
             and not self.response.busy
             and not self.recognition.busy
@@ -404,7 +431,7 @@ class Bridge:
             'connected': self.connection is not None,
             'transport': self.transport_kind,
             'microphone_active': self.active,
-            'calibrating': self.calibrating,
+            'calibrating': self.calibration.active,
             'asr_engine': getattr(getattr(self.speech, 'recognizer', None), 'engine', None),
             'brain_provider': getattr(self.brain, 'selected', 'echo'),
             'dot_runtime': dot_runtime_status(),
@@ -432,7 +459,7 @@ class Bridge:
         ):
             raise ValueError('Text must contain 1–6000 characters')
         with self.guard:
-            if self.connection is None or self.calibrating:
+            if self.connection is None or self.calibration.active:
                 raise RuntimeError('Text request unavailable')
             generation = self.cancel('text_request')
             self.text_generation = generation
@@ -459,7 +486,7 @@ class Bridge:
             self.reminder_poll = time.monotonic() + 5
             if (
                 self.connection is None
-                or self.calibrating
+                or self.calibration.active
                 or self.playback.playing
                 or self.response.busy
                 or self.recognition.busy
@@ -521,8 +548,8 @@ class Bridge:
         with self.guard:
             if (
                 self.connection is None
-                or self.calibrating
-                or self.echo_check_running
+                or self.calibration.active
+                or self.calibration.running
                 or self.announcement_generation is not None
             ):
                 raise RuntimeError('Announcement unavailable')
@@ -606,7 +633,7 @@ class Bridge:
 
     def stop(self):
         self.active = False
-        self.calibrating = False
+        self.calibration.stop()
         self.screen_sleeping = False
         self.cancel('session_stop')
         self.capture.close()
@@ -646,7 +673,7 @@ class Bridge:
                 message='我在听'
                 if self.active
                 else '回声自检已准备 · 点击开始语音后保持安静'
-                if self.echo_check_pending
+                if self.calibration.pending
                 else '大黄蜂已就绪 · 点击开始语音',
                 transport=self.transport_kind,
                 asr_engine=getattr(
@@ -695,7 +722,7 @@ class Bridge:
                 return
             self.rebind_seen = True
             if self.active and int(j.get('epoch', -1)) == self.epoch:
-                if self.calibrating:
+                if self.calibration.active:
                     self.capture.echo.clear_calibration_frames()
                     threading.Thread(
                         target=self.calibrate, args=(self.generation,), daemon=True
@@ -735,7 +762,7 @@ class Bridge:
                 self.awake = not self.wake
             if 'brain_provider' in j and hasattr(self.brain, 'select'):
                 provider = j['brain_provider']
-                if provider in ('minimax', 'dot') and not self.calibrating:
+                if provider in ('minimax', 'dot') and not self.calibration.active:
                     self.cancel('brain_change')
                     self.brain.select(provider)
                     self.event('brain_provider', provider=provider)
@@ -762,7 +789,7 @@ class Bridge:
             self.capture.reset_session()
             self.playback.reset_session()
             self.capture.echo.open()
-            self.calibrating = True
+            self.calibration.begin()
             self.awake = not self.wake
             self.screen_sleeping = False
             self.last_interaction = time.monotonic()
@@ -828,7 +855,7 @@ class Bridge:
         data = {
             'connected': self.connection is not None,
             'active': self.active,
-            'calibrating': self.calibrating,
+            'calibrating': self.calibration.active,
             'playing': self.playback.playing,
             'generation': self.generation,
             'wake_mode': self.wake,
@@ -864,8 +891,8 @@ class Bridge:
             'aec_engine': 'WebRTC AEC3 + NS; AGC disabled',
             'render_asr_comparison': True,
             'residual_echo_suppression': True,
-            'echo_check_pending': self.echo_check_pending,
-            'echo_check_failed': self.echo_check_failed,
+            'echo_check_pending': self.calibration.pending,
+            'echo_check_failed': self.calibration.failed,
             'speech_voice': getattr(getattr(self.speech, 'voice', None), 'voice', None),
             'speech_speed': getattr(getattr(self.speech, 'voice', None), 'speed', None),
             'speech_pitch': getattr(getattr(self.speech, 'voice', None), 'pitch', None),
@@ -887,137 +914,13 @@ class Bridge:
         return self.playback.speak(text, generation)
 
     def startup_reference(self):
-        # 开场口号同时提供扬声器参考，不再使用检测器的固定女声素材。
-        pcm = np.asarray(self.speech.synthesize(STARTUP_GREETING))
-        if (
-            pcm.ndim != 1
-            or pcm.dtype != np.dtype('int16')
-            or not RATE <= len(pcm) <= RATE * 6
-            or not np.any(pcm)
-        ):
-            raise ValueError('Invalid startup reference PCM')
-        return pcm
+        return self.calibration.startup_reference()
 
     def calibrate(self, generation):
-        try:
-            self.status('calibrating', '正在准备大黄蜂开场音…')
-            pcm = self.startup_reference()
-            with self.guard:
-                if not self.valid(generation):
-                    return
-                # 云端合成可能耗时，时钟对齐只使用真正播放开始后的收音。
-                self.capture.echo.clear_calibration_frames()
-            started = time.monotonic()
-            self.status('calibrating', '声音校准中，请稍候…')
-            if not self.play(pcm, STARTUP_GREETING, generation, 'calibration'):
-                return
-            if not self.valid(generation):
-                return
-            self.status('calibrating', '声音校准中，请稍候…')
-            # 保留原 6 秒采样窗口和房间尾音时间；后半段安静等待，不再播放额外提示。
-            time.sleep(max(0.4, 6.4 - (time.monotonic() - started)))
-            if not self.valid(generation):
-                return
-            if not self.align_reference(generation):
-                return
-            with self.guard:
-                if not self.valid(generation):
-                    return
-                self.calibrating = False
-                self.capture.endpoint.reset_voice_activity()
-            if self.echo_check_pending:
-                self.echo_check_pending = False
-                self.check_echo(generation)
-            elif self.wake:
-                self.status('listening', '请说“大黄蜂”或“Bumblebee”开始聊天')
-            else:
-                self.status('listening', '我在听，可以开始说话')
-            self.save_status()
-            self.log('calibration_finished')
-        except Exception as e:
-            if self.valid(generation):
-                self.failure('校准未完成，请停止后重试', e)
-        finally:
-            if generation == self.generation:
-                self.calibrating = False
+        return self.calibration.calibrate(generation)
 
     def check_echo(self, generation):
-        """One-shot diagnostic, ONLY after the device's foreground Start.
-
-        ASR and the normal echo gate stay active. A would-be reply is counted
-        as a failure and withheld, so the diagnostic cannot start a web loop.
-        No audio is saved and no microphone-start command exists.
-        """
-        self.echo_check_running = True
-        before = self.metrics.get('echo_transcripts_rejected', 0)
-        start = time.monotonic()
-        report = {
-            'state': 'running',
-            'unmatched_candidates': 0,
-            'echo_rejections': 0,
-            'seconds': 0,
-            'diagnostic_text_pairs': [],
-        }
-        self.metrics['echo_self_check'] = report
-        lines = [
-            '下面是回声自检，内容只是声音示例，不是实时新闻。请保持安静。',
-            '报告称，长三角已形成从底层算力、核心算法到终端应用、高端装备的完整产业生态。',
-            '现在测试英文和数字，MiniMax、OpenAI、GPU，百分之二点八六和百分之二十九。',
-            '金额示例为十五亿元，日期示例为十月三十一日。',
-            '声音示例已经播完，请继续保持安静二十秒，等屏幕显示自检结果。',
-        ]
-        try:
-            self.log('echo_self_check_started')
-            self.save_status()
-            for line in lines:
-                if not self.valid(generation) or not self.speak(line, generation):
-                    report['state'] = 'interrupted'
-                    return
-            self.status('listening', '回声自检收尾 · 请保持安静20秒')
-            deadline = time.monotonic() + 20
-            while self.valid(generation) and time.monotonic() < deadline:
-                time.sleep(0.1)
-            if not self.valid(generation):
-                report['state'] = 'interrupted'
-                return
-            drain = time.monotonic() + 20
-            while (
-                self.valid(generation)
-                and (
-                    self.recognition.busy
-                    or not self.recognition.queue.empty()
-                    or self.capture.endpoint.vad.talking
-                )
-                and time.monotonic() < drain
-            ):
-                time.sleep(0.1)
-            if not self.valid(generation):
-                report['state'] = 'interrupted'
-                return
-            complete = (
-                not self.recognition.busy
-                and self.recognition.queue.empty()
-                and not self.capture.endpoint.vad.talking
-            )
-            passed = complete and report['unmatched_candidates'] == 0
-            report['state'] = 'passed' if passed else ('failed' if complete else 'incomplete')
-            self.echo_check_failed = not passed
-            self.status(
-                'listening' if passed else 'error',
-                '回声自检通过 · 你现在可以说话'
-                if passed
-                else '自检仍发现疑似回声 · 已暂停自动回答，等待调试',
-            )
-        except Exception:
-            report['state'] = 'error'
-            self.echo_check_failed = True
-            raise
-        finally:
-            report['echo_rejections'] = self.metrics.get('echo_transcripts_rejected', 0) - before
-            report['seconds'] = round(time.monotonic() - start, 1)
-            self.echo_check_running = False
-            self.log('echo_self_check_finished', **report)
-            self.save_status()
+        return self.calibration.check_echo(generation)
 
     def align_reference(self, generation=None):
         return self.capture.echo.align_reference(generation)
@@ -1202,18 +1105,14 @@ def run_backend():
         # it deliberately cannot open the microphone or resume a stopped one.
         if (
             not bridge.active
-            or bridge.calibrating
-            or bridge.echo_check_running
+            or bridge.calibration.active
+            or bridge.calibration.running
             or bridge.playback.playing
         ):
             bridge.log('echo_self_check_retry_ignored')
             return
         generation = bridge.cancel('echo_check_retry')
-        bridge.calibrating = True
-        bridge.echo_check_pending = True
-        bridge.echo_check_failed = False
-        bridge.capture.echo.clear_calibration_frames()
-        bridge.capture.endpoint.reset_voice_activity()
+        bridge.calibration.prepare_retry()
         threading.Thread(target=bridge.calibrate, args=(generation,), daemon=True).start()
 
     signal.signal(signal.SIGUSR1, retry_echo_check)

@@ -68,6 +68,8 @@ class IdleTests(unittest.TestCase):
             owner = (
                 b.playback
                 if field == 'playing'
+                else b.calibration
+                if field == 'calibrating'
                 else b.response
                 if field == 'response_busy'
                 else b.recognition
@@ -75,7 +77,13 @@ class IdleTests(unittest.TestCase):
                 else b
             )
             setattr(
-                owner, 'busy' if field in ('recognition_busy', 'response_busy') else field, True
+                owner,
+                'busy'
+                if field in ('recognition_busy', 'response_busy')
+                else 'active'
+                if field == 'calibrating'
+                else field,
+                True,
             )
             b.idle_tick()
             self.assertFalse(b.screen_sleeping)

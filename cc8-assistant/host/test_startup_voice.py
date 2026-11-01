@@ -14,7 +14,7 @@ class StartupVoiceTests(unittest.TestCase):
         value = Bridge(speech, None)
         value.active = True
         value.connection = object()
-        value.calibrating = True
+        value.calibration.active = True
         value.play = Mock(return_value=True)
         value.speak = Mock()
         value.align_reference = Mock(return_value=True)
@@ -45,7 +45,7 @@ class StartupVoiceTests(unittest.TestCase):
                 self.assertEqual(len(value.play.call_args.args[0]), RATE * 2)
                 value.speak.assert_not_called()
                 value.align_reference.assert_called_once_with(value.generation)
-                self.assertFalse(value.calibrating)
+                self.assertFalse(value.calibration.active)
                 self.assertGreater(sleep.call_args.args[0], 6)
 
     def test_tts_waiting_audio_is_excluded_from_alignment_window(self):
@@ -75,7 +75,7 @@ class StartupVoiceTests(unittest.TestCase):
         value.calibrate(generation)
         value.play.assert_not_called()
         value.align_reference.assert_not_called()
-        self.assertTrue(value.calibrating)
+        self.assertTrue(value.calibration.active)
         self.assertEqual(value.capture.echo.calibration_frames, [('new-session',)])
 
     def test_synthesis_failure_never_falls_back_to_old_female_reference(self):
