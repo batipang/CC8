@@ -24,32 +24,36 @@ def can_fast_stop(keyword, render_text):
     return keyword in COMMANDS and keyword not in normalize(render_text)
 
 
+def keyword_spotter(model=MODEL):
+    import sherpa_onnx
+
+    def file(name):
+        p = model / name
+        if not p.is_file():
+            raise RuntimeError('Local fast-stop model missing: ' + name)
+        return str(p)
+
+    return sherpa_onnx.KeywordSpotter(
+        tokens=file('tokens.txt'),
+        encoder=file('encoder-epoch-13-avg-2-chunk-8-left-64.int8.onnx'),
+        decoder=file('decoder-epoch-13-avg-2-chunk-8-left-64.onnx'),
+        joiner=file('joiner-epoch-13-avg-2-chunk-8-left-64.int8.onnx'),
+        keywords_file=str(WORDS),
+        num_threads=1,
+        provider='cpu',
+        keywords_score=1.0,
+        keywords_threshold=0.25,
+        num_trailing_blanks=1,
+    )
+
+
 class FastStopDetector:
     # 本地流式关键词提供停止快路径，不替代一般话语 ASR 或近端语音确认。
     def __init__(self, gain=2.0):
         if not 1 <= gain <= 4:
             raise ValueError('Fast-stop gain must be between 1 and 4')
         self.gain = float(gain)
-        import sherpa_onnx
-
-        def file(name):
-            p = MODEL / name
-            if not p.is_file():
-                raise RuntimeError('Local fast-stop model missing: ' + name)
-            return str(p)
-
-        self.detector = sherpa_onnx.KeywordSpotter(
-            tokens=file('tokens.txt'),
-            encoder=file('encoder-epoch-13-avg-2-chunk-8-left-64.int8.onnx'),
-            decoder=file('decoder-epoch-13-avg-2-chunk-8-left-64.onnx'),
-            joiner=file('joiner-epoch-13-avg-2-chunk-8-left-64.int8.onnx'),
-            keywords_file=str(WORDS),
-            num_threads=1,
-            provider='cpu',
-            keywords_score=1.0,
-            keywords_threshold=0.25,
-            num_trailing_blanks=1,
-        )
+        self.detector = keyword_spotter()
         self.stream = self.detector.create_stream()
         self.samples = 0
         self.compute_seconds = 0.0
