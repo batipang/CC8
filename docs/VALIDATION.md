@@ -264,7 +264,7 @@ main 的 [CI 运行](https://github.com/batipang/CC8/actions/runs/41320525409) �
 
 [PR #15](https://github.com/batipang/CC8/pull/15) 的 [真实 CI](https://github.com/batipang/CC8/actions/runs/41330787441) 八项全部通过并合入主分支；实际全套包含 installer 11、host 341（4 private skip）、tooling 40 与 Java 15 checks。
 
-# F-14 签名预检候选（2026-11-02，待 CI）
+# F-14 签名预检（2026-11-02）
 
 安装前强制验证候选签名和同包名已装 APK 的完整证书集合；候选快照与安装字节绑定，已装包读取前后核对哈希/路径，任何读取失败、变化或签名不一致都在 helper / APK 写入前停止。新增 `--verify-apk` 只读入口和 [SIGNING.md](SIGNING.md)。
 
@@ -276,11 +276,17 @@ main 的 [CI 运行](https://github.com/batipang/CC8/actions/runs/41320525409) �
 
 [PR #16](https://github.com/batipang/CC8/pull/16) 的 [真实 CI](https://github.com/batipang/CC8/actions/runs/41331554254) 八项全部通过并合入主分支，含两个工程实际 APK 的换钥 / 篡改拒绝；F-14 软件与原签名只读验收完成，未安装/降级。
 
-# F-10 独立版本与构建清单候选（2026-11-02，待 CI / tag）
+# F-10 独立版本与构建清单（2026-11-02）
 
 新增根 release.json：助手 0.8.7 / code 32、后台 0.12.5、检测器 1.0.1 / code 2、协议 2（设备接受 2～2）。Gradle、BuildConfig、Python 构建脚本、后台 health / status 和握手读取同一版本来源；原运行对 0.8.6 / 0.12.2 只是已知现场记录，不表示候选已部署。
 
 新增源码提交 / 脏状态 / manifest / APK 摘要的构建回执、实际包版本与签名核验、annotated tag / 本地 inventory 的 record / verify 工具。脏候选记录不通过 verify，旧提交/旧产物回执或修改的记录字段/路径拒绝；所有记录固定不宣称设备验收。版本信息纳入 strict mypy，第六模块无全局忽略。
 
 本机完整离线检查 installer 16、host 345（4 private-audio skip）、tooling 47、Java 15 checks；Ruff / Java formatting / strict mypy 6 模块 / actionlint 通过。两个 APK 均经原签名引用 assemble/lint，AAPT 实际版本和 SDK-27 签名与清单一致，脏源码候选 inventory 成功生成，尚不能算干净发布。后续在通过 CI 的合入提交上重建、建立 annotated 源码 tag 并复验 inventory；未部署或打开采集。
+
+[PR #17 CI](https://github.com/batipang/CC8/actions/runs/41332607678) 和 [合入 CI](https://github.com/batipang/CC8/actions/runs/41332798135) 全绿；干净提交 `3850f3e9df6a81eb6288e91832d2c3e3022dfc7e` 已用原钥引用重建两工程，通过实际 record / verify。annotated 源码 tag [foundation-20261102.1](https://github.com/batipang/CC8/tree/foundation-20261102.1) 已推送并核对远端解引用提交；tag inventory 位于本机忽略的 artifacts/releases/foundation-20261102.1.json，带 tag 的 record / verify 通过。助手 APK SHA-256 `05520cd42f480c4ac9fc9c5aac0c13008128c313f014a3e683a81d3dba440262`；检测器 `830290358b0f64b1b12c9545f2b9792cbc66336ee88839b1146ac662809f84df`。未发布 APK 或创建 GitHub Release，未部署、验收设备。后续 main 改动后复验该清单需在对应 tag 源码下进行。
+
+# F-06 第一步候选（2026-11-02，待 CI）
+
+提取 provider 自有资源、USB 子进程流、工作项类型三个模块，保留 bridge 导出；12 个移动定义和未移动的 Bridge / main / run_backend 共全部顶层定义，拆分前后 AST 相同。共享会话/DSP/播放/视觉状态尚留 Bridge，本项保持未完成。所有原离线回归同样通过（16 / 345[4 skip] / 47 / 15 checks），六模块 strict mypy 与格式检查通过；未运行设备或声音对照。线程/资源边界及下一步见 [BRIDGE_REFACTOR.md](BRIDGE_REFACTOR.md)。
 
