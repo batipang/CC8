@@ -36,3 +36,8 @@ setup 可加 `--dry-run` 输出 argv 计划，不创建环境、不下载、不�
 ## 分轮诊断采集
 
 `./cc8 measure --seconds 60 --condition quiet --distance 1m --partition acceptance` 只读取已运行后台的 owner IPC，聚合最近窗口之外的已观察请求，不启动模型、设备界面或采集。先看到“诊断采集已就绪”再开始操作。现有服务在其他运行目录时，显式 `--socket /absolute/runtime/device-access/private/voice-runtime/announce.sock`，不会迁移或重启它。Python stdlib 即可运行，详见 [采集格式、私有输出与限制](MEASUREMENT_RUNS.md)。
+
+
+## 固定识别样本评分
+
+`./cc8 score-asr --template <私有新文件.json>` 生成未测矩阵；`--input` 评分已有私有转录，`--baseline-input` 做覆盖一致的 A/B。标准库、不收音、不上传、不执行指令，报告不留正文。语料、标注与缺测规则见 [ASR_EVALUATION](ASR_EVALUATION.md)。

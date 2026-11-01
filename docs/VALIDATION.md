@@ -394,3 +394,12 @@ P0-03 已通过 [PR #30](https://github.com/batipang/CC8/pull/30) 的 [真实 CI
 候选后台 0.13.1 / failure-feedback-20261102.1。两个定向用例对 44eaff7 基线分别复现 Dot 错误被普通回答吞掉、播放 ACK 缺失无分类反馈，候选通过。新增 11 项回归含大脑 6 类、ASR/TTS 5 类故障各 3 次，真实 MiniMax Transport 三入口超时/断连各 3 次；检查请求一次、busy 清理、失败任务/已完成工作分立、固定恢复文案、旧代次和秘密 sentinel 隔离。RPC waiter 超时清理、后半段 TTS 仍正确标为 TTS、设备错误及 ACK 截止时间均验证。
 
 本机全套 installer 16、host 413（4 private-audio skip）、tooling 51、Java 15 checks；Ruff / Java formatting / strict 六模块与脱敏历史扫描通过。无实际模型、麦克风/相机或设备操作；详见 [FAILURE_FEEDBACK](FAILURE_FEEDBACK.md)。待 CI，不关闭部署/实机验收。
+
+
+P0-06 经 [PR #31](https://github.com/batipang/CC8/pull/31) 的 [真实 CI 八项](https://github.com/batipang/CC8/actions/runs/41352856361) 通过并合入 e2a274a，未更新运行安装。
+
+### P0-04：固定语料和私有评分软件（未调整音频门槛）
+
+新增 75 条通用语料：五类各 3 调参 / 12 验收，四种距离/背景组合 300 位；空模板全部 unmeasured。CER/WER S/D/I、关键字段和人工意图标注分开，缺测和未标注不当正确；A/B 要求样本/场景/source/标注覆盖一致。输出只留静态语料编号、计数/差值，无转录或实际字段值。
+
+12 项新增回归覆盖已知编辑距离和小字串穷举不变量、负数/小数及纠错句、缺测/失败/缺标注、分组隔离、A/B 拒绝、schema/预算、owner 文件/链接/FIFO/JSON、真实 root CLI 私有结果与不覆盖。实际系统 Python 3.9.6 在 / 与最小 PATH 执行空模板→评分，300 missing、0 observed、0600，无设备/模型/网络；临时文件清理。完整 installer 16、host 425（4 private-audio skip）、tooling 51、Java 15 checks；质量/strict 六模块/脱敏扫描通过。待 CI，未采样真人或调整阈值，P0-04 不结项；见 [ASR_EVALUATION](ASR_EVALUATION.md)。

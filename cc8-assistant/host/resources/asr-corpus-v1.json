@@ -1,0 +1,873 @@
+{
+  "schema": 1,
+  "corpus": "cc8-generic-v1",
+  "samples": [
+    {
+      "id": "qa-01",
+      "category": "qa",
+      "partition": "calibration",
+      "delivery": "normal",
+      "reference": "你好，请介绍一下你自己",
+      "critical_fields": {}
+    },
+    {
+      "id": "qa-02",
+      "category": "qa",
+      "partition": "calibration",
+      "delivery": "normal",
+      "reference": "请解释为什么天空是蓝色的",
+      "critical_fields": {}
+    },
+    {
+      "id": "qa-03",
+      "category": "qa",
+      "partition": "calibration",
+      "delivery": "normal",
+      "reference": "讲一个简短的睡前故事",
+      "critical_fields": {}
+    },
+    {
+      "id": "qa-04",
+      "category": "qa",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "请介绍太阳系的八大行星",
+      "critical_fields": {
+        "number": [
+          "八",
+          "8"
+        ]
+      }
+    },
+    {
+      "id": "qa-05",
+      "category": "qa",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "雨后为什么会出现彩虹",
+      "critical_fields": {}
+    },
+    {
+      "id": "qa-06",
+      "category": "qa",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "水在什么条件下会结冰",
+      "critical_fields": {}
+    },
+    {
+      "id": "qa-07",
+      "category": "qa",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "用三句话解释光合作用",
+      "critical_fields": {
+        "number": [
+          "三",
+          "3"
+        ]
+      }
+    },
+    {
+      "id": "qa-08",
+      "category": "qa",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "请说出两种节约用水的方法",
+      "critical_fields": {
+        "number": [
+          "两",
+          "二",
+          "2"
+        ]
+      }
+    },
+    {
+      "id": "qa-09",
+      "category": "qa",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "为什么冬天的白天比较短",
+      "critical_fields": {}
+    },
+    {
+      "id": "qa-10",
+      "category": "qa",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "请解释月亮为什么有圆缺",
+      "critical_fields": {}
+    },
+    {
+      "id": "qa-11",
+      "category": "qa",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "给我一个整理书桌的建议",
+      "critical_fields": {}
+    },
+    {
+      "id": "qa-12",
+      "category": "qa",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "地球绕太阳转一圈大约多久",
+      "critical_fields": {}
+    },
+    {
+      "id": "qa-13",
+      "category": "qa",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "Please explain why the sky is blue",
+      "critical_fields": {}
+    },
+    {
+      "id": "qa-14",
+      "category": "qa",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "Tell me a short story about a robot",
+      "critical_fields": {}
+    },
+    {
+      "id": "qa-15",
+      "category": "qa",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "What is the difference between weather and climate",
+      "critical_fields": {}
+    },
+    {
+      "id": "names_places-01",
+      "category": "names_places",
+      "partition": "calibration",
+      "delivery": "normal",
+      "reference": "大黄蜂，你叫什么名字",
+      "critical_fields": {
+        "name": [
+          "大黄蜂",
+          "Bumblebee"
+        ]
+      }
+    },
+    {
+      "id": "names_places-02",
+      "category": "names_places",
+      "partition": "calibration",
+      "delivery": "normal",
+      "reference": "常州属于哪个省",
+      "critical_fields": {
+        "place": [
+          "常州"
+        ]
+      }
+    },
+    {
+      "id": "names_places-03",
+      "category": "names_places",
+      "partition": "calibration",
+      "delivery": "normal",
+      "reference": "请介绍苏州园林",
+      "critical_fields": {
+        "place": [
+          "苏州"
+        ]
+      }
+    },
+    {
+      "id": "names_places-04",
+      "category": "names_places",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "杭州的西湖有哪些特点",
+      "critical_fields": {
+        "place": [
+          "杭州"
+        ],
+        "landmark": [
+          "西湖"
+        ]
+      }
+    },
+    {
+      "id": "names_places-05",
+      "category": "names_places",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "南京和南宁有什么区别",
+      "critical_fields": {
+        "place": [
+          "南京",
+          "南宁"
+        ]
+      }
+    },
+    {
+      "id": "names_places-06",
+      "category": "names_places",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "上海到常州有多远",
+      "critical_fields": {
+        "place": [
+          "上海到常州"
+        ]
+      }
+    },
+    {
+      "id": "names_places-07",
+      "category": "names_places",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "请介绍成都的气候",
+      "critical_fields": {
+        "place": [
+          "成都"
+        ]
+      }
+    },
+    {
+      "id": "names_places-08",
+      "category": "names_places",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "武汉和芜湖分别在哪里",
+      "critical_fields": {
+        "place": [
+          "武汉和芜湖"
+        ]
+      }
+    },
+    {
+      "id": "names_places-09",
+      "category": "names_places",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "无锡的太湖有什么特点",
+      "critical_fields": {
+        "place": [
+          "无锡"
+        ],
+        "landmark": [
+          "太湖"
+        ]
+      }
+    },
+    {
+      "id": "names_places-10",
+      "category": "names_places",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "广州和贵阳分别属于哪个省",
+      "critical_fields": {
+        "place": [
+          "广州和贵阳"
+        ]
+      }
+    },
+    {
+      "id": "names_places-11",
+      "category": "names_places",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "请介绍北京的故宫",
+      "critical_fields": {
+        "place": [
+          "北京"
+        ],
+        "landmark": [
+          "故宫"
+        ]
+      }
+    },
+    {
+      "id": "names_places-12",
+      "category": "names_places",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "厦门和西安的气候有何不同",
+      "critical_fields": {
+        "place": [
+          "厦门和西安"
+        ]
+      }
+    },
+    {
+      "id": "names_places-13",
+      "category": "names_places",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "Bumblebee, what is your name",
+      "critical_fields": {
+        "name": [
+          "Bumblebee",
+          "大黄蜂"
+        ]
+      }
+    },
+    {
+      "id": "names_places-14",
+      "category": "names_places",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "Where is Changzhou in China",
+      "critical_fields": {
+        "place": [
+          "Changzhou",
+          "常州"
+        ]
+      }
+    },
+    {
+      "id": "names_places-15",
+      "category": "names_places",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "Tell me about the city of Shanghai",
+      "critical_fields": {
+        "place": [
+          "Shanghai",
+          "上海"
+        ]
+      }
+    },
+    {
+      "id": "numbers_time-01",
+      "category": "numbers_time",
+      "partition": "calibration",
+      "delivery": "normal",
+      "reference": "下午三点半应该怎样写成二十四小时制",
+      "critical_fields": {
+        "time": [
+          "三点半",
+          "15:30",
+          "十五点三十分"
+        ]
+      }
+    },
+    {
+      "id": "numbers_time-02",
+      "category": "numbers_time",
+      "partition": "calibration",
+      "delivery": "normal",
+      "reference": "二十七加三十八等于多少",
+      "critical_fields": {
+        "number": [
+          "二十七加三十八",
+          "27+38"
+        ]
+      }
+    },
+    {
+      "id": "numbers_time-03",
+      "category": "numbers_time",
+      "partition": "calibration",
+      "delivery": "normal",
+      "reference": "一百零五减二十九等于多少",
+      "critical_fields": {
+        "number": [
+          "一百零五减二十九",
+          "105-29"
+        ]
+      }
+    },
+    {
+      "id": "numbers_time-04",
+      "category": "numbers_time",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "把七点四十五分转换成英文表达",
+      "critical_fields": {
+        "time": [
+          "七点四十五分",
+          "7:45"
+        ]
+      }
+    },
+    {
+      "id": "numbers_time-05",
+      "category": "numbers_time",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "二零二六年十一月二日是星期几",
+      "critical_fields": {
+        "date": [
+          "二零二六年十一月二日",
+          "2026年11月2日"
+        ]
+      }
+    },
+    {
+      "id": "numbers_time-06",
+      "category": "numbers_time",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "一小时二十分钟一共多少分钟",
+      "critical_fields": {
+        "duration": [
+          "一小时二十分钟",
+          "1小时20分钟"
+        ]
+      }
+    },
+    {
+      "id": "numbers_time-07",
+      "category": "numbers_time",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "三点零五和三点五有什么区别",
+      "critical_fields": {
+        "number": [
+          "三点零五和三点五",
+          "3.05和3.5"
+        ]
+      }
+    },
+    {
+      "id": "numbers_time-08",
+      "category": "numbers_time",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "零下五摄氏度和五摄氏度差多少",
+      "critical_fields": {
+        "number": [
+          "零下五和五",
+          "-5和5"
+        ]
+      }
+    },
+    {
+      "id": "numbers_time-09",
+      "category": "numbers_time",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "十五除以三等于多少",
+      "critical_fields": {
+        "number": [
+          "十五除以三",
+          "15/3"
+        ]
+      }
+    },
+    {
+      "id": "numbers_time-10",
+      "category": "numbers_time",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "两千零六和二零二六相差多少年",
+      "critical_fields": {
+        "number": [
+          "两千零六和二零二六",
+          "2006和2026"
+        ]
+      }
+    },
+    {
+      "id": "numbers_time-11",
+      "category": "numbers_time",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "从上午九点到下午两点相隔多久",
+      "critical_fields": {
+        "time": [
+          "上午九点到下午两点",
+          "9:00到14:00"
+        ]
+      }
+    },
+    {
+      "id": "numbers_time-12",
+      "category": "numbers_time",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "百分之十五与百分之五十有什么区别",
+      "critical_fields": {
+        "number": [
+          "百分之十五与百分之五十",
+          "15%与50%"
+        ]
+      }
+    },
+    {
+      "id": "numbers_time-13",
+      "category": "numbers_time",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "What is twenty seven plus thirty eight",
+      "critical_fields": {
+        "number": [
+          "twenty seven plus thirty eight",
+          "27+38"
+        ]
+      }
+    },
+    {
+      "id": "numbers_time-14",
+      "category": "numbers_time",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "How many minutes are in one hour and twenty minutes",
+      "critical_fields": {
+        "duration": [
+          "one hour and twenty minutes",
+          "1小时20分钟"
+        ]
+      }
+    },
+    {
+      "id": "numbers_time-15",
+      "category": "numbers_time",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "Explain the difference between thirteen and thirty",
+      "critical_fields": {
+        "number": [
+          "thirteen and thirty",
+          "13和30"
+        ]
+      }
+    },
+    {
+      "id": "mixed-01",
+      "category": "mixed",
+      "partition": "calibration",
+      "delivery": "normal",
+      "reference": "大黄蜂，请解释一下 Wi-Fi 是什么",
+      "critical_fields": {
+        "term": [
+          "Wi-Fi",
+          "wifi"
+        ]
+      }
+    },
+    {
+      "id": "mixed-02",
+      "category": "mixed",
+      "partition": "calibration",
+      "delivery": "normal",
+      "reference": "USB 和 Wi-Fi 的区别是什么",
+      "critical_fields": {
+        "term": [
+          "USB和Wi-Fi",
+          "USB和wifi"
+        ]
+      }
+    },
+    {
+      "id": "mixed-03",
+      "category": "mixed",
+      "partition": "calibration",
+      "delivery": "normal",
+      "reference": "Dot 和 MiniMax 各负责什么",
+      "critical_fields": {
+        "term": [
+          "Dot和MiniMax"
+        ]
+      }
+    },
+    {
+      "id": "mixed-04",
+      "category": "mixed",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "请解释 API 的含义",
+      "critical_fields": {
+        "term": [
+          "API"
+        ]
+      }
+    },
+    {
+      "id": "mixed-05",
+      "category": "mixed",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "Bumblebee，请用中文介绍你自己",
+      "critical_fields": {
+        "name": [
+          "Bumblebee",
+          "大黄蜂"
+        ]
+      }
+    },
+    {
+      "id": "mixed-06",
+      "category": "mixed",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "把 good morning 翻译成中文",
+      "critical_fields": {
+        "term": [
+          "good morning"
+        ]
+      }
+    },
+    {
+      "id": "mixed-07",
+      "category": "mixed",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "请解释 Bluetooth 和 Wi-Fi 的区别",
+      "critical_fields": {
+        "term": [
+          "Bluetooth和Wi-Fi",
+          "Bluetooth和wifi"
+        ]
+      }
+    },
+    {
+      "id": "mixed-08",
+      "category": "mixed",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "ASR 和 TTS 分别是什么意思",
+      "critical_fields": {
+        "term": [
+          "ASR和TTS"
+        ]
+      }
+    },
+    {
+      "id": "mixed-09",
+      "category": "mixed",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "请介绍 Android 和 macOS 的区别",
+      "critical_fields": {
+        "term": [
+          "Android和macOS"
+        ]
+      }
+    },
+    {
+      "id": "mixed-10",
+      "category": "mixed",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "camera 这个英文单词怎样发音",
+      "critical_fields": {
+        "term": [
+          "camera"
+        ]
+      }
+    },
+    {
+      "id": "mixed-11",
+      "category": "mixed",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "请用中文解释 full duplex",
+      "critical_fields": {
+        "term": [
+          "full duplex"
+        ]
+      }
+    },
+    {
+      "id": "mixed-12",
+      "category": "mixed",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "CC8 的英文全称应该怎样读",
+      "critical_fields": {
+        "term": [
+          "CC8"
+        ]
+      }
+    },
+    {
+      "id": "mixed-13",
+      "category": "mixed",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "用一句话介绍 OpenAI 的 API",
+      "critical_fields": {
+        "term": [
+          "OpenAI的API"
+        ]
+      }
+    },
+    {
+      "id": "mixed-14",
+      "category": "mixed",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "请把 thank you 翻译成中文",
+      "critical_fields": {
+        "term": [
+          "thank you"
+        ]
+      }
+    },
+    {
+      "id": "mixed-15",
+      "category": "mixed",
+      "partition": "acceptance",
+      "delivery": "normal",
+      "reference": "给我解释一下 Python 和 Java 的区别",
+      "critical_fields": {
+        "term": [
+          "Python和Java"
+        ]
+      }
+    },
+    {
+      "id": "pause_soft-01",
+      "category": "pause_soft",
+      "partition": "calibration",
+      "delivery": "pause_or_soft",
+      "reference": "我想问一下常州今天的天气",
+      "critical_fields": {
+        "place": [
+          "常州"
+        ]
+      }
+    },
+    {
+      "id": "pause_soft-02",
+      "category": "pause_soft",
+      "partition": "calibration",
+      "delivery": "pause_or_soft",
+      "reference": "请先暂停再介绍一下你自己",
+      "critical_fields": {}
+    },
+    {
+      "id": "pause_soft-03",
+      "category": "pause_soft",
+      "partition": "calibration",
+      "delivery": "pause_or_soft",
+      "reference": "换一个请讲一个关于月亮的故事",
+      "critical_fields": {}
+    },
+    {
+      "id": "pause_soft-04",
+      "category": "pause_soft",
+      "partition": "acceptance",
+      "delivery": "pause_or_soft",
+      "reference": "我说的是苏州不是徐州",
+      "critical_fields": {
+        "place": [
+          "苏州"
+        ]
+      }
+    },
+    {
+      "id": "pause_soft-05",
+      "category": "pause_soft",
+      "partition": "acceptance",
+      "delivery": "pause_or_soft",
+      "reference": "不是十三是三十",
+      "critical_fields": {
+        "number": [
+          "三十",
+          "30"
+        ]
+      }
+    },
+    {
+      "id": "pause_soft-06",
+      "category": "pause_soft",
+      "partition": "acceptance",
+      "delivery": "pause_or_soft",
+      "reference": "请把刚才的解释说得简单一些",
+      "critical_fields": {}
+    },
+    {
+      "id": "pause_soft-07",
+      "category": "pause_soft",
+      "partition": "acceptance",
+      "delivery": "pause_or_soft",
+      "reference": "等一下我想换一个问题",
+      "critical_fields": {}
+    },
+    {
+      "id": "pause_soft-08",
+      "category": "pause_soft",
+      "partition": "acceptance",
+      "delivery": "pause_or_soft",
+      "reference": "请解释一下为什么晚上会有露水",
+      "critical_fields": {}
+    },
+    {
+      "id": "pause_soft-09",
+      "category": "pause_soft",
+      "partition": "acceptance",
+      "delivery": "pause_or_soft",
+      "reference": "先说结论然后再解释原因",
+      "critical_fields": {}
+    },
+    {
+      "id": "pause_soft-10",
+      "category": "pause_soft",
+      "partition": "acceptance",
+      "delivery": "pause_or_soft",
+      "reference": "不是下午三点是上午九点",
+      "critical_fields": {
+        "time": [
+          "上午九点",
+          "9:00"
+        ]
+      }
+    },
+    {
+      "id": "pause_soft-11",
+      "category": "pause_soft",
+      "partition": "acceptance",
+      "delivery": "pause_or_soft",
+      "reference": "我想了解一下南京的历史",
+      "critical_fields": {
+        "place": [
+          "南京"
+        ]
+      }
+    },
+    {
+      "id": "pause_soft-12",
+      "category": "pause_soft",
+      "partition": "acceptance",
+      "delivery": "pause_or_soft",
+      "reference": "这次请用两句话回答",
+      "critical_fields": {
+        "number": [
+          "两",
+          "2"
+        ]
+      }
+    },
+    {
+      "id": "pause_soft-13",
+      "category": "pause_soft",
+      "partition": "acceptance",
+      "delivery": "pause_or_soft",
+      "reference": "Please pause and answer a different question",
+      "critical_fields": {}
+    },
+    {
+      "id": "pause_soft-14",
+      "category": "pause_soft",
+      "partition": "acceptance",
+      "delivery": "pause_or_soft",
+      "reference": "I mean thirty, not thirteen",
+      "critical_fields": {
+        "number": [
+          "thirty",
+          "30"
+        ]
+      }
+    },
+    {
+      "id": "pause_soft-15",
+      "category": "pause_soft",
+      "partition": "acceptance",
+      "delivery": "pause_or_soft",
+      "reference": "Tell me about Changzhou, not Guangzhou",
+      "critical_fields": {
+        "place": [
+          "Changzhou",
+          "常州"
+        ]
+      }
+    }
+  ]
+}
