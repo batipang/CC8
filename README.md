@@ -1,12 +1,14 @@
 # CC8：APK 安装与大黄蜂语音助手
 
+[English](README.en.md) · [文档导航](docs/README.md) · [兼容性反馈](docs/COMPATIBILITY.md) · [贡献](CONTRIBUTING.md) · [安全报告](SECURITY.md)
+
 [![CI](https://github.com/batipang/CC8/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/batipang/CC8/actions/workflows/ci.yml)
 
 整理自一台天猫精灵 CC8 的实际开发记录，包含 **APK 安装工具、离线能力检测器，以及完整的大黄蜂（Bumblebee）语音助手代码**。
 
 已验证设备：底部型号 **TG_S6B01**，Android 型号 **AILABS_S6**，Android SDK **27**，固件 **6.1.8-RS-20251125.1919**。其他硬件或固件的工程入口、ADB 限制和安装权限未验证。
 
-本项目已经走通的安装路径是：正常开机 → 工程调试入口 → USB ADB 工程命令通道 → shell UID 2000 → 原生 `PackageInstaller` API。**不需要 Root、刷机或解锁 Bootloader。** 工具会检查设备型号、SDK、UID、传输哈希和安装回执。
+本项目已经走通的安装路径是：正常开机 → 工程调试入口 → USB ADB 工程命令通道 → shell UID 2000 → 原生 `PackageInstaller` API。**不需要 Root、刷机或解锁 Bootloader。** 工具会检查设备型号、SDK、UID、传输哈希和安装回执。 工程模式角落文字本身不代表通道可用；`--probe` 未通过就停止。当前固件的受保护 staging 被拒绝，显式共享兼容路线仍有助手被替换的风险，详见 [适用范围/停止入口](docs/COMPATIBILITY.md) 和 [安装排障](docs/INSTALL_TROUBLESHOOTING.md)。
 
 ## 文档
 
@@ -16,7 +18,11 @@
 - [轻量测试、格式规范与提交钩子](docs/DEVELOPMENT.md#轻量测试与质量检查)
 - [CI、密钥扫描、依赖审计与更新边界](docs/CI_SECURITY.md)
 - [配置来源、私有覆盖、迁移与恢复](docs/CONFIGURATION.md)
-- [统一 setup / doctor / run / measure 与单实例规则](docs/COMMANDS.md)
+- [统一 setup / doctor / run / measure / score-asr / observe 与单实例规则](docs/COMMANDS.md)
+- [本地双唤醒词](docs/LOCAL_WAKE.md)
+- [分类错误与恢复](docs/FAILURE_FEEDBACK.md)
+- [固定语料评分与 A/B](docs/ASR_EVALUATION.md)
+- [只读资源曲线与长期观察边界](docs/RUNTIME_OBSERVATION.md)
 - [分轮诊断采集与计时边界](docs/MEASUREMENT_RUNS.md)
 - [独立版本、兼容性与构建回执](docs/RELEASES.md)
 - [语音助手配置与使用](cc8-assistant/README.md)

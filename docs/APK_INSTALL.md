@@ -1,5 +1,7 @@
 # CC8 安装 APK：已验证步骤
 
+当前只验证下面这一台/固件；工程模式字样本身不算通道或权限已验证。先读 [兼容表/脱敏反馈](COMPATIBILITY.md) 和 [流程图/排障](INSTALL_TROUBLESHOOTING.md)。默认保护 staging 被该固件拒绝，显式共享装载路线仍有替换风险；未通过 probe / 签名 / 哈希 / 回执就停止，不自动卸载或改系统。
+
 ## 1. 适用范围与实际结果
 
 本次实际设备：
@@ -79,7 +81,7 @@ python3 device-access/cc8_install.py --install artifacts/cc8-diagnostics-1.0.1.a
 
 ```sh
 python3 cc8-assistant/tools/build.py
-python3 device-access/cc8_install.py --install artifacts/cc8-assistant-0.7.0.apk --launch --shared-staging
+python3 device-access/cc8_install.py --install artifacts/cc8-assistant-0.8.7.apk --launch --shared-staging
 ```
 
 安装其他单 APK 时替换 `--install` 后的路径。不想启动就省略 `--launch`。没有桌面入口的 APK 不能使用 `--launch`。
@@ -96,7 +98,7 @@ python3 device-access/cc8_install.py --install artifacts/cc8-assistant-0.7.0.apk
 
 如果安装成功但启动未确认，应查看 `launch_error`、`launch_command_accepted` 与设备画面，不能将“命令已发送”当成“应用已在前台”。如果设备不允许读取已安装文件的哈希，工具会以非零状态退出并明确说明“已安装但验证不完整”，不会继续启动或报告完整成功；不会自动卸载应用。
 
-麦克风、摄像头等运行时权限仍由用户在设备前台授权。仅安装不打开界面时不会启动录音或预览。助手 0.5.3 的普通 `--launch` 会遵循用户选择的自动语音行为；若只做维护检查，先不加 `--launch`，随后使用 `launch.py --no-auto-voice` 打开。摄像头仍需在检测页手动开始。
+麦克风、摄像头等运行时权限仍由用户在设备前台授权。仅安装不打开界面时不会启动录音或预览。助手自 0.5.3 起的普通 `--launch` 会遵循用户选择的自动语音行为；若只做维护检查，先不加 `--launch`，随后使用 `launch.py --no-auto-voice` 打开。摄像头只在前台明确的看图/拍照请求或检测页操作时启动，维护打开不触发。
 
 ## 6. 安装器内部流程
 
