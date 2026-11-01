@@ -126,3 +126,10 @@ AnnouncementController 拥有播报 generation 与完成回执，ReminderSchedul
 新增三项真实调用线程/虚拟通道回归：两个并发音量请求倒序确认仍正确路由，未知 ID 忽略且无关字段过滤；发送断线或等待超时均删除 waiter；非法动作/无连接在发包前拒绝，不开启捕获。未使用真实等待 5 秒、提供方或设备。installer 16、host 356（4 private skip）、tooling 47、Java 15 checks 与质量通过。Bridge 829 行、装配 299 行，新动态模块不计入 strict 六模块清单。
 
 第七步校准与装配已通过 [PR #24](https://github.com/batipang/CC8/pull/24) 的 [真实 CI](https://github.com/batipang/CC8/actions/runs/41342127824) 八项检查并合入。
+
+
+## 第九步：后台进程运行入口（候选）
+
+191 行 app_runtime.py 收拢 parser、provider factory 装配、TransportHub / owner IPC、信号与主事件循环；Bridge 的 main / run_backend 保留入口，运行锁仍覆盖整个模型加载/服务期。frozen BackendDependencies 在每次调用时从原入口绑定当前 factory / 路径 / 描述，保留现有测试替换点，不静态缓存原提供方。原函数体仅将工厂、私有目录和 parser 描述改为显式依赖，AST 归一比较完全相同；没有改变退出顺序、重试或资源权限。
+
+原公开 USB 工具/信号测试 patch 点仍通过显式模块 re-export 保留；实际 signal 注册、配置错误在 provider 前失败、最小 PATH 和 USB 排除网络 ADB/多设备回归仍通过。全套 installer 16、host 356（4 private skip）、tooling 47、Java 15 checks 与质量通过。Bridge 699 行，仍包含会话与设备事件所有权，不能只因文件变短关闭 F-06。严格检查范围仍六模块，未运行后台、设备或私人音频，待 CI。
