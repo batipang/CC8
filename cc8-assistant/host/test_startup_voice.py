@@ -50,17 +50,17 @@ class StartupVoiceTests(unittest.TestCase):
 
     def test_tts_waiting_audio_is_excluded_from_alignment_window(self):
         value = self.bridge()
-        value.calibration_frames = [('waiting',)]
+        value.capture.echo.calibration_frames = [('waiting',)]
 
         def play(*args):
-            self.assertEqual(value.calibration_frames, [])
-            value.calibration_frames.append(('actual-playback',))
+            self.assertEqual(value.capture.echo.calibration_frames, [])
+            value.capture.echo.calibration_frames.append(('actual-playback',))
             return True
 
         value.play.side_effect = play
         with patch('bridge.time.sleep'):
             value.calibrate(value.generation)
-        self.assertEqual(value.calibration_frames, [('actual-playback',)])
+        self.assertEqual(value.capture.echo.calibration_frames, [('actual-playback',)])
 
     def test_cancelled_synthesis_cannot_clear_or_play_new_session(self):
         value = self.bridge()
@@ -68,7 +68,7 @@ class StartupVoiceTests(unittest.TestCase):
 
         def synthesize(text):
             value.generation += 1
-            value.calibration_frames = [('new-session',)]
+            value.capture.echo.calibration_frames = [('new-session',)]
             return np.ones(RATE * 2, dtype=np.int16)
 
         value.speech.synthesize.side_effect = synthesize
@@ -76,7 +76,7 @@ class StartupVoiceTests(unittest.TestCase):
         value.play.assert_not_called()
         value.align_reference.assert_not_called()
         self.assertTrue(value.calibrating)
-        self.assertEqual(value.calibration_frames, [('new-session',)])
+        self.assertEqual(value.capture.echo.calibration_frames, [('new-session',)])
 
     def test_synthesis_failure_never_falls_back_to_old_female_reference(self):
         value = self.bridge()

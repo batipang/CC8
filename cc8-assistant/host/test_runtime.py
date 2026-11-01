@@ -707,14 +707,14 @@ class CaptureEvidenceTests(unittest.TestCase):
         b = QuietWorker(None, None)
         b.connection = Sink()
         b.active = True
-        b.aec = AEC()
-        b.vad = VAD()
+        b.capture.echo.aec = AEC()
+        b.capture.endpoint.vad = VAD()
         b.save_status = lambda: None
-        b.last_status = time.monotonic()
+        b.capture.last_status = time.monotonic()
         b.playback.last_audio_end = time.monotonic() - 500
         b.playback.spoken.append((time.monotonic() - 100, '较早开始的一段长播报。'))
         stamp = 1_000_000_000
-        b.timeline.add(b.generation, 0, stamp, np.ones(320) * 0.1)
+        b.capture.echo.timeline.add(b.generation, 0, stamp, np.ones(320) * 0.1)
         b.process_microphone(
             Packet(MIC, 1, 0, 0, stamp, (np.ones(FRAME) * 1200).astype('<i2').tobytes())
         )
@@ -758,10 +758,10 @@ class CaptureEvidenceTests(unittest.TestCase):
         b = QuietWorker(None, None)
         b.connection = Sink()
         b.active = True
-        b.aec = AEC()
-        b.vad = VAD()
+        b.capture.echo.aec = AEC()
+        b.capture.endpoint.vad = VAD()
         b.save_status = lambda: None
-        b.last_status = time.monotonic()
+        b.capture.last_status = time.monotonic()
         b.process_microphone(
             Packet(MIC, 1, 0, 0, 1_000_000_000, np.ones(320, dtype='<i2').tobytes())
         )
@@ -788,7 +788,7 @@ class FastStopTests(unittest.TestCase):
         b.active = True
         b.playback.playing = True
         b.playback.last_spoken = spoken
-        b.aec = AEC()
+        b.capture.echo.aec = AEC()
         b.calibrating = calibrating
         b.save_status = lambda: None
         return b
@@ -826,12 +826,12 @@ class FastStopTests(unittest.TestCase):
                 return False, None, -90
 
         b = self.bridge()
-        b.aec = AEC(0)
-        b.stop_aec = AEC(0.01)
-        b.fast_stop = Detector()
-        b.vad = VAD()
+        b.capture.echo.aec = AEC(0)
+        b.capture.echo.stop_aec = AEC(0.01)
+        b.capture.endpoint.fast_stop = Detector()
+        b.capture.endpoint.vad = VAD()
         b.process_microphone(Packet(MIC, 0, 0, 0, 10_000_000_000, b'\x00\x00' * 320))
-        np.testing.assert_allclose(b.fast_stop.calls[0], np.full(FRAME, 0.01))
+        np.testing.assert_allclose(b.capture.endpoint.fast_stop.calls[0], np.full(FRAME, 0.01))
         self.assertEqual(b.metrics['fast_stop_count'], 1)
         self.assertFalse(b.playback.playing)
 
@@ -888,7 +888,7 @@ class FastStopTests(unittest.TestCase):
     def test_calibration_never_activates_fast_stop(self):
         b = self.bridge(calibrating=True)
         b.process_microphone(Packet(MIC, 0, 0, 0, 10_000_000_000, b'\x00\x00' * 320))
-        self.assertEqual(b.fast_stop.calls, 0)
+        self.assertEqual(b.capture.endpoint.fast_stop.calls, 0)
         self.assertTrue(b.playback.playing)
 
     def test_late_whisper_result_after_fast_stop_cannot_restart_answer(self):

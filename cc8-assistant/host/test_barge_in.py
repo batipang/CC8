@@ -57,11 +57,11 @@ class BargeInTests(unittest.TestCase):
     def test_earlier_rejection_cannot_resume_over_a_new_speech_segment(self):
         b = self.bridge()
         token = b.pause_for_voice()
-        b.vad.talking = True
-        b.turn_pause_token = token
+        b.capture.endpoint.vad.talking = True
+        b.capture.endpoint.turn_pause_token = token
         b.resume_after_rejection(token, b.generation)
         self.assertIsNotNone(b.playback.pause_state)
-        b.vad.talking = False
+        b.capture.endpoint.vad.talking = False
         b.resume_after_rejection(token, b.generation)
         self.assertIsNone(b.playback.pause_state)
 
@@ -79,7 +79,7 @@ class BargeInTests(unittest.TestCase):
         old = b.generation
         b.cancel('next')
         b.on_event({'event': 'playback_paused', 'token': token, 'generation': old, 'nanos': 1000})
-        self.assertIsNone(b.timeline.paused_at)
+        self.assertIsNone(b.capture.echo.timeline.paused_at)
 
     def test_false_recognition_resumes_without_transcript_or_reply(self):
         class Speech:

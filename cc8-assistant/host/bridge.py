@@ -20,26 +20,24 @@ import threading
 import time
 import numpy as np
 
-from protocol import Packet, MIC, RENDER, EVENT, SPEAKER, decode_event, validate_device_event
+from protocol import Packet, EVENT, SPEAKER, decode_event, validate_device_event
 from transport import Pairing, TransportHub
 from dsp import (
     RATE,
-    FRAME,
     WebRtcEchoCanceller,
-    RenderTimeline,
-    ReferenceCapture,
     VoiceDetector,
     NearSpeechDetector,
-    level,
-    estimate_reference_shift,
     resembles_playback,
 )
-from fast_stop import FastStopDetector, can_fast_stop
+from fast_stop import FastStopDetector
 from brain_router import BrainRouter
 from announce import Announcement, AnnouncementServer, validate_text
 from vision import visual_request, desktop_signature
 from vision_controller import VisionController, VisionHooks
 from playback_controller import PlaybackController, PlaybackHooks
+from capture_pipeline import CapturePipeline, CaptureHooks
+from echo_pipeline import EchoPipeline, EchoHooks
+from endpoint_pipeline import EndpointPipeline, EndpointHooks
 from minimax_client import MiniMaxBrain, MiniMaxError
 from workspace import Workspace
 from diagnostics import TraceBook
@@ -84,7 +82,6 @@ class Bridge:
         self, speech, brain, library=LIBRARY, fast_stop=None, echo_check=False, workspace=None
     ):
         self.diagnostics = TraceBook()
-        self.voice_trace = None
         self.started_at = time.monotonic()
         self.speech = speech
         self.brain = brain
@@ -97,7 +94,6 @@ class Bridge:
         self.transport_hub = None
         self.transport_kind = 'none'
         self.rebind_seen = False
-        self.capture_lookahead_ns = 80_000_000
         self.write_lock = threading.Lock()
         self.guard = threading.RLock()
         self.active = False
@@ -107,10 +103,6 @@ class Bridge:
         self.announcement_generation = None
         self.wake = False
         self.awake = True
-        self.aec = None
-        self.stop_aec = None
-        self.timeline = RenderTimeline()
-        self.vad = VoiceDetector()
         self.history = deque(maxlen=8)
         self.queue = queue.Queue(maxsize=2)
         self.metrics = {
@@ -121,21 +113,6 @@ class Bridge:
             'utterances': 0,
             'raw_audio_saved': False,
         }
-        self.last_sequence = None
-        self.last_status = 0
-        self.live_turn = 0
-        self.pending_mic = deque()
-        self.calibration_frames = []
-        self.reference_shift_ns = 0
-        self.dsp_lock = threading.RLock()
-        self.turn_reference = []
-        self.turn_during_playback = False
-        self.turn_echo_risk = False
-        self.turn_capture_started = 0
-        self.last_capture_render_ns = None
-        self.reference_capture = ReferenceCapture()
-        self.near_speech = NearSpeechDetector()
-        self.turn_pause_token = None
         self.response_queue = queue.Queue(maxsize=2)
         self.status_lock = threading.Lock()
         self.last_interaction = time.monotonic()
@@ -146,9 +123,6 @@ class Bridge:
         if isinstance(self.brain, BrainRouter):
             self.brain.dot.device_control = self.control_device
             self.brain.dot.reminders = self.reminder_action
-        self.fast_stop = fast_stop
-        self.last_fast_stop_ns = 0
-        self.ignore_vad_until_ns = 0
         self.echo_check_pending = echo_check
         self.echo_check_running = False
         self.echo_check_failed = False
@@ -191,19 +165,77 @@ class Bridge:
                 log=lambda name, **fields: self.log(name, **fields),
                 metric=self.record_metric,
                 diagnostics=lambda: self.diagnostics,
-                trace=lambda: self.voice_trace,
+                trace=lambda: self.capture.endpoint.voice_trace,
                 echo_metrics=lambda: dict(
                     input_dbfs=self.metrics.get('input_dbfs'),
                     residual_dbfs=self.metrics.get('output_dbfs'),
-                    raw_coherence=round(self.near_speech.correlation, 3),
-                    residual_coherence=round(self.near_speech.residual_correlation, 3),
+                    raw_coherence=round(self.capture.endpoint.near_speech.correlation, 3),
+                    residual_coherence=round(
+                        self.capture.endpoint.near_speech.residual_correlation, 3
+                    ),
                 ),
-                utterance_paused=lambda token: self.vad.talking and self.turn_pause_token == token,
+                utterance_paused=lambda token: (
+                    self.capture.endpoint.vad.talking
+                    and self.capture.endpoint.turn_pause_token == token
+                ),
                 speech=lambda: self.speech,
-                cancel_timeline_pause=lambda: self.timeline.cancel_pause(),
-                pause_timeline=lambda nanos: self.timeline.pause_at(nanos),
-                resume_timeline=lambda nanos: self.timeline.resume_at(nanos),
+                cancel_timeline_pause=lambda: self.capture.echo.cancel_pause(),
+                pause_timeline=lambda nanos: self.capture.echo.pause_at(nanos),
+                resume_timeline=lambda nanos: self.capture.echo.resume_at(nanos),
             )
+        )
+        self.capture = CapturePipeline(
+            CaptureHooks(
+                generation=lambda: self.generation,
+                epoch=lambda: self.epoch,
+                active=lambda: self.active,
+                calibrating=lambda: self.calibrating,
+                diagnostics=lambda: self.diagnostics,
+                metric=self.record_metric,
+                add_metric=self.add_capture_metric,
+                log=lambda name, **fields: self.log(name, **fields),
+                save_status=lambda: self.save_status(),
+            ),
+            EchoPipeline(
+                EchoHooks(
+                    lock=self.guard,
+                    active=lambda: self.active,
+                    valid=lambda generation: self.valid(generation),
+                    factory=lambda **kwargs: WebRtcEchoCanceller(**kwargs),
+                    fast_stop_enabled=lambda: bool(self.capture.endpoint.fast_stop),
+                    metric=self.record_metric,
+                    log=lambda name, **fields: self.log(name, **fields),
+                )
+            ),
+            EndpointPipeline(
+                EndpointHooks(
+                    generation=lambda: self.generation,
+                    awake=lambda: self.awake,
+                    playing=lambda: self.playback.playing,
+                    last_audio_end=lambda: self.playback.last_audio_end,
+                    last_spoken=lambda: self.playback.last_spoken,
+                    previous_spoken=lambda: self.playback.previous_spoken,
+                    previous_spoken_until=lambda: self.playback.previous_spoken_until,
+                    recent_spoken=lambda: [text for _, text in tuple(self.playback.spoken)],
+                    pause_token=lambda: (
+                        self.playback.pause_state['token'] if self.playback.pause_state else None
+                    ),
+                    paused=lambda: self.playback.pause_state is not None,
+                    pause_voice=lambda: self.pause_for_voice(),
+                    cancel_session=lambda reason: self.cancel(reason),
+                    event=lambda name, **fields: self.event(name, **fields),
+                    status=lambda phase, message: self.status(phase, message),
+                    log=lambda name, **fields: self.log(name, **fields),
+                    save_status=lambda: self.save_status(),
+                    metric=self.record_metric,
+                    add_metric=self.add_capture_metric,
+                    metric_value=lambda name: self.metrics[name],
+                    diagnostics=lambda: self.diagnostics,
+                    enqueue=lambda job: self.enqueue_recognition(job),
+                    discard_recognition=lambda: self.discard_recognition(),
+                ),
+                fast_stop,
+            ),
         )
         self.worker = threading.Thread(target=self.work, daemon=True)
         self.worker.start()
@@ -249,15 +281,8 @@ class Bridge:
         self.visual.clear_challenge()
         self.rebind_seen = False
         self.transport_kind = channel.kind if channel else 'none'
-        self.capture_lookahead_ns = 120_000_000 if self.transport_kind == 'wifi' else 80_000_000
-        self.timeline = RenderTimeline()
-        self.pending_mic.clear()
-        self.vad.reset()
-        self.reference_capture.reset()
-        self.near_speech.reset()
-        self.last_sequence = None
+        self.capture.reset_transport(self.transport_kind)
         self.playback.clear_transport_pause()
-        self.turn_pause_token = None
         if channel is None:
             self.stop()
         elif was_active:
@@ -395,7 +420,7 @@ class Bridge:
                 or self.text_generation is not None
                 or self.visual.generation is not None
                 or self.announcement_generation is not None
-                or self.vad.talking
+                or self.capture.endpoint.vad.talking
                 or not self.response_queue.empty()
             ):
                 return
@@ -538,17 +563,7 @@ class Bridge:
         self.calibrating = False
         self.screen_sleeping = False
         self.cancel('session_stop')
-        self.vad.reset()
-        self.reference_capture.reset()
-        with self.dsp_lock:
-            if self.aec:
-                self.aec.close()
-                self.aec = None
-            if self.stop_aec:
-                self.stop_aec.close()
-                self.stop_aec = None
-        self.pending_mic.clear()
-        self.calibration_frames.clear()
+        self.capture.close()
         self.save_status()
 
     def on_event(self, j):
@@ -635,7 +650,7 @@ class Bridge:
             self.rebind_seen = True
             if self.active and int(j.get('epoch', -1)) == self.epoch:
                 if self.calibrating:
-                    self.calibration_frames = []
+                    self.capture.echo.clear_calibration_frames()
                     threading.Thread(
                         target=self.calibrate, args=(self.generation,), daemon=True
                     ).start()
@@ -698,25 +713,9 @@ class Bridge:
             self.epoch = int(j['epoch'])
             self.active = True
             self.generation += 1
-            self.timeline = RenderTimeline()
-            self.vad = VoiceDetector()
-            self.last_sequence = None
-            self.pending_mic.clear()
-            self.calibration_frames = []
-            self.reference_shift_ns = 0
+            self.capture.reset_session()
             self.playback.reset_session()
-            self.turn_reference = []
-            self.turn_echo_risk = False
-            self.last_capture_render_ns = None
-            self.reference_capture.reset()
-            self.near_speech.reset()
-            self.turn_pause_token = None
-            self.last_fast_stop_ns = 0
-            self.ignore_vad_until_ns = 0
-            if self.fast_stop:
-                self.fast_stop.reset()
-            self.aec = WebRtcEchoCanceller()
-            self.stop_aec = WebRtcEchoCanceller(noise_suppression=False) if self.fast_stop else None
+            self.capture.echo.open()
             self.calibrating = True
             self.awake = not self.wake
             self.screen_sleeping = False
@@ -754,156 +753,26 @@ class Bridge:
             self.log('capture_read_gap', milliseconds=j.get('milliseconds'))
 
     def on_packet(self, p):
-        # RENDER 是设备接受的扬声器参考，与 MIC 收音分开，先建时间轴再做 AEC。
         if p.kind == EVENT:
             try:
                 self.on_event(decode_event(p.data))
             except (KeyError, TypeError, OverflowError):
                 raise ValueError('Invalid device event fields') from None
             return
-        if p.kind == RENDER:
-            if p.generation != self.generation:
-                return
-            self.diagnostics.mark(p.generation, 'render_ack')
-            pcm = np.frombuffer(p.data, dtype='<i2').astype(float) / 32768
-            self.timeline.add(p.generation, p.frame, p.nanos, pcm)
-            self.metrics['render_frames'] += len(pcm)
-            self.metrics['render_clock_discontinuities'] = self.timeline.discontinuities
-            return
-        if p.kind != MIC or not self.active or p.generation != self.epoch:
-            return
-        if self.pending_mic and p.nanos <= self.pending_mic[-1].nanos:
-            raise ValueError('Non-monotonic microphone timestamp')
-        if len(self.pending_mic) >= 64:
-            raise ValueError('Microphone lookahead exceeded')
-        self.pending_mic.append(p)
-        # A short fixed lookahead lets playback reference arrive before AEC,
-        # even when estimated capture timestamps lead the render clock.
-        while self.pending_mic and p.nanos - self.pending_mic[0].nanos >= self.capture_lookahead_ns:
-            self.process_microphone(self.pending_mic.popleft())
+        self.capture.on_packet(p)
 
     def process_microphone(self, p):
-        # DSP 按设备纳秒时间戳和 16 kHz / 10 ms 帧对齐，不能用网络到达时间替代。
-        if self.last_sequence is not None and p.sequence != self.last_sequence + 1:
-            self.metrics['sequence_gaps'] += 1
-            self.log('capture_packet_gap')
-        self.last_sequence = p.sequence
-        mic = np.frombuffer(p.data, dtype='<i2').astype(float) / 32768
-        if len(mic) % FRAME:
-            self.log('unaligned_capture_frame', frames=len(mic))
-            return
-        self.metrics['mic_frames'] += len(mic)
-        for offset in range(0, len(mic), FRAME):
-            stamp = p.nanos + round(offset * 1e9 / RATE)
-            reference = self.timeline.at(stamp - self.reference_shift_ns, FRAME)
-            with self.dsp_lock:
-                if not self.aec:
-                    return
-                cleaned = self.aec.process(mic[offset : offset + FRAME], reference)
-                # Stop keywords need a weak near voice to survive double-talk.
-                # Their narrow, text-guarded detector uses AEC3 without the
-                # additional noise suppressor used for conversational ASR.
-                stop_cleaned = (
-                    self.stop_aec.process(mic[offset : offset + FRAME], reference)
-                    if self.stop_aec
-                    else cleaned
-                )
-            self.metrics['input_dbfs'] = round(level(mic[offset : offset + FRAME]), 1)
-            self.metrics['output_dbfs'] = round(level(cleaned), 1)
-            if self.calibrating:
-                self.calibration_frames.append((stamp, mic[offset : offset + FRAME].copy()))
-                continue
-            # Capture-clock evidence survives ASR/network queue delays. A
-            # wall-clock check made after recognition can miss the same echo.
-            if level(reference) > -65:
-                self.last_capture_render_ns = stamp
-            echo_risk = self.playback.playing or (
-                self.last_capture_render_ns is not None
-                and 0 <= stamp - self.last_capture_render_ns < 3_000_000_000
-            )
-            if self.fast_stop:
-                self.metrics['stop_input_dbfs'] = round(level(stop_cleaned), 1)
-                keyword = self.fast_stop.feed(stop_cleaned)
-                if keyword and stamp - self.last_fast_stop_ns > 1_200_000_000:
-                    recent = (
-                        self.playback.playing or time.monotonic() - self.playback.last_audio_end < 1
-                    )
-                    render_text = self.playback.last_spoken if recent else ''
-                    if time.monotonic() < self.playback.previous_spoken_until:
-                        render_text += self.playback.previous_spoken
-                    if can_fast_stop(keyword, render_text):
-                        self.apply_fast_stop(keyword, stamp)
-                    else:
-                        self.log('fast_stop_reference_suppressed')
-            if stamp < self.ignore_vad_until_ns:
-                continue
-            voiced, credible = self.near_speech.feed(
-                cleaned, mic[offset : offset + FRAME], reference
-            )
-            self.vad.external_voice = voiced
-            began, utterance, _ = self.vad.feed(cleaned)
-            render_audio = self.reference_capture.feed(reference, began, utterance is not None)
-            if began:
-                self.voice_trace = self.diagnostics.begin('voice')
-                self.diagnostics.mark(self.voice_trace, 'voice_detected')
-                # Wake mode waits for textual keyword recognition until the
-                # conversation is awake. This is not offline keyword spotting.
-                now = time.monotonic()
-                self.turn_during_playback = self.playback.playing
-                self.turn_echo_risk = echo_risk
-                self.turn_capture_started = now
-                self.turn_pause_token = (
-                    self.playback.pause_state['token'] if self.playback.pause_state else None
-                )
-                # Bounded by count, not clause-start age: a 30-second-old
-                # clause can still be audible or queued for recognition.
-                self.turn_reference = [text for _, text in tuple(self.playback.spoken)]
-                # Only the acoustic speech gate can pause. Decode and reject
-                # reference fragments before permanently cancelling a turn.
-                self.live_turn = (
-                    self.generation
-                    if self.turn_echo_risk or not self.awake
-                    else self.cancel('voice')
-                )
-                if not self.turn_echo_risk:
-                    self.status('listening', '我在听，你继续说')
-            if (
-                self.vad.talking
-                and credible
-                and self.playback.playing
-                and self.awake
-                and self.playback.pause_state is None
-            ):
-                self.turn_pause_token = self.pause_for_voice()
-            if self.vad.talking or utterance is not None:
-                self.turn_echo_risk |= echo_risk
-            if utterance is not None:
-                self.diagnostics.mark(self.voice_trace, 'utterance_end')
-                self.metrics['utterances'] += 1
-                # Include clauses that started after this utterance began.
-                references = list(
-                    dict.fromkeys(
-                        [*self.turn_reference, *[text for _, text in tuple(self.playback.spoken)]]
-                    )
-                )[-64:]
-                evidence = {
-                    'echo_risk': self.turn_echo_risk,
-                    'captured_at': self.turn_capture_started,
-                    'pause_token': self.turn_pause_token,
-                }
-                job = (
-                    self.live_turn,
-                    utterance,
-                    self.turn_during_playback,
-                    references,
-                    evidence,
-                    render_audio,
-                    self.voice_trace,
-                )
-                self.enqueue_recognition(job)
-        if time.monotonic() - self.last_status > 1:
-            self.last_status = time.monotonic()
-            self.save_status()
+        return self.capture.process_microphone(p)
+
+    def add_capture_metric(self, name, amount):
+        self.metrics[name] += amount
+
+    def discard_recognition(self):
+        while True:
+            try:
+                self.queue.get_nowait()
+            except queue.Empty:
+                break
 
     def enqueue_recognition(self, job):
         try:
@@ -918,31 +787,7 @@ class Bridge:
             self.queue.put_nowait(job)
 
     def apply_fast_stop(self, keyword, stamp):
-        start = time.perf_counter()
-        self.last_fast_stop_ns = stamp
-        self.ignore_vad_until_ns = stamp + 160_000_000
-        self.cancel('streaming_stop_keyword')
-        self.vad.reset()
-        self.live_turn = self.generation
-        self.reference_capture.reset()
-        # A stop command invalidates all queued, not-yet-recognized turns.
-        while True:
-            try:
-                self.queue.get_nowait()
-            except queue.Empty:
-                break
-        self.event('transcript', text=keyword)
-        self.status('listening', '已停止播报，我在听')
-        self.metrics['fast_stop_count'] = self.metrics.get('fast_stop_count', 0) + 1
-        self.metrics['fast_stop_control_dispatch_ms'] = round(
-            (time.perf_counter() - start) * 1000, 2
-        )
-        self.log(
-            'streaming_stop_keyword',
-            command=keyword,
-            control_dispatch_ms=self.metrics['fast_stop_control_dispatch_ms'],
-        )
-        self.save_status()
+        return self.capture.endpoint.apply_fast_stop(keyword, stamp)
 
     def save_status(self):
         PRIVATE.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -980,9 +825,9 @@ class Bridge:
             else 'echo test',
             'dot_enabled': isinstance(self.brain, BrainRouter),
             'web_search_enabled': self.brain is not None,
-            'fast_stop_enabled': self.fast_stop is not None,
+            'fast_stop_enabled': self.capture.endpoint.fast_stop is not None,
             'fast_stop_input': 'AEC3 without additional NS',
-            'fast_stop_gain': getattr(self.fast_stop, 'gain', None),
+            'fast_stop_gain': getattr(self.capture.endpoint.fast_stop, 'gain', None),
             'aec_engine': 'WebRTC AEC3 + NS; AGC disabled',
             'render_asr_comparison': True,
             'residual_echo_suppression': True,
@@ -1028,7 +873,7 @@ class Bridge:
                 if not self.valid(generation):
                     return
                 # 云端合成可能耗时，时钟对齐只使用真正播放开始后的收音。
-                self.calibration_frames.clear()
+                self.capture.echo.clear_calibration_frames()
             started = time.monotonic()
             self.status('calibrating', '声音校准中，请稍候…')
             if not self.play(pcm, STARTUP_GREETING, generation, 'calibration'):
@@ -1046,8 +891,7 @@ class Bridge:
                 if not self.valid(generation):
                     return
                 self.calibrating = False
-                self.vad.reset()
-                self.reference_capture.reset()
+                self.capture.endpoint.reset_voice_activity()
             if self.echo_check_pending:
                 self.echo_check_pending = False
                 self.check_echo(generation)
@@ -1106,14 +950,22 @@ class Bridge:
             drain = time.monotonic() + 20
             while (
                 self.valid(generation)
-                and (self.recognition_busy or not self.queue.empty() or self.vad.talking)
+                and (
+                    self.recognition_busy
+                    or not self.queue.empty()
+                    or self.capture.endpoint.vad.talking
+                )
                 and time.monotonic() < drain
             ):
                 time.sleep(0.1)
             if not self.valid(generation):
                 report['state'] = 'interrupted'
                 return
-            complete = not self.recognition_busy and self.queue.empty() and not self.vad.talking
+            complete = (
+                not self.recognition_busy
+                and self.queue.empty()
+                and not self.capture.endpoint.vad.talking
+            )
             passed = complete and report['unmatched_candidates'] == 0
             report['state'] = 'passed' if passed else ('failed' if complete else 'incomplete')
             self.echo_check_failed = not passed
@@ -1135,42 +987,7 @@ class Bridge:
             self.save_status()
 
     def align_reference(self, generation=None):
-        with self.guard:
-            if not self.active or (generation is not None and not self.valid(generation)):
-                return False
-            frames = list(self.calibration_frames)
-            if len(frames) < 100:
-                return True
-            mic = np.concatenate([pcm for _, pcm in frames])
-            render = np.concatenate([self.timeline.at(stamp, FRAME) for stamp, _ in frames])
-            shift, correlation = estimate_reference_shift(mic, render)
-            self.reference_shift_ns = round(shift * 1e9 / RATE)
-            with self.dsp_lock:
-                if not self.active:
-                    return False
-                if self.aec:
-                    self.aec.close()
-                if self.stop_aec:
-                    self.stop_aec.close()
-                self.aec = WebRtcEchoCanceller()
-                self.stop_aec = (
-                    WebRtcEchoCanceller(noise_suppression=False) if self.fast_stop else None
-                )
-                # Warm the adaptive filter on the same visible calibration only.
-                for stamp, pcm in frames:
-                    reference = self.timeline.at(stamp - self.reference_shift_ns, FRAME)
-                    self.aec.process(pcm, reference)
-                    if self.stop_aec:
-                        self.stop_aec.process(pcm, reference)
-            self.metrics['reference_shift_samples'] = shift
-            self.metrics['calibration_reference_correlation'] = round(correlation, 3)
-            self.calibration_frames.clear()
-            self.log(
-                'reference_alignment_estimated',
-                shift_samples=shift,
-                correlation=round(correlation, 3),
-            )
-            return True
+        return self.capture.echo.align_reference(generation)
 
     def failure(self, message, error, trace_key=None):
         key = self.generation if trace_key is None else trace_key
@@ -1682,9 +1499,8 @@ def run_backend():
         bridge.calibrating = True
         bridge.echo_check_pending = True
         bridge.echo_check_failed = False
-        bridge.calibration_frames = []
-        bridge.vad.reset()
-        bridge.reference_capture.reset()
+        bridge.capture.echo.clear_calibration_frames()
+        bridge.capture.endpoint.reset_voice_activity()
         threading.Thread(target=bridge.calibrate, args=(generation,), daemon=True).start()
 
     signal.signal(signal.SIGUSR1, retry_echo_check)
