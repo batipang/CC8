@@ -1,0 +1,162 @@
+"""Bounded live task receipts and owner-private, durable CC8 reminders.
+
+Task transcripts are not persisted. Reminders are created only by an explicit
+tool/UI request; the scheduler never opens a microphone or camera.
+"""
+from __future__ import annotations
+from copy import deepcopy
+from datetime import datetime, timedelta
+import json
+import os
+from pathlib import Path
+import threading
+import uuid
+from zoneinfo import ZoneInfo
+
+ZONE = ZoneInfo('Asia/Shanghai')
+
+
+def clock():return datetime.now(ZONE)
+
+
+class Workspace:
+    def __init__(self, path=None, now=clock):
+        self.path=Path(path) if path else None;self.now=now
+        self.lock=threading.RLock();self.tasks=[];self.reminders=[];self.revision=0
+        if self.path and self.path.exists():
+            # Do not silently replace a corrupt reminder store with an empty one.
+            data=json.loads(self.path.read_text())
+            if data.get('version')!=1 or not isinstance(data.get('reminders'),list) or len(data['reminders'])>64:
+                raise ValueError('Invalid reminder store')
+            self.reminders=data['reminders']
+            for item in self.reminders:self._validate(item,existing=True)
+            if sum(r['status']=='pending' for r in self.reminders)>32:raise ValueError('Too many pending reminders')
+
+    def _save(self):
+        if self.path:
+            self.path.parent.mkdir(parents=True,exist_ok=True,mode=0o700);os.chmod(self.path.parent,0o700)
+            temporary=self.path.with_name(self.path.name+'.'+uuid.uuid4().hex+'.tmp')
+            try:
+                with temporary.open('x',encoding='utf-8') as f:
+                    os.chmod(temporary,0o600)
+                    json.dump({'version':1,'reminders':self.reminders},f,ensure_ascii=False)
+                    f.flush();os.fsync(f.fileno())
+                temporary.replace(self.path)
+            finally:
+                temporary.unlink(missing_ok=True)
+        self.revision+=1
+
+    @staticmethod
+    def _date(value):
+        if not isinstance(value,str) or len(value)>40:raise ValueError('提醒时间需要带时区的 ISO 日期')
+        try:result=datetime.fromisoformat(value)
+        except ValueError:raise ValueError('提醒时间格式不正确') from None
+        if result.tzinfo is None:raise ValueError('提醒时间必须包含时区')
+        return result.astimezone(ZONE)
+
+    def _validate(self,item,existing=False):
+        if not isinstance(item,dict):raise ValueError('Invalid reminder')
+        title=item.get('title')
+        if not isinstance(title,str) or not title.strip() or len(title)>120 or any(ord(c)<32 for c in title):
+            raise ValueError('提醒内容应为 1 至 120 字')
+        due=self._date(item.get('due'))
+        if item.get('repeat','none') not in ('none','daily','weekdays','weekly'):raise ValueError('不支持的重复方式')
+        if not existing and item.get('repeat')=='weekdays':
+            while due.weekday()>4:due+=timedelta(days=1)
+        if not existing and (due<=self.now() or due>self.now()+timedelta(days=366*5)):raise ValueError('请选择未来五年内的提醒时间')
+        if existing and (not isinstance(item.get('id'),str) or len(item['id'])!=16 or item.get('status') not in ('pending','delivered','cancelled')):
+            raise ValueError('Invalid reminder record')
+        return due
+
+    def snapshot(self):
+        with self.lock:
+            reminders=sorted((r for r in self.reminders if r['status']=='pending'),key=lambda r:r['due'])
+            data=deepcopy({'revision':self.revision,'tasks':list(reversed(self.tasks)),
+                           'reminders':reminders,'timezone':'Asia/Shanghai','server_time':self.now().isoformat(timespec='seconds')})
+            # The authenticated audio protocol has a 64 KiB packet ceiling.
+            # Preserve current work/reminders, omit oldest receipts if needed.
+            while len(json.dumps(data,ensure_ascii=False).encode())>58000 and len(data['tasks'])>1:data['tasks'].pop()
+            return data
+
+    def task_start(self,generation,title):
+        with self.lock:
+            task={'id':uuid.uuid4().hex[:16],'generation':generation,'title':title[:80],
+                  'status':'running','stage':'正在连接助理','steps':[],'result':'','started_at':self.now().isoformat(timespec='seconds')}
+            self.tasks.append(task);self.tasks=self.tasks[-12:];self.revision+=1
+            return task['id']
+
+    def task_stage(self,ident,key,title,status):
+        with self.lock:
+            task=next((t for t in self.tasks if t['id']==ident),None)
+            if not task or task['status']!='running':return
+            step=next((s for s in task['steps'] if s['id']==key),None)
+            if step is None:
+                step={'id':key,'title':title[:40]};task['steps'].append(step);task['steps']=task['steps'][-5:]
+            step['title']=title[:40];step['status']=status;task['stage']=title[:40];self.revision+=1
+
+    def task_finish(self,ident,status,result=''):
+        with self.lock:
+            task=next((t for t in self.tasks if t['id']==ident),None)
+            if not task or task['status']!='running':return
+            task['status']=status;task['result']=result[:1600]
+            task['stage']={'completed':'请求已完成','failed':'请求未完成','cancelled':'已停止等待；已执行的操作不会撤销'}.get(status,status)
+            for step in task['steps']:
+                if step['status']=='running':step['status']='cancelled' if status=='cancelled' else 'failed' if status=='failed' else 'completed'
+            self.revision+=1
+
+    def cancel_generation(self,generation):
+        with self.lock:
+            before=self.revision
+            for task in self.tasks:
+                if task['generation']==generation:self.task_finish(task['id'],'cancelled')
+            return self.revision!=before
+
+    def reminder(self,args,is_current=lambda:True):
+        if not isinstance(args,dict) or set(args)-{'action','id','title','due','repeat'}:raise ValueError('提醒参数不正确')
+        action=args.get('action')
+        with self.lock:
+            if not is_current():return {'ok':False,'error':'turn_cancelled'}
+            if action=='list':return {'ok':True,**self.snapshot()}
+            before=deepcopy(self.reminders)
+            if action=='create':
+                if len([r for r in self.reminders if r['status']=='pending'])>=32:raise ValueError('最多保留 32 条待提醒事项')
+                item={'id':uuid.uuid4().hex[:16],'title':args.get('title'),'due':args.get('due'),
+                      'repeat':args.get('repeat','none'),'status':'pending'}
+                item['due']=self._validate(item).isoformat(timespec='seconds');self.reminders.append(item)
+                if len(self.reminders)>64:self.reminders=[r for r in self.reminders if r['status']=='pending']+self.reminders[-16:]
+                # Stable unique IDs, even after pruning completed records.
+                self.reminders=list({r['id']:r for r in self.reminders}.values())
+            elif action in ('update','cancel'):
+                item=next((r for r in self.reminders if r['id']==args.get('id') and r['status']=='pending'),None)
+                if item is None:raise ValueError('这条提醒不存在或已经结束')
+                if action=='cancel':item['status']='cancelled'
+                else:
+                    candidate={**item,**{k:v for k,v in args.items() if k in ('title','due','repeat')}}
+                    candidate['due']=self._validate(candidate).isoformat(timespec='seconds');item.update(candidate);item.pop('retry_after',None)
+            else:raise ValueError('不支持的提醒操作')
+            try:self._save()
+            except Exception:
+                self.reminders=before;raise
+            return {'ok':True,'reminder':deepcopy(item)}
+
+    def due(self):
+        with self.lock:
+            now=self.now()
+            return next((deepcopy(r) for r in sorted(self.reminders,key=lambda x:x['due'])
+                         if r['status']=='pending' and self._date(r['due'])<=now
+                         and (not r.get('retry_after') or self._date(r['retry_after'])<=now)),None)
+
+    def delivered(self,ident,success):
+        with self.lock:
+            item=next((r for r in self.reminders if r['id']==ident and r['status']=='pending'),None)
+            if item is None:return
+            before=deepcopy(self.reminders)
+            if not success:item['retry_after']=(self.now()+timedelta(minutes=5)).isoformat(timespec='seconds')
+            elif item['repeat']=='none':item['status']='delivered'
+            else:
+                due=self._date(item['due']);step=7 if item['repeat']=='weekly' else 1
+                while due<=self.now() or (item['repeat']=='weekdays' and due.weekday()>4):due+=timedelta(days=step)
+                item['due']=due.isoformat(timespec='seconds');item.pop('retry_after',None)
+            try:self._save()
+            except Exception:
+                self.reminders=before;raise

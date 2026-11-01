@@ -11,6 +11,8 @@
 - [从准备设备到安装 APK 的完整步骤](docs/APK_INSTALL.md)
 - [构建、签名与测试](docs/DEVELOPMENT.md)
 - [语音助手配置与使用](cc8-assistant/README.md)
+- [方案一界面、任务与提醒](docs/WORKSPACE.md)
+- [功能迭代列表](docs/ROADMAP.md)
 - [离线检测器](cc8-diagnostics/README.md)
 - [打开助手自动开始语音](docs/AUTO_VOICE.md)
 - [摄像头看图与 Dot 分析](docs/VISION.md)

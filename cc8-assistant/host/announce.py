@@ -71,6 +71,9 @@ class AnnouncementServer:
                     elif request.get('operation')=='device_control':
                         from voice_tools import VoiceTools
                         result=VoiceTools(self.bridge.control_device).call('cc8_control',request.get('arguments'))
+                    elif request.get('operation')=='text_request':result=self.bridge.submit_text(request.get('text'))
+                    elif request.get('operation')=='workspace_status':result={'ok':True,**self.bridge.workspace.snapshot()}
+                    elif request.get('operation')=='reminder_action':result=self.bridge.reminder_action(request.get('arguments'))
                     else:
                         text=validate_text(request.get('text'));job=self.bridge.announce(text)
                         finished=job.done.wait(120)

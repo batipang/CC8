@@ -10,9 +10,9 @@ final class KaraokeTextView extends TextView {
     private final Path path=new Path();private final RectF bounds=new RectF();
     private float position;private boolean timed;
     KaraokeTextView(Context context){super(context);}
-    void progress(float value,boolean enabled){if(position!=value||timed!=enabled){position=value;if(timed!=enabled)setTextColor(enabled?Color.rgb(95,132,153):Color.rgb(217,240,249));timed=enabled;invalidate();}}
+    void progress(float value,boolean enabled){if(position!=value||timed!=enabled){position=value;if(timed!=enabled)setTextColor(enabled?Color.rgb(104,143,173):Color.rgb(217,240,249));timed=enabled;invalidate();}}
     @Override protected void onDraw(Canvas canvas){
-        int original=getCurrentTextColor();getPaint().setColor(timed?Color.rgb(95,132,153):original);super.onDraw(canvas);
+        int original=getCurrentTextColor();getPaint().setColor(timed?Color.rgb(104,143,173):original);super.onDraw(canvas);
         Layout layout=getLayout();if(!timed||layout==null||position<=0)return;
         String text=getText().toString();int end=Math.min(text.length(),(int)position);
         if(end>0&&end<text.length()&&Character.isLowSurrogate(text.charAt(end)))end--;
@@ -23,6 +23,6 @@ final class KaraokeTextView extends TextView {
             float fraction=Math.min(1,(position-end)/(next-end));bounds.right=bounds.left+bounds.width()*fraction;
             Path crop=new Path();crop.addRect(bounds,Path.Direction.CW);glyph.op(crop,Path.Op.INTERSECT);path.addPath(glyph);
         }
-        canvas.clipPath(path);getPaint().setColor(Color.rgb(89,224,244));layout.draw(canvas);canvas.restore();getPaint().setColor(original);
+        canvas.clipPath(path);getPaint().setColor(Color.rgb(255,199,91));layout.draw(canvas);canvas.restore();getPaint().setColor(original);
     }
 }

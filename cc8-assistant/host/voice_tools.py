@@ -16,14 +16,21 @@ TOOLS=[
         'action':{'type':'string','enum':['status','volume','stop','wake_screen']},
         'percent':{'type':'integer','minimum':0,'maximum':100}},['action']),
     spec('mac_open','按用户要求在当前 Mac 打开已安装的应用、HTTP(S)网页或在 Finder 显示当前项目文件。只负责打开，不发送消息或运行传入代码。',{
-        'kind':{'type':'string','enum':['app','url','project_file']},'target':{'type':'string','maxLength':2048}},['kind','target'])]
+        'kind':{'type':'string','enum':['app','url','project_file']},'target':{'type':'string','maxLength':2048}},['kind','target']),
+    spec('cc8_reminder','仅按用户要求创建、查询、修改或取消大黄蜂提醒。due 必须是带时区的 ISO8601 时间，默认北京时间。提醒由当前 Mac 保存，Mac 服务与 CC8 前台连接时才可播报；不可声称已创建系统闹钟。修改/取消须先 list 获取真实 id。',{
+        'action':{'type':'string','enum':['create','list','update','cancel']},
+        'id':{'type':'string','maxLength':16},'title':{'type':'string','maxLength':120},
+        'due':{'type':'string','maxLength':40},'repeat':{'type':'string','enum':['none','daily','weekdays','weekly']}},['action'])]
 
 
 class VoiceTools:
-    def __init__(self,device_control=None,run=subprocess.run):self.device_control=device_control;self.run=run
+    def __init__(self,device_control=None,run=subprocess.run,reminders=None):self.device_control=device_control;self.run=run;self.reminders=reminders
     def call(self,name,args,is_current=lambda:True):
         if not is_current():return {'ok':False,'error':'turn_cancelled'}
         if not isinstance(args,dict):raise ValueError('Invalid tool arguments')
+        if name=='cc8_reminder':
+            if self.reminders is None:raise RuntimeError('Reminder service unavailable')
+            return self.reminders(args,is_current)
         if name=='cc8_control':
             if set(args)-{'action','percent'}:raise ValueError('Unexpected argument')
             action=args.get('action');percent=args.get('percent')

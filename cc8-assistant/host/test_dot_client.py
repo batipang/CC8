@@ -38,7 +38,7 @@ class DotTests(unittest.TestCase):
         rpc=FakeRpc();b=DotBrain(rpc);events=[]
         self.assertEqual(''.join(b.clauses('你好',[],on_web=lambda k,v:events.append((k,v)))),'我是大黄蜂。')
         thread=rpc.calls[0][1];turn=rpc.calls[1][1]
-        self.assertTrue(thread['ephemeral']);self.assertEqual(len(thread['dynamicTools']),2);self.assertNotIn('sandbox',thread);self.assertNotIn('approvalPolicy',thread)
+        self.assertTrue(thread['ephemeral']);self.assertEqual({t['name'] for t in thread['dynamicTools']},{'cc8_control','mac_open','cc8_reminder'});self.assertNotIn('sandbox',thread);self.assertNotIn('approvalPolicy',thread)
         self.assertNotIn('sandboxPolicy',turn);self.assertNotIn('approvalPolicy',turn);self.assertNotIn('effort',turn)
         self.assertTrue(any(k=='dot_result' for k,_ in events));self.assertTrue(b.last_metrics['completed'])
     def test_same_owned_session_is_reused(self):
