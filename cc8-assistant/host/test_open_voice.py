@@ -1,20 +1,24 @@
 """Run the real Android-free opening gate against capture lifecycle scenarios."""
+
 import json
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
 
-ROOT=Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 class OpenVoiceTests(unittest.TestCase):
     def test_open_stop_background_timeout_and_reconnect(self):
-        config=ROOT/'.toolchains/cc8/paths.json'
-        if not config.is_file():self.skipTest('Local JDK unavailable')
-        java=Path(json.loads(config.read_text())['java_home'])/'bin'
-        source=ROOT/'cc8-assistant/app/src/main/java/com/happyhome/cc8assistant/OpenVoiceGate.java'
-        harness='''package com.happyhome.cc8assistant;
+        config = ROOT / '.toolchains/cc8/paths.json'
+        if not config.is_file():
+            self.skipTest('Local JDK unavailable')
+        java = Path(json.loads(config.read_text())['java_home']) / 'bin'
+        source = (
+            ROOT / 'cc8-assistant/app/src/main/java/com/happyhome/cc8assistant/OpenVoiceGate.java'
+        )
+        harness = """package com.happyhome.cc8assistant;
 public final class OpenCheck {
  static void yes(boolean value){if(!value)throw new AssertionError();}
  public static void main(String[] args){
@@ -37,9 +41,20 @@ public final class OpenCheck {
   gate.opened(60000);gate.resumed(60000);gate.stopped();gate.resumed(60001);yes(!gate.take(60002,true,true,false)); // Actual background/resume does not rearm.
   gate.opened(70000);gate.resumed(70000);yes(!gate.take(70001,false,true,false));gate.resumed(71000);yes(gate.take(71001,true,true,false)); // Transient pause preserves the unconsumed opening, never captures while paused.
  }
-}'''
+}"""
         with tempfile.TemporaryDirectory() as folder:
-            test=Path(folder)/'OpenCheck.java';test.write_text(harness)
-            subprocess.run([str(java/'javac'),'-d',folder,str(source),str(test)],check=True,capture_output=True,timeout=30)
-            result=subprocess.run([str(java/'java'),'-cp',folder,'com.happyhome.cc8assistant.OpenCheck'],capture_output=True,text=True,timeout=10)
-            self.assertEqual(result.returncode,0,result.stderr)
+            test = Path(folder) / 'OpenCheck.java'
+            test.write_text(harness)
+            subprocess.run(
+                [str(java / 'javac'), '-d', folder, str(source), str(test)],
+                check=True,
+                capture_output=True,
+                timeout=30,
+            )
+            result = subprocess.run(
+                [str(java / 'java'), '-cp', folder, 'com.happyhome.cc8assistant.OpenCheck'],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)

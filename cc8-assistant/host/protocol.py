@@ -1,4 +1,5 @@
 """Bounded framing shared by USB-loopback and authenticated LAN connections."""
+
 from dataclasses import dataclass
 import json
 import struct
@@ -26,12 +27,19 @@ class Packet:
             raise ValueError('Packet too large')
         if self.kind != EVENT and (len(self.data) % 2 or len(self.data) > 6400):
             raise ValueError('Invalid PCM length')
-        payload = HEADER.pack(self.kind, self.generation, self.sequence, self.frame, self.nanos) + self.data
+        payload = (
+            HEADER.pack(self.kind, self.generation, self.sequence, self.frame, self.nanos)
+            + self.data
+        )
         return struct.pack('!I', len(payload)) + payload
 
     @classmethod
     def event(cls, event, generation=0, **fields):
-        return cls(EVENT, generation, data=json.dumps({'event': event, **fields}, ensure_ascii=False).encode())
+        return cls(
+            EVENT,
+            generation,
+            data=json.dumps({'event': event, **fields}, ensure_ascii=False).encode(),
+        )
 
 
 def read_exact(stream, count):
@@ -50,6 +58,6 @@ def receive(stream):
     if size < HEADER.size or size > MAX_PACKET:
         raise ValueError('Invalid packet length')
     payload = read_exact(stream, size)
-    p = Packet(*HEADER.unpack(payload[:HEADER.size]), payload[HEADER.size:])
+    p = Packet(*HEADER.unpack(payload[: HEADER.size]), payload[HEADER.size :])
     p.encode()  # Same validation in both directions.
     return p
