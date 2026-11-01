@@ -43,7 +43,7 @@ The owner's subsequent font instruction takes precedence over the mock typograph
 - A text task was cancelled through the acknowledged device stop path and remained cancelled.
 - Reminder form, settings list and volume dialog opened. No camera was requested: capture count remains zero.
 - Normal explicit opening performed one automatic voice start and calibration. Latest announcement play_done completed with the microphone remaining open; app remains foreground, USB selected and paired Wi-Fi ready.
-- 247 host tests passed, with 4 missing-private-recording cases skipped. Android assembleRelease and lintRelease passed, zero lint errors. Actual speaking screenshots and playback receipts supplement these checks.
+- 247 host tests ran: 243 passed and 4 missing-private-recording cases skipped. Android assembleRelease and lintRelease passed, zero lint errors. Actual speaking screenshots and playback receipts supplement these checks.
 
 ## Remaining P3 / test gaps
 
@@ -59,5 +59,14 @@ The owner's subsequent font instruction takes precedence over the mock typograph
 - [x] Replace actual-data placeholders with real state and provide working controls.
 - [x] Compare normalized full screen and focused region after fixes.
 - [x] Verify build, tests, signed installation, native interactions, real playback and automatic voice.
+
+final result: passed
+
+
+## 0.8.2 caption regression fix (2026-11-01)
+
+The 0.8.1 long-announcement capture reproduced text painting outside its 665×153 caption viewport, overlapping the header and playback progress. CaptionViewport now explicitly clips both ordinary text and the karaoke drawing pass. When the playback head enters an obscured line, scrolling reveals the whole current line immediately. The 42sp caption, selected composition, portrait, halo and progress-bar coordinates are unchanged.
+
+On the physical 1280×800 CC8, the same 97-character announcement completed with seven wrapped lines. Eleven status samples confirmed the active line was fully visible, viewport/progress intersection was false, clipping was enabled, and the caption remained 42sp; scroll reached 302px. Native screenshots of each line were captured, with first, middle and final states visually checked. Neighboring context can be cropped at the viewport edges; the current spoken line is fully visible and no text paints across the progress bar. The microphone and camera remained off during this verification. Seven relevant timing / playback regressions, release build and lint passed.
 
 final result: passed
