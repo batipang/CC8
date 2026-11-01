@@ -34,6 +34,8 @@ from recognition import MandarinRecognizer
 from vision import CameraInbox, DesktopSnapshot, VisionError, visual_request, desktop_signature
 from minimax_client import MiniMaxBrain, MiniMaxVoice, MiniMaxError
 from workspace import Workspace
+from diagnostics import TraceBook
+from process_lock import ProcessLease
 
 ROOT = Path(__file__).resolve().parents[2]
 PRIVATE = ROOT/'device-access/private/voice-runtime'
@@ -118,6 +120,7 @@ class Bridge:
     # Mac 端协调收音、消回声/断句、ASR、大脑及 TTS。
     # epoch 标识设备录音会话；generation 标识可被打断的回答，两者不可互换。
     def __init__(self,speech,brain,library=LIBRARY,fast_stop=None,echo_check=False,workspace=None):
+        self.diagnostics=TraceBook();self.voice_trace=None;self.started_at=time.monotonic()
         self.speech=speech;self.brain=brain;self.library=library
         self.workspace=workspace or Workspace();self.reminder_job=None;self.reminder_poll=0
         self.text_generation=None
@@ -202,6 +205,18 @@ class Bridge:
     def publish_workspace(self):
         if self.connection is not None:self.event('workspace',**self.workspace.snapshot())
 
+    def health(self):
+        # 白名单输出就绪位，不导出 metrics 内可能存在的自检文字和用户内容。
+        return {'ok':True,'bridge_version':'0.12.0','uptime_seconds':round(time.monotonic()-self.started_at,1),
+            'model_ready':True,'recognition_worker':self.worker.is_alive(),'response_worker':self.responder.is_alive(),
+            'connected':self.connection is not None,'transport':self.transport_kind,'microphone_active':self.active,
+            'calibrating':self.calibrating,'asr_engine':getattr(getattr(self.speech,'recognizer',None),'engine',None),
+            'brain_provider':getattr(self.brain,'selected','echo'),'playing':self.playing,
+            'mic_frames':self.metrics.get('mic_frames',0),'render_frames':self.metrics.get('render_frames',0)}
+
+    def diagnostics_report(self):
+        return {'ok':True,'health':self.health(),**self.diagnostics.report()}
+
     def reminder_action(self,args,is_current=lambda:True):
         with self.guard:
             result=self.workspace.reminder(args,is_current)
@@ -213,6 +228,7 @@ class Bridge:
         with self.guard:
             if self.connection is None or self.calibrating:raise RuntimeError('Text request unavailable')
             generation=self.cancel('text_request');self.text_generation=generation;self.touch_activity()
+            self.diagnostics.begin('text',generation)
             self.event('text_begin',generation=generation,text=text.strip());self.enqueue_response(TextReply(generation,text.strip()))
             return {'ok':True,'generation':generation}
 
@@ -256,6 +272,7 @@ class Bridge:
             if not self.device_can_pause or not self.active or not self.playing or self.pause_state or time.monotonic()<self.pause_cooldown:return None
             self.pause_serial+=1;token=self.pause_serial;self.pause_token=token
             self.pause_state={'token':token,'generation':self.generation,'started':time.monotonic()}
+        self.diagnostics.mark(self.voice_trace,'pause_request')
         self.event('playback_pause',token=token)
         self.metrics['barge_in_pauses']=self.metrics.get('barge_in_pauses',0)+1
         self.log('barge_in_tentative_pause',token=token,input_dbfs=self.metrics.get('input_dbfs'),residual_dbfs=self.metrics.get('output_dbfs'),raw_coherence=round(self.near_speech.correlation,3),residual_coherence=round(self.near_speech.residual_correlation,3))
@@ -290,6 +307,7 @@ class Bridge:
             if self.connection is None or self.calibrating or self.echo_check_running or self.announcement_generation is not None:
                 raise RuntimeError('Announcement unavailable')
             generation=self.cancel('announcement');self.announcement_generation=generation
+            self.diagnostics.begin('announcement',generation)
             job=Announcement(generation,text)
             try:self.response_queue.put_nowait(job)
             except queue.Full:
@@ -316,12 +334,14 @@ class Bridge:
                 except (OSError,EOFError):pass
             if self.announcement_generation==generation:self.announcement_generation=None
             self.metrics['last_announcement']={'status':job.result,'characters':len(job.text)}
+            self.diagnostics.finish(generation,'completed' if job.result=='completed' else 'failed' if job.result=='failed' else 'cancelled')
             try:self.save_status()
             finally:job.done.set()
 
     def cancel(self,reason='speech'):
         # 推进代次使旧模型、音频、字幕和看图结果失效，但不能撤销已执行的工具动作。
         with self.guard:
+            self.diagnostics.finish(self.generation,'cancelled')
             workspace_changed=self.workspace.cancel_generation(self.generation)
             self.generation+=1;generation=self.generation;was_playing=self.playing;self.playing=False;self.announcement_generation=None;self.vision_generation=None;self.text_generation=None;self.vision_nonce="";self.camera_inbox.cancel()
             job=self.desktop_snapshot;self.desktop_snapshot=None
@@ -427,15 +447,19 @@ class Bridge:
         elif event=='interrupt':
             if self.active or self.text_generation is not None or self.announcement_generation is not None or self.vision_generation is not None:self.cancel('button');self.status('listening' if self.active else 'idle','播报已停止')
         elif event=='play_done':
+            if int(j['generation'])==self.generation:self.diagnostics.mark(self.generation,'playback_done')
             with self.done:
                 if int(j['generation'])==self.generation:self.completed={self.generation}
                 self.done.notify_all()
             if int(j['generation'])==self.generation:self.playing=False;self.last_audio_end=time.monotonic()
         elif event=='playback_paused' and int(j.get('token',-1))==self.pause_token and int(j.get('generation',-1))==self.generation:
+            self.diagnostics.mark(self.voice_trace,'pause_ack')
             self.timeline.pause_at(int(j['nanos']))
         elif event=='playback_resumed' and int(j.get('token',-1))==self.pause_token and int(j.get('generation',-1))==self.generation:
+            self.diagnostics.mark(self.voice_trace,'resume_ack')
             self.timeline.resume_at(int(j['nanos']))
         elif event=='playback_error' and int(j.get('generation',self.generation))==self.generation:
+            self.diagnostics.failure(self.generation,'playback',RuntimeError())
             self.log('device_playback_error',error_type=str(j.get('error_type','Unknown'))[:50])
             self.cancel('playback_error')
         elif event=='capture_gap':self.log('capture_read_gap',milliseconds=j.get('milliseconds'))
@@ -449,6 +473,7 @@ class Bridge:
             return
         if p.kind==RENDER:
             if p.generation!=self.generation:return
+            self.diagnostics.mark(p.generation,'render_ack')
             pcm=np.frombuffer(p.data,dtype='<i2').astype(float)/32768
             self.timeline.add(p.generation,p.frame,p.nanos,pcm);self.metrics['render_frames']+=len(pcm)
             self.metrics['render_clock_discontinuities']=self.timeline.discontinuities;return
@@ -504,6 +529,7 @@ class Bridge:
             began,utterance,_=self.vad.feed(cleaned)
             render_audio=self.reference_capture.feed(reference,began,utterance is not None)
             if began:
+                self.voice_trace=self.diagnostics.begin('voice');self.diagnostics.mark(self.voice_trace,'voice_detected')
                 # Wake mode waits for textual keyword recognition until the
                 # conversation is awake. This is not offline keyword spotting.
                 now=time.monotonic()
@@ -521,18 +547,24 @@ class Bridge:
                 self.turn_pause_token=self.pause_for_voice()
             if self.vad.talking or utterance is not None:self.turn_echo_risk|=echo_risk
             if utterance is not None:
+                self.diagnostics.mark(self.voice_trace,'utterance_end')
                 self.metrics['utterances']+=1
                 # Include clauses that started after this utterance began.
                 references=list(dict.fromkeys([*self.turn_reference,*[text for _,text in tuple(self.spoken)]]))[-64:]
                 evidence={'echo_risk':self.turn_echo_risk,'captured_at':self.turn_capture_started,'pause_token':self.turn_pause_token}
-                job=(self.live_turn,utterance,self.turn_during_playback,references,evidence,render_audio)
-                try:self.queue.put_nowait(job)
-                except queue.Full:
-                    try:self.queue.get_nowait()
-                    except queue.Empty:pass
-                    self.queue.put_nowait(job)
+                job=(self.live_turn,utterance,self.turn_during_playback,references,evidence,render_audio,self.voice_trace)
+                self.enqueue_recognition(job)
         if time.monotonic()-self.last_status>1:
             self.last_status=time.monotonic();self.save_status()
+
+    def enqueue_recognition(self,job):
+        try:self.queue.put_nowait(job)
+        except queue.Full:
+            try:
+                old=self.queue.get_nowait()
+                if len(old)>6:self.diagnostics.finish(old[6],'cancelled')
+            except queue.Empty:pass
+            self.queue.put_nowait(job)
 
     def apply_fast_stop(self,keyword,stamp):
         start=time.perf_counter()
@@ -555,7 +587,7 @@ class Bridge:
         PRIVATE.mkdir(parents=True,exist_ok=True,mode=0o700);os.chmod(PRIVATE,0o700)
         data={'connected':self.connection is not None,'active':self.active,'calibrating':self.calibrating,
               'playing':self.playing,'generation':self.generation,'wake_mode':self.wake,'wake_word':WAKE_WORD,
-              'bridge_version':'0.11.1','desktop_camera_enabled':bool(self.desktop_challenge),'desktop_snapshot_active':self.desktop_snapshot is not None,'noise_profile':'moderate','speech_energy_floor_dbfs':NearSpeechDetector.MIN_DBFS,'speech_noise_margin_db':NearSpeechDetector.NOISE_MARGIN_DB,'speech_onset_ms':VoiceDetector.ONSET_FRAMES*10,'barge_confirm_min_ms':NearSpeechDetector.CONFIRM_MIN_FRAMES*10,'vision_active':self.vision_generation is not None,'vision_enabled':isinstance(self.brain,BrainRouter),'transport':self.transport_kind,**(self.transport_hub.diagnostics() if self.transport_hub else {}),'screen_sleeping':self.screen_sleeping,'idle_sleep_seconds':900,'asr_engine':getattr(getattr(self.speech,'recognizer',None),'engine',None),'barge_in_enabled':self.device_can_pause,'playback_paused':self.pause_state is not None,'announcement_active':self.announcement_generation is not None,'brain_provider':getattr(self.brain,'selected','minimax') if self.brain else 'echo test','dot_enabled':isinstance(self.brain,BrainRouter),'web_search_enabled':self.brain is not None,'fast_stop_enabled':self.fast_stop is not None,
+              'bridge_version':'0.12.0','desktop_camera_enabled':bool(self.desktop_challenge),'desktop_snapshot_active':self.desktop_snapshot is not None,'noise_profile':'moderate','speech_energy_floor_dbfs':NearSpeechDetector.MIN_DBFS,'speech_noise_margin_db':NearSpeechDetector.NOISE_MARGIN_DB,'speech_onset_ms':VoiceDetector.ONSET_FRAMES*10,'barge_confirm_min_ms':NearSpeechDetector.CONFIRM_MIN_FRAMES*10,'vision_active':self.vision_generation is not None,'vision_enabled':isinstance(self.brain,BrainRouter),'transport':self.transport_kind,**(self.transport_hub.diagnostics() if self.transport_hub else {}),'screen_sleeping':self.screen_sleeping,'idle_sleep_seconds':900,'asr_engine':getattr(getattr(self.speech,'recognizer',None),'engine',None),'barge_in_enabled':self.device_can_pause,'playback_paused':self.pause_state is not None,'announcement_active':self.announcement_generation is not None,'brain_provider':getattr(self.brain,'selected','minimax') if self.brain else 'echo test','dot_enabled':isinstance(self.brain,BrainRouter),'web_search_enabled':self.brain is not None,'fast_stop_enabled':self.fast_stop is not None,
               'fast_stop_input':'AEC3 without additional NS','fast_stop_gain':getattr(self.fast_stop,'gain',None),
               'aec_engine':'WebRTC AEC3 + NS; AGC disabled',
               'render_asr_comparison':True,
@@ -579,7 +611,9 @@ class Bridge:
             while count<3200 and self.valid(generation):
                 try:piece=next(iterator)
                 except StopIteration:break
-                if len(piece):prefill.append(piece);count+=len(piece)
+                if len(piece):
+                    self.diagnostics.mark(generation,'first_pcm')
+                    prefill.append(piece);count+=len(piece)
             if not self.valid(generation):return False
             if not prefill:raise MiniMaxError('No audio available for playback')
             with self.done:self.completed.discard(generation)
@@ -619,7 +653,8 @@ class Bridge:
             if not completed and self.valid(generation):
                 self.log('playback_completion_timeout');self.cancel('completion_timeout');return False
             return self.valid(generation)
-        except Exception:
+        except Exception as error:
+            self.diagnostics.failure(generation,self.diagnostics.current_stage(generation),error)
             if self.valid(generation) and started:
                 self.cancel('audio_stream_error');self.status('error','这次播报没有完成，请再说一次')
             raise
@@ -629,6 +664,7 @@ class Bridge:
             if timing:timing.publish=None
 
     def speak(self,text,generation):
+        self.diagnostics.mark(generation,'tts_start')
         if isinstance(self.speech,DirectSpeech):
             timing=CaptionTiming(text)
             return self.play_stream(self.speech.stream(text,lambda:self.valid(generation),timing.feed),text,generation,timing=timing)
@@ -727,7 +763,9 @@ class Bridge:
             self.log('reference_alignment_estimated',shift_samples=shift,correlation=round(correlation,3))
             return True
 
-    def failure(self,message,error):
+    def failure(self,message,error,trace_key=None):
+        key=self.generation if trace_key is None else trace_key
+        self.diagnostics.failure(key,self.diagnostics.current_stage(key),error)
         # MiniMaxError messages are our own fixed strings, never provider
         # bodies, user text, URLs or credentials. Other exception text is not logged.
         self.log('runtime_error',error_type=type(error).__name__,reason=str(error) if isinstance(error,MiniMaxError) else None,api_code=getattr(error,'code',None),http_status=getattr(error,'http_status',None))
@@ -742,11 +780,17 @@ class Bridge:
             references=job[3] if len(job)>3 else []
             evidence=job[4] if len(job)>4 else None
             render_audio=job[5] if len(job)>5 else None
-            if not self.valid(generation):continue
+            if not self.valid(generation):
+                if len(job)>6:self.diagnostics.finish(job[6],'cancelled')
+                continue
+            trace_id=job[6] if len(job)>6 else self.diagnostics.begin('voice')
+            accepted=False
             self.recognition_busy=True;rejected=False
             try:
                 if not self.playing:self.status('thinking','正在本机识别…')
+                self.diagnostics.mark(trace_id,'asr_start')
                 text=self.speech.recognize(audio)
+                self.diagnostics.mark(trace_id,'asr_end')
                 asr=getattr(self.speech,'recognizer',None)
                 if asr:self.metrics['last_asr']=dict(asr.last_metrics)
                 if not self.valid(generation):continue
@@ -797,20 +841,24 @@ class Bridge:
                 if self.wake and '休息' in text and (WAKE_PATTERN.search(text) or len(text)<8):
                     self.awake=False;self.cancel('wake_sleep');self.status('listening','请说“大黄蜂”或“Bumblebee”开始聊天');continue
                 if risky:generation=self.cancel('verified_voice')
+                self.diagnostics.bind(trace_id,generation);accepted=True
                 self.touch_activity()
                 self.event('transcript',text=text);self.log('user_turn_recognized',characters=len(text),echo_risk=risky,references=len(available))
                 if re.sub(r'\W','',text) in {'停','停下','停一下','停止','暂停','打住','等等','别说了','听我说'}:
+                    self.diagnostics.finish(trace_id,'completed')
                     self.status('listening','已停止播报，我在听');continue
                 if visual_request(text):self.begin_visual(text,'voice')
                 else:self.enqueue_response(Reply(generation,text))
             except Exception as e:
+                self.diagnostics.failure(trace_id,'asr',e)
                 if self.valid(generation):
                     try:
                         if self.pause_state and evidence and evidence.get('pause_token')==self.pause_state['token']:self.cancel('barge_asr_error')
                     except (OSError,EOFError):pass
-                    self.failure('这次识别没有完成，请再说一次',e)
+                    self.failure('这次识别没有完成，请再说一次',e,trace_key=trace_id)
             finally:
                 self.recognition_busy=False
+                if not accepted:self.diagnostics.finish(trace_id,'rejected' if rejected else 'cancelled')
                 if evidence and rejected:
                     try:self.resume_after_rejection(evidence.get('pause_token'),generation)
                     except (OSError,EOFError) as error:self.log('playback_resume_disconnected',error_type=type(error).__name__)
@@ -932,6 +980,8 @@ class Bridge:
 
     def answer(self,text,generation,image=None):
         # 任务成功以大脑真实回执为准，后续停止朗读不能把已完成工作改为取消。
+        self.diagnostics.ensure(generation,'vision' if image is not None else 'text')
+        self.diagnostics.mark(generation,'brain_start')
         task_id=self.workspace.task_start(generation,text);result_text=[''];clauses=None
         def web_update(kind,payload):
             if not self.valid(generation):return
@@ -940,6 +990,8 @@ class Bridge:
                 self.workspace.task_stage(task_id,'analysis','连接助理' if '连接' in message else '分析请求','running');self.publish_workspace()
                 self.event('status',generation=generation,phase='thinking',message=message)
             elif kind=='dot_result':
+                self.diagnostics.task_result(generation,'completed')
+                self.diagnostics.link_turn(generation,self.brain.last_metrics.get('turn_id'))
                 result_text[0]=payload.get('text','')
                 # The Dot turn receipt closes the task, independently of the
                 # remaining audio or device delivery. A disconnected display
@@ -947,8 +999,10 @@ class Bridge:
                 self.workspace.task_finish(task_id,'completed',result_text[0])
                 self.event('dot_result',generation=generation,**payload);self.publish_workspace()
             elif kind=='task_stage':
+                self.diagnostics.scenario(generation,'web' if payload.get('kind')=='webSearch' else 'tool')
                 self.workspace.task_stage(task_id,payload['id'],payload['title'],payload['status']);self.publish_workspace()
             elif kind=='searching':
+                self.diagnostics.scenario(generation,'web')
                 self.workspace.task_stage(task_id,'search','联网检索','running');self.publish_workspace()
                 self.event('status',generation=generation,phase='thinking',message='正在联网查询…')
             elif kind=='failed':self.log('web_search_failed',**payload)
@@ -965,6 +1019,8 @@ class Bridge:
                      else iter(['语音识别已完成。你刚才说：'+text]))
             for clause in clauses:
                 if not self.valid(generation):completed=False;break
+                self.diagnostics.mark(generation,'first_clause')
+                if self.brain:self.diagnostics.link_turn(generation,self.brain.last_metrics.get('turn_id'))
                 if not self.speak(clause,generation):completed=False;break
                 spoken.append(clause)
         finally:
@@ -972,7 +1028,10 @@ class Bridge:
             if close:close()
             failed=bool(self.brain and (self.brain.last_metrics.get('completed') is False or self.brain.last_metrics.get('approval_required')))
             status='cancelled' if not self.valid(generation) else 'failed' if sys.exc_info()[0] or not completed or failed else 'completed'
-            self.workspace.task_finish(task_id,status,result_text[0] or ''.join(spoken));self.publish_workspace()
+            self.workspace.task_finish(task_id,status,result_text[0] or ''.join(spoken))
+            self.diagnostics.task_result(generation,status)
+            self.diagnostics.finish(generation,status)
+            self.publish_workspace()
         if completed and self.valid(generation):
             answer=''.join(spoken)
             self.history.extend([{'role':'user','content':text},{'role':'assistant','content':answer}]);self.status('listening' if self.active else 'idle','我在听' if self.active else '回答已完成 · 麦克风关闭')
@@ -1047,6 +1106,13 @@ def connect_device():
 
 
 def main():
+    # 锁覆盖模型加载到退出全程；直接执行 bridge.py 也不能绕过单实例检查。
+    try:
+        with ProcessLease(PRIVATE/'bridge.lock'):run_backend()
+    except BlockingIOError:raise SystemExit('当前目录已有大黄蜂后台，未启动第二份模型。')
+
+
+def run_backend():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--brain',choices=['minimax','echo'],default='minimax')
     parser.add_argument('--speech-smoke',action='store_true')

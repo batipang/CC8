@@ -14,6 +14,7 @@
 - [方案一界面、任务与提醒](docs/WORKSPACE.md)
 - [功能迭代列表](docs/ROADMAP.md)
 - [后续工作 TODO：P0 / P1 / P2 与验收条件](docs/TODO.md)
+- [P0 第一批：阶段诊断、登录启动与后台恢复](docs/P0_FOUNDATION.md)
 - [第二轮竞品复盘（2026-11-01）](docs/COMPETITOR_REVIEW_2026-11-01.md)
 - [离线检测器](cc8-diagnostics/README.md)
 - [打开助手自动开始语音](docs/AUTO_VOICE.md)

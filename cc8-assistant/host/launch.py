@@ -34,6 +34,10 @@ def main():
     parser.add_argument('--no-auto-voice',action='store_true',help='Open the UI without starting a new microphone session')
     parser.add_argument('--echo-check-after-start',action='store_true')
     args=parser.parse_args()
+    managed_stop=False
+    if args.stop:
+        from service import enabled,disable
+        if enabled():disable();managed_stop=True
     PRIVATE.mkdir(parents=True,exist_ok=True,mode=0o700)
     os.chmod(PRIVATE,0o700)
     with (PRIVATE/'launcher.lock').open('w') as lock:
@@ -48,7 +52,7 @@ def main():
                 deadline=time.monotonic()+5
                 while own_process(pid) and time.monotonic()<deadline:time.sleep(.1)
                 if own_process(pid):raise SystemExit('旧服务仍在退出，请稍后再启动。')
-            print('大黄蜂语音服务已停止。' if running else '大黄蜂语音服务未运行。')
+            print('大黄蜂语音服务已停止。' if running or managed_stop else '大黄蜂语音服务未运行。')
             return
         if not PYTHON.is_file():raise SystemExit('缺少语音运行环境，请执行 python3.13 scripts/setup-voice.py。')
         if not running:

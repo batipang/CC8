@@ -243,6 +243,7 @@ class DotBrain:
             result=self.rpc.request('turn/start',{'threadId':self.thread_id,'input':inputs,
                 'cwd':str(ROOT)},timeout=20)
             turn.ident=(result.get('turn') or {}).get('id')
+            self.last_metrics['turn_id']=turn.ident
             turn.ident_ready.set()
             if not turn.ident:raise DotError('Codex did not start a turn')
             if turn.stopped.is_set() or not is_current():self._interrupt(turn);raise Cancelled('Turn cancelled')
@@ -278,7 +279,7 @@ class DotBrain:
                     if item.get('type') in ('webSearch','commandExecution','fileChange','mcpToolCall','dynamicToolCall') and on_web:
                         kind=item['type'];label={'webSearch':'联网检索','commandExecution':'执行 Mac 任务','fileChange':'修改文件','mcpToolCall':'调用已连接工具','dynamicToolCall':'执行助理操作'}[kind]
                         failed=item.get('status') in ('failed','declined') or (kind=='commandExecution' and item.get('exitCode') not in (None,0))
-                        on_web('task_stage',{'id':str(item.get('id') or kind)[:80],'title':label,'status':'running' if method=='item/started' else 'failed' if failed else 'completed'})
+                        on_web('task_stage',{'id':str(item.get('id') or kind)[:80],'kind':kind,'title':label,'status':'running' if method=='item/started' else 'failed' if failed else 'completed'})
                     if method=='item/started':continue
                     if item.get('type')=='webSearch':
                         self.last_metrics['web_search_calls']=self.last_metrics.get('web_search_calls',0)+1

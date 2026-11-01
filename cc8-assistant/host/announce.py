@@ -63,7 +63,9 @@ class AnnouncementServer:
                         data+=chunk
                     if len(data)>4096:raise ValueError('Oversized request')
                     request=json.loads(data)
-                    if request.get('operation')=='transport_status':
+                    if request.get('operation')=='health':result=self.bridge.health()
+                    elif request.get('operation')=='diagnostics':result=self.bridge.diagnostics_report()
+                    elif request.get('operation')=='transport_status':
                         result={'ok':True,**self.bridge.transport_hub.diagnostics()}
                     elif request.get('operation')=='transport_test':
                         result=self.bridge.transport_hub.suppress_usb_for_test(request.get('seconds',15))

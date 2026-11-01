@@ -1,10 +1,12 @@
 # 大黄蜂（Bumblebee）语音助手
 
-完整源码快照：Android APK **0.8.6**（versionCode 31）、Mac 后台 **0.11.1**。包名 `com.happyhome.cc8assistant`。默认 **Dot / Codex 做大脑，MiniMax ASR 做耳朵，MiniMax TTS 做嘴巴**，Mac 执行消回声与即时打断，CC8 负责录放和显示。
+完整源码快照：Android APK **0.8.6**（versionCode 31）、Mac 后台 **0.12.0**。包名 `com.happyhome.cc8assistant`。默认 **Dot / Codex 做大脑，MiniMax ASR 做耳朵，MiniMax TTS 做嘴巴**，Mac 执行消回声与即时打断，CC8 负责录放和显示。
 
 0.11.1 修复断线后的工作线程、Dot 最终回答判定、任务回执及提醒旧回执覆盖问题，兼容既有提醒文件。已于 2026-11-01 替换当前运行中的 Mac 后台并恢复语音会话；Android APK 保持 0.8.6。详情见[检查记录](../docs/CODE_REVIEW.md)和[部署验证](../docs/VALIDATION.md)。
 
 ## 构建与安装
+
+0.12.0 新增阶段诊断/私有报告和 Mac 登录启动/崩溃恢复；使用与验证边界见 [P0 第一批](../docs/P0_FOUNDATION.md)。该服务不自动打开 CC8 或开启麦克风。
 
 先按[开发说明](../docs/DEVELOPMENT.md)准备 Android 工具链，再从仓库根目录执行：
 

@@ -1,5 +1,7 @@
 # 大黄蜂架构与通信
 
+后台 0.12.0 增加不含内容的阶段诊断、owner-only 健康查询，以及当前用户的登录服务、OS 单实例锁、退出退避和日志轮转。它们只管理 Mac 后台，不自动打开 CC8 或启动录音；命令与验收边界见 [P0 第一批](P0_FOUNDATION.md)。
+
 ```mermaid
 flowchart LR
     CC8[CC8 前台终端\n麦克风 / 扬声器 / 显示] <-->|USB 优先| MAC[Mac 后台\nAEC3 / VAD / 打断 / 路由]
