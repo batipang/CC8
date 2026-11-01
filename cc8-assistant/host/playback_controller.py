@@ -208,10 +208,26 @@ class PlaybackController:
     def play(self, pcm, text, generation, role='assistant'):
         return self.play_stream(iter([pcm]), text, generation, role)
 
+    def output_event(self, name, **fields):
+        try:
+            self.hooks.event(name, **fields)
+        except (OSError, EOFError, ValueError) as error:
+            raise OperationFailure(
+                'Device event send failed', stage='transport', kind=error_kind(error)
+            ) from None
+
+    def output_packet(self, packet):
+        try:
+            self.hooks.send(packet)
+        except (OSError, EOFError, ValueError) as error:
+            raise OperationFailure(
+                'Device PCM send failed', stage='transport', kind=error_kind(error)
+            ) from None
+
     def audio_chunks(self, chunks):
         try:
             yield from chunks
-        except Cancelled:
+        except (Cancelled, OperationFailure):
             raise
         except Exception as error:
             raise OperationFailure(
@@ -253,7 +269,9 @@ class PlaybackController:
             self.spoken.append((time.monotonic(), text))
             self.playback_serial += 1
             playback_id = self.playback_serial
-            self.hooks.event(
+            # Output is locally active before any begin notification can fail.
+            started = True
+            self.output_event(
                 'play_begin',
                 generation=generation,
                 text=text,
@@ -265,7 +283,7 @@ class PlaybackController:
             )
             if timing:
                 timing.publish = lambda rows: (
-                    self.hooks.event(
+                    self.output_event(
                         'caption_timing',
                         generation=generation,
                         playback_id=playback_id,
@@ -274,7 +292,6 @@ class PlaybackController:
                     if self.hooks.valid(generation)
                     else None
                 )
-            started = True
             sequence = 0
             written = 0
             start = time.monotonic()
@@ -287,7 +304,7 @@ class PlaybackController:
                     if not self.hooks.valid(generation):
                         return False
                     piece = pcm[offset : offset + 320].astype('<i2')
-                    self.hooks.send(
+                    self.output_packet(
                         Packet(SPEAKER, generation, sequence, written, 0, piece.tobytes())
                     )
                     sequence += 1
@@ -301,7 +318,7 @@ class PlaybackController:
                         time.sleep(min(0.01, max(0, deadline - time.monotonic())))
             if not self.hooks.valid(generation):
                 return False
-            self.hooks.event('play_end', generation=generation, frames=written)
+            self.output_event('play_end', generation=generation, frames=written)
             with self.done:
                 deadline = time.monotonic() + 4
             while self.hooks.valid(generation):

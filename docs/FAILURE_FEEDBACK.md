@@ -32,3 +32,5 @@ OperationFailure 传递固定 stage/kind；Dot RPC 和 turn 的已知超时、�
 当前运行助手没有更新；候选不改变模型选择、音色、原签名或采集授权。
 
 补充真实路径回归：MiniMax 搜索错误原先仍被转换成普通回答，可能关闭成完成任务；候选 0.13.4 改为失败向上透传，并仅记录白名单错误类别。实际 MiniMaxBrain→BrainRouter→ResponseWorker 的五类失败各 3 次及 failed 进度正文注入在修复前均复现、修复后通过；无模型请求。未修改查询规划失败时原有的直接关键词准备逻辑，也不将“成功检索但无结果”改成服务错误。
+
+补充断连收尾：0.13.5 在发取消通知之前先作废本地状态并唤醒播放 waiter，普通连接错误不阻止 Stop 释放采集；即使提供方取消抛出未预期错误，Stop 的 finally 仍关闭 AEC/收音并保存状态，错误本身保留。play_begin、PCM、play_end 和字幕发送错误统一定位 transport，provider iterator 内的字幕失败不重标成 TTS。该软件回归不代表已完成物理拔插。
