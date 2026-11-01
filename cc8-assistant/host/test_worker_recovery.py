@@ -38,7 +38,7 @@ class WorkerRecoveryTests(unittest.TestCase):
             self.assertTrue(disconnected.wait(1))
             b.enqueue_response(Reply(b.generation, 'second'))
             self.assertTrue(answered.wait(1), 'response worker died during text cleanup')
-        self.assertTrue(b.responder.is_alive())
+        self.assertTrue(b.response.worker.is_alive())
         self.assertIsNone(b.text_generation)
 
     def test_resume_disconnect_does_not_kill_recognition_worker(self):

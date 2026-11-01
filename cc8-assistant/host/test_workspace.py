@@ -199,15 +199,21 @@ class WorkspaceTests(unittest.TestCase):
             owner = (
                 b.playback
                 if field == 'playing'
+                else b.response
+                if field == 'response_busy'
                 else b.recognition
                 if field == 'recognition_busy'
                 else b
             )
-            setattr(owner, 'busy' if field == 'recognition_busy' else field, True)
+            setattr(
+                owner, 'busy' if field in ('recognition_busy', 'response_busy') else field, True
+            )
             b.reminder_poll = 0
             b.reminder_tick()
             self.assertEqual(jobs, [])
-            setattr(owner, 'busy' if field == 'recognition_busy' else field, False)
+            setattr(
+                owner, 'busy' if field in ('recognition_busy', 'response_busy') else field, False
+            )
         b.connection = None
         b.reminder_poll = 0
         b.reminder_tick()

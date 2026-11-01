@@ -10,6 +10,9 @@ Backend 0.12.6; APK and wire protocol versions stay independent and unchanged.
   and owner cancellation. Recheck generation before timeout cancellation so an
   old output cannot cancel a newer request. Add a bounded subprocess regression.
 
+- Fix self-check retry to query the playback owner after extraction; verify the
+  actual registered signal ignores stopped or busy sessions without capture.
+
 This candidate has not replaced the running installation.
 
 ## foundation-20261102.1 — source snapshot

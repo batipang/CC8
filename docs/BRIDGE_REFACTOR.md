@@ -76,3 +76,17 @@ Bridge 仍协调会话、校准提示流程、识别/回答 worker 和任务；�
 原 host 347 项通过（4 private skip），包括两轮识别间的恢复通知断线不杀死 worker、溢出请求回执、回声拒绝/保留人声、待机/提醒 busy 门槛。测试只移动内部队列/线程/状态定位，溢出用例改为冻结线程启动后构建实际 façade，原断言保留。Ruff / Java formatting / strict 六模块通过；识别组件本身未计入 strict 清单。Bridge 1387 行，回答/任务、校准/自检与会话仍待拆，F-06 未结项，待 CI。
 
 同一组件 start 以独立启动锁做 one-shot 检查；两个并发启动请求的回归确认只创建一个消费者，另一个明确拒绝，不触发 provider。此保护只约束新拆出的组件生命周期，不自动重建或重放队列。
+
+
+## 第六步：回复队列、对话历史与任务回执（候选）
+
+`ResponseWorker`（232 行）拥有容量 2 的回复队列、busy、单消费者线程与最多 8 条 RAM 对话历史；通过 frozen ResponseHooks 查询会话、provider 和 Workspace，发送输出/诊断命令，不持有整个 Bridge 或共享指标字典。Bridge 的 enqueue_response / respond_work / respond_job / answer 保留同签名入口。显式播报仍通过 offer 在队列满时拒绝，普通回复原有挤出策略和 Announcement waiter 释放不变。
+
+任务与阶段状态仍由 Workspace 统一保存；真实 Dot 回执先完成任务，后续声音停止、设备断开或通知失败不能降级已完成任务。回复 iterator 的 finally 关闭、text_done 的代次匹配、回答/清理异常后继续处理下一个请求，以及视觉与原文播报的分流保持。历史只在原先的有效完成条件下追加，既不落盘，也不增加 provider 重试。
+
+新增与识别相同的并发启动保护覆盖：两次 start 只创建一个回复消费者，另一请求明确失败。原断线恢复、已完成任务不被停止播报降级、任务/提醒忙闲、旧代次和视觉回归原断言保留。installer 16、host 348（4 private skip）、tooling 47、Java 15 checks 与质量检查通过；strict 仍只覆盖原六模块，不把动态 provider 接口计入。Bridge 1255 行，F-06 继续推进校准/自检与会话职责；未调用设备、云服务或私人音频，未替换运行中的助手，待真实 CI。
+
+
+### 独立修复：自检重试播放状态
+
+审计发现第三步拆分后，run_backend 的 SIGUSR1 自检重试仍读已移除的 bridge.playing。新增回归拦截实际 signal 注册，用真实 Bridge / 合成事件循环且禁用线程/provider/设备，在播放中和有效空闲会话两条路径复现 AttributeError。独立修复为查询 playback.playing；同一回归同时确认麦克风已停、校准中、自检中或播放中均不派发线程、不推进代次，只有原先已 active 的空闲会话重试校准，不授权新采集。后台候选仍属未发布的 0.12.6；运行中版本未动。
