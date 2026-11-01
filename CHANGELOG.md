@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased — runtime-observation-20261102.1
+## Unreleased — p0-software-20261102.1
 
-Backend 0.13.2; APK and wire protocol versions stay independent and unchanged.
+Backend 0.13.3; APK and wire protocol versions stay independent and unchanged.
 
 - Split vision and speaker/pause lifecycle ownership behind explicit session
   ports, preserving foreground authorization and existing audio parameters.
@@ -40,6 +40,10 @@ Backend 0.13.2; APK and wire protocol versions stay independent and unchanged.
 - Add bounded owner-process gauges to health and `cc8 observe` for private
   resource curves, runtime segments and explicit sampling/legacy-data gaps.
   Observation never starts capture, executes tasks or restarts services.
+
+- Prepare a new owner-private installation receipt before device operations;
+  reject public/symlink output folders and retain unconfirmed state on failures.
+  A late report-save failure never automatically reinstalls the APK.
 
 This candidate has not replaced the running installation.
 

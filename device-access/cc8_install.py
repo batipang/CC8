@@ -9,6 +9,7 @@ writes, bootloader changes, or persistent debug-property changes are used.
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import hashlib
 import json
 import os
@@ -21,9 +22,11 @@ import tempfile
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / 'tools'))
 from apk_signing import signer_fingerprints, require_same_signers, SignatureError  # noqa: E402
 from java_toolchain import require_java  # noqa: E402
+from tools.private_output import PrivateOutput, private_directory  # noqa: E402
 
 CONFIG = ROOT / '.toolchains/cc8/paths.json'
 SDK = (
@@ -349,7 +352,7 @@ def _install_verified(transport, package, activity, payload, launch, shared_stag
     return report
 
 
-if __name__ == '__main__':
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument('--check', action='store_true')
@@ -367,7 +370,7 @@ if __name__ == '__main__':
         action='store_true',
         help='Explicit legacy shared-directory mode; other storage-enabled apps may replace the helper. See docs/APK_INSTALL.md',
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if (args.launch or args.shared_staging) and not args.install:
         parser.error('--launch and --shared-staging require --install APK')
     if not ADB.is_file() or not AAPT.is_file() or not APKSIGNER.is_file():
@@ -380,19 +383,46 @@ if __name__ == '__main__':
         )
         raise SystemExit(0)
     try:
-        transport = target()
-        report = probe(transport)
-        print(json.dumps(report), flush=True)
-        if args.verify_apk:
-            package, _, _, signature = prepare_apk(transport, args.verify_apk)
-            print(json.dumps({'package': package, **signature, 'installed': False}), flush=True)
+        scope = nullcontext(None)
         if args.install:
-            report.update(
-                install(transport, args.install, args.launch, shared_staging=args.shared_staging)
-            )
-            destination = ROOT / 'device-access/private/apk-install-result.json'
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_text(json.dumps(report, indent=2) + '\n')
-            print(json.dumps(report, indent=2), flush=True)
+            # Prepare and validate owner storage before even probing the device.
+            # Never chmod an existing public/foreign/symlink directory silently.
+            folder = private_directory(ROOT / 'device-access/private')
+            destination = folder / ('apk-install-result-' + uuid.uuid4().hex[:12] + '.json')
+            scope = PrivateOutput(destination)
+        with scope as output:
+            if output is not None:
+                output.write({'report_state': 'prepared', 'installation_result': 'not_started'})
+            _perform_actions(args, output)
     except (RuntimeError, SignatureError, ValueError, OSError, subprocess.SubprocessError) as error:
         raise SystemExit(str(error)) from None
+
+
+def _perform_actions(args, output=None):
+    transport = target()
+    report = probe(transport)
+    print(json.dumps(report), flush=True)
+    if args.verify_apk:
+        package, _, _, signature = prepare_apk(transport, args.verify_apk)
+        print(json.dumps({'package': package, **signature, 'installed': False}), flush=True)
+    if args.install:
+        # A crash/failed callback after entering install cannot prove whether the
+        # package changed; leave an explicit unconfirmed receipt, never retry.
+        output.write(
+            {**report, 'report_state': 'result_unconfirmed', 'installation_result': 'unconfirmed'}
+        )
+        report.update(
+            install(transport, args.install, args.launch, shared_staging=args.shared_staging)
+        )
+        try:
+            output.write({**report, 'report_state': 'installation_verified'})
+        except (OSError, ValueError):
+            raise RuntimeError(
+                'APK action may have completed; private report save failed. Verify the installed package before retrying.'
+            ) from None
+        print(json.dumps(report, indent=2), flush=True)
+        print('Private install report saved: ' + str(output.path), flush=True)
+
+
+if __name__ == '__main__':
+    main()
