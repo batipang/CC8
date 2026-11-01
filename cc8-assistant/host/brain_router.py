@@ -7,6 +7,7 @@ DELEGATE=re.compile(r'^\s*(?:请\s*)?(?:让|叫|交给|用)\s*(?:dot|codex|多�
 
 
 class BrainRouter:
+    # 文字按用户选择或显式委派路由，图像统一交给 Dot；失败时报告错误而不暗中换大脑。
     label='MiniMax + Dot'
     def __init__(self,minimax,dot=None):self.minimax=minimax;self.dot=dot or DotBrain();self.selected='dot';self.last_metrics={}
     def select(self,provider):

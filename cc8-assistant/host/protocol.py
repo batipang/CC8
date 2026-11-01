@@ -4,6 +4,8 @@ import json
 import struct
 
 HEADER = struct.Struct('!BIQQQ')
+# 长度与头字段为网络字节序，PCM 载荷为小端有符号 16 位。
+# frame 是采样位置，nanos 是设备时间，不能当作日历时间。
 MIC, RENDER, EVENT, SPEAKER = 1, 2, 3, 4
 MAX_PACKET = 65536
 
@@ -43,6 +45,7 @@ def read_exact(stream, count):
 
 
 def receive(stream):
+    # 底层可能拆包，须读满声明长度并复用发送侧校验，不能把一次 recv 当作一包。
     size = struct.unpack('!I', read_exact(stream, 4))[0]
     if size < HEADER.size or size > MAX_PACKET:
         raise ValueError('Invalid packet length')

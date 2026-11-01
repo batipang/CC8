@@ -21,6 +21,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 public final class MainActivity extends Activity implements VoiceSession.Listener {
+    // 主界面只编排前台操作与显示；录放和通道生命周期由 VoiceSession 管理。
     private final java.util.ArrayDeque<String> autoVoiceTrace=new java.util.ArrayDeque<>();
     private final OpenVoiceGate autoVoice=new OpenVoiceGate();
     private boolean permissionGrantedAwaitingResume;private int autoVoiceOpens,autoVoiceStarts;private boolean lastOpenWantedVoice;
@@ -68,6 +69,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     private void rule(FrameLayout parent,float x,float y,float w,float h){View line=new View(this);line.setBackgroundColor(Color.rgb(36,75,96));place(parent,line,x,y,w,h);}
     private TextView label(String value,int size,int color){TextView t=text(value,size,color);t.setGravity(Gravity.CENTER_VERTICAL);t.setIncludeFontPadding(false);return t;}
     private void build(){
+        // 固定 1280×800 设计坐标统一缩放，保留光环、独立声波、字幕和进度条的间距。
         FrameLayout stage=new FrameLayout(this);stage.addView(new HudBackdrop(this),new FrameLayout.LayoutParams(-1,-1));setContentView(stage);
         FrameLayout root=new FrameLayout(this);root.setClipChildren(false);stage.addView(root,new FrameLayout.LayoutParams(dp(1280),dp(800)));
         stage.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,orr,ob)->{float scale=Math.min(stage.getWidth()/(float)dp(1280),stage.getHeight()/(float)dp(800));root.setPivotX(0);root.setPivotY(0);root.setScaleX(scale);root.setScaleY(scale);root.setTranslationX((stage.getWidth()-dp(1280)*scale)/2);root.setTranslationY((stage.getHeight()-dp(800)*scale)/2);});

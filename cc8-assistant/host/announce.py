@@ -33,6 +33,7 @@ def validate_text(text):
 
 
 class AnnouncementServer:
+    # owner-only Unix IPC 复用既有认证通道做桌面控制，不提供开麦操作。
     def __init__(self,bridge,path=SOCKET):self.bridge=bridge;self.path=path;self.stop=threading.Event();self.socket=None;self.slots=threading.BoundedSemaphore(4)
     def start(self):
         self.path.parent.mkdir(parents=True,exist_ok=True,mode=0o700);os.chmod(self.path.parent,0o700)
@@ -87,6 +88,7 @@ class AnnouncementServer:
         finally:self.slots.release()
 
     def snapshot(self,connection,request):
+        # 调用端断开即取消未完成拍照；成功仍须匹配本次 ID，不能返回上次图片。
         ident=request.get('request_id')
         if not isinstance(ident,str) or not re.fullmatch('[a-f0-9]{32}',ident):raise ValueError('Invalid request ID')
         job=self.bridge.request_snapshot()

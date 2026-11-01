@@ -65,6 +65,7 @@ def codex_command():
 
 
 class CodexRpc:
+    # 独立 app-server 的 JSON-RPC 适配，请求回执与异步轮次事件分别分发。
     MAX_LINE=8*1024*1024
     def __init__(self,command=None,popen=subprocess.Popen):
         self.command=command;self.popen=popen;self.process=None;self.lock=threading.Lock();self.pending={};self.sequence=0
@@ -107,6 +108,7 @@ class CodexRpc:
         finally:
             with self.lock:self.pending.pop(ident,None)
     def _server_request(self,message):
+        # 服务端工具请求不等于用户授权，需要审批的动作不能在这里自动批准。
         method=message.get('method','')
         if method=='item/tool/call':
             def execute():
@@ -181,6 +183,7 @@ class DotBrain:
             turn.stopped.set();threading.Thread(target=self._interrupt,args=(turn,),daemon=True).start()
     def close(self):self.cancel();self.rpc.close()
     def _thread(self):
+        # 沿用当前 Mac 的 Codex 配置创建临时语音上下文，不继承桌面聊天历史。
         if self.rpc.failed and self.rpc_factory:
             self.rpc.close();self.rpc=self.rpc_factory();self.thread_id=None;self.last_metrics['context_reset']=True
         self.rpc.start()
@@ -209,6 +212,8 @@ class DotBrain:
         return VoiceTools(self.device_control,reminders=self.reminders).call(params.get('tool'),params.get('arguments'),current)
 
     def clauses(self,text,history,is_current=lambda:True,on_web=None,image=None):
+        # 明确 final_answer 才逐句播报；完全无阶段信息的旧协议才允许完成后回退。
+        # 流式内容与权威最终文本一致后，才发布成功回执和来源。
         if not is_current():raise Cancelled('Turn cancelled')
         turn=Turn();self.current=turn;start=time.monotonic();messages=[];completed=False
         phases={};stream_id=None;stream_text='';speech=SpeechClauses();said=0;limited=False

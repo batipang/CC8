@@ -25,6 +25,7 @@ PREFIX = 'dumpsys activity com.ailabs.emode >/dev/null 2>&1; '
 
 
 def helper_artifact() -> bytes:
+    # 源文件和 JAR 同时核对构建清单，避免把旧助手或被替换的产物送入设备。
     helper = ROOT / 'artifacts/cc8-installer-shell-1.0.jar'
     metadata = json.loads(helper.with_suffix('.json').read_text())
     payload = helper.read_bytes()
@@ -51,6 +52,7 @@ def private_staging(transport: str) -> str:
 
 
 def install_stream(transport: str, package: str, payload: bytes, digest: str, shared_staging: bool = False):
+    # 调用系统 PackageInstaller；成功必须有流哈希与安装回调，不能只凭 shell 退出码。
     helper = helper_artifact()
     helper_hash = hashlib.sha256(helper).hexdigest()
     directory = '/sdcard/Download' if shared_staging else private_staging(transport)
@@ -83,6 +85,7 @@ def install_stream(transport: str, package: str, payload: bytes, digest: str, sh
 
 
 def target() -> str:
+    # 唯一匹配正常 Android 模式的 AILABS_S6，不能猜测目标或连接下载模式设备。
     result = subprocess.run([str(ADB), 'devices', '-l'], capture_output=True, text=True, check=True, timeout=15)
     matches = []
     for line in result.stdout.splitlines():

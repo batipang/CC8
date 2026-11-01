@@ -26,6 +26,7 @@ class MiniMaxError(RuntimeError):
 
 
 def subscription_key():
+    # 密钥仅从 Mac 环境或 owner-only 文件读取，不随 APK、协议包或日志下发。
     value=os.environ.get('CC8_MINIMAX_API_KEY','')
     if not value:
         path=ROOT/'.toolchains/cc8/voice-secrets.env'
@@ -44,6 +45,7 @@ MAX_STREAM_BYTES = 32*1024*1024
 
 
 def bounded_lines(chunks,max_line=MAX_SSE_EVENT,max_total=MAX_STREAM_BYTES,is_current=lambda:True):
+    # 分行前限制原始字节，避免长行或缺少换行时无限占用内存。
     """Read bounded bytes before splitting; iter_lines itself buffers long lines."""
     pending=bytearray();total=0;scan=0
     for chunk in chunks:
@@ -128,6 +130,7 @@ class VisibleText:
 
 @dataclass(eq=False)
 class RequestSlot:
+    # 取消绑定单次 HTTP 请求，避免旧请求清理时误关掉后来的连接。
     stopped: threading.Event=field(default_factory=threading.Event)
     response: object=None
     session: object=None
@@ -342,6 +345,7 @@ class MiniMaxBrain:
 
 
 class MiniMaxVoice:
+    # 流式输出 16 kHz PCM 和字幕时间戳；保留用户音色配置，设备端不存 API 密钥。
     model='speech-2.8-turbo'
     def __init__(self,transport=None,voice='Chinese (Mandarin)_Straightforward_Boy',speed=1.03,pitch=1,emotion=None):
         self.transport=transport or Transport();self.voice=voice;self.speed=speed;self.pitch=pitch;self.emotion=emotion;self.last_metrics={}

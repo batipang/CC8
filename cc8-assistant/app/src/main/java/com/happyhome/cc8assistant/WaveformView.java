@@ -11,6 +11,7 @@ import java.util.Random;
 
 /** Voice-driven particle field, separate from the approved portrait and subtitles. */
 final class WaveformView extends View {
+    // 独立于头像布局；实际播放 RMS 控制能量，暂停冻结运动，停止时回落为低亮度。
     private static final int COUNT=3200,BINS=4;
     private final Paint p=new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Typeface mono=Typeface.create("monospace",Typeface.NORMAL);

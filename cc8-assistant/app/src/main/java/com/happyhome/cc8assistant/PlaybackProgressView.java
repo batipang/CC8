@@ -6,6 +6,7 @@ import android.widget.ProgressBar;
 
 /** Selected energy-cartridge design, driven only by the actual karaoke timeline. */
 final class PlaybackProgressView extends ProgressBar {
+    // 斜切能量舱只显示上层传入的真实字幕播放进度，不按动画时间模拟任务完成比例。
     private static final int CYAN=Color.rgb(67,224,252),DIM=Color.rgb(55,102,130),AMBER=Color.rgb(255,199,91);
     private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path frame=new Path(),played=new Path();private final Path[] cells=new Path[20];

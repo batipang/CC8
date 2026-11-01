@@ -115,6 +115,8 @@ class TextReply(Reply):pass
 
 
 class Bridge:
+    # Mac 端协调收音、消回声/断句、ASR、大脑及 TTS。
+    # epoch 标识设备录音会话；generation 标识可被打断的回答，两者不可互换。
     def __init__(self,speech,brain,library=LIBRARY,fast_stop=None,echo_check=False,workspace=None):
         self.speech=speech;self.brain=brain;self.library=library
         self.workspace=workspace or Workspace();self.reminder_job=None;self.reminder_poll=0
@@ -157,6 +159,7 @@ class Bridge:
         self.send(Packet.event(event,self.generation if generation is None else generation,**fields))
 
     def change_transport(self,channel):
+        # 先作废旧回答并重置参考时钟；只可 rebind 已有录音，重连不能自行开麦。
         old=self.connection
         if old is channel:return
         was_active=self.active
@@ -248,6 +251,7 @@ class Bridge:
             with self.guard:self.device_requests.pop(ident,None)
 
     def pause_for_voice(self):
+        # 先可撤销地暂停并保留回答代次；ASR 确认新话语后才真正取消旧回答。
         with self.guard:
             if not self.device_can_pause or not self.active or not self.playing or self.pause_state or time.monotonic()<self.pause_cooldown:return None
             self.pause_serial+=1;token=self.pause_serial;self.pause_token=token
@@ -258,6 +262,7 @@ class Bridge:
         return token
 
     def resume_after_rejection(self,token,generation):
+        # token 区分同一回答中的多次暂停，generation 隔离不同回答，均匹配才恢复。
         with self.guard:
             state=self.pause_state
             if token is None or not state or state['token']!=token or state['generation']!=generation or not self.valid(generation):return
@@ -315,6 +320,7 @@ class Bridge:
             finally:job.done.set()
 
     def cancel(self,reason='speech'):
+        # 推进代次使旧模型、音频、字幕和看图结果失效，但不能撤销已执行的工具动作。
         with self.guard:
             workspace_changed=self.workspace.cancel_generation(self.generation)
             self.generation+=1;generation=self.generation;was_playing=self.playing;self.playing=False;self.announcement_generation=None;self.vision_generation=None;self.text_generation=None;self.vision_nonce="";self.camera_inbox.cancel()
@@ -435,6 +441,7 @@ class Bridge:
         elif event=='capture_gap':self.log('capture_read_gap',milliseconds=j.get('milliseconds'))
 
     def on_packet(self,p):
+        # RENDER 是设备接受的扬声器参考，与 MIC 收音分开，先建时间轴再做 AEC。
         if p.kind==EVENT:
             try:self.on_event(json.loads(p.data))
             except (KeyError,TypeError,OverflowError):
@@ -456,6 +463,7 @@ class Bridge:
             self.process_microphone(self.pending_mic.popleft())
 
     def process_microphone(self,p):
+        # DSP 按设备纳秒时间戳和 16 kHz / 10 ms 帧对齐，不能用网络到达时间替代。
         if self.last_sequence is not None and p.sequence!=self.last_sequence+1:
             self.metrics['sequence_gaps']+=1;self.log('capture_packet_gap')
         self.last_sequence=p.sequence
@@ -563,6 +571,7 @@ class Bridge:
         return self.play_stream(iter([pcm]),text,generation,role)
 
     def play_stream(self,chunks,text,generation,role='assistant',timing=None):
+        # 每句有独立 playback_id；发完 PCM 不等于播完，仍须等待设备 play_done。
         iterator=iter(chunks);prefill=[];count=0;started=False;completed=False
         try:
             # Keep a short prebuffer before AudioTrack starts. Cloud audio can
@@ -900,6 +909,7 @@ class Bridge:
                 if isinstance(old,Announcement):old.done.set()
 
     def respond_work(self):
+        # 单消费者串行播报，识别另在线程运行，因此暂停时仍能继续听插话。
         while True:
             job=self.response_queue.get()
             try:self.respond_job(job)
@@ -921,6 +931,7 @@ class Bridge:
                 if self.connection is not None:self.event('text_done',generation=job.generation)
 
     def answer(self,text,generation,image=None):
+        # 任务成功以大脑真实回执为准，后续停止朗读不能把已完成工作改为取消。
         task_id=self.workspace.task_start(generation,text);result_text=[''];clauses=None
         def web_update(kind,payload):
             if not self.valid(generation):return

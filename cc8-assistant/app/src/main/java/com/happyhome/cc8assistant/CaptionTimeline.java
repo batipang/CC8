@@ -2,6 +2,7 @@ package com.happyhome.cc8assistant;
 
 /** Immutable provider word timings, in UTF-16 offsets and actual playback frames. */
 final class CaptionTimeline {
+    // 每行 [UTF-16 起点, UTF-16 终点, 采样起点, 采样终点]，frame 来自真实播放头。
     final int[][] rows;final int length;
     CaptionTimeline(int[][] values,int length){this.length=length;this.rows=values;}
     float position(long frame){

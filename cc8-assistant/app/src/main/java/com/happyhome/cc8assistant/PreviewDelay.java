@@ -2,6 +2,7 @@ package com.happyhome.cc8assistant;
 
 /** Hold a live visible preview for five full seconds before taking a frame. */
 final class PreviewDelay {
+    // 使用单调时钟计时；相机初始化和等待首帧的时间不占用用户调整画面的五秒。
     static final long HOLD_MS=5000;
     private volatile long visibleAt=-1;
     void reset(){visibleAt=-1;}

@@ -21,6 +21,7 @@ def selected_engine():
 
 
 def prepare_audio(samples):
+    # 有界 16 kHz 单句先去直流、限制增益并补首尾静音，减少轻声和辅音被截断。
     pcm=np.asarray(samples,dtype=np.float32)
     if pcm.ndim!=1 or len(pcm)>16000*13:raise ValueError('ASR expects bounded 16 kHz mono audio')
     if not len(pcm):return np.zeros(0,dtype=np.float32),1.
@@ -45,6 +46,7 @@ def verify_model():
 
 
 class MandarinRecognizer:
+    # 按显式配置选择引擎，失败不偷偷换服务或上传更多录音。
     def __init__(self,engine=None,recognizer=None):
         self.engine=engine or ('sensevoice' if recognizer is not None else selected_engine())
         self.last_metrics={}
@@ -70,6 +72,7 @@ class MandarinRecognizer:
     def cancel(self):
         if self.engine=='minimax':self.recognizer.cancel()
     def recognize(self,samples):
+        # 云端仅接收当前单句的内存 WAV；持续音频、AEC 和即时插话仍在 Mac 本地处理。
         start=time.monotonic();pcm,gain=prepare_audio(samples)
         if not len(pcm):text=''
         elif self.engine=='minimax':

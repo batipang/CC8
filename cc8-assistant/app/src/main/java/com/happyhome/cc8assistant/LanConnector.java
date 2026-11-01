@@ -16,6 +16,7 @@ import org.json.JSONArray;
 
 /** USB-provisioned private pairing; no transport secret is compiled into the APK. */
 final class LanConnector {
+    // USB 写入的私有配对信息是信任来源，Wi-Fi 连接还须校验证书指纹和共享密钥。
     interface Current {boolean active();}
     private final Object connectLock=new Object();private volatile Socket pendingSocket;
     void cancelPending(){Socket pending=pendingSocket;if(pending!=null)try{pending.close();}catch(IOException ignored){}}
@@ -44,6 +45,7 @@ final class LanConnector {
         check(current);return connectTo(discover(config),config,current);
     }}
     private Socket connectTo(String host,JSONObject config,Current current)throws Exception{
+        // 只连局域网 IPv4，TLS 握手前后均检查前台票据，拒绝已经过期的连接任务。
         check(current);InetAddress address=InetAddress.getByName(host);if(!(address instanceof Inet4Address)||!address.isSiteLocalAddress())throw new IOException("LAN address required");
         final String pin=config.getString("certificate_sha256");SSLContext ssl=SSLContext.getInstance("TLSv1.2");
         ssl.init(null,new TrustManager[]{new X509TrustManager(){

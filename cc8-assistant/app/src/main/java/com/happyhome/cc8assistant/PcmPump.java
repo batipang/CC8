@@ -4,6 +4,7 @@ import java.io.IOException;
 
 /** AudioTrack may return a short/zero write when paused during a blocking write. */
 final class PcmPump {
+    // AudioTrack 暂停时可能短写或零写；只有被硬件接受的采样才能推进参考帧和嘴型。
     interface Sink {
         boolean allowed(); boolean paused();
         void awaitReady() throws InterruptedException;

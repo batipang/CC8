@@ -7,6 +7,7 @@ import android.widget.TextView;
 
 /** Paint a clipped highlight without relaying out the text on every audio frame. */
 final class KaraokeTextView extends TextView {
+    // 复用同一份文字布局，仅裁切高亮绘制范围；逐字推进不应引发每帧重新排版。
     private final Path path=new Path();private final RectF bounds=new RectF();
     private float position;private boolean timed;
     KaraokeTextView(Context context){super(context);}

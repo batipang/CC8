@@ -16,6 +16,7 @@ COMMANDS={'停一下','停止','暂停'}
 
 
 def can_fast_stop(keyword,render_text):
+    # 播报本身也可能含“停一下”，先排除参考文本，避免把助理自己的话当作口令。
     normalize=lambda text:re.sub(r'[^\w\u4e00-\u9fff]','',text)
     # Conservatively defer to the existing route while the assistant itself
     # is saying this exact command. A hardware stop button remains available.
@@ -23,6 +24,7 @@ def can_fast_stop(keyword,render_text):
 
 
 class FastStopDetector:
+    # 本地流式关键词提供停止快路径，不替代一般话语 ASR 或近端语音确认。
     def __init__(self,gain=2.0):
         if not 1<=gain<=4:raise ValueError('Fast-stop gain must be between 1 and 4')
         self.gain=float(gain)

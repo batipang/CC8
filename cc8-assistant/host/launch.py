@@ -16,6 +16,7 @@ PYTHON=ROOT/'.toolchains/cc8/voice-venv/bin/python'
 
 
 def own_process(pid):
+    # PID 会复用，必须核对当前用户及脚本绝对路径，避免停止别的工作区服务。
     if type(pid) is not int or pid<=0:return False
     result=subprocess.run(['ps','-p',str(pid),'-o','uid=','-o','command='],capture_output=True,text=True)
     try:

@@ -16,6 +16,8 @@ import org.json.JSONObject;
 import org.json.JSONArray;
 
 final class VoiceSession {
+    // 设备端资源所有者：前台期间维护双通道、AudioRecord 与 AudioTrack，退出即释放。
+    // lifecycle 隔离前后台连接任务，epoch 隔离收音线程，generation 隔离回答/字幕。
     interface Listener {void link(boolean connected);void state(String phase,String message);void caption(String text,String mood);void microphone(boolean active);void playback(boolean active);void heard(String text);void sources(JSONArray items,String retrievedAt);void brain(String provider);void recognition(String engine);void dotResult(String text,boolean truncated);void screen(boolean sleeping);void vision(boolean active,String message);void cameraCapture(JSONObject request);void announcement();void workspace(JSONObject data);void workspaceResult(boolean ok,String message);}
     private final Context context;private final Listener listener;private final Object routeLock=new Object();private final Object captureResourceLock=new Object();private final LanConnector lan;private volatile Link activeLink,usbLink,wifiLink;private volatile String wifiError="";private boolean receiverRegistered;private volatile boolean usbPhysical,wakeMode=true;
     private final DesktopCameraAuth desktopCameraAuth=new DesktopCameraAuth();
@@ -40,6 +42,7 @@ final class VoiceSession {
         if(lan.paired())lan.acquire();new Thread(()->accept(ticket),"cc8-usb-listener").start();new Thread(()->wifiLoop(ticket),"cc8-wifi-link").start();
     }
     void pause(){
+        // 先使生命周期票据失效，再停音频和关闭连接；旧异步任务不能在后台重建资源。
         cancelVision();textSession=false;
         ServerSocket listener;synchronized(routeLock){foreground=false;lifecycle++;listener=server;server=null;}lan.cancelPending();stopMicrophone();cancelPlayback();closeSocket();if(listener!=null)try{listener.close();}catch(IOException ignored){}
         if(receiverRegistered){context.unregisterReceiver(usbState);receiverRegistered=false;}lan.release();
@@ -64,6 +67,7 @@ final class VoiceSession {
         }
     }
     private void select(Link next)throws IOException{
+        // routeLock 保证只选一路；切换可以保留已开启的收音，但必须丢弃旧回答和看图。
         synchronized(routeLock){
             if(!foreground||next.closed||next.ticket!=lifecycle)return;next.ready=true;
             boolean changed=activeLink!=next;boolean captureWasActive=recording;int captureEpoch=epoch;
@@ -199,6 +203,7 @@ final class VoiceSession {
     void interrupt(){cancelVision();announcement=false;textSession=false;listener.playback(false);cancelPlayback();listener.caption("","attentive");send(Wire.event("interrupt"));if(recording)listener.state("listening","我在听，你继续说");else{phase="idle";listener.state("idle","播报已停止 · 麦克风关闭");}}
     @SuppressLint("MissingPermission") // Only MainActivity's authorized foreground opening or Start action may call; checked again here.
     void startMicrophone(){
+        // mine 固定本次录音 epoch，旧线程 finally 只能清理自己，不能关闭后来新开的录音。
         if(!foreground||recording||!isConnected())return;
         cancelVision();
         if(context.checkCallingOrSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){listener.state("error","请先允许麦克风权限");return;}
@@ -229,6 +234,7 @@ final class VoiceSession {
         }},"cc8-microphone").start();
     }
     void stopMicrophone(){
+        // 先推进 epoch 再停止硬件，使阻塞 read 返回后的旧帧无法进入新会话。
         final int stoppedEpoch;final AudioRecord r;
         synchronized(this){stoppedEpoch=epoch++;recording=false;r=recorder;recorder=null;}
         announcement=false;listener.playback(false);inputLevel=0;phase="idle";
@@ -267,6 +273,7 @@ final class VoiceSession {
         }catch(RuntimeException e){Wire.put(result,"ok",false);Wire.put(result,"error",e.getClass().getSimpleName());}send(result);
     }
     private final class Player extends Thread implements PcmPump.Sink {
+        // 播放头决定字幕、嘴型和完成回执；队列中已有数据不能被当成已经发声。
         final int generation,playbackId;final String text,mood,role;volatile CaptionTimeline timings;long renderSequence;long writeNanos;final ArrayBlockingQueue<byte[]> queue=new ArrayBlockingQueue<>(64);final ConcurrentLinkedQueue<Envelope> envelopes=new ConcurrentLinkedQueue<>();
         volatile boolean ended,stopped,paused;volatile int pauseToken;volatile AudioTrack track;volatile long written=0;
         Player(int g,String t,String m,String role,int id,CaptionTimeline line){super("cc8-speaker");generation=g;text=t;mood=m;this.role=role;playbackId=id;timings=line;}

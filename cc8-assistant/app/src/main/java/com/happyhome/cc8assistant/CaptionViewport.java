@@ -10,6 +10,7 @@ import android.widget.TextView;
 
 /** Hard three-line viewport for both base text and the karaoke highlight pass. */
 final class CaptionViewport extends ScrollView {
+    // 按 Layout 实测行高裁出三行，不用固定字号猜高度，避免第四行残片及进度条遮挡。
     private static final int LINES=3;
     private final Rect clip=new Rect();
     CaptionViewport(Context context){super(context);setClipChildren(true);setClipToPadding(true);setOverScrollMode(OVER_SCROLL_NEVER);setVerticalFadingEdgeEnabled(false);}

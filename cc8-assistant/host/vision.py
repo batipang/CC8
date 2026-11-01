@@ -22,6 +22,7 @@ class VisionError(RuntimeError):pass
 
 
 def visual_request(text):
+    # 只有明确的当前拍摄/观察意图才可触发镜头；否定、引用或普通查询不能授权拍照。
     """Explicit present-camera requests; descriptions/quotes of commands aren't consent."""
     value=re.sub(r'\s+','',text).lower()
     value=re.sub(r'^(?:大黄蜂|大黃蜂|大黄峰|bumble-?bee)[，,。:：！!]*','',value)
@@ -81,6 +82,8 @@ class DesktopSnapshot:
 
 
 class CameraInbox:
+    # 一次只接收一个有代次和请求 ID 的分块 JPEG，校验大小、尺寸、哈希与超时。
+    # 取消后不复用旧图；普通语音看图数据只在内存中等待 Dot 消费。
     def __init__(self):self.lock=threading.Lock();self.pending=None
     def begin(self,generation):
         with self.lock:

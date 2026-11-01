@@ -20,6 +20,8 @@ def clock():return datetime.now(ZONE)
 
 
 class Workspace:
+    # 任务回执只存内存，明确创建的提醒才持久化到 owner-private 文件。
+    # self.revision 刷新整个界面，提醒自身的 revision 绑定某次播报，二者用途不同。
     def __init__(self, path=None, now=clock):
         self.path=Path(path) if path else None;self.now=now
         self.lock=threading.RLock();self.tasks=[];self.reminders=[];self.revision=0
@@ -36,6 +38,7 @@ class Workspace:
             if sum(r['status']=='pending' for r in self.reminders)>32:raise ValueError('Too many pending reminders')
 
     def _save(self):
+        # 同目录临时文件写完后原子替换，避免半份 JSON；调用方负责失败时回滚内存。
         if self.path:
             self.path.parent.mkdir(parents=True,exist_ok=True,mode=0o700);os.chmod(self.path.parent,0o700)
             temporary=self.path.with_name(self.path.name+'.'+uuid.uuid4().hex+'.tmp')
@@ -101,6 +104,7 @@ class Workspace:
             step['title']=title[:40];step['status']=status;task['stage']=title[:40];self.revision+=1
 
     def task_finish(self,ident,status,result=''):
+        # 只有 running 可进入终态，迟到的进度或停止朗读不能覆盖已有完成结果。
         with self.lock:
             task=next((t for t in self.tasks if t['id']==ident),None)
             if not task or task['status']!='running':return
@@ -154,6 +158,7 @@ class Workspace:
                          and (not r.get('retry_after') or self._date(r['retry_after'])<=now)),None)
 
     def delivered(self,ident,success,*,revision):
+        # 旧回执不能结束编辑/稍后提醒后的新版本，也不能推进下一次重复提醒。
         with self.lock:
             item=next((r for r in self.reminders if r['id']==ident and r['status']=='pending'),None)
             # Bind playback receipts to the exact scheduled occurrence. Editing,

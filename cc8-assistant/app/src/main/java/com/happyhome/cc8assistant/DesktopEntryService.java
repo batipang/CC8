@@ -13,6 +13,7 @@ import org.json.JSONObject;
 
 /** Local UI entry only. Never owns microphones, cameras, audio or network sockets. */
 public final class DesktopEntryService extends Service {
+    // 桌面悬浮入口只负责重新打开界面；不能在服务里保活麦克风、相机或网络。
     private static final String CHANNEL="desktop_entry",PREFS="desktop_entry";
     private static final int NOTIFICATION=701;
     private static final String VISIBLE="ui_visible";

@@ -24,6 +24,7 @@ TOOLS=[
 
 
 class VoiceTools:
+    # 仅暴露工具白名单中的 Mac/CC8 动作，执行前复核轮次并返回真实结果。
     def __init__(self,device_control=None,run=subprocess.run,reminders=None):self.device_control=device_control;self.run=run;self.reminders=reminders
     def call(self,name,args,is_current=lambda:True):
         if not is_current():return {'ok':False,'error':'turn_cancelled'}

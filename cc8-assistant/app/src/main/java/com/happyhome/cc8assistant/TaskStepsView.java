@@ -13,6 +13,7 @@ import org.json.JSONObject;
 
 /** A compact diagram of actual tool receipts, never fabricated task percentages. */
 final class TaskStepsView extends View {
+    // 只从后台真实任务回执提取步骤，保持完成/失败/取消语义，不生成示例任务进度。
     private static final int CYAN=Color.rgb(67,224,252),AMBER=Color.rgb(255,199,91),MUTED=Color.rgb(120,156,175);
     private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Drawable check,error;

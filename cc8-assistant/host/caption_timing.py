@@ -3,6 +3,8 @@ import math
 
 
 class CaptionTiming:
+    # Python 按 Unicode 字符计数，Android 按 UTF-16 单元计数，emoji 等需转换偏移。
+    # 每行是 [起始字符, 结束字符, 起始采样帧, 结束采样帧]；16 kHz 下 1 ms = 16 帧。
     def __init__(self,text):
         self.text=text;self.segments={};self.publish=None
         self.offsets=[0]

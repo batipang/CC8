@@ -22,6 +22,7 @@ def wants_web(text, previous=False):
 
 
 def public_url(value):
+    # 规范公网来源地址的字符串边界检查，不构成 DNS 级网络隔离。
     if not isinstance(value,str) or len(value)>2048 or re.search(r'[\s\x00-\x1f\x7f]',value):return None
     try:
         p=urlsplit(value);host=(p.hostname or '').lower().rstrip('.')
@@ -70,6 +71,7 @@ def parse_plan(content):
 
 
 class SpeechClauses:
+    # 将模型增量缓存到可朗读的句段边界，避免每个 token 都触发一次 TTS。
     """Keep URLs whole across network chunks, then omit them from speech."""
     def __init__(self):self.buffer=''
     @staticmethod

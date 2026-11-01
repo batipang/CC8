@@ -43,6 +43,7 @@ def local_addresses():
 
 
 class Pairing:
+    # 私有文件保存共享密钥与 TLS 证书；USB 负责初次交付设备侧配对信息。
     def __init__(self,folder=PAIR_DIR):
         self.folder=Path(folder);self.folder.mkdir(parents=True,exist_ok=True);os.chmod(self.folder,0o700)
         cert=self.folder/'server.pem';key=self.folder/'server-key.pem';config=self.folder/'pairing.json'
@@ -71,6 +72,7 @@ class Pairing:
 
 
 class Channel:
+    # USB 与 TLS 统一为包流；读线程投递事件，主循环选择唯一生效的通道。
     def __init__(self,stream,kind,events):
         self.stream=stream;self.kind=kind;self.events=events;self.ident=uuid.uuid4().hex;self.lock=threading.Lock();self.closed=False;self.ready=False;self.last_rx=time.monotonic()
     def start(self):threading.Thread(target=self.read,daemon=True,name='cc8-'+self.kind+'-reader').start()
@@ -188,6 +190,7 @@ class TransportHub:
                     else:channel.event('transport_ping')
                 except (OSError,EOFError):channel.close()
     def preferred(self):
+        # socket 连通不等于已就绪；只从可用通道中优先选 USB，否则选 Wi-Fi。
         with self.guard:
             for kind in ['usb','wifi']:
                 channel=self.channels.get(kind)
@@ -195,6 +198,7 @@ class TransportHub:
                 if channel and channel.ready and not channel.closed:return channel
         return None
     def selected(self,channel):
+        # 明确激活/备用角色，防止两路同时处理音频；配对配置只经 USB 下发。
         self.active=channel;self.switches+=1
         with self.guard:others=list(self.channels.values())
         for other in others:

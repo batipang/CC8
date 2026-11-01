@@ -7,6 +7,7 @@ import javax.crypto.spec.SecretKeySpec;
 
 /** Android-free signing primitives shared by discovery and certificate pinning. */
 final class TransportAuth {
+    // UDP 发现使用 HMAC，TLS 使用证书指纹；签名比较按字节完成，不能改成普通字符串相等。
     static byte[] unhex(String value){
         if(value==null||value.length()%2!=0)throw new IllegalArgumentException("Invalid hex");
         byte[] bytes=new byte[value.length()/2];for(int i=0;i<bytes.length;i++){int a=Character.digit(value.charAt(i*2),16),b=Character.digit(value.charAt(i*2+1),16);if(a<0||b<0)throw new IllegalArgumentException("Invalid hex");bytes[i]=(byte)(a*16+b);}return bytes;

@@ -9,6 +9,7 @@ import java.util.Locale;
 
 /** Local-time orbit clock: bold yellow hour/minute markers and a live second sweep around the portrait. */
 final class CompanionView extends View {
+    // 光环表示系统本地时间：长短黄线为分/时，秒点在 00 秒位于顶部，顺时针一圈一分钟。
     private final Paint p=new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF oval=new RectF();
     private final BumblebeeAvatar avatar;private final float[] ticks=new float[60*4];

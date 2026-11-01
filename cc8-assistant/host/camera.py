@@ -61,6 +61,7 @@ def save_photo(image,folder=PHOTOS):
 
 
 def main():
+    # 桌面显式拍照入口；校验回执后仅把本次新图片保存到本机私有目录。
     try:
         result,image=receive_photo()
         if image is None:

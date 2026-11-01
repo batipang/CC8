@@ -75,6 +75,8 @@ class EchoCanceller:
 
 
 class RenderTimeline:
+    # 把设备播放帧映射到设备纳秒时钟，为 AEC 提供同一时刻的扬声器参考。
+    # 暂停时暂存未播片段，恢复时整体平移，不能把静音间隙当作连续播放。
     def __init__(self):
         self.blocks = deque()
         self.anchors = {}
@@ -136,6 +138,7 @@ class RenderTimeline:
 
 
 class WebRtcEchoCanceller:
+    # 输入/输出为归一化单声道，每块固定 160 个采样，即 16 kHz 下的 10 ms。
     """AEC3 + moderate NS; normalized PCM in/out, no device access or AGC."""
     def __init__(self,noise_suppression=True):
         from pywebrtc_audio import AudioProcessor
@@ -235,6 +238,8 @@ def resembles_playback(text, spoken):
 
 
 class VoiceDetector:
+    # 保留起音前缓冲，连续静音 80 帧收尾，单句最多 1200 帧；仅负责成句。
+    # external_voice 可由近端门控提供，能量判定不等于说话人或专用唤醒词识别。
     """Energy VAD for prototype testing, not a semantic speech detector."""
     ONSET_FRAMES=14
     def __init__(self):
@@ -278,6 +283,8 @@ class VoiceDetector:
 
 
 class NearSpeechDetector:
+    # 比较原始收音、消回声残差与播放参考，用多帧投票降低播报尾音误打断。
+    # dBFS 阈值越接近 0 越严格；声学证据不是声纹，不能辨别具体说话人。
     """Local WebRTC VAD plus residual energy/correlation; not speaker identity."""
     MIN_DBFS=-43.
     MAX_DBFS=-34.

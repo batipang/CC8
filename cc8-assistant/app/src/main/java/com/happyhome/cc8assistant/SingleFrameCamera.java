@@ -14,6 +14,7 @@ import java.io.ByteArrayOutputStream;
 /** Visible, one-shot Camera1 capture. No files, no continuous streaming. */
 @SuppressWarnings("deprecation")
 final class SingleFrameCamera implements TextureView.SurfaceTextureListener {
+    // serial 隔离每次前台拍摄；取消、超时或 Surface 销毁后，旧回调不能再提交图片。
     interface Result {void image(byte[] jpeg,int width,int height);void error(String reason);}
     private final Activity activity;private final FrameLayout panel;private final TextureView preview;private final TextView label;
     private final PreviewDelay delay=new PreviewDelay();private volatile long capturedAfterPreviewMs;
@@ -29,6 +30,7 @@ final class SingleFrameCamera implements TextureView.SurfaceTextureListener {
         FrameLayout.LayoutParams lp=new FrameLayout.LayoutParams(360,320,Gravity.TOP|Gravity.LEFT);lp.leftMargin=40;lp.topMargin=155;stage.addView(panel,lp);
     }
     void start(Result callback){
+        // 11 秒是整个任务上限，5 秒调整时间另从实际可见的首帧开始计算。
         cancel();result=callback;wanted=true;lastError="";serial++;delay.reset();frameReceived=false;capturedAfterPreviewMs=0;label.setText("● 摄像头打开中 · 请准备调整画面");panel.setVisibility(View.VISIBLE);openIfReady();
         final int token=serial;ui.postDelayed(()->{if(current(token))fail(token,"camera_timeout");},11000);
     }

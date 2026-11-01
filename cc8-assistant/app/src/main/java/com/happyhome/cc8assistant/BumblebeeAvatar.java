@@ -7,6 +7,7 @@ import java.io.InputStream;
 
 /** Approved transparent head asset, with lightweight eyes and speech overlays. */
 final class BumblebeeAvatar {
+    // 保留已确认的透明头像原图，仅覆盖眼睑/嘴部；嘴型是播放包络动画，非音素级对齐。
     private final Bitmap head;
     private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG|Paint.FILTER_BITMAP_FLAG);
     private final RectF bounds=new RectF(0,0,1254,1254);
