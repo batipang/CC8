@@ -16,7 +16,7 @@ import subprocess
 import threading
 import time
 import uuid
-from protocol import Packet, receive, EVENT
+from protocol import Packet, receive, EVENT, decode_event, decode_json_object
 
 ROOT = Path(__file__).resolve().parents[2]
 PAIR_DIR = ROOT / '.toolchains/cc8/transport'
@@ -154,12 +154,25 @@ class Channel:
         self.events = events
         self.ident = uuid.uuid4().hex
         self.lock = threading.Lock()
+        self.state_lock = threading.Lock()
+        self.reader = None
+        self.reader_running = False
+        self.io_closed = False
         self.closed = False
         self.ready = False
         self.last_rx = time.monotonic()
 
     def start(self):
-        threading.Thread(target=self.read, daemon=True, name='cc8-' + self.kind + '-reader').start()
+        with self.state_lock:
+            if self.closed:
+                return
+            if self.reader is not None:
+                raise RuntimeError('Channel reader already started')
+            self.reader_running = True
+            self.reader = threading.Thread(
+                target=self.read, daemon=True, name='cc8-' + self.kind + '-reader'
+            )
+        self.reader.start()
 
     def sendall(self, raw):
         with self.lock:
@@ -171,10 +184,19 @@ class Channel:
         self.sendall(Packet.event(name, **fields).encode())
 
     def read(self):
+        with self.state_lock:
+            self.reader_running = True
         try:
+            if self.closed:
+                return
             first = receive(self.stream)
-            hello = json.loads(first.data) if first.kind == EVENT else None
-            if not isinstance(hello, dict) or hello.get('event') != 'transport_hello':
+            hello = decode_event(first.data) if first.kind == EVENT else None
+            if (
+                not isinstance(hello, dict)
+                or hello.get('event') != 'transport_hello'
+                or type(hello.get('protocol')) is not int
+                or hello['protocol'] != 2
+            ):
                 raise ValueError('Missing transport hello')
             self.ready = True
             self.last_rx = time.monotonic()
@@ -183,9 +205,7 @@ class Channel:
                 packet = receive(self.stream)
                 self.last_rx = time.monotonic()
                 if packet.kind == EVENT:
-                    event = json.loads(packet.data)
-                    if not isinstance(event, dict):
-                        raise ValueError('Invalid event object')
+                    event = decode_event(packet.data)
                     if event.get('event') == 'transport_pong':
                         continue
                 self.events.put(('packet', self, packet), timeout=0.2)
@@ -193,6 +213,11 @@ class Channel:
             pass
         finally:
             self.close()
+            # A foreign thread may shutdown() to wake recv(), but must not release the
+            # TLS descriptor while SSL_read is still using it. Only this reader finalizes it.
+            self._finish_close()
+            with self.state_lock:
+                self.reader_running = False
             try:
                 self.events.put(('down', self, None), timeout=0.2)
             except queue.Full:
@@ -202,18 +227,29 @@ class Channel:
         self.close()
 
     def close(self):
-        if self.closed:
-            return
-        self.closed = True
-        self.ready = False
+        with self.state_lock:
+            if self.closed:
+                return
+            self.closed = True
+            self.ready = False
+            finish = not self.reader_running
         try:
             self.stream.shutdown(socket.SHUT_RDWR)
         except (OSError, AttributeError):
             pass
-        try:
-            self.stream.close()
-        except OSError:
-            pass
+        if finish:
+            self._finish_close()
+
+    def _finish_close(self):
+        with self.state_lock:
+            if self.io_closed:
+                return
+            self.io_closed = True
+        with self.lock:
+            try:
+                self.stream.close()
+            except OSError:
+                pass
 
 
 class TransportHub:
@@ -244,8 +280,11 @@ class TransportHub:
         self.auth_failures = 0
         self.server = None
         self.discovery = None
+        self.workers = []
 
     def start(self):
+        if self.workers or self.stop.is_set():
+            raise RuntimeError('Transport hub cannot be started twice or after close')
         try:
             self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -260,7 +299,9 @@ class TransportHub:
             self.close()
             raise
         for method in [self.accept_wifi, self.discover, self.monitor_usb, self.heartbeat]:
-            threading.Thread(target=method, daemon=True).start()
+            worker = threading.Thread(target=method, daemon=True, name='cc8-' + method.__name__)
+            self.workers.append(worker)
+            worker.start()
 
     def register(self, stream, kind):
         channel = Channel(stream, kind, self.events)
@@ -293,7 +334,7 @@ class TransportHub:
                 tls = self.pairing.context.wrap_socket(raw, server_side=True)
                 packet = receive(tls)
                 auth = (
-                    json.loads(packet.data)
+                    decode_json_object(packet.data, max_bytes=1024)
                     if packet.kind == EVENT and len(packet.data) <= 1024
                     else {}
                 )
@@ -325,7 +366,7 @@ class TransportHub:
                 raw, peer = self.discovery.recvfrom(2048)
                 if not private_ipv4(peer[0]):
                     continue
-                value = self.pairing.offer(json.loads(raw))
+                value = self.pairing.offer(decode_json_object(raw, max_bytes=2048))
                 if value:
                     self.discovery.sendto(json.dumps(value, separators=(',', ':')).encode(), peer)
             except socket.timeout:

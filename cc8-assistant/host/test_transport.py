@@ -1,7 +1,9 @@
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 import secrets
+import queue
 import socket
 import ssl
 import subprocess
@@ -11,8 +13,8 @@ import time
 import unittest
 from unittest.mock import patch
 
-from transport import Pairing, TransportHub, signature, private_ipv4
-from protocol import Packet, receive, SPEAKER, RENDER
+from transport import Pairing, TransportHub, Channel, signature, private_ipv4
+from protocol import Packet, receive, SPEAKER, RENDER, EVENT
 from bridge import Bridge, usb_target
 from tools.java_toolchain import java_bin
 
@@ -38,7 +40,7 @@ class TransportTests(unittest.TestCase):
         self.addCleanup(hub.close)
         return hub
 
-    def connect(self, hub, token=None):
+    def connect(self, hub, token=None, auth_data=None):
         # Match Android's explicit leaf pin, rather than treating this leaf as a CA.
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         context.check_hostname = False
@@ -50,7 +52,13 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(
             hashlib.sha256(client.getpeercert(binary_form=True)).hexdigest(), self.pairing.pin
         )
-        client.sendall(Packet.event('transport_auth', token=token or self.pairing.token).encode())
+        client.sendall(
+            (
+                Packet(EVENT, data=auth_data)
+                if auth_data is not None
+                else Packet.event('transport_auth', token=token or self.pairing.token)
+            ).encode()
+        )
         return client
 
     def up(self, hub):
@@ -106,6 +114,140 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(json.loads(receive(client).data)['event'], 'transport_activate')
         self.assertEqual(hub.diagnostics()['transport'], 'wifi')
         self.assertEqual(hub.switches, 3)
+
+    def test_deep_discovery_cannot_kill_listener(self):
+        hub = self.hub()
+        client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.addCleanup(client.close)
+        client.settimeout(1)
+        client.sendto(b'[' * 1000 + b'0' + b']' * 1000, hub.discovery.getsockname())
+        nonce = secrets.token_hex(16)
+        request = {
+            'type': 'cc8_discover',
+            'nonce': nonce,
+            'mac': signature(self.pairing.token, 'discover:' + nonce),
+        }
+        client.sendto(json.dumps(request).encode(), hub.discovery.getsockname())
+        offer = json.loads(client.recvfrom(2048)[0])
+        self.assertEqual(offer['nonce'], nonce)
+        self.assertTrue(all(worker.is_alive() for worker in hub.workers))
+
+    def test_ambiguous_auth_is_rejected_and_listener_recovers(self):
+        hub = self.hub()
+        bad = self.connect(
+            hub,
+            auth_data=(
+                '{"event":"transport_auth","token":"bad","token":"' + self.pairing.token + '"}'
+            ).encode(),
+        )
+        self.assertEqual(bad.recv(1), b'')
+        self.assertEqual(hub.auth_failures, 1)
+        good = self.connect(hub)
+        self.assertEqual(json.loads(receive(good).data)['event'], 'transport_welcome')
+        good.sendall(Packet.event('transport_hello', protocol=2).encode())
+        self.assertIs(self.up(hub), hub.preferred())
+
+    def test_bad_hello_versions_do_not_become_ready(self):
+        hub = self.hub()
+        for version in (True, 1, '2', 3, None):
+            client = self.connect(hub)
+            receive(client)
+            client.sendall(Packet.event('transport_hello', protocol=version).encode())
+            self.assertEqual(client.recv(1), b'')
+            self.assertIsNone(hub.preferred())
+        good = self.connect(hub)
+        receive(good)
+        good.sendall(Packet.event('transport_hello', protocol=2).encode())
+        self.assertIs(self.up(hub), hub.preferred())
+
+    def test_queue_saturation_closes_reader_instead_of_hanging(self):
+        left, right = socket.socketpair()
+        self.addCleanup(left.close)
+        self.addCleanup(right.close)
+        events = queue.Queue(maxsize=1)
+        channel = Channel(left, 'usb', events)
+        worker = threading.Thread(target=channel.read, daemon=True)
+        worker.start()
+        right.sendall(
+            Packet.event('transport_hello', protocol=2).encode()
+            + Packet.event('screen_touch').encode()
+        )
+        worker.join(1.5)
+        self.assertFalse(worker.is_alive())
+        self.assertTrue(channel.closed)
+        self.assertFalse(channel.ready)
+        self.assertEqual(events.qsize(), 1)
+
+    def test_concurrent_authenticated_replacements_stay_bounded_and_close(self):
+        hub = self.hub()
+
+        def connect():
+            client = self.connect(hub)
+            self.assertEqual(json.loads(receive(client).data)['event'], 'transport_welcome')
+
+        # Stay within the listen(4) OS backlog; overload may legitimately be refused.
+        for _ in range(20):
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                futures = [executor.submit(connect) for _ in range(3)]
+                for future in futures:
+                    future.result(timeout=8)
+        self.assertEqual(len(hub.channels), 1)
+        self.assertEqual(hub.auth_failures, 0)
+        current = self.connect(hub)
+        receive(current)
+        current.sendall(Packet.event('transport_hello', protocol=2).encode())
+        self.assertIs(self.up(hub), hub.preferred())
+        hub.close()
+        self.assertEqual(current.recv(1), b'')
+        self.assertIsNone(hub.preferred())
+
+    def test_foreign_close_wakes_reader_but_defers_descriptor_release(self):
+        entered, released = threading.Event(), threading.Event()
+
+        class BlockingStream:
+            def __init__(self):
+                self.finished = False
+                self.shutdown_called = False
+
+            def recv(self, count):
+                entered.set()
+                released.wait(2)
+                return b''
+
+            def shutdown(self, how):
+                self.shutdown_called = True
+
+            def close(self):
+                self.finished = True
+
+        stream = BlockingStream()
+        channel = Channel(stream, 'wifi', queue.Queue())
+        channel.start()
+        try:
+            self.assertTrue(entered.wait(1))
+            channel.close()
+            self.assertTrue(stream.shutdown_called)
+            self.assertFalse(stream.finished)
+            self.assertTrue(channel.closed)
+        finally:
+            released.set()
+            channel.reader.join(2)
+        self.assertFalse(channel.reader.is_alive())
+        self.assertTrue(stream.finished)
+
+    def test_close_during_incomplete_tls_handshake_is_bounded(self):
+        hub = self.hub()
+        client = socket.create_connection(hub.server.getsockname(), timeout=1)
+        self.addCleanup(client.close)
+        # Let accept() enter the bounded 3-second TLS handshake, without sending a ClientHello.
+        time.sleep(0.05)
+        hub.close()
+        deadline = time.monotonic() + 4
+        for worker in hub.workers:
+            worker.join(max(0, deadline - time.monotonic()))
+        self.assertFalse(any(worker.is_alive() for worker in hub.workers))
+        with self.assertRaises(RuntimeError):
+            hub.start()
 
     def test_signed_discovery_has_no_secret_and_rejects_tampering(self):
         hub = self.hub()

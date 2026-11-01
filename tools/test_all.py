@@ -36,7 +36,7 @@ def preflight():
         raise RuntimeError('Development tests require Python 3.11+ (3.13 recommended)')
     missing = [
         name
-        for name in ('numpy', 'requests', 'webrtcvad')
+        for name in ('numpy', 'requests', 'webrtcvad', 'hypothesis')
         if importlib.util.find_spec(name) is None
     ]
     if missing:

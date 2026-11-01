@@ -222,3 +222,9 @@ Android 0.5.2 已使用原签名安装到当前 CC8，Mac 后台已更新为 0.8
 - 在独立 Apple Silicon / CPython 3.13 环境安装 mlx / mlx-metal 0.29.4 与 numpy 2.3.4，pip check、正常 NPY 数组加载和求和结果核对通过，没有加载模型或采集录音。当前运行目录和实际 voice venv 未修改，语音模型兼容、真实问答与运行环境补丁部署留待单独验证。
 - Dependabot 配置为每周检查 pip、GitHub Actions 和两个 Gradle 工程，只生成更新 PR、不自动合并/发布。工具与模型下载来源、固定校验值、唯一误报证据及当前覆盖限制见 [CI_SECURITY.md](CI_SECURITY.md)。CI 仅保留 lint 和依赖审计公开信息报告 7 天，不上传 APK、开发签名、用户数据或本机配置。
 - 本轮未操作设备、打开麦克风/相机、部署后台、安装 APK或调用任何模型；当前实际运行助手不变。F-05 / F-07 / F-19 按上述范围完成，后续 F-20 / F-08 / F-09 与运行补丁部署仍在 TODO。
+
+### F-19：首次真实 Dependabot 更新补验
+
+main 的 [CI 运行](https://github.com/batipang/CC8/actions/runs/41320525409) 已全绿。GitHub Actions / Gradle 更新器成功并产生待审 PR，但首次 pip updater 报错，原因是上游文件发现器只递归取回 .txt/.in，未取回原跨目录 .lock 引用；此时将 F-19 恢复为未完成。
+
+[PR #5](https://github.com/batipang/CC8/pull/5) 保留原 .lock 为 -r 兼容入口，将唯一版本列表移到标准 `cc8-assistant/host/requirements-runtime.txt`，版本未改变；三份清单审计及 PR CI 再次通过后合入。通过已登录的仓库网页 Check for updates 触发真实 pip 更新，[复跑 41321754075](https://github.com/batipang/CC8/actions/runs/41321754075) 成功，F-19 才重新关闭。没有用普通 Actions 重跑失败 API 的 403 作为成功证据，也没有忽略运行清单或自动合入 bot 更新。

@@ -24,7 +24,7 @@ import time
 import wave
 import numpy as np
 
-from protocol import Packet, MIC, RENDER, EVENT, SPEAKER
+from protocol import Packet, MIC, RENDER, EVENT, SPEAKER, decode_event, validate_device_event
 from transport import Pairing, TransportHub
 from dsp import (
     RATE,
@@ -385,7 +385,7 @@ class Bridge:
         # 白名单输出就绪位，不导出 metrics 内可能存在的自检文字和用户内容。
         return {
             'ok': True,
-            'bridge_version': '0.12.2',
+            'bridge_version': '0.12.3',
             'uptime_seconds': round(time.monotonic() - self.started_at, 1),
             'model_ready': True,
             'recognition_worker': self.worker.is_alive(),
@@ -687,8 +687,7 @@ class Bridge:
         self.save_status()
 
     def on_event(self, j):
-        if not isinstance(j, dict):
-            raise ValueError('Invalid device event')
+        validate_device_event(j)
         event = j.get('event')
         if event in (
             'camera_image_begin',
@@ -938,7 +937,7 @@ class Bridge:
         # RENDER 是设备接受的扬声器参考，与 MIC 收音分开，先建时间轴再做 AEC。
         if p.kind == EVENT:
             try:
-                self.on_event(json.loads(p.data))
+                self.on_event(decode_event(p.data))
             except (KeyError, TypeError, OverflowError):
                 raise ValueError('Invalid device event fields') from None
             return
@@ -1130,7 +1129,7 @@ class Bridge:
             'generation': self.generation,
             'wake_mode': self.wake,
             'wake_word': WAKE_WORD,
-            'bridge_version': '0.12.2',
+            'bridge_version': '0.12.3',
             'desktop_camera_enabled': bool(self.desktop_challenge),
             'desktop_snapshot_active': self.desktop_snapshot is not None,
             'noise_profile': 'moderate',
