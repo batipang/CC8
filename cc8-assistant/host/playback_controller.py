@@ -24,7 +24,7 @@ from session_ports import EventSink, MetricSink
 @dataclass(frozen=True)
 class PlaybackHooks:
     lock: ContextManager[object]
-    generation: Callable[[], int]
+    generation: Callable[[], int]  # Read-only, non-locking session generation accessor.
     active: Callable[[], bool]
     announcement_generation: Callable[[], int | None]
     valid: Callable[[int], bool]
@@ -182,7 +182,12 @@ class PlaybackController:
             if not state:
                 break
             if time.monotonic() - state['started'] > 20:
-                self.hooks.cancel_session('barge_in_timeout')
+                # A newer owner request may have cancelled this generation while
+                # the timeout was being checked. Never cancel that new request.
+                with self.hooks.lock:
+                    if not self.hooks.valid(generation):
+                        break
+                    self.hooks.cancel_session('barge_in_timeout')
                 self.hooks.status('listening', '插话识别超时，已停止旧播报')
                 break
             with self.done:
@@ -278,11 +283,25 @@ class PlaybackController:
             self.hooks.event('play_end', generation=generation, frames=written)
             with self.done:
                 deadline = time.monotonic() + 4
-                while self.hooks.valid(generation) and generation not in self.completed:
-                    deadline += self.wait_playback(generation)
+            while self.hooks.valid(generation):
+                with self.done:
+                    if generation in self.completed:
+                        break
+                # Pause timeout can acquire the session guard and call cancel.
+                # Never retain the completion condition across that callback:
+                # owner requests acquire session guard -> completion condition.
+                deadline += self.wait_playback(generation)
+                if not self.hooks.valid(generation):
+                    break
+                with self.done:
+                    # Recheck after dropping/reacquiring the condition so a
+                    # device ACK in the gap cannot become a lost notification.
+                    if generation in self.completed:
+                        break
                     if time.monotonic() >= deadline:
                         break
                     self.done.wait(0.1)
+            with self.done:
                 completed = generation in self.completed
             if not completed and self.hooks.valid(generation):
                 self.hooks.log('playback_completion_timeout')
