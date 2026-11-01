@@ -23,6 +23,9 @@ final class LanConnector {
     private final SharedPreferences prefs;private final WifiManager manager;private final ConnectivityManager connectivity;private WifiManager.WifiLock lock;
     LanConnector(Context context){prefs=context.getSharedPreferences("cc8_lan_pairing",Context.MODE_PRIVATE);manager=(WifiManager)context.getApplicationContext().getSystemService(Context.WIFI_SERVICE);connectivity=(ConnectivityManager)context.getSystemService(Context.CONNECTIVITY_SERVICE);}
     boolean networkAvailable(){NetworkInfo network=connectivity==null?null:connectivity.getActiveNetworkInfo();return network!=null&&network.isConnected()&&(network.getType()==ConnectivityManager.TYPE_WIFI||network.getType()==ConnectivityManager.TYPE_ETHERNET);}
+    boolean authorizeDesktopCamera(DesktopCameraAuth authorization,String nonce,int generation,String signature){
+        try{return authorization.accept(new JSONObject(prefs.getString("config","{}")).optString("token"),nonce,generation,signature);}catch(Exception error){return false;}
+    }
     boolean paired(){return !prefs.getString("config","").isEmpty();}
     synchronized void acquire(){if(manager!=null&&lock==null){lock=manager.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF,"Bumblebee foreground voice");lock.setReferenceCounted(false);lock.acquire();}}
     synchronized void release(){if(lock!=null){if(lock.isHeld())lock.release();lock=null;}}

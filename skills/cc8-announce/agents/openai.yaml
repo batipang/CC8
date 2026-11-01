@@ -1,0 +1,4 @@
+interface:
+  display_name: "CC8 播报"
+  short_description: "通过当前 Mac 让大黄蜂朗读用户指定的文字内容并确认设备播放完成"
+  default_prompt: "使用 $cc8-announce 完成用户明确要求的设备操作。"

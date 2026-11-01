@@ -1,0 +1,4 @@
+interface:
+  display_name: "CC8 拍照"
+  short_description: "通过当前 Mac 请求大黄蜂拍摄现场照片并显示在当前 Dot 聊天中"
+  default_prompt: "使用 $cc8-camera 完成用户明确要求的设备操作。"

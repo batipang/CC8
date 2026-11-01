@@ -18,7 +18,8 @@ import org.json.JSONArray;
 final class VoiceSession {
     interface Listener {void link(boolean connected);void state(String phase,String message);void caption(String text,String mood);void microphone(boolean active);void playback(boolean active);void heard(String text);void sources(JSONArray items,String retrievedAt);void brain(String provider);void recognition(String engine);void dotResult(String text,boolean truncated);void screen(boolean sleeping);void vision(boolean active,String message);void cameraCapture(JSONObject request);}
     private final Context context;private final Listener listener;private final Object routeLock=new Object();private final Object captureResourceLock=new Object();private final LanConnector lan;private volatile Link activeLink,usbLink,wifiLink;private volatile String wifiError="";private boolean receiverRegistered;private volatile boolean usbPhysical,wakeMode=true;
-    private volatile boolean visual;private volatile int visualGeneration;private volatile String pendingVisionNonce="",visionRequestId="";
+    private final DesktopCameraAuth desktopCameraAuth=new DesktopCameraAuth();
+    private volatile boolean visual;private volatile int visualGeneration;private volatile String pendingVisionNonce="",visionRequestId="",desktopVisionNonce="";
     private volatile boolean foreground,recording,announcement;private volatile int announcementGeneration;private volatile ServerSocket server;private volatile Socket socket;private volatile DataOutputStream output;private volatile AudioRecord recorder;private volatile Player player;
     private volatile float inputLevel=0;private volatile CaptionProgress lastCaption=CaptionProgress.empty();
     private volatile int epoch=0,minimumGeneration=0,lifecycle=0;private volatile long micFrames=0,renderFrames=0;private volatile String phase="idle";
@@ -66,11 +67,12 @@ final class VoiceSession {
             if(!foreground||next.closed||next.ticket!=lifecycle)return;next.ready=true;
             boolean changed=activeLink!=next;boolean captureWasActive=recording;int captureEpoch=epoch;
             if(changed){
+                desktopCameraAuth.reset();
                 if(visual){visual=false;listener.vision(false,"连接切换，请重新看图");}
                 cancelPlayback();announcement=false;listener.playback(false);listener.caption("","attentive");minimumGeneration=0;
                 activeLink=next;socket=next.connection;output=next.out;phase=recording?"listening":"idle";
             }
-            JSONObject hello=Wire.event("device_ready");Wire.put(hello,"supports_playback_pause",true);Wire.put(hello,"protocol",2);Wire.put(hello,"sample_rate",16000);Wire.put(hello,"capture_active",captureWasActive);Wire.put(hello,"wake_mode",wakeMode);next.event(hello);
+            JSONObject hello=Wire.event("device_ready");Wire.put(hello,"supports_playback_pause",true);Wire.put(hello,"desktop_camera_version",1);Wire.put(hello,"desktop_camera_challenge",desktopCameraAuth.challenge());Wire.put(hello,"protocol",2);Wire.put(hello,"sample_rate",16000);Wire.put(hello,"capture_active",captureWasActive);Wire.put(hello,"wake_mode",wakeMode);next.event(hello);
             if(captureWasActive){JSONObject rebound=Wire.event("session_rebind");Wire.put(rebound,"capture_active",true);Wire.put(rebound,"epoch",captureEpoch);Wire.put(rebound,"source",7);Wire.put(rebound,"sample_rate",16000);Wire.put(rebound,"render_gain",.35);next.event(rebound);}
             // Ready/rebind must enter the wire before a UI callback can start capture.
             if(changed)listener.link(true);
@@ -118,16 +120,16 @@ final class VoiceSession {
             else if("screen_wake".equals(event)){listener.screen(false);}
             else if("device_control".equals(event)){deviceControl(j);}
             else if("vision_begin".equals(event)){
-                String nonce=j.optString("nonce");if(visual&&p.generation==visualGeneration)return;if(!foreground||p.generation<minimumGeneration||(!recording&&!nonce.equals(pendingVisionNonce))||(nonce.isEmpty()&&!recording))return;
-                visual=true;visualGeneration=p.generation;visionRequestId="";listener.dotResult("",false);listener.caption("请调整画面，预览 5 秒后自动拍摄并交给 Dot 分析。","attentive");listener.screen(false);listener.vision(true,"请调整画面 · 预览 5 秒后拍摄");final int waitingGeneration=visualGeneration;new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(()->{if(visual&&visualGeneration==waitingGeneration&&visionRequestId.isEmpty()){cancelVision();listener.state(recording?"listening":"idle","拍摄请求超时，请重试");}},15000);
+                String nonce=j.optString("nonce");if(!foreground||p.generation<minimumGeneration||(visual&&p.generation==visualGeneration))return;boolean desktop="desktop".equals(j.optString("origin"));if(desktop&&!lan.authorizeDesktopCamera(desktopCameraAuth,nonce,p.generation,j.optString("camera_auth")))return;if(!desktop&&((!recording&&!nonce.equals(pendingVisionNonce))||(nonce.isEmpty()&&!recording)))return;desktopVisionNonce=desktop?nonce:"";
+                visual=true;visualGeneration=p.generation;visionRequestId="";listener.dotResult("",false);listener.caption(desktop?"Dot 请求拍照，请调整画面；预览 5 秒后拍摄并返回当前聊天。":"请调整画面，预览 5 秒后自动拍摄并交给 Dot 分析。","attentive");listener.screen(false);listener.vision(true,"请调整画面 · 预览 5 秒后拍摄");final int waitingGeneration=visualGeneration;new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(()->{if(visual&&visualGeneration==waitingGeneration&&visionRequestId.isEmpty()){cancelVision();listener.state(recording?"listening":"idle","拍摄请求超时，请重试");}},15000);
             }
             else if("camera_capture".equals(event)){
                 if(!foreground||!visual||p.generation!=visualGeneration||p.generation<minimumGeneration)return;
-                String nonce=j.optString("nonce");String ident=j.optString("request_id");if(!visionRequestId.isEmpty()||!ident.matches("[a-f0-9]{32}"))return;visionRequestId=ident;Wire.put(j,"vision_generation",p.generation);boolean allowed="button".equals(j.optString("origin"))?!nonce.isEmpty()&&nonce.equals(pendingVisionNonce):"voice".equals(j.optString("origin"))&&recording;
-                pendingVisionNonce="";if(!allowed){cameraFailed(j,"request_not_authorized");return;}
+                String nonce=j.optString("nonce");String ident=j.optString("request_id");if(!visionRequestId.isEmpty()||!ident.matches("[a-f0-9]{32}"))return;visionRequestId=ident;Wire.put(j,"vision_generation",p.generation);boolean allowed="desktop".equals(j.optString("origin"))?!nonce.isEmpty()&&nonce.equals(desktopVisionNonce)&&ident.equals(nonce):"button".equals(j.optString("origin"))?!nonce.isEmpty()&&nonce.equals(pendingVisionNonce):"voice".equals(j.optString("origin"))&&recording;
+                pendingVisionNonce="";desktopVisionNonce="";if(!allowed){cameraFailed(j,"request_not_authorized");return;}
                 Wire.put(j,"vision_generation",p.generation);listener.cameraCapture(j);
             }
-            else if("vision_done".equals(event)){if(visual&&p.generation==visualGeneration){visual=false;pendingVisionNonce="";listener.vision(false,"completed".equals(j.optString("result"))?"看图已结束 · 摄像头关闭":"看图未完成 · 摄像头关闭");}}
+            else if("vision_done".equals(event)){if(visual&&p.generation==visualGeneration){visual=false;pendingVisionNonce="";desktopVisionNonce="";boolean desktop="desktop".equals(j.optString("origin"));if(desktop&&"completed".equals(j.optString("result")))listener.caption("照片已交给 Mac，请在 Dot 查看本次拍照结果。","friendly");listener.vision(false,"completed".equals(j.optString("result"))?desktop?"拍照完成 · 摄像头关闭":"看图已结束 · 摄像头关闭":"看图未完成 · 摄像头关闭");}}
             else if("vision_unavailable".equals(event)){visual=false;pendingVisionNonce="";listener.vision(false,j.optString("message","看图暂不可用"));}
             else if("caption_timing".equals(event)){Player current=player;if(current!=null&&current.generation==p.generation&&current.playbackId==j.optInt("playback_id",-1))current.timings=timings(j.optJSONArray("timings"),current.text.length());}
             else if("ping".equals(event)){send(Wire.event("pong"));}
@@ -163,7 +165,7 @@ final class VoiceSession {
         pendingVisionNonce=java.util.UUID.randomUUID().toString().replace("-","");JSONObject e=Wire.event("vision_request");Wire.put(e,"nonce",pendingVisionNonce);send(e);listener.vision(true,"正在请求拍摄 · 图片将交给 Dot");final String nonce=pendingVisionNonce;new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(()->{if(!nonce.isEmpty()&&nonce.equals(pendingVisionNonce)){cancelVision();listener.state(recording?"listening":"idle","拍摄请求超时，请重试");}},15000);
     }
     void cancelVision(){
-        boolean had=visual||!pendingVisionNonce.isEmpty();int stoppedGeneration=visual?visualGeneration:-1;String stoppedNonce=pendingVisionNonce;if(visual)minimumGeneration=Math.max(minimumGeneration,visualGeneration+1);visual=false;pendingVisionNonce="";visionRequestId="";
+        boolean had=visual||!pendingVisionNonce.isEmpty();int stoppedGeneration=visual?visualGeneration:-1;String stoppedNonce=pendingVisionNonce;if(visual)minimumGeneration=Math.max(minimumGeneration,visualGeneration+1);visual=false;pendingVisionNonce="";visionRequestId="";desktopVisionNonce="";
         if(had){cancelPlayback();JSONObject stopped=Wire.event("vision_cancel");Wire.put(stopped,"vision_generation",stoppedGeneration);Wire.put(stopped,"nonce",stoppedNonce);send(stopped);listener.vision(false,"已取消看图 · 摄像头关闭");}
     }
     void cameraFailed(JSONObject request,String reason){

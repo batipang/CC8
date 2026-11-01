@@ -31,7 +31,7 @@ from brain_router import BrainRouter
 from announce import Announcement, AnnouncementServer, validate_text
 from caption_timing import CaptionTiming
 from recognition import MandarinRecognizer
-from vision import CameraInbox, VisionError, visual_request
+from vision import CameraInbox, DesktopSnapshot, VisionError, visual_request, desktop_signature
 from minimax_client import MiniMaxBrain, MiniMaxVoice, MiniMaxError
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -113,7 +113,7 @@ class Bridge:
     def __init__(self,speech,brain,library=LIBRARY,fast_stop=None,echo_check=False):
         self.speech=speech;self.brain=brain;self.library=library
         self.connection=None;self.transport_hub=None;self.transport_kind="none";self.rebind_seen=False;self.capture_lookahead_ns=80_000_000;self.write_lock=threading.Lock();self.guard=threading.RLock()
-        self.camera_inbox=CameraInbox();self.vision_generation=None;self.vision_nonce=""
+        self.camera_inbox=CameraInbox();self.desktop_snapshot=None;self.desktop_challenge="";self.vision_generation=None;self.vision_nonce=""
         self.active=False;self.epoch=0;self.generation=100;self.playing=False;self.calibrating=False;self.announcement_generation=None
         self.wake=False;self.awake=True;self.aec=None;self.stop_aec=None;self.timeline=RenderTimeline();self.vad=VoiceDetector()
         self.history=deque(maxlen=8);self.queue=queue.Queue(maxsize=2);self.completed=set();self.done=threading.Condition()
@@ -154,7 +154,7 @@ class Bridge:
         was_active=self.active
         try:self.cancel('transport_switch')
         except (OSError,EOFError):pass
-        self.connection=channel;self.rebind_seen=False;self.transport_kind=channel.kind if channel else 'none'
+        self.connection=channel;self.desktop_challenge="";self.rebind_seen=False;self.transport_kind=channel.kind if channel else 'none'
         self.capture_lookahead_ns=120_000_000 if self.transport_kind=='wifi' else 80_000_000
         self.timeline=RenderTimeline();self.pending_mic.clear();self.vad.reset();self.reference_capture.reset();self.near_speech.reset();self.last_sequence=None
         self.pause_state=None;self.turn_pause_token=None
@@ -267,6 +267,8 @@ class Bridge:
     def cancel(self,reason='speech'):
         with self.guard:
             self.generation+=1;generation=self.generation;was_playing=self.playing;self.playing=False;self.announcement_generation=None;self.vision_generation=None;self.vision_nonce="";self.camera_inbox.cancel()
+            job=self.desktop_snapshot;self.desktop_snapshot=None
+            if job is not None:job.image=None;job.result='interrupted';job.done.set()
             self.pause_state=None;self.pause_token=0;self.timeline.cancel_pause()
             if was_playing:self.last_audio_end=time.monotonic()
         if self.brain:self.brain.cancel()
@@ -298,6 +300,8 @@ class Bridge:
         elif event=='vision_cancel':
             if self.vision_generation is not None and (j.get('vision_generation')==self.vision_generation or (j.get('nonce') and j.get('nonce')==self.vision_nonce)):self.cancel('vision_cancel');self.status('listening' if self.active else 'idle','已停止看图')
         elif event=='device_ready':
+            challenge=j.get('desktop_camera_challenge')
+            self.desktop_challenge=challenge if j.get('desktop_camera_version')==1 and isinstance(challenge,str) and re.fullmatch('[a-f0-9]{32}',challenge) else ''
             self.device_can_pause=bool(j.get('supports_playback_pause'))
             if self.active and not j.get('capture_active',False):self.stop()
             if 'wake_mode' in j:self.wake=bool(j['wake_mode'])
@@ -480,7 +484,7 @@ class Bridge:
         PRIVATE.mkdir(parents=True,exist_ok=True,mode=0o700);os.chmod(PRIVATE,0o700)
         data={'connected':self.connection is not None,'active':self.active,'calibrating':self.calibrating,
               'playing':self.playing,'generation':self.generation,'wake_mode':self.wake,'wake_word':WAKE_WORD,
-              'bridge_version':'0.9.2','noise_profile':'moderate','speech_energy_floor_dbfs':NearSpeechDetector.MIN_DBFS,'speech_noise_margin_db':NearSpeechDetector.NOISE_MARGIN_DB,'speech_onset_ms':VoiceDetector.ONSET_FRAMES*10,'barge_confirm_min_ms':NearSpeechDetector.CONFIRM_MIN_FRAMES*10,'vision_active':self.vision_generation is not None,'vision_enabled':isinstance(self.brain,BrainRouter),'transport':self.transport_kind,**(self.transport_hub.diagnostics() if self.transport_hub else {}),'screen_sleeping':self.screen_sleeping,'idle_sleep_seconds':900,'asr_engine':getattr(getattr(self.speech,'recognizer',None),'engine',None),'barge_in_enabled':self.device_can_pause,'playback_paused':self.pause_state is not None,'announcement_active':self.announcement_generation is not None,'brain_provider':getattr(self.brain,'selected','minimax') if self.brain else 'echo test','dot_enabled':isinstance(self.brain,BrainRouter),'web_search_enabled':self.brain is not None,'fast_stop_enabled':self.fast_stop is not None,
+              'bridge_version':'0.10.0','desktop_camera_enabled':bool(self.desktop_challenge),'desktop_snapshot_active':self.desktop_snapshot is not None,'noise_profile':'moderate','speech_energy_floor_dbfs':NearSpeechDetector.MIN_DBFS,'speech_noise_margin_db':NearSpeechDetector.NOISE_MARGIN_DB,'speech_onset_ms':VoiceDetector.ONSET_FRAMES*10,'barge_confirm_min_ms':NearSpeechDetector.CONFIRM_MIN_FRAMES*10,'vision_active':self.vision_generation is not None,'vision_enabled':isinstance(self.brain,BrainRouter),'transport':self.transport_kind,**(self.transport_hub.diagnostics() if self.transport_hub else {}),'screen_sleeping':self.screen_sleeping,'idle_sleep_seconds':900,'asr_engine':getattr(getattr(self.speech,'recognizer',None),'engine',None),'barge_in_enabled':self.device_can_pause,'playback_paused':self.pause_state is not None,'announcement_active':self.announcement_generation is not None,'brain_provider':getattr(self.brain,'selected','minimax') if self.brain else 'echo test','dot_enabled':isinstance(self.brain,BrainRouter),'web_search_enabled':self.brain is not None,'fast_stop_enabled':self.fast_stop is not None,
               'fast_stop_input':'AEC3 without additional NS','fast_stop_gain':getattr(self.fast_stop,'gain',None),
               'aec_engine':'WebRTC AEC3 + NS; AGC disabled',
               'render_asr_comparison':True,
@@ -736,6 +740,49 @@ class Bridge:
                 if evidence and rejected:self.resume_after_rejection(evidence.get('pause_token'),generation)
 
 
+    def request_snapshot(self):
+        # Only the owner-local desktop IPC invokes this; no autonomous model camera tool.
+        with self.guard:
+            if self.connection is None or self.calibrating or self.vision_generation is not None or not self.desktop_challenge or self.transport_hub is None:
+                raise RuntimeError('Camera unavailable or busy')
+            generation=self.cancel('desktop_snapshot');capture=self.camera_inbox.begin(generation)
+            job=DesktopSnapshot(generation,capture.ident);self.desktop_snapshot=job
+            self.vision_generation=generation;self.vision_nonce=capture.ident
+            self.touch_activity()
+            authorization=desktop_signature(self.transport_hub.pairing.token,self.desktop_challenge,capture.ident,generation)
+            self.event('vision_begin',generation=generation,origin='desktop',nonce=capture.ident,camera_auth=authorization)
+            threading.Thread(target=self.capture_snapshot,args=(job,capture),daemon=True).start()
+        self.save_status();return job
+
+    def cancel_snapshot(self,job):
+        with self.guard:
+            if self.desktop_snapshot is job and self.generation==job.generation:self.cancel('desktop_snapshot_cancel')
+
+    def capture_snapshot(self,job,capture):
+        generation=job.generation
+        current=lambda:self.desktop_snapshot is job and self.valid(generation)
+        try:
+            if not current():return
+            self.status('thinking','Dot 请求拍照 · 预览 5 秒后返回当前聊天')
+            self.event('camera_capture',generation=generation,request_id=capture.ident,origin='desktop',nonce=capture.ident)
+            image=self.camera_inbox.wait(capture,current)
+            with self.guard:
+                if not current():return
+                job.image=image;job.result='completed'
+                self.metrics['desktop_snapshots_captured']=self.metrics.get('desktop_snapshots_captured',0)+1
+        except Exception as error:
+            if current():job.result='failed';job.error=str(error)[:60] if isinstance(error,VisionError) else type(error).__name__
+        finally:
+            self.camera_inbox.cancel_capture(capture)
+            with self.guard:
+                if self.desktop_snapshot is job:
+                    self.desktop_snapshot=None
+                    if self.vision_generation==generation:
+                        self.vision_generation=None;self.vision_nonce=''
+                        if self.connection is not None:self.event('vision_done',generation=generation,result=job.result,origin='desktop')
+                job.done.set()
+            self.save_status()
+
     def begin_visual(self,text,origin,nonce=''):
         if self.connection is None or self.calibrating or not isinstance(self.brain,BrainRouter):
             self.event('vision_unavailable',message='请先连接 Mac、结束校准，并确认 Dot 可用');return
@@ -747,10 +794,11 @@ class Bridge:
         self.save_status()
 
     def answer_visual(self,job):
-        generation=job.generation;outcome='cancelled';image=None
+        generation=job.generation;outcome='cancelled';image=None;capture=None
         try:
-            capture=self.camera_inbox.begin(generation)
-            if not self.valid(generation):return
+            with self.guard:
+                if not self.valid(generation):return
+                capture=self.camera_inbox.begin(generation)
             self.status('thinking','正在打开摄像头 · 预览 5 秒后拍摄给 Dot')
             self.event('camera_capture',generation=generation,request_id=capture.ident,origin=job.origin,nonce=job.nonce)
             image=self.camera_inbox.wait(capture,lambda:self.valid(generation))
@@ -768,7 +816,8 @@ class Bridge:
                 self.event('dot_result',generation=generation,text=message,truncated=False)
                 self.status('idle',message)
         finally:
-            image=None;self.camera_inbox.cancel()
+            image=None
+            if capture is not None:self.camera_inbox.cancel_capture(capture)
             if self.vision_generation==generation:
                 self.vision_generation=None;self.vision_nonce='';self.metrics['vision_last_result']=outcome
                 if self.connection is not None:self.event('vision_done',generation=generation,result=outcome)
@@ -916,7 +965,10 @@ def main():
     (PRIVATE/'bridge.pid').write_text(str(os.getpid())+'\n')
     stop=threading.Event()
     def shutdown(*unused):
-        stop.set();bridge.active=False;bridge.playing=False;bridge.announcement_generation=None;bridge.vision_generation=None;bridge.camera_inbox.cancel();announcements.close();hub.close()
+        stop.set();bridge.active=False;bridge.playing=False;bridge.announcement_generation=None
+        try:bridge.cancel("shutdown")
+        except (OSError,EOFError):pass
+        announcements.close();hub.close()
         if bridge.brain:
             close=getattr(bridge.brain,'close',bridge.brain.cancel);close()
         cancel_speech=getattr(bridge.speech,'cancel',None)

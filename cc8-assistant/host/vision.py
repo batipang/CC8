@@ -1,11 +1,19 @@
 """One explicitly requested camera frame, bounded in RAM and tied to a turn."""
+from __future__ import annotations
 from dataclasses import dataclass, field
 import base64
 import hashlib
+import hmac
 import re
 import secrets
 import threading
 import time
+
+def desktop_signature(token,challenge,nonce,generation):
+    if not isinstance(token,str) or not re.fullmatch('[a-f0-9]{64}',token) or not isinstance(challenge,str) or not re.fullmatch('[a-f0-9]{32}',challenge) or not isinstance(nonce,str) or not re.fullmatch('[a-f0-9]{32}',nonce) or type(generation) is not int or generation<0:
+        raise ValueError('Invalid desktop camera authorization')
+    return hmac.new(bytes.fromhex(token),f'desktop-camera:{challenge}:{nonce}:{generation}'.encode(),hashlib.sha256).hexdigest()
+
 
 MAX_IMAGE=384*1024
 CHUNK=12288
@@ -62,6 +70,16 @@ class Capture:
     error:str=''
 
 
+@dataclass
+class DesktopSnapshot:
+    generation:int
+    ident:str
+    done:threading.Event=field(default_factory=threading.Event)
+    image:bytes|None=None
+    result:str='interrupted'
+    error:str=''
+
+
 class CameraInbox:
     def __init__(self):self.lock=threading.Lock();self.pending=None
     def begin(self,generation):
@@ -73,6 +91,9 @@ class CameraInbox:
         self.pending=None
     def cancel(self):
         with self.lock:self._cancel()
+    def cancel_capture(self,capture):
+        with self.lock:
+            if self.pending is capture:self._cancel()
     def feed(self,value):
         with self.lock:
             c=self.pending

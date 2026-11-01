@@ -2,12 +2,18 @@
 from dataclasses import dataclass,field
 from pathlib import Path
 import argparse
+import base64
+import hashlib
+import re
+import select
+import time
 import json
 import os
 import socket
 import stat
 import sys
 import threading
+from vision import jpeg_dimensions
 
 SOCKET=Path(__file__).resolve().parents[2]/'device-access/private/voice-runtime/announce.sock'
 
@@ -60,6 +66,8 @@ class AnnouncementServer:
                         result={'ok':True,**self.bridge.transport_hub.diagnostics()}
                     elif request.get('operation')=='transport_test':
                         result=self.bridge.transport_hub.suppress_usb_for_test(request.get('seconds',15))
+                    elif request.get('operation')=='camera_snapshot':
+                        result=self.snapshot(connection,request)
                     elif request.get('operation')=='device_control':
                         from voice_tools import VoiceTools
                         result=VoiceTools(self.bridge.control_device).call('cc8_control',request.get('arguments'))
@@ -74,6 +82,28 @@ class AnnouncementServer:
                 try:connection.sendall((json.dumps(result)+'\n').encode())
                 except OSError:pass
         finally:self.slots.release()
+
+    def snapshot(self,connection,request):
+        ident=request.get('request_id')
+        if not isinstance(ident,str) or not re.fullmatch('[a-f0-9]{32}',ident):raise ValueError('Invalid request ID')
+        job=self.bridge.request_snapshot()
+        try:
+            deadline=time.monotonic()+25
+            while not job.done.wait(.05):
+                # Closing the calling chat's client must cancel an unfinished photo.
+                if select.select([connection],[],[],0)[0]:
+                    self.bridge.cancel_snapshot(job);return {'status':'interrupted','request_id':ident}
+                if time.monotonic()>deadline:
+                    self.bridge.cancel_snapshot(job);return {'status':'timeout','request_id':ident}
+            with self.bridge.guard:
+                if job.result!='completed' or job.image is None or self.bridge.generation!=job.generation:
+                    return {'status':job.result if job.result!='completed' else 'interrupted','request_id':ident,'reason':job.error or 'capture_interrupted'}
+                image=job.image;width,height=jpeg_dimensions(image)
+                return {'status':'completed','request_id':ident,'media_type':'image/jpeg','width':width,'height':height,
+                        'bytes':len(image),'sha256':hashlib.sha256(image).hexdigest(),'image_base64':base64.b64encode(image).decode('ascii')}
+        finally:
+            if not job.done.is_set():self.bridge.cancel_snapshot(job)
+            job.image=None
 
     def close(self):
         self.stop.set()

@@ -64,7 +64,7 @@ def main():
             print('语音后台已准备，未打开设备界面或麦克风。');return
         sys.path.insert(0,str(ROOT/'device-access'))
         import cc8_install as access
-        command='input keyevent 224; am start -n com.happyhome.cc8assistant/.MainActivity'
+        command='input keyevent 224; am start --activity-clear-top -n com.happyhome.cc8assistant/.MainActivity'
         command+=' --ez auto_start_voice '+('false' if args.no_auto_voice else 'true')
         try:print(access.shell(access.target(),command).strip())
         except (OSError,RuntimeError,subprocess.SubprocessError):print('未发现可用 USB；请点 CC8 桌面大黄蜂入口，后台等待已配对的局域网连接。')
