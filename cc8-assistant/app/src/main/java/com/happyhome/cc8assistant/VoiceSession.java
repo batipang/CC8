@@ -61,12 +61,15 @@ final class VoiceSession {
     private void select(Link next)throws IOException{
         synchronized(routeLock){
             if(!foreground||next.closed||next.ticket!=lifecycle)return;next.ready=true;
-            if(activeLink!=next){
+            boolean changed=activeLink!=next;boolean captureWasActive=recording;int captureEpoch=epoch;
+            if(changed){
                 cancelPlayback();announcement=false;listener.playback(false);listener.caption("","attentive");minimumGeneration=0;
-                activeLink=next;socket=next.connection;output=next.out;phase=recording?"listening":"idle";listener.link(true);
+                activeLink=next;socket=next.connection;output=next.out;phase=recording?"listening":"idle";
             }
-            JSONObject hello=Wire.event("device_ready");Wire.put(hello,"supports_playback_pause",true);Wire.put(hello,"protocol",2);Wire.put(hello,"sample_rate",16000);Wire.put(hello,"capture_active",recording);Wire.put(hello,"wake_mode",wakeMode);next.event(hello);
-            if(recording){JSONObject rebound=Wire.event("session_rebind");Wire.put(rebound,"capture_active",true);Wire.put(rebound,"epoch",epoch);Wire.put(rebound,"source",7);Wire.put(rebound,"sample_rate",16000);Wire.put(rebound,"render_gain",.35);next.event(rebound);}
+            JSONObject hello=Wire.event("device_ready");Wire.put(hello,"supports_playback_pause",true);Wire.put(hello,"protocol",2);Wire.put(hello,"sample_rate",16000);Wire.put(hello,"capture_active",captureWasActive);Wire.put(hello,"wake_mode",wakeMode);next.event(hello);
+            if(captureWasActive){JSONObject rebound=Wire.event("session_rebind");Wire.put(rebound,"capture_active",true);Wire.put(rebound,"epoch",captureEpoch);Wire.put(rebound,"source",7);Wire.put(rebound,"sample_rate",16000);Wire.put(rebound,"render_gain",.35);next.event(rebound);}
+            // Ready/rebind must enter the wire before a UI callback can start capture.
+            if(changed)listener.link(true);
         }
     }
     private void lost(Link link){
@@ -141,7 +144,7 @@ final class VoiceSession {
     void settings(boolean wake){wakeMode=wake;JSONObject e=Wire.event("settings");Wire.put(e,"wake_mode",wake);send(e);}
     void brain(String provider){JSONObject e=Wire.event("settings");Wire.put(e,"brain_provider",provider);send(e);}
     void interrupt(){announcement=false;listener.playback(false);cancelPlayback();listener.caption("","attentive");send(Wire.event("interrupt"));if(recording)listener.state("listening","我在听，你继续说");else{phase="idle";listener.state("idle","播报已停止 · 麦克风关闭");}}
-    @SuppressLint("MissingPermission") // Only MainActivity's foreground button may call this method; checked again here.
+    @SuppressLint("MissingPermission") // Only MainActivity's authorized foreground opening or Start action may call; checked again here.
     void startMicrophone(){
         if(!foreground||recording||!isConnected())return;
         if(context.checkCallingOrSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){listener.state("error","请先允许麦克风权限");return;}

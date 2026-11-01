@@ -1,6 +1,6 @@
 # 大黄蜂（Bumblebee）语音助手
 
-完整源码快照：Android APK **0.5.2**（versionCode 20）、Mac 后台 **0.8.1**。包名 `com.happyhome.cc8assistant`。默认 **Dot / Codex 做大脑，MiniMax ASR 做耳朵，MiniMax TTS 做嘴巴**，Mac 执行消回声与即时打断，CC8 负责录放和显示。
+完整源码快照：Android APK **0.5.3**（versionCode 21）、Mac 后台 **0.8.2**。包名 `com.happyhome.cc8assistant`。默认 **Dot / Codex 做大脑，MiniMax ASR 做耳朵，MiniMax TTS 做嘴巴**，Mac 执行消回声与即时打断，CC8 负责录放和显示。
 
 ## 构建与安装
 
@@ -10,7 +10,7 @@
 python3 device-access/installer-helper/build.py
 python3 cc8-assistant/tools/build.py
 python3 device-access/cc8_install.py --probe
-python3 device-access/cc8_install.py --install artifacts/cc8-assistant-0.5.2.apk --launch --shared-staging
+python3 device-access/cc8_install.py --install artifacts/cc8-assistant-0.5.3.apk --launch --shared-staging
 ```
 
 `--shared-staging` 的共享存储替换风险、安装条件和更新签名问题见[安装步骤](../docs/APK_INSTALL.md)。新克隆不会拥有原开发机签名，首次构建生成独立本地开发证书。
@@ -41,13 +41,13 @@ python3 cc8-assistant/host/launch.py --stop
 
 也可双击 `start-usb-voice.command`。首次连接 USB 完成局域网配对；Mac 后台只运行一份，勿同时运行两个源码目录的后台。APK 安装后也可在设备应用列表手动打开“大黄蜂”。
 
-在 CC8 前台点“开始语音”，授权麦克风，安静等约 6 秒校准及提示语结束。开启唤醒模式时说“大黄蜂，介绍一下你自己”或“Bumblebee，常州属于哪个省？”。无唤醒模式可直接说话。正常音量插话应先暂停播报，识别新内容后回答；“停一下 / 停止 / 暂停”另有本地快速路径。
+从 CC8 桌面入口或应用图标打开大黄蜂，已授权时会在连接后自动开始语音；首次允许麦克风后，安静等约 6 秒校准及提示语结束。开启唤醒模式时说“大黄蜂，介绍一下你自己”或“Bumblebee，常州属于哪个省？”。无唤醒模式可直接说话。正常音量插话应先暂停播报，识别新内容后回答；“停一下 / 停止 / 暂停”另有本地快速路径。
 
 点停止、离开前台或全部通道断开会停止采集。重连不会自动开麦。15 分钟无交互进入应用内黑屏待机，需已开启麦克风与 Mac 服务才能语音唤醒。
 
 ## 桌面入口
 
-返回原厂桌面后，点击右侧“大黄蜂”悬浮按钮即可重新打开助手，不需要 USB 拉起；打开后麦克风保持关闭。按钮可上下拖动，设置位于顶部连接状态 → 桌面入口。详见[桌面入口说明](../docs/DESKTOP_ENTRY.md)。
+返回原厂桌面后，点击右侧“大黄蜂”悬浮按钮即可重新打开助手，不需要 USB 拉起；打开后默认自动开始语音；手动停止、后台及重连规则见[自动开始说明](../docs/AUTO_VOICE.md)。按钮可上下拖动，设置位于顶部连接状态 → 桌面入口。详见[桌面入口说明](../docs/DESKTOP_ENTRY.md)。
 
 ## ASR 与音色
 
@@ -56,6 +56,8 @@ python3 cc8-assistant/host/launch.py --stop
 TTS 使用 `speech-2.8-turbo`、`Chinese (Mandarin)_Straightforward_Boy`、speed 1.03、pitch +1，16 kHz 单声道流式 PCM。目标是年轻、明亮、活泼的中文大黄蜂感觉，是系统音色近似，不是原动画配音的精确复刻。相关适配在 `host/minimax_client.py`。
 
 顶部可手动切换 MiniMax 对话模式；默认 Dot 可使用其本机工具做联网、文件与项目任务。客户端另提供 Mac 打开应用 / 网页 / 项目文件及 CC8 状态、媒体音量、停播与亮屏工具，等待真实执行结果；没有远程开麦工具。
+
+只启动后台可附加 `launch.py --no-open`；只打开页面而不新开麦可用 `launch.py --no-auto-voice`。只播报和维护流程必须显式选择相应选项。
 
 ## 从 Mac 指定播报
 

@@ -32,7 +32,7 @@ public final class DesktopEntryService extends Service {
         catch(IllegalStateException|SecurityException ignored){}
     }
     static void settings(Activity activity){
-        String message=enabled(activity)?"已开启桌面入口。返回桌面后点右侧大黄蜂按钮即可打开助手；可拖动位置。打开后仍需点击开始语音。":"桌面入口已关闭。开启后，返回桌面仍可一键打开助手。";
+        String message=enabled(activity)?"已开启桌面入口。返回桌面后点右侧大黄蜂按钮即可打开助手；可拖动位置。打开后会自动开始语音，请安静等待校准。":"桌面入口已关闭。开启后，返回桌面仍可一键打开助手。";
         if(!permitted(activity))message+="\n\n需要允许显示在其他应用上层，才能显示悬浮按钮。通知入口仍可使用。";
         AlertDialog.Builder dialog=new AlertDialog.Builder(activity).setTitle("大黄蜂桌面入口").setMessage(message)
             .setPositiveButton(enabled(activity)?"关闭入口":"开启入口",(d,w)->enabled(activity,!enabled(activity)))
@@ -45,7 +45,7 @@ public final class DesktopEntryService extends Service {
     }
     private int dp(float value){return Math.round(value*getResources().getDisplayMetrics().density);}
     private PendingIntent openIntent(){
-        Intent intent=new Intent(this,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_CLEAR_TOP|Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        Intent intent=new Intent(this,MainActivity.class).putExtra("auto_start_voice",true).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_CLEAR_TOP|Intent.FLAG_ACTIVITY_SINGLE_TOP);
         return PendingIntent.getActivity(this,0,intent,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
     }
     @Override public void onCreate(){
@@ -53,7 +53,7 @@ public final class DesktopEntryService extends Service {
         NotificationManager manager=(NotificationManager)getSystemService(NOTIFICATION_SERVICE);
         if(Build.VERSION.SDK_INT>=26){NotificationChannel channel=new NotificationChannel(CHANNEL,"大黄蜂桌面入口",NotificationManager.IMPORTANCE_LOW);channel.setSound(null,null);channel.enableVibration(false);channel.setShowBadge(false);manager.createNotificationChannel(channel);}
         Notification.Builder builder=Build.VERSION.SDK_INT>=26?new Notification.Builder(this,CHANNEL):new Notification.Builder(this);
-        startForeground(NOTIFICATION,builder.setSmallIcon(com.happyhome.cc8assistant.R.drawable.ic_assistant).setContentTitle("大黄蜂 · 点此打开")
+        startForeground(NOTIFICATION,builder.setSmallIcon(com.happyhome.cc8assistant.R.drawable.ic_assistant).setContentTitle("大黄蜂 · 打开并开始语音")
             .setContentText("桌面快捷入口 · 点击返回助手").setContentIntent(openIntent()).setOngoing(true).setShowWhen(false).setCategory(Notification.CATEGORY_SERVICE).build());
     }
     @Override public int onStartCommand(Intent intent,int flags,int startId){
@@ -66,7 +66,7 @@ public final class DesktopEntryService extends Service {
         if(shown)return;
         try{
             LinearLayout entry=new LinearLayout(this);entry.setGravity(Gravity.CENTER);entry.setOrientation(LinearLayout.VERTICAL);
-            entry.setPadding(dp(4),dp(3),dp(4),dp(4));entry.setContentDescription("打开大黄蜂语音助手");
+            entry.setPadding(dp(4),dp(3),dp(4),dp(4));entry.setContentDescription("打开大黄蜂并开始语音");
             GradientDrawable background=new GradientDrawable();background.setColor(Color.argb(240,7,26,39));background.setCornerRadius(dp(18));background.setStroke(dp(1),Color.rgb(89,224,244));entry.setBackground(background);
             BitmapFactory.Options options=new BitmapFactory.Options();options.inSampleSize=8;
             try(InputStream source=getAssets().open("jarvis-g1-bumblebee-head.png")){portrait=BitmapFactory.decodeStream(source,null,options);}

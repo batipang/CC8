@@ -29,6 +29,8 @@ def own_process(pid):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--stop',action='store_true')
+    parser.add_argument('--no-open',action='store_true',help='Start/reuse the backend without opening the device UI')
+    parser.add_argument('--no-auto-voice',action='store_true',help='Open the UI without starting a new microphone session')
     parser.add_argument('--echo-check-after-start',action='store_true')
     args=parser.parse_args()
     PRIVATE.mkdir(parents=True,exist_ok=True,mode=0o700)
@@ -58,11 +60,16 @@ def main():
             pid_file.write_text(str(child.pid)+'\n')
             print('本机语音服务已启动，正在准备识别模型。')
         else:print('本机语音服务已运行。')
+        if args.no_open:
+            print('语音后台已准备，未打开设备界面或麦克风。');return
         sys.path.insert(0,str(ROOT/'device-access'))
         import cc8_install as access
-        try:print(access.shell(access.target(),'input keyevent 224; am start -n com.happyhome.cc8assistant/.MainActivity').strip())
-        except (OSError,RuntimeError,subprocess.SubprocessError):print('未发现可用 USB，后台正等待已配对的局域网连接；请在 CC8 打开大黄蜂。')
-        print('请在 CC8 点击“开始语音”；首次授权后，安静等待 6 秒校准。')
+        command='input keyevent 224; am start -n com.happyhome.cc8assistant/.MainActivity'
+        command+=' --ez auto_start_voice '+('false' if args.no_auto_voice else 'true')
+        try:print(access.shell(access.target(),command).strip())
+        except (OSError,RuntimeError,subprocess.SubprocessError):print('未发现可用 USB；请点 CC8 桌面大黄蜂入口，后台等待已配对的局域网连接。')
+        print('本次打开不自动开始语音；会话仍遵守前后台和断线停止规则。' if args.no_auto_voice else '打开后将自动开始语音；首次授权后，请安静等待 6 秒校准。')
+
 
 
 if __name__=='__main__':main()

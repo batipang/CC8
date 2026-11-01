@@ -313,6 +313,9 @@ class Bridge:
             self.save_status()
         elif event=='session_start':
             self.rebind_seen=True
+            # A route rebind can arrive before the capture worker's first start.
+            # Both describe the same native recording epoch; never restart it.
+            if self.active and int(j['epoch'])==self.epoch:return
             if self.active or self.announcement_generation is not None:self.stop()
             self.epoch=int(j['epoch']);self.active=True;self.generation+=1;self.timeline=RenderTimeline();self.vad=VoiceDetector();self.last_sequence=None
             self.pending_mic.clear();self.calibration_frames=[];self.reference_shift_ns=0;self.spoken.clear()
@@ -460,7 +463,7 @@ class Bridge:
         PRIVATE.mkdir(parents=True,exist_ok=True,mode=0o700);os.chmod(PRIVATE,0o700)
         data={'connected':self.connection is not None,'active':self.active,'calibrating':self.calibrating,
               'playing':self.playing,'generation':self.generation,'wake_mode':self.wake,'wake_word':WAKE_WORD,
-              'bridge_version':'0.8.1','transport':self.transport_kind,**(self.transport_hub.diagnostics() if self.transport_hub else {}),'screen_sleeping':self.screen_sleeping,'idle_sleep_seconds':900,'asr_engine':getattr(getattr(self.speech,'recognizer',None),'engine',None),'barge_in_enabled':self.device_can_pause,'playback_paused':self.pause_state is not None,'announcement_active':self.announcement_generation is not None,'brain_provider':getattr(self.brain,'selected','minimax') if self.brain else 'echo test','dot_enabled':isinstance(self.brain,BrainRouter),'web_search_enabled':self.brain is not None,'fast_stop_enabled':self.fast_stop is not None,
+              'bridge_version':'0.8.2','transport':self.transport_kind,**(self.transport_hub.diagnostics() if self.transport_hub else {}),'screen_sleeping':self.screen_sleeping,'idle_sleep_seconds':900,'asr_engine':getattr(getattr(self.speech,'recognizer',None),'engine',None),'barge_in_enabled':self.device_can_pause,'playback_paused':self.pause_state is not None,'announcement_active':self.announcement_generation is not None,'brain_provider':getattr(self.brain,'selected','minimax') if self.brain else 'echo test','dot_enabled':isinstance(self.brain,BrainRouter),'web_search_enabled':self.brain is not None,'fast_stop_enabled':self.fast_stop is not None,
               'fast_stop_input':'AEC3 without additional NS','fast_stop_gain':getattr(self.fast_stop,'gain',None),
               'aec_engine':'WebRTC AEC3 + NS; AGC disabled',
               'render_asr_comparison':True,

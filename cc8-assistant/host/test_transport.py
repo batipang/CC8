@@ -104,6 +104,22 @@ class HandoverTests(unittest.TestCase):
 
 
 class RebindIdempotenceTests(unittest.TestCase):
+    def test_start_and_rebind_for_same_epoch_cannot_duplicate_calibration(self):
+        for order in [('session_rebind','session_start'),('session_start','session_rebind')]:
+            with self.subTest(order=order):
+                b=Bridge(None,None);b.connection=FakeChannel('usb');b.save_status=lambda:None
+                began=threading.Event()
+                with patch('bridge.WebRtcEchoCanceller'),patch.object(b,'calibrate',side_effect=lambda generation:began.set()) as calibrate:
+                    for event in order:b.on_event({'event':event,'capture_active':True,'epoch':7})
+                    self.assertTrue(began.wait(1));self.assertEqual(calibrate.call_count,1)
+                    generation=b.generation
+                    b.on_event({'event':'session_start','epoch':7})
+                    self.assertEqual(b.generation,generation);self.assertEqual(calibrate.call_count,1)
+                    b.on_event({'event':'session_start','epoch':8})
+                    deadline=time.monotonic()+1
+                    while calibrate.call_count<2 and time.monotonic()<deadline:time.sleep(.01)
+                    self.assertEqual(calibrate.call_count,2);self.assertEqual(b.epoch,8)
+
     def test_duplicate_rebind_during_calibration_starts_only_one_calibration(self):
         b=Bridge(None,None);b.connection=FakeChannel('wifi');b.active=True;b.epoch=3;b.calibrating=True
         began=threading.Event()

@@ -79,7 +79,7 @@ python3 device-access/cc8_install.py --install artifacts/cc8-diagnostics-1.0.1.a
 
 ```sh
 python3 cc8-assistant/tools/build.py
-python3 device-access/cc8_install.py --install artifacts/cc8-assistant-0.5.2.apk --launch --shared-staging
+python3 device-access/cc8_install.py --install artifacts/cc8-assistant-0.5.3.apk --launch --shared-staging
 ```
 
 安装其他单 APK 时替换 `--install` 后的路径。不想启动就省略 `--launch`。没有桌面入口的 APK 不能使用 `--launch`。
@@ -96,7 +96,7 @@ python3 device-access/cc8_install.py --install artifacts/cc8-assistant-0.5.2.apk
 
 如果安装成功但启动未确认，应查看 `launch_error`、`launch_command_accepted` 与设备画面，不能将“命令已发送”当成“应用已在前台”。如果设备不允许读取已安装文件的哈希，工具会以非零状态退出并明确说明“已安装但验证不完整”，不会继续启动或报告完整成功；不会自动卸载应用。
 
-麦克风、摄像头等运行时权限仍由用户在设备前台授权。安装不会自动开始录音或预览。
+麦克风、摄像头等运行时权限仍由用户在设备前台授权。仅安装不打开界面时不会启动录音或预览。助手 0.5.3 的普通 `--launch` 会遵循用户选择的自动语音行为；若只做维护检查，先不加 `--launch`，随后使用 `launch.py --no-auto-voice` 打开。摄像头仍需在检测页手动开始。
 
 ## 6. 安装器内部流程
 
