@@ -51,8 +51,12 @@ class WorkerRecoveryTests(unittest.TestCase):
         b = self.bridge(Speech())
         disconnected = threading.Event()
         answered = threading.Event()
-        b.playing = True
-        b.pause_state = {'token': 1, 'generation': b.generation, 'started': time.monotonic()}
+        b.playback.playing = True
+        b.playback.pause_state = {
+            'token': 1,
+            'generation': b.generation,
+            'started': time.monotonic(),
+        }
 
         def event(name, **fields):
             if name == 'playback_resume':

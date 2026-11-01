@@ -315,20 +315,20 @@ class CancellationTests(unittest.TestCase):
 
     def test_cancel_increments_generation_and_notifies_device(self):
         b = self.bridge(None)
-        b.playing = True
+        b.playback.playing = True
         old = b.generation
         b.cancel('test')
         self.assertEqual(b.generation, old + 1)
-        self.assertFalse(b.playing)
+        self.assertFalse(b.playback.playing)
         p = b.connection.packets[-1]
         self.assertEqual(p.generation, b.generation)
         self.assertEqual(json.loads(p.data)['event'], 'cancel')
 
     def test_late_old_play_done_does_not_stop_new_playback(self):
         b = self.bridge(None)
-        b.playing = True
+        b.playback.playing = True
         b.on_event({'event': 'play_done', 'generation': b.generation - 1})
-        self.assertTrue(b.playing)
+        self.assertTrue(b.playback.playing)
 
     def test_recognized_playback_fragment_does_not_cancel_or_reply(self):
         completed = threading.Event()
@@ -339,11 +339,11 @@ class CancellationTests(unittest.TestCase):
                 return '你可以开始说话'
 
         b = self.bridge(Speech())
-        b.playing = True
+        b.playback.playing = True
         b.queue.put((b.generation, np.ones(RATE), True, ['我在。你可以开始说话。']))
         self.assertTrue(completed.wait(1))
         time.sleep(0.05)
-        self.assertTrue(b.playing)
+        self.assertTrue(b.playback.playing)
         self.assertEqual(b.generation, 100)
         self.assertEqual(b.connection.packets, [])
 
@@ -356,8 +356,8 @@ class CancellationTests(unittest.TestCase):
                 return '这次联网查询没有成功，我暂时无法核实最新信息。'
 
         b = self.bridge(Speech())
-        b.last_audio_end = time.monotonic() - 2
-        b.spoken.append(
+        b.playback.last_audio_end = time.monotonic() - 2
+        b.playback.spoken.append(
             (
                 time.monotonic() - 7,
                 '这次联网查询没有成功，我暂时无法核实最新信息。请稍后让我再查一次。',
@@ -379,7 +379,7 @@ class CancellationTests(unittest.TestCase):
                 return '国产GPU沐曦第三季度实现单机扭轨'
 
         b = self.bridge(Speech())
-        b.last_audio_end = time.monotonic() - 120
+        b.playback.last_audio_end = time.monotonic() - 120
         refs = ['国产GPU沐曦第三季度实现单季扭亏。']
         b.queue.put(
             (
@@ -711,14 +711,14 @@ class CaptureEvidenceTests(unittest.TestCase):
         b.vad = VAD()
         b.save_status = lambda: None
         b.last_status = time.monotonic()
-        b.last_audio_end = time.monotonic() - 500
-        b.spoken.append((time.monotonic() - 100, '较早开始的一段长播报。'))
+        b.playback.last_audio_end = time.monotonic() - 500
+        b.playback.spoken.append((time.monotonic() - 100, '较早开始的一段长播报。'))
         stamp = 1_000_000_000
         b.timeline.add(b.generation, 0, stamp, np.ones(320) * 0.1)
         b.process_microphone(
             Packet(MIC, 1, 0, 0, stamp, (np.ones(FRAME) * 1200).astype('<i2').tobytes())
         )
-        b.spoken.append((time.monotonic(), '同一段录音开始后播报的下一句。'))
+        b.playback.spoken.append((time.monotonic(), '同一段录音开始后播报的下一句。'))
         b.process_microphone(
             Packet(
                 MIC,
@@ -786,8 +786,8 @@ class FastStopTests(unittest.TestCase):
         b = Bridge(None, None, fast_stop=Detector())
         b.connection = Sink()
         b.active = True
-        b.playing = True
-        b.last_spoken = spoken
+        b.playback.playing = True
+        b.playback.last_spoken = spoken
         b.aec = AEC()
         b.calibrating = calibrating
         b.save_status = lambda: None
@@ -833,7 +833,7 @@ class FastStopTests(unittest.TestCase):
         b.process_microphone(Packet(MIC, 0, 0, 0, 10_000_000_000, b'\x00\x00' * 320))
         np.testing.assert_allclose(b.fast_stop.calls[0], np.full(FRAME, 0.01))
         self.assertEqual(b.metrics['fast_stop_count'], 1)
-        self.assertFalse(b.playing)
+        self.assertFalse(b.playback.playing)
 
     def test_keyword_gain_is_bounded_and_clipped(self):
         for gain in [0, 5]:
@@ -860,14 +860,14 @@ class FastStopTests(unittest.TestCase):
     def test_assistant_quoting_command_cannot_trigger_fast_route(self):
         b = self.bridge('你可以说停一下来中断。')
         b.process_microphone(Packet(MIC, 0, 0, 0, 10_000_000_000, b'\x00\x00' * 320))
-        self.assertTrue(b.playing)
+        self.assertTrue(b.playback.playing)
         self.assertEqual(b.generation, 100)
         self.assertEqual(b.connection.packets, [])
 
     def test_streaming_keyword_stops_without_utterance_endpoint(self):
         b = self.bridge()
         b.process_microphone(Packet(MIC, 0, 0, 0, 10_000_000_000, b'\x00\x00' * 320))
-        self.assertFalse(b.playing)
+        self.assertFalse(b.playback.playing)
         self.assertEqual(b.generation, 101)
         self.assertTrue(b.active)
         self.assertEqual(b.metrics['fast_stop_count'], 1)
@@ -879,17 +879,17 @@ class FastStopTests(unittest.TestCase):
 
     def test_previous_sentence_acoustic_tail_cannot_trigger_fast_route(self):
         b = self.bridge()
-        b.previous_spoken = '你可以说停一下。'
-        b.previous_spoken_until = time.monotonic() + 1
+        b.playback.previous_spoken = '你可以说停一下。'
+        b.playback.previous_spoken_until = time.monotonic() + 1
         b.process_microphone(Packet(MIC, 0, 0, 0, 10_000_000_000, b'\x00\x00' * 320))
-        self.assertTrue(b.playing)
+        self.assertTrue(b.playback.playing)
         self.assertEqual(b.connection.packets, [])
 
     def test_calibration_never_activates_fast_stop(self):
         b = self.bridge(calibrating=True)
         b.process_microphone(Packet(MIC, 0, 0, 0, 10_000_000_000, b'\x00\x00' * 320))
         self.assertEqual(b.fast_stop.calls, 0)
-        self.assertTrue(b.playing)
+        self.assertTrue(b.playback.playing)
 
     def test_late_whisper_result_after_fast_stop_cannot_restart_answer(self):
         started = threading.Event()
@@ -904,7 +904,7 @@ class FastStopTests(unittest.TestCase):
         b = Bridge(SlowSpeech(), None)
         b.connection = Sink()
         b.active = True
-        b.playing = True
+        b.playback.playing = True
         b.save_status = lambda: None
         b.queue.put((b.generation, np.ones(RATE)))
         self.assertTrue(started.wait(1))

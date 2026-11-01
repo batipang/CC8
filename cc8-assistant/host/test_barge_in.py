@@ -23,8 +23,8 @@ class BargeInTests(unittest.TestCase):
         b = Bridge(speech, None)
         b.connection = Sink()
         b.active = True
-        b.device_can_pause = True
-        b.playing = True
+        b.playback.device_can_pause = True
+        b.playback.playing = True
         b.save_status = lambda: None
         return b
 
@@ -37,9 +37,9 @@ class BargeInTests(unittest.TestCase):
         token = b.pause_for_voice()
         self.assertIsNotNone(token)
         self.assertEqual(b.generation, generation)
-        self.assertTrue(b.playing)
+        self.assertTrue(b.playback.playing)
         b.resume_after_rejection(token, generation)
-        self.assertIsNone(b.pause_state)
+        self.assertIsNone(b.playback.pause_state)
         self.assertEqual(b.generation, generation)
         self.assertEqual(
             [e['event'] for e in self.events(b)], ['playback_pause', 'playback_resume']
@@ -60,16 +60,16 @@ class BargeInTests(unittest.TestCase):
         b.vad.talking = True
         b.turn_pause_token = token
         b.resume_after_rejection(token, b.generation)
-        self.assertIsNotNone(b.pause_state)
+        self.assertIsNotNone(b.playback.pause_state)
         b.vad.talking = False
         b.resume_after_rejection(token, b.generation)
-        self.assertIsNone(b.pause_state)
+        self.assertIsNone(b.playback.pause_state)
 
     def test_unsupported_device_and_inactive_mic_do_not_pause(self):
         b = self.bridge()
-        b.device_can_pause = False
+        b.playback.device_can_pause = False
         self.assertIsNone(b.pause_for_voice())
-        b.device_can_pause = True
+        b.playback.device_can_pause = True
         b.active = False
         self.assertIsNone(b.pause_for_voice())
 
@@ -99,9 +99,9 @@ class BargeInTests(unittest.TestCase):
             )
         )
         deadline = time.monotonic() + 1
-        while b.pause_state and time.monotonic() < deadline:
+        while b.playback.pause_state and time.monotonic() < deadline:
             time.sleep(0.01)
-        self.assertIsNone(b.pause_state)
+        self.assertIsNone(b.playback.pause_state)
         self.assertEqual(b.generation, generation)
         self.assertFalse(any(e['event'] == 'transcript' for e in self.events(b)))
 
@@ -165,11 +165,11 @@ class BargeInTests(unittest.TestCase):
     def test_timeout_stops_instead_of_resuming_unconfirmed_audio(self):
         b = self.bridge()
         b.pause_for_voice()
-        b.pause_state['started'] -= 21
+        b.playback.pause_state['started'] -= 21
         old = b.generation
         b.wait_playback(old)
         self.assertGreater(b.generation, old)
-        self.assertIsNone(b.pause_state)
+        self.assertIsNone(b.playback.pause_state)
 
     def test_asr_failure_stops_old_audio_instead_of_resuming(self):
         class Speech:
@@ -192,7 +192,7 @@ class BargeInTests(unittest.TestCase):
         while b.generation == old and time.monotonic() < deadline:
             time.sleep(0.01)
         self.assertGreater(b.generation, old)
-        self.assertFalse(b.playing)
+        self.assertFalse(b.playback.playing)
         self.assertFalse(any(e['event'] == 'playback_resume' for e in self.events(b)))
 
     def test_no_old_pcm_is_sent_while_paused(self):
