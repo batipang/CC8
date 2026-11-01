@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 import numpy as np
 import requests
 from web_search import now, wants_web, normalize, parse_plan, SpeechClauses
+from configuration import load_config
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -29,11 +30,11 @@ class MiniMaxError(RuntimeError):
         self.http_status = http_status
 
 
-def subscription_key():
+def subscription_key(config=None):
     # 密钥仅从 Mac 环境或 owner-only 文件读取，不随 APK、协议包或日志下发。
     value = os.environ.get('CC8_MINIMAX_API_KEY', '')
     if not value:
-        path = ROOT / '.toolchains/cc8/voice-secrets.env'
+        path = (config or load_config()).credential_file
         if path.exists():
             info = path.stat()
             if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077:
@@ -193,7 +194,9 @@ class RequestSlot:
 
 
 class Transport:
-    def __init__(self, key=None, base='https://api.minimax.cn', session_factory=requests.Session):
+    def __init__(self, key=None, base=None, session_factory=requests.Session, config=None):
+        self.config = config or load_config()
+        base = self.config.minimax_base if base is None else base
         parsed = urlparse(base)
         if (
             parsed.scheme != 'https'
@@ -207,7 +210,8 @@ class Transport:
         ):
             raise ValueError('Only official MiniMax HTTPS endpoints are allowed')
         self.base = base.rstrip('/')
-        self.key = key or subscription_key()
+        self.key = key or subscription_key(self.config)
+        self.timeout = (self.config.connect_timeout, self.config.read_timeout)
         self.factory = session_factory
         self.lock = threading.Lock()
         self.slots = set()
@@ -231,12 +235,12 @@ class Transport:
                 raise Cancelled('Turn cancelled')
             response = slot.session.post(
                 self.base + '/v1/speech_to_text',
-                data={'model': 'asr-1.0', 'response_format': 'json', 'stream': 'false'},
+                data={'model': self.config.asr_model, 'response_format': 'json', 'stream': 'false'},
                 files={'file': ('utterance.wav', wav, 'audio/wav')},
                 headers={'Authorization': 'Bearer ' + self.key},
                 stream=True,
                 allow_redirects=False,
-                timeout=(8, 20),
+                timeout=self.timeout,
             )
             slot.response = response
             if response.status_code != 200:
@@ -278,7 +282,7 @@ class Transport:
                 headers={'Authorization': 'Bearer ' + self.key, 'Content-Type': 'application/json'},
                 stream=True,
                 allow_redirects=False,
-                timeout=(8, 20),
+                timeout=self.timeout,
             )
             slot.response = response
             if response.status_code != 200:
@@ -315,7 +319,7 @@ class Transport:
                 headers={'Authorization': 'Bearer ' + self.key, 'Content-Type': 'application/json'},
                 stream=True,
                 allow_redirects=False,
-                timeout=(8, 20),
+                timeout=self.timeout,
             )
             slot.response = response
             if slot.stopped.is_set() or not is_current():
@@ -361,9 +365,10 @@ class Transport:
 class MiniMaxBrain:
     label = 'MiniMax'
 
-    def __init__(self, transport=None, model='MiniMax-M3'):
-        self.transport = transport or Transport()
-        self.model = model
+    def __init__(self, transport=None, model=None, config=None):
+        settings = config or load_config()
+        self.transport = transport or Transport(config=settings)
+        self.model = settings.minimax_model if model is None else model
         self.last_metrics = {}
         self.web_context = False
         self.pending_web = None
@@ -577,23 +582,28 @@ class MiniMaxBrain:
         return ''.join(self.clauses(text, history))
 
 
+_DEFAULT_EMOTION = object()
+
+
 class MiniMaxVoice:
     # 流式输出 16 kHz PCM 和字幕时间戳；保留用户音色配置，设备端不存 API 密钥。
-    model = 'speech-2.8-turbo'
 
     def __init__(
         self,
         transport=None,
-        voice='Chinese (Mandarin)_Straightforward_Boy',
-        speed=1.03,
-        pitch=1,
-        emotion=None,
+        voice=None,
+        speed=None,
+        pitch=None,
+        emotion=_DEFAULT_EMOTION,
+        config=None,
     ):
-        self.transport = transport or Transport()
-        self.voice = voice
-        self.speed = speed
-        self.pitch = pitch
-        self.emotion = emotion
+        settings = config or load_config()
+        self.transport = transport or Transport(config=settings)
+        self.model = settings.tts_model
+        self.voice = settings.tts_voice if voice is None else voice
+        self.speed = settings.tts_speed if speed is None else speed
+        self.pitch = settings.tts_pitch if pitch is None else pitch
+        self.emotion = settings.tts_emotion if emotion is _DEFAULT_EMOTION else emotion
         self.last_metrics = {}
 
     def cancel(self):

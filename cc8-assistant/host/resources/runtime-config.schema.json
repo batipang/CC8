@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CC8 non-secret assistant configuration v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "asr": {
+      "default": "minimax",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "not": {
+        "type": "string",
+        "pattern": "sk-(?:cp-|proj-|ant-)|^Bearer |[\\u0000-\\u001f]|^\\s|\\s$"
+      },
+      "enum": [
+        "minimax",
+        "sensevoice",
+        "whisper"
+      ]
+    },
+    "brain": {
+      "default": "dot",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "not": {
+        "type": "string",
+        "pattern": "sk-(?:cp-|proj-|ant-)|^Bearer |[\\u0000-\\u001f]|^\\s|\\s$"
+      },
+      "enum": [
+        "dot",
+        "minimax"
+      ]
+    },
+    "minimax_base": {
+      "default": "https://api.minimax.cn",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "not": {
+        "type": "string",
+        "pattern": "sk-(?:cp-|proj-|ant-)|^Bearer |[\\u0000-\\u001f]|^\\s|\\s$"
+      },
+      "enum": [
+        "https://api.minimax.cn",
+        "https://api.minimax.cn/",
+        "https://api.minimaxi.com",
+        "https://api.minimaxi.com/",
+        "https://api.minimax.io",
+        "https://api.minimax.io/"
+      ]
+    },
+    "minimax_model": {
+      "default": "MiniMax-M3",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "not": {
+        "type": "string",
+        "pattern": "sk-(?:cp-|proj-|ant-)|^Bearer |[\\u0000-\\u001f]|^\\s|\\s$"
+      },
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,95}$"
+    },
+    "asr_model": {
+      "default": "asr-1.0",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "not": {
+        "type": "string",
+        "pattern": "sk-(?:cp-|proj-|ant-)|^Bearer |[\\u0000-\\u001f]|^\\s|\\s$"
+      },
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,95}$"
+    },
+    "tts_model": {
+      "default": "speech-2.8-turbo",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "not": {
+        "type": "string",
+        "pattern": "sk-(?:cp-|proj-|ant-)|^Bearer |[\\u0000-\\u001f]|^\\s|\\s$"
+      },
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,95}$"
+    },
+    "tts_voice": {
+      "default": "Chinese (Mandarin)_Straightforward_Boy",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "not": {
+        "type": "string",
+        "pattern": "sk-(?:cp-|proj-|ant-)|^Bearer |[\\u0000-\\u001f]|^\\s|\\s$"
+      }
+    },
+    "tts_speed": {
+      "default": 1.03,
+      "type": "number",
+      "minimum": 0.5,
+      "maximum": 2.0
+    },
+    "tts_pitch": {
+      "default": 1,
+      "type": "integer",
+      "minimum": -12,
+      "maximum": 12
+    },
+    "tts_emotion": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1,
+      "maxLength": 120,
+      "not": {
+        "type": "string",
+        "pattern": "sk-(?:cp-|proj-|ant-)|^Bearer |[\\u0000-\\u001f]|^\\s|\\s$"
+      },
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,95}$"
+    },
+    "tls_port": {
+      "default": 18766,
+      "type": "integer",
+      "minimum": 1024,
+      "maximum": 65535
+    },
+    "connect_timeout": {
+      "default": 8,
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 30
+    },
+    "read_timeout": {
+      "default": 20,
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 120
+    },
+    "credential_file": {
+      "default": ".toolchains/cc8/voice-secrets.env",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "not": {
+        "type": "string",
+        "pattern": "sk-(?:cp-|proj-|ant-)|^Bearer |[\\u0000-\\u001f]|^\\s|\\s$|://"
+      }
+    },
+    "signing_keystore": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1,
+      "maxLength": 4096,
+      "not": {
+        "type": "string",
+        "pattern": "sk-(?:cp-|proj-|ant-)|^Bearer |[\\u0000-\\u001f]|^\\s|\\s$|://"
+      }
+    }
+  }
+}

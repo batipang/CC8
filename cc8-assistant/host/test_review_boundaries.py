@@ -17,6 +17,7 @@ from protocol import MIC, EVENT, Packet
 from test_dot_client import FakeRpc
 from test_minimax import Session
 from transport import TransportHub
+from configuration import load_config
 from web_search import public_url
 
 
@@ -100,17 +101,20 @@ class StreamBoundsTests(unittest.TestCase):
     def test_credential_file_requires_owner_only_access(self):
         with (
             tempfile.TemporaryDirectory() as folder,
-            patch.object(mini, 'ROOT', Path(folder)),
             patch.dict(os.environ, {'CC8_MINIMAX_API_KEY': ''}),
         ):
+            defaults = Path(folder) / 'cc8-assistant/host/voice-config.json'
+            defaults.parent.mkdir(parents=True)
+            defaults.write_text('{"asr":"minimax"}')
+            config = load_config(root=Path(folder), environ={})
             credential = Path(folder) / '.toolchains/cc8/voice-secrets.env'
             credential.parent.mkdir(parents=True)
             credential.write_text('CC8_MINIMAX_API_KEY=sk-cp-test-not-a-secret\n')
             credential.chmod(0o644)
             with self.assertRaisesRegex(mini.MiniMaxError, 'owner-only'):
-                mini.subscription_key()
+                mini.subscription_key(config=config)
             credential.chmod(0o600)
-            self.assertEqual(mini.subscription_key(), 'sk-cp-test-not-a-secret')
+            self.assertEqual(mini.subscription_key(config=config), 'sk-cp-test-not-a-secret')
 
 
 class TurnOwnershipTests(unittest.TestCase):

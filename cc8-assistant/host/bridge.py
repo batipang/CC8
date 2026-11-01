@@ -48,6 +48,8 @@ from minimax_client import MiniMaxBrain, MiniMaxVoice, MiniMaxError
 from workspace import Workspace
 from diagnostics import TraceBook
 from process_lock import ProcessLease
+from configuration import load_config
+from config_schema import ConfigError
 from dot_client import runtime_status as dot_runtime_status
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -79,8 +81,9 @@ def wav_samples(path):
 
 
 class LocalSpeech:
-    def __init__(self):
-        self.recognizer = MandarinRecognizer()
+    def __init__(self, config=None):
+        settings = config or load_config()
+        self.recognizer = MandarinRecognizer(config=settings)
         self.cache = {}
 
     def recognize(self, samples):
@@ -127,9 +130,10 @@ class LocalSpeech:
 
 
 class DirectSpeech(LocalSpeech):
-    def __init__(self):
-        super().__init__()
-        self.voice = MiniMaxVoice()
+    def __init__(self, config=None):
+        settings = config or load_config()
+        super().__init__(config=settings)
+        self.voice = MiniMaxVoice(config=settings)
 
     def cancel(self):
         self.voice.cancel()
@@ -385,7 +389,7 @@ class Bridge:
         # 白名单输出就绪位，不导出 metrics 内可能存在的自检文字和用户内容。
         return {
             'ok': True,
-            'bridge_version': '0.12.3',
+            'bridge_version': '0.12.4',
             'uptime_seconds': round(time.monotonic() - self.started_at, 1),
             'model_ready': True,
             'recognition_worker': self.worker.is_alive(),
@@ -1129,7 +1133,7 @@ class Bridge:
             'generation': self.generation,
             'wake_mode': self.wake,
             'wake_word': WAKE_WORD,
-            'bridge_version': '0.12.3',
+            'bridge_version': '0.12.4',
             'desktop_camera_enabled': bool(self.desktop_challenge),
             'desktop_snapshot_active': self.desktop_snapshot is not None,
             'noise_profile': 'moderate',
@@ -2133,7 +2137,13 @@ def run_backend():
         help='Run a one-shot echo diagnostic only after the foreground microphone button',
     )
     args = parser.parse_args()
-    speech = DirectSpeech() if args.brain == 'minimax' else LocalSpeech()
+    try:
+        config = load_config()
+    except ConfigError as error:
+        parser.error(str(error))
+    except OSError:
+        parser.error('CC8 configuration file unavailable; check path and owner access')
+    speech = DirectSpeech(config=config) if args.brain == 'minimax' else LocalSpeech(config=config)
     print('Loading local Chinese ASR (' + speech.recognizer.engine + ')…', flush=True)
     speech.recognize(np.zeros(RATE, dtype=np.float32))
     print('Local ASR ready; raw microphone audio is not saved.', flush=True)
@@ -2152,12 +2162,20 @@ def run_backend():
     )
     bridge = Bridge(
         speech,
-        BrainRouter(MiniMaxBrain()) if args.brain == 'minimax' else None,
+        BrainRouter(MiniMaxBrain(config=config), selected=config.brain)
+        if args.brain == 'minimax'
+        else None,
         fast_stop=fast_stop,
         echo_check=args.echo_check_after_start,
         workspace=Workspace(PRIVATE / 'reminders.json'),
     )
-    hub = TransportHub(Pairing(), connect_device, usb_present, bridge.log)
+    hub = TransportHub(
+        Pairing(port=config.tls_port),
+        connect_device,
+        usb_present,
+        bridge.log,
+        tls_port=config.tls_port,
+    )
     bridge.transport_hub = hub
     hub.start()
     bridge.save_status()

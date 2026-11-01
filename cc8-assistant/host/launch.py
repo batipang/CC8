@@ -9,6 +9,8 @@ import shlex
 import subprocess
 import sys
 import time
+from configuration import load_config
+from config_schema import ConfigError
 
 ROOT = Path(__file__).resolve().parents[2]
 PRIVATE = ROOT / 'device-access/private/voice-runtime'
@@ -83,6 +85,14 @@ def main():
         if not PYTHON.is_file():
             raise SystemExit('缺少语音运行环境，请执行 python3.13 scripts/setup-voice.py。')
         if not running:
+            try:
+                load_config()
+            except ConfigError as error:
+                raise SystemExit(str(error)) from None
+            except OSError:
+                raise SystemExit(
+                    'CC8 configuration file unavailable; check path and owner access'
+                ) from None
             log = PRIVATE / 'service.log'
             with log.open('ab') as output:
                 command = [str(PYTHON), '-u', str(BRIDGE)]
