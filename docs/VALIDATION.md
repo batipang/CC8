@@ -349,3 +349,8 @@ F-06 独立缺陷回归：实际注册的 SIGUSR1 handler 在第三步之后漏�
 ### F-06 第八步：播报 / 提醒 / 控制回执（未部署）
 
 三个独立所有者经明确接口收拢 announcement generation、提醒 pending/revision 与设备请求 waiter；原事务/忙闲门槛、120 字分段、队列满拒绝、5 秒超时、finally waiter 释放保留。新增虚拟通道并发倒序确认/白名单、超时/断线清理、非法动作拒绝回归。原提醒改版旧回执、停止播报不撤销已完成工作、IPC 播报完成和磁盘异常回归保留。installer 16、host 356（4 private skip）、tooling 47、Java 15 checks 及质量通过；严格范围仍六模块。Bridge 829 行，F-06 / 物理 P0 保持开放，待 CI；未更动运行安装。
+
+
+### F-06 第九步：进程运行入口（未部署）
+
+run_backend 原体经显式工厂/目录/描述绑定后 AST 等价，原 façade 和锁覆盖保留；app_runtime 191 行、Bridge 699 行。installer 16、host 356（4 private skip）、tooling 47、Java 15 checks 和质量通过，含实际信号注册、启动错误先于 provider、最小 PATH 和 USB 排除网络/多设备。动态入口新模块不计入 strict 六模块。没有运行新后台或更动部署，F-06 保持开放，待 CI。
