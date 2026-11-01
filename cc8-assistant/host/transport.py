@@ -154,12 +154,25 @@ class Channel:
         self.events = events
         self.ident = uuid.uuid4().hex
         self.lock = threading.Lock()
+        self.state_lock = threading.Lock()
+        self.reader = None
+        self.reader_running = False
+        self.io_closed = False
         self.closed = False
         self.ready = False
         self.last_rx = time.monotonic()
 
     def start(self):
-        threading.Thread(target=self.read, daemon=True, name='cc8-' + self.kind + '-reader').start()
+        with self.state_lock:
+            if self.closed:
+                return
+            if self.reader is not None:
+                raise RuntimeError('Channel reader already started')
+            self.reader_running = True
+            self.reader = threading.Thread(
+                target=self.read, daemon=True, name='cc8-' + self.kind + '-reader'
+            )
+        self.reader.start()
 
     def sendall(self, raw):
         with self.lock:
@@ -171,7 +184,11 @@ class Channel:
         self.sendall(Packet.event(name, **fields).encode())
 
     def read(self):
+        with self.state_lock:
+            self.reader_running = True
         try:
+            if self.closed:
+                return
             first = receive(self.stream)
             hello = decode_event(first.data) if first.kind == EVENT else None
             if (
@@ -196,6 +213,11 @@ class Channel:
             pass
         finally:
             self.close()
+            # A foreign thread may shutdown() to wake recv(), but must not release the
+            # TLS descriptor while SSL_read is still using it. Only this reader finalizes it.
+            self._finish_close()
+            with self.state_lock:
+                self.reader_running = False
             try:
                 self.events.put(('down', self, None), timeout=0.2)
             except queue.Full:
@@ -205,18 +227,29 @@ class Channel:
         self.close()
 
     def close(self):
-        if self.closed:
-            return
-        self.closed = True
-        self.ready = False
+        with self.state_lock:
+            if self.closed:
+                return
+            self.closed = True
+            self.ready = False
+            finish = not self.reader_running
         try:
             self.stream.shutdown(socket.SHUT_RDWR)
         except (OSError, AttributeError):
             pass
-        try:
-            self.stream.close()
-        except OSError:
-            pass
+        if finish:
+            self._finish_close()
+
+    def _finish_close(self):
+        with self.state_lock:
+            if self.io_closed:
+                return
+            self.io_closed = True
+        with self.lock:
+            try:
+                self.stream.close()
+            except OSError:
+                pass
 
 
 class TransportHub:

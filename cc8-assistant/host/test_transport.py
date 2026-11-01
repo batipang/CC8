@@ -186,7 +186,7 @@ class TransportTests(unittest.TestCase):
             self.assertEqual(json.loads(receive(client).data)['event'], 'transport_welcome')
 
         # Stay within the listen(4) OS backlog; overload may legitimately be refused.
-        for _ in range(3):
+        for _ in range(20):
             with ThreadPoolExecutor(max_workers=3) as executor:
                 futures = [executor.submit(connect) for _ in range(3)]
                 for future in futures:
@@ -200,6 +200,40 @@ class TransportTests(unittest.TestCase):
         hub.close()
         self.assertEqual(current.recv(1), b'')
         self.assertIsNone(hub.preferred())
+
+    def test_foreign_close_wakes_reader_but_defers_descriptor_release(self):
+        entered, released = threading.Event(), threading.Event()
+
+        class BlockingStream:
+            def __init__(self):
+                self.finished = False
+                self.shutdown_called = False
+
+            def recv(self, count):
+                entered.set()
+                released.wait(2)
+                return b''
+
+            def shutdown(self, how):
+                self.shutdown_called = True
+
+            def close(self):
+                self.finished = True
+
+        stream = BlockingStream()
+        channel = Channel(stream, 'wifi', queue.Queue())
+        channel.start()
+        try:
+            self.assertTrue(entered.wait(1))
+            channel.close()
+            self.assertTrue(stream.shutdown_called)
+            self.assertFalse(stream.finished)
+            self.assertTrue(channel.closed)
+        finally:
+            released.set()
+            channel.reader.join(2)
+        self.assertFalse(channel.reader.is_alive())
+        self.assertTrue(stream.finished)
 
     def test_close_during_incomplete_tls_handshake_is_bounded(self):
         hub = self.hub()
