@@ -446,3 +446,10 @@ P0-05 观察软件经 [PR #33](https://github.com/batipang/CC8/pull/33) 的 [真
 旧实现的取消通知/提供方取消异常可跳过本地收尾，首次 play_begin 发送失败还会留下 playing。五项定向方法在旧实现复现七处失败/异常；另单项复现开场发送失败后残留 calibrating。修复先通知本地 waiter，普通通知失败只记录类型；Stop 用 finally 关闭采集/保存状态，未预期提供方错误仍抛出。输出的 begin/PCM/end/字幕 IO 分为 transport；iterator 内已分类错误不再包装成 TTS。仅输出失败结束校准，handover 保留校准重绑语义。
 
 六项新方法包括三个发送阶段、字幕回调/iterator 关闭、普通取消与手动停止、异常提供方取消以及开场失败/手动 transport 保留校准。没有真实通道、模型或采集，修复后 installer 22、host 444（4 private-audio skip）、tooling 51、Java 15 checks，格式/质量/strict 六模块通过。候选后台 0.13.5 / p0-software-20261102.1；待 CI，未替换当前助手，不把模拟故障当物理拔插验收。
+
+
+P0-06 搜索回执补充经 [PR #36](https://github.com/batipang/CC8/pull/36) / [真实 CI](https://github.com/batipang/CC8/actions/runs/41356493257) 通过并合入 72fa997；通知/资源收尾经 [PR #37](https://github.com/batipang/CC8/pull/37) / [真实 CI](https://github.com/batipang/CC8/actions/runs/41357130621) 八项通过并合入 327871a。
+
+### P0 软件源码标记及原签名产物核验
+
+CI 通过的干净源码 5f1c087cfa8c4cdea42758dd26b7f0597b1c31ef 已包含在 main；两个 APK 实际原钥引用 assemble/lint 通过，独立版本/SDK27 签名及旧原证书集合一致。annotated tag p0-software-20261102.1 固定该源码，实际 record / verify 通过，远端解引用同 SHA。Git 归档源码包 7075058 字节，SHA-256 为 57bb5533cb415850e2ade89cfd52e0a10e92d912b70d51912f31b6e9e141485c；逐项检查不含工具链、private、密钥文件或 Git 目录。所有产物/回执仍在忽略目录，没有上传 APK 或发布 GitHub Release；未部署、重启或打开采集。完整版本/产物和待补输入见 [软件交接](P0_SOFTWARE_HANDOFF.md)，P0 实体/真人验收保持开放。
