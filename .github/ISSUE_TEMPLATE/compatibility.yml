@@ -1,0 +1,60 @@
+name: CC8 兼容性反馈
+description: 仅反馈机型/公开固件版本与脱敏探测结论；不要上传序列号、密钥或原始报告
+title: "[兼容性] 型号 / 固件 / 结果"
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        安全漏洞请使用仓库 Security 页的私密报告入口，不在此公开复现敏感问题。
+        仅填写底部型号、公开固件版本和以下白名单信息。不要粘贴 adb devices、getprop 全量输出、安装结果 JSON、账号、序列号、MAC/IP、配对、签名私钥、录音或照片。
+        工程模式角落文字不等于安装成功；不要为填写反馈进入 BootROM、刷机、Root 或尝试未经验证的复位组合键。
+  - type: input
+    id: hardware
+    attributes:
+      label: 底部型号与 Android model
+      description: 例如 TG_S6B01 / AILABS_S6，不填写序列号
+    validations:
+      required: true
+  - type: input
+    id: firmware
+    attributes:
+      label: 公开固件版本与 SDK
+      description: 只填写版本号和 API 级别，不贴完整 build fingerprint 或全量 getprop
+    validations:
+      required: true
+  - type: dropdown
+    id: result
+    attributes:
+      label: 本轮结果
+      options:
+        - 尚未探测 / 未验证
+        - 探测通过，尚未安装
+        - 探测未通过，已停止
+        - 安装及哈希核对通过
+        - 已安装，但验证或启动未完成
+        - 安装失败
+    validations:
+      required: true
+  - type: textarea
+    id: probe
+    attributes:
+      label: 脱敏探测摘要
+      description: 只保留 shell_verified、uid、model、sdk；失败可写错误类别，不粘贴异常全文
+      placeholder: '{"shell_verified": true, "uid": 2000, "model": "AILABS_S6", "sdk": 27}'
+  - type: textarea
+    id: version_steps
+    attributes:
+      label: 仓库提交 / APK 版本、使用步骤与结果
+      description: 说明是否使用 --shared-staging（已知共享装载风险）、证书匹配/拒绝、安装回执；不要贴本机路径或原始安装报告
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: 提交前检查
+      options:
+        - label: 已检查内容没有账号、唯一设备标识、密钥、配对、原始日志或音视频
+          required: true
+        - label: 明白外部反馈不会自动升级为“本项目实测”兼容结论
+          required: true

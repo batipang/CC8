@@ -412,3 +412,12 @@ P0-04 评分软件经 [PR #32](https://github.com/batipang/CC8/pull/32) 的 [真
 0.13.2 / runtime-observation-20261102.1 候选 health 增加仅自身资源快照和随机实例标识；cc8 observe 最长 72 小时 / 6000 采样，原子私有检查点、重启分段、完整/缺口/取消状态。只读取 health，不发设备/工具/服务管理指令。旧后台缺资源字段明确 partial；Python 线程不冒充 native 总线程，探测 FD 误差/轮询间隙/休眠或调时限制均记录。11 项新回归含实际自身进程数值与真实 Unix fixture / 最小 PATH CLI。完整 installer 16、host 436（4 private-audio skip）、tooling 51、Java 15 checks 及质量/strict 六模块通过，待 CI。
 
 隔离 actual dual-KWS eval 额外输入 1800 秒合成低电平噪声，40.589 秒挂钟、native 40.061 秒，无触发；峰值约 112.3 MiB，模拟 600/1200/1800 秒点 RSS 均约 88.5 MiB。不是实时 30 分钟或 72 小时验收，未采麦、调用云端或保存声音。详见 [RUNTIME_OBSERVATION](RUNTIME_OBSERVATION.md)，未更动运行助手。
+
+
+P0-05 观察软件经 [PR #33](https://github.com/batipang/CC8/pull/33) 的 [真实 CI 八项](https://github.com/batipang/CC8/actions/runs/41354504360) 通过并合入 86a9102，未更新生产助手或开始 72 小时观察。
+
+### P0 兼容性与交接文档（F-03 / F-13 / F-16 / F-17 / F-18）
+
+新增来源分级兼容表、仅四字段 probe 的公开 issue 表单、明确为示意的安装路线/分阶段排障、文档导航/历史索引/英文入口，以及贡献和安全策略。README/安装页补齐停止条件、共享装载剩余风险及当前 APK 示例。GitHub issues 已核对可用，private vulnerability reporting 由 API 启用并再次读回 enabled；没有发送报告/通知。
+
+文档 147 个本地链接存在性与 diff whitespace 通过；兼容 issue form 经系统 Ruby/Psych YAML 解析和字段/唯一 ID 校验通过（旧 Ruby 无 filter_map 的检查脚本已换成 map/compact，不是表单错误）。未操作设备或采集截图。F-16 真实脱敏截图/GIF 仍开放；其他文档条目只按本轮已完成内容关闭。安装报告保存权限问题另行独立修复，不混入本次纯文档提交。
