@@ -6,7 +6,6 @@ read audio files. The companion APK never starts capture from a host command.
 
 from __future__ import annotations
 import argparse
-from collections import deque
 import json
 import os
 from pathlib import Path
@@ -15,7 +14,6 @@ import re
 import signal
 import socket
 import subprocess
-import sys
 import threading
 import time
 import numpy as np
@@ -38,6 +36,7 @@ from capture_pipeline import CapturePipeline, CaptureHooks
 from echo_pipeline import EchoPipeline, EchoHooks
 from endpoint_pipeline import EndpointPipeline, EndpointHooks
 from recognition_worker import RecognitionWorker, RecognitionHooks
+from response_worker import ResponseWorker, ResponseHooks
 from minimax_client import MiniMaxBrain, MiniMaxError
 from workspace import Workspace
 from diagnostics import TraceBook
@@ -103,7 +102,6 @@ class Bridge:
         self.announcement_generation = None
         self.wake = False
         self.awake = True
-        self.history = deque(maxlen=8)
         self.metrics = {
             'mic_frames': 0,
             'render_frames': 0,
@@ -112,11 +110,9 @@ class Bridge:
             'utterances': 0,
             'raw_audio_saved': False,
         }
-        self.response_queue = queue.Queue(maxsize=2)
         self.status_lock = threading.Lock()
         self.last_interaction = time.monotonic()
         self.screen_sleeping = False
-        self.response_busy = False
         self.device_requests = {}
         self.device_request_serial = 0
         if isinstance(self.brain, BrainRouter):
@@ -267,9 +263,30 @@ class Bridge:
                 ),
             )
         )
+        self.response = ResponseWorker(
+            ResponseHooks(
+                valid=lambda generation: self.valid(generation),
+                diagnostics=lambda: self.diagnostics,
+                workspace=lambda: self.workspace,
+                brain=lambda: self.brain,
+                speech=lambda: self.speech,
+                active=lambda: self.active,
+                metric=self.record_metric,
+                dispatch=lambda job: self.respond_job(job),
+                answer=lambda text, generation: self.answer(text, generation),
+                answer_visual=lambda job: self.answer_visual(job),
+                read_announcement=lambda job: self.read_announcement(job),
+                finish_text=self.finish_text_response,
+                publish_workspace=lambda: self.publish_workspace(),
+                event=lambda name, **fields: self.event(name, **fields),
+                status=lambda phase, message: self.status(phase, message),
+                log=lambda name, **fields: self.log(name, **fields),
+                failure=lambda message, error: self.failure(message, error),
+                speak=lambda text, generation: self.speak(text, generation),
+            )
+        )
         self.recognition.start()
-        self.responder = threading.Thread(target=self.respond_work, daemon=True)
-        self.responder.start()
+        self.response.start()
 
     def log(self, event, **fields):
         print(
@@ -350,7 +367,7 @@ class Bridge:
             self.active
             and not self.calibrating
             and not self.playback.playing
-            and not self.response_busy
+            and not self.response.busy
             and not self.recognition.busy
             and not self.screen_sleeping
             and time.monotonic() - self.last_interaction >= 900
@@ -383,7 +400,7 @@ class Bridge:
             'uptime_seconds': round(time.monotonic() - self.started_at, 1),
             'model_ready': True,
             'recognition_worker': self.recognition.worker.is_alive(),
-            'response_worker': self.responder.is_alive(),
+            'response_worker': self.response.worker.is_alive(),
             'connected': self.connection is not None,
             'transport': self.transport_kind,
             'microphone_active': self.active,
@@ -444,13 +461,13 @@ class Bridge:
                 self.connection is None
                 or self.calibrating
                 or self.playback.playing
-                or self.response_busy
+                or self.response.busy
                 or self.recognition.busy
                 or self.text_generation is not None
                 or self.visual.generation is not None
                 or self.announcement_generation is not None
                 or self.capture.endpoint.vad.talking
-                or not self.response_queue.empty()
+                or not self.response.queue.empty()
             ):
                 return
             item = self.workspace.due()
@@ -514,7 +531,7 @@ class Bridge:
             self.diagnostics.begin('announcement', generation)
             job = Announcement(generation, text)
             try:
-                self.response_queue.put_nowait(job)
+                self.response.offer(job)
             except queue.Full:
                 self.announcement_generation = None
                 raise RuntimeError('Announcement queue busy') from None
@@ -1058,172 +1075,23 @@ class Bridge:
     def answer_visual(self, job):
         return self.visual.answer_visual(job)
 
+    def finish_text_response(self, generation):
+        if self.text_generation == generation:
+            self.text_generation = None
+            if self.connection is not None:
+                self.event('text_done', generation=generation)
+
     def enqueue_response(self, job):
-        while True:
-            try:
-                self.response_queue.put_nowait(job)
-                return
-            except queue.Full:
-                try:
-                    old = self.response_queue.get_nowait()
-                except queue.Empty:
-                    continue
-                if isinstance(old, Announcement):
-                    old.done.set()
+        return self.response.enqueue(job)
 
     def respond_work(self):
-        # 单消费者串行播报，识别另在线程运行，因此暂停时仍能继续听插话。
-        while True:
-            job = self.response_queue.get()
-            try:
-                self.respond_job(job)
-            except Exception as error:
-                if self.valid(job.generation):
-                    self.failure('这次回答没有完成，请再说一次', error)
-                else:
-                    self.log('response_worker_error', error_type=type(error).__name__)
+        return self.response.work()
 
     def respond_job(self, job):
-        if isinstance(job, Announcement):
-            self.read_announcement(job)
-            return
-        if not self.valid(job.generation):
-            return
-        self.response_busy = True
-        try:
-            if isinstance(job, VisualReply):
-                self.answer_visual(job)
-            else:
-                self.answer(job.text, job.generation)
-        finally:
-            self.response_busy = False
-            if isinstance(job, TextReply) and self.text_generation == job.generation:
-                self.text_generation = None
-                if self.connection is not None:
-                    self.event('text_done', generation=job.generation)
+        return self.response.respond_job(job)
 
     def answer(self, text, generation, image=None):
-        # 任务成功以大脑真实回执为准，后续停止朗读不能把已完成工作改为取消。
-        self.diagnostics.ensure(generation, 'vision' if image is not None else 'text')
-        self.diagnostics.mark(generation, 'brain_start')
-        task_id = self.workspace.task_start(generation, text)
-        result_text = ['']
-        clauses = None
-
-        def web_update(kind, payload):
-            if not self.valid(generation):
-                return
-            if kind == 'progress':
-                message = payload.get('message', '正在处理…')
-                self.workspace.task_stage(
-                    task_id, 'analysis', '连接助理' if '连接' in message else '分析请求', 'running'
-                )
-                self.publish_workspace()
-                self.event('status', generation=generation, phase='thinking', message=message)
-            elif kind == 'dot_result':
-                self.diagnostics.task_result(generation, 'completed')
-                self.diagnostics.link_turn(generation, self.brain.last_metrics.get('turn_id'))
-                result_text[0] = payload.get('text', '')
-                # The Dot turn receipt closes the task, independently of the
-                # remaining audio or device delivery. A disconnected display
-                # cannot turn successfully executed work into a failed task.
-                self.workspace.task_finish(task_id, 'completed', result_text[0])
-                self.event('dot_result', generation=generation, **payload)
-                self.publish_workspace()
-            elif kind == 'task_stage':
-                self.diagnostics.scenario(
-                    generation, 'web' if payload.get('kind') == 'webSearch' else 'tool'
-                )
-                self.workspace.task_stage(
-                    task_id, payload['id'], payload['title'], payload['status']
-                )
-                self.publish_workspace()
-            elif kind == 'searching':
-                self.diagnostics.scenario(generation, 'web')
-                self.workspace.task_stage(task_id, 'search', '联网检索', 'running')
-                self.publish_workspace()
-                self.event(
-                    'status', generation=generation, phase='thinking', message='正在联网查询…'
-                )
-            elif kind == 'failed':
-                self.log('web_search_failed', **payload)
-            elif kind in ('clear', 'sources'):
-                self.event(
-                    'web_sources',
-                    generation=generation,
-                    items=payload.get('items', []),
-                    retrieved_at=payload.get('retrieved_at', ''),
-                )
-                if kind == 'clear':
-                    self.event('dot_result', generation=generation, text='', truncated=False)
-                if kind == 'sources':
-                    self.workspace.task_stage(task_id, 'search', '检索来源已返回', 'completed')
-                    self.publish_workspace()
-                    self.log('web_search_ready', sources=len(payload['items']))
-
-        completed = True
-        spoken = []
-        try:
-            self.publish_workspace()
-            self.status('thinking', '正在准备回答…')
-            clauses = (
-                self.brain.vision_clauses(
-                    text, image, self.history, lambda: self.valid(generation), web_update
-                )
-                if image is not None
-                else self.brain.clauses(
-                    text, self.history, lambda: self.valid(generation), web_update
-                )
-                if self.brain
-                else iter(['语音识别已完成。你刚才说：' + text])
-            )
-            for clause in clauses:
-                if not self.valid(generation):
-                    completed = False
-                    break
-                self.diagnostics.mark(generation, 'first_clause')
-                if self.brain:
-                    self.diagnostics.link_turn(generation, self.brain.last_metrics.get('turn_id'))
-                if not self.speak(clause, generation):
-                    completed = False
-                    break
-                spoken.append(clause)
-        finally:
-            close = getattr(clauses, 'close', None)
-            if close:
-                close()
-            failed = bool(
-                self.brain
-                and (
-                    self.brain.last_metrics.get('completed') is False
-                    or self.brain.last_metrics.get('approval_required')
-                )
-            )
-            status = (
-                'cancelled'
-                if not self.valid(generation)
-                else 'failed'
-                if sys.exc_info()[0] or not completed or failed
-                else 'completed'
-            )
-            self.workspace.task_finish(task_id, status, result_text[0] or ''.join(spoken))
-            self.diagnostics.task_result(generation, status)
-            self.diagnostics.finish(generation, status)
-            self.publish_workspace()
-        if completed and self.valid(generation):
-            answer = ''.join(spoken)
-            self.history.extend(
-                [{'role': 'user', 'content': text}, {'role': 'assistant', 'content': answer}]
-            )
-            self.status(
-                'listening' if self.active else 'idle',
-                '我在听' if self.active else '回答已完成 · 麦克风关闭',
-            )
-            if self.brain:
-                self.metrics['last_chat_api'] = self.brain.last_metrics
-            voice = getattr(self.speech, 'voice', None)
-            if voice:
-                self.metrics['last_speech_api'] = voice.last_metrics
+        return self.response.answer(text, generation, image=image)
 
 
 def main():

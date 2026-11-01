@@ -68,11 +68,15 @@ class IdleTests(unittest.TestCase):
             owner = (
                 b.playback
                 if field == 'playing'
+                else b.response
+                if field == 'response_busy'
                 else b.recognition
                 if field == 'recognition_busy'
                 else b
             )
-            setattr(owner, 'busy' if field == 'recognition_busy' else field, True)
+            setattr(
+                owner, 'busy' if field in ('recognition_busy', 'response_busy') else field, True
+            )
             b.idle_tick()
             self.assertFalse(b.screen_sleeping)
         b = self.bridge()

@@ -328,3 +328,8 @@ main 的 [CI 运行](https://github.com/batipang/CC8/actions/runs/41320525409) �
 
 
 识别组件新增 one-shot 启动锁和两个并发启动的回归：只创建一个 worker、不调用 provider，另一个启动明确拒绝。加入后全 host 347 项通过（4 private skip）。
+
+
+### F-06 第六步：回复所有权（未部署）
+
+ResponseWorker 接管有界队列、单消费者、busy 与 RAM-only 历史；任务状态继续通过 Workspace 方法维护，接口动态查询 provider 并保留原 façade，未改变工具权限、调用次数、音色或音频参数。并发启动明确拒绝第二个消费者。实际本地 installer 16、host 348（4 private skip）、tooling 47、Java 15 checks、Ruff / Java / strict 六模块全部通过。原 text_done 断线后第二条请求仍执行、已完成真实任务在停止朗读后仍完成、视觉/提醒忙闲与旧代次隔离均保持。未进行真人/设备或私有音频验证；F-06 和所有实体 P0 验收仍开放，待 CI。
