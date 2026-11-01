@@ -14,7 +14,7 @@ from typing import Callable
 from announce import Announcement
 from diagnostics import TraceBook, error_kind
 from failure_feedback import FailureSink, feedback
-from operation_failure import OperationFailure
+from operation_failure import OperationFailure, KINDS
 from reply_types import Reply, TextReply, VisualReply
 from session_ports import EventSink, MetricSink
 from workspace import Workspace
@@ -150,7 +150,15 @@ class ResponseWorker:
                     'status', generation=generation, phase='thinking', message='正在联网查询…'
                 )
             elif kind == 'failed':
-                self.hooks.log('web_search_failed', **payload)
+                category = payload.get('kind')
+                category = (
+                    category
+                    if isinstance(category, str) and category in KINDS
+                    else 'provider_or_runtime'
+                )
+                self.hooks.workspace().task_stage(task_id, 'search', '联网检索', 'failed')
+                self.hooks.publish_workspace()
+                self.hooks.log('web_search_failed', kind=category)
             elif kind in ('clear', 'sources'):
                 self.hooks.event(
                     'web_sources',

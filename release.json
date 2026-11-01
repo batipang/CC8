@@ -2,7 +2,7 @@
   "schema_version": 1,
   "release_id": "p0-software-20261102.1",
   "backend": {
-    "version": "0.13.3"
+    "version": "0.13.4"
   },
   "assistant": {
     "version": "0.8.7",
