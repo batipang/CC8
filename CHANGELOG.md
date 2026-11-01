@@ -33,6 +33,10 @@ Backend 0.13.1; APK and wire protocol versions stay independent and unchanged.
 - Retain requests timeout/disconnect categories at all MiniMax transport entry
   points. Recovery uses fixed content-free guidance and never retries a task.
 
+- Add a fixed 15-calibration/60-acceptance generic ASR corpus and private
+  `cc8 score-asr` reports, with missing coverage, explicit field annotations,
+  paired A/B and no recording, upload or automatic acceptance claim.
+
 This candidate has not replaced the running installation.
 
 ## foundation-20261102.1 — source snapshot

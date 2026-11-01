@@ -421,6 +421,10 @@ def main():
         from measure import main as measure_main
 
         return measure_main(sys.argv[2:])
+    if sys.argv[1:2] == ['score-asr']:
+        from score_asr import main as score_main
+
+        return score_main(sys.argv[2:])
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
     prepare = commands.add_parser(
@@ -440,6 +444,9 @@ def main():
     group.add_argument('--foreground', action='store_true')
     group.add_argument('--stop', action='store_true')
     commands.add_parser('measure', help='Collect content-free host receipts without capture')
+    commands.add_parser(
+        'score-asr', help='Score supplied private ASR text; never records or uploads'
+    )
     args = parser.parse_args()
     try:
         if args.command == 'setup':
