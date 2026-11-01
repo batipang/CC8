@@ -384,3 +384,13 @@ wait gate 加速但退避请求仍断言为 1/2/4/8/16/30/30/30/30/30；不健�
 后台候选 0.13.0 / local-wake-20261102.1，APK 0.8.7 与协议 2 不变。中文独立 stream 共享既有停止模型和 engine lock，英文专用 GigaSpeech BPE KWS；原停止参数未改变。双重云识别门控、有界空闲窗口、同句缓冲、无唤醒词/应用内黑屏、旧代次与 native 重置竞态均有合成流水线/并发回归。英文固定归档 SHA 为本机官方 HTTPS 下载计算，来源明确记录，权重不入 Git。
 
 实际本机全套 installer 16、host 402（4 private-audio skip）、tooling 51、Java 15 checks；Ruff / Java formatting / strict 六模块通过。真实两个权重在隔离 eval 环境执行 5 正样本 / 3 负样本和 10 秒低电平噪声检查；合成音而非真人，无麦克风、云请求或私有音频。加载 0.571 秒、进程峰值 RSS 108.0 MiB、10 秒 native 计算 0.2123 秒仅为本轮开发机观测。模型许可、资源、断线/停止规则和待补真人矩阵见 [LOCAL_WAKE](LOCAL_WAKE.md)。未运行新后台、安装 APK 或启用设备采集；待 CI，P0-03 及实体验收均不关闭。
+
+
+P0-03 已通过 [PR #30](https://github.com/batipang/CC8/pull/30) 的 [真实 CI 八项](https://github.com/batipang/CC8/actions/runs/41352092517)，合入 c260111。仍未部署，真人/设备缺口保持开放。
+
+
+### P0-06：分类失败、任务与播报分立（未部署）
+
+候选后台 0.13.1 / failure-feedback-20261102.1。两个定向用例对 44eaff7 基线分别复现 Dot 错误被普通回答吞掉、播放 ACK 缺失无分类反馈，候选通过。新增 11 项回归含大脑 6 类、ASR/TTS 5 类故障各 3 次，真实 MiniMax Transport 三入口超时/断连各 3 次；检查请求一次、busy 清理、失败任务/已完成工作分立、固定恢复文案、旧代次和秘密 sentinel 隔离。RPC waiter 超时清理、后半段 TTS 仍正确标为 TTS、设备错误及 ACK 截止时间均验证。
+
+本机全套 installer 16、host 413（4 private-audio skip）、tooling 51、Java 15 checks；Ruff / Java formatting / strict 六模块与脱敏历史扫描通过。无实际模型、麦克风/相机或设备操作；详见 [FAILURE_FEEDBACK](FAILURE_FEEDBACK.md)。待 CI，不关闭部署/实机验收。

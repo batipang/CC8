@@ -7,6 +7,7 @@ import re
 import threading
 import time
 import uuid
+from operation_failure import OperationFailure, ClassifiedFailure
 
 STAGES = frozenset(
     (
@@ -43,6 +44,8 @@ INTERVALS = {
 
 def error_kind(error):
     """Never copy exception messages, URLs, provider bodies or credentials."""
+    if isinstance(error, OperationFailure):
+        return error.kind
     status = getattr(error, 'http_status', None)
     if status == 429:
         return 'rate_limit'
@@ -50,6 +53,8 @@ def error_kind(error):
         return 'quota'
     if status in (401, 403):
         return 'credential_or_permission'
+    if isinstance(error, ClassifiedFailure):
+        return error.kind
     if type(error).__name__ == 'DotApprovalRequired':
         return 'approval_declined'
     if isinstance(error, TimeoutError) or type(error).__name__ in (
@@ -203,12 +208,19 @@ class TraceBook:
             if row is not None:
                 row['turn_id'] = ident
 
-    def current_stage(self, key):
+    def current_stage(self, key, *, default='asr'):
         with self.lock:
             row = self._row(key)
-            return row.get('active_stage', 'asr') if row else 'asr'
+            return row.get('active_stage', default) if row else default
+
+    def failure_record(self, key):
+        with self.lock:
+            row = self._row(key)
+            return deepcopy(row.get('error')) if row else None
 
     def failure(self, key, stage, error):
+        if isinstance(error, OperationFailure):
+            stage = error.stage
         if stage not in ('asr', 'brain', 'tts', 'playback', 'transport'):
             stage = 'runtime'
         with self.lock:

@@ -12,9 +12,11 @@ import threading
 import time
 from typing import Callable, ContextManager
 from caption_timing import CaptionTiming
-from diagnostics import TraceBook
+from diagnostics import TraceBook, error_kind
+from failure_feedback import FailureSink
+from operation_failure import OperationFailure
 from dsp import RATE
-from minimax_client import MiniMaxError
+from minimax_client import MiniMaxError, Cancelled
 from protocol import Packet, SPEAKER, JsonValue
 from reply_types import mood
 from speech_providers import DirectSpeech
@@ -35,6 +37,7 @@ class PlaybackHooks:
     log: EventSink
     metric: MetricSink
     diagnostics: Callable[[], TraceBook]
+    failure: FailureSink
     trace: Callable[[], str | None]
     echo_metrics: Callable[[], dict[str, JsonValue]]
     utterance_paused: Callable[[int], bool]
@@ -125,7 +128,15 @@ class PlaybackController:
             self.hooks.log(
                 'device_playback_error', error_type=str(event.get('error_type', 'Unknown'))[:50]
             )
+            generation = self.hooks.generation()
             self.hooks.cancel_session('playback_error')
+            self.hooks.failure(
+                '设备播放失败',
+                OperationFailure(
+                    'Device playback failed', stage='playback', kind='provider_or_runtime'
+                ),
+                trace_key=generation,
+            )
 
     def pause_for_voice(self):
         # A tentative pause retains generation; confirmed speech cancels later.
@@ -197,10 +208,20 @@ class PlaybackController:
     def play(self, pcm, text, generation, role='assistant'):
         return self.play_stream(iter([pcm]), text, generation, role)
 
+    def audio_chunks(self, chunks):
+        try:
+            yield from chunks
+        except Cancelled:
+            raise
+        except Exception as error:
+            raise OperationFailure(
+                'Speech provider failed', stage='tts', kind=error_kind(error)
+            ) from None
+
     def play_stream(self, chunks, text, generation, role='assistant', timing=None):
         # Each clause owns its iterator, caption publisher and playback_id.
         # Sending all PCM is not a device play_done acknowledgement.
-        iterator = iter(chunks)
+        iterator = self.audio_chunks(chunks)
         prefill = []
         count = 0
         started = False
@@ -305,7 +326,12 @@ class PlaybackController:
                 completed = generation in self.completed
             if not completed and self.hooks.valid(generation):
                 self.hooks.log('playback_completion_timeout')
+                error = OperationFailure(
+                    'Playback acknowledgement timed out', stage='playback', kind='timeout'
+                )
+                self.hooks.diagnostics().failure(generation, 'playback', error)
                 self.hooks.cancel_session('completion_timeout')
+                self.hooks.failure('设备播放未确认', error, trace_key=generation)
                 return False
             return self.hooks.valid(generation)
         except Exception as error:
@@ -314,7 +340,7 @@ class PlaybackController:
             )
             if self.hooks.valid(generation) and started:
                 self.hooks.cancel_session('audio_stream_error')
-                self.hooks.status('error', '这次播报没有完成，请再说一次')
+                self.hooks.failure('这次播报没有完成', error, trace_key=generation)
             raise
         finally:
             close = getattr(iterator, 'close', None)
@@ -325,18 +351,16 @@ class PlaybackController:
 
     def speak(self, text, generation):
         self.hooks.diagnostics().mark(generation, 'tts_start')
-        if isinstance(self.hooks.speech(), DirectSpeech):
-            timing = CaptionTiming(text)
-            return self.play_stream(
-                self.hooks.speech().stream(text, lambda: self.hooks.valid(generation), timing.feed),
-                text,
-                generation,
-                timing=timing,
-            )
-        if hasattr(self.hooks.speech(), 'stream'):
-            return self.play_stream(
-                self.hooks.speech().stream(text, lambda: self.hooks.valid(generation)),
-                text,
-                generation,
-            )
-        return self.play(self.hooks.speech().synthesize(text), text, generation)
+        speech = self.hooks.speech()
+        timing = CaptionTiming(text) if isinstance(speech, DirectSpeech) else None
+
+        def source():
+            # Invoke even eager providers inside the explicit TTS boundary.
+            if timing:
+                yield from speech.stream(text, lambda: self.hooks.valid(generation), timing.feed)
+            elif hasattr(speech, 'stream'):
+                yield from speech.stream(text, lambda: self.hooks.valid(generation))
+            else:
+                yield speech.synthesize(text)
+
+        return self.play_stream(source(), text, generation, timing=timing)

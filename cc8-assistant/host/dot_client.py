@@ -19,6 +19,7 @@ from minimax_client import Cancelled
 from web_search import SpeechClauses, now, public_url
 from vision import jpeg_dimensions
 from runtime_env import command_path, runtime_environment
+from operation_failure import OperationFailure
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -40,12 +41,14 @@ def answer_sources(answer):
     return items
 
 
-class DotError(RuntimeError):
-    pass
+class DotError(OperationFailure):
+    def __init__(self, message, *, kind='provider_or_runtime'):
+        super().__init__(message, stage='brain', kind=kind)
 
 
 class DotApprovalRequired(DotError):
-    pass
+    def __init__(self, message):
+        super().__init__(message, kind='approval_declined')
 
 
 class EventQueue(queue.Queue):
@@ -124,7 +127,7 @@ class CodexRpc:
     def start(self):
         if self.process is not None:
             if self.failed or self.process.poll() is not None:
-                raise DotError('Codex process is no longer connected')
+                raise DotError('Codex process is no longer connected', kind='transport_or_io')
             return
         self.process = self.popen(
             self.command or codex_command(),
@@ -164,7 +167,7 @@ class CodexRpc:
             raise DotError('Codex request exceeds size limit')
         with self.lock:
             if not self.process or self.failed:
-                raise DotError('Codex is disconnected')
+                raise DotError('Codex is disconnected', kind='transport_or_io')
             try:
                 offset = 0
                 while offset < len(wire):
@@ -173,7 +176,7 @@ class CodexRpc:
                         raise OSError('Closed Codex input')
                     offset += count
             except (OSError, ValueError):
-                raise DotError('Codex request could not be sent') from None
+                raise DotError('Codex request could not be sent', kind='transport_or_io') from None
 
     def notify(self, method, params):
         self._send({'method': method, 'params': params})
@@ -189,7 +192,7 @@ class CodexRpc:
             try:
                 result = waiter.get(timeout=timeout)
             except queue.Empty:
-                raise DotError('Codex request timed out') from None
+                raise DotError('Codex request timed out', kind='timeout') from None
             if isinstance(result, Exception):
                 raise result
             if result.get('error'):
@@ -292,9 +295,7 @@ class CodexRpc:
                 waiters = list(self.pending.values())
             for waiter in waiters:
                 try:
-                    waiter.put_nowait(
-                        DotError('Codex disconnected: ' + getattr(self, 'failure_reason', 'EOF'))
-                    )
+                    waiter.put_nowait(DotError('Codex disconnected', kind='transport_or_io'))
                 except queue.Full:
                     pass
 
@@ -497,7 +498,7 @@ class DotBrain:
                     event = self.rpc.events.get(timeout=0.1)
                 except queue.Empty:
                     if self.rpc.failed:
-                        raise DotError('Codex disconnected during the turn')
+                        raise DotError('Codex disconnected during the turn', kind='transport_or_io')
                     continue
                 p = event.get('params') or {}
                 if p.get('threadId') != self.thread_id:
@@ -609,7 +610,7 @@ class DotBrain:
                     break
             if not completed:
                 self._interrupt(turn)
-                raise DotError('Codex turn timed out')
+                raise DotError('Codex turn timed out', kind='timeout')
             if turn.stopped.is_set() or not is_current():
                 raise Cancelled('Turn cancelled')
             finals = [m for m in messages if m.get('phase') == 'final_answer']

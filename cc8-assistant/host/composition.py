@@ -131,6 +131,7 @@ def build_components(
                 raw_coherence=round(host.capture.endpoint.near_speech.correlation, 3),
                 residual_coherence=round(host.capture.endpoint.near_speech.residual_correlation, 3),
             ),
+            failure=lambda message, error, **fields: host.failure(message, error, **fields),
             utterance_paused=lambda token: (
                 host.capture.endpoint.vad.talking
                 and host.capture.endpoint.turn_pause_token == token
@@ -250,7 +251,7 @@ def build_components(
             event=lambda name, **fields: host.event(name, **fields),
             status=lambda phase, message: host.status(phase, message),
             log=lambda name, **fields: host.log(name, **fields),
-            failure=lambda message, error: host.failure(message, error),
+            failure=lambda message, error, **fields: host.failure(message, error, **fields),
             speak=lambda text, generation: host.speak(text, generation),
         )
     )

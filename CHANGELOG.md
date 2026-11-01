@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased — local-wake-20261102.1
+## Unreleased — failure-feedback-20261102.1
 
-Backend 0.13.0; APK and wire protocol versions stay independent and unchanged.
+Backend 0.13.1; APK and wire protocol versions stay independent and unchanged.
 
 - Split vision and speaker/pause lifecycle ownership behind explicit session
   ports, preserving foreground authorization and existing audio parameters.
@@ -26,6 +26,12 @@ Backend 0.13.0; APK and wire protocol versions stay independent and unchanged.
 - Reuse Chinese stop-model weights through an independent native stream; pin a
   dedicated English BPE KWS archive after bilingual-model synthesis checks.
   Document model provenance, resource measurements and human acceptance gaps.
+
+- Preserve stage-specific timeout, quota, authentication, connectivity and
+  declined-approval failures instead of speaking Dot errors as normal answers.
+  Keep completed task receipts after TTS failure; expose missing playback ACKs.
+- Retain requests timeout/disconnect categories at all MiniMax transport entry
+  points. Recovery uses fixed content-free guidance and never retries a task.
 
 This candidate has not replaced the running installation.
 

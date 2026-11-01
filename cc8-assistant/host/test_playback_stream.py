@@ -5,6 +5,7 @@ import numpy as np
 
 from bridge import Bridge
 from minimax_client import MiniMaxError
+from operation_failure import OperationFailure
 from protocol import receive, EVENT, SPEAKER
 from test_runtime import Fragmented
 
@@ -82,8 +83,9 @@ class StreamPlaybackTests(unittest.TestCase):
 
         b = self.bridge()
         generation = b.session.generation
-        with self.assertRaises(MiniMaxError):
+        with self.assertRaises(OperationFailure) as failure:
             b.play_stream(failing(), 'test', generation)
+        self.assertEqual(failure.exception.stage, 'tts')
         self.assertGreater(b.session.generation, generation)
         self.assertFalse(b.playback.playing)
         self.assertTrue(b.session.active)
