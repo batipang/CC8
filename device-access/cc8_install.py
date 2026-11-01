@@ -349,7 +349,7 @@ def _install_verified(transport, package, activity, payload, launch, shared_stag
     return report
 
 
-if __name__ == '__main__':
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument('--check', action='store_true')
@@ -367,7 +367,7 @@ if __name__ == '__main__':
         action='store_true',
         help='Explicit legacy shared-directory mode; other storage-enabled apps may replace the helper. See docs/APK_INSTALL.md',
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if (args.launch or args.shared_staging) and not args.install:
         parser.error('--launch and --shared-staging require --install APK')
     if not ADB.is_file() or not AAPT.is_file() or not APKSIGNER.is_file():
@@ -396,3 +396,7 @@ if __name__ == '__main__':
             print(json.dumps(report, indent=2), flush=True)
     except (RuntimeError, SignatureError, ValueError, OSError, subprocess.SubprocessError) as error:
         raise SystemExit(str(error)) from None
+
+
+if __name__ == '__main__':
+    main()
