@@ -1,6 +1,20 @@
 # Changelog
 
-## Unreleased — p0-software-20261102.1
+## Unreleased — p0-playout-20261102.1
+
+Backend 0.13.6; assistant APK 0.8.8 / code 33; protocol 2.
+
+- Negotiate an optional first-signal playback-head receipt. Validate its clause,
+  generation, frame bounds and host PCM signal index before recording one
+  Mac-clock diagnostic stage. This is device progress, not acoustic audibility.
+- Keep legacy peers, silence, pause/cancel and transport reset safe; a separate
+  short publication lock preserves cancellation without holding wire I/O.
+- Cover reader ACK-before-send-return and cancel/publication races, short writes,
+  small final buffers, invalid/stale/duplicate receipts and Java playback logic.
+
+Not deployed; human and physical P0 acceptance remains pending.
+
+## p0-software-20261102.1 — source snapshot
 
 Backend 0.13.5; APK and wire protocol versions stay independent and unchanged.
 

@@ -93,6 +93,14 @@ def validate_device_event(value: object) -> JsonObject:
         'session_start': ('epoch',),
         'session_rebind': ('epoch',),
         'play_done': ('generation',),
+        'playout_progress': (
+            'generation',
+            'playback_id',
+            'first_signal_frame',
+            'played_frames',
+            'accepted_frames',
+            'nanos',
+        ),
         'playback_paused': ('generation', 'token', 'nanos'),
         'playback_resumed': ('generation', 'token', 'nanos'),
     }.get(name, ())
@@ -105,7 +113,10 @@ def validate_device_event(value: object) -> JsonObject:
         'vision_generation': 32,
         'nanos': 64,
         'desktop_camera_version': 32,
+        'playout_receipt_version': 32,
     }
+    if name == 'playout_progress':
+        integers.update(playback_id=32, first_signal_frame=64, played_frames=64, accepted_frames=64)
     if name in ('playback_paused', 'playback_resumed'):
         integers['token'] = 32
     for key, bits in integers.items():

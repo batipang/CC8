@@ -1,5 +1,7 @@
 # P0 软件候选交接：2026-11-02
 
+本页下方固定记录 p0-software-20261102.1 快照。后续工作候选已到后台 **0.13.6 / APK 0.8.8 code 33**，新增[设备播放头回执](PLAYOUT_RECEIPT.md)，见 [PR #39](https://github.com/batipang/CC8/pull/39)。原版本文件/回执已保留在本机忽略的 artifacts/preserved/p0-software-20261102.1；不要将下方旧 APK 哈希用于新版。两批均未替换现场安装。
+
 本轮可独立完成的软件改造已合入 main，**还没有替换正在运行的助手**。源码标记 [p0-software-20261102.1](https://github.com/batipang/CC8/tree/p0-software-20261102.1) 固定到 `5f1c087cfa8c4cdea42758dd26b7f0597b1c31ef`，该提交已由 PR #37 经全部 CI 通过并包含在主分支；后续 main 的交接文档提交不改写这个源码快照。
 
 | 组成 | 候选 | 现场已知运行 |

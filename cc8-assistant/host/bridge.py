@@ -270,7 +270,13 @@ class Bridge:
             self.session.stop_capture(j)
         elif event == 'interrupt':
             self.session.interrupt(j)
-        elif event in ('play_done', 'playback_paused', 'playback_resumed', 'playback_error'):
+        elif event in (
+            'play_done',
+            'playback_paused',
+            'playback_resumed',
+            'playback_error',
+            'playout_progress',
+        ):
             self.playback.device_event(j)
         elif event == 'capture_gap':
             self.log('capture_read_gap', milliseconds=j.get('milliseconds'))

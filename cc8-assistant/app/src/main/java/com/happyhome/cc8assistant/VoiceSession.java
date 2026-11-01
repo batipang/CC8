@@ -262,6 +262,7 @@ final class VoiceSession {
       }
       JSONObject hello = Wire.event("device_ready");
       Wire.put(hello, "supports_playback_pause", true);
+      Wire.put(hello, "playout_receipt_version", 1);
       Wire.put(hello, "desktop_camera_version", 1);
       Wire.put(hello, "desktop_camera_challenge", desktopCameraAuth.challenge());
       Wire.put(hello, "protocol", BuildConfig.CC8_PROTOCOL);
@@ -614,7 +615,8 @@ final class VoiceSession {
                 j.optString("mood", "friendly"),
                 j.optString("role", "assistant"),
                 j.optInt("playback_id"),
-                timings(j.optJSONArray("timings"), j.optString("text").length()));
+                timings(j.optJSONArray("timings"), j.optString("text").length()),
+                PlayoutProbe.requested(j.opt("playout_receipt_version")));
         player = next;
         next.start();
       } else if ("play_end".equals(event)) {
@@ -1134,6 +1136,8 @@ final class VoiceSession {
   private final class Player extends Thread implements PcmPump.Sink {
     // 播放头决定字幕、嘴型和完成回执；队列中已有数据不能被当成已经发声。
     final int generation, playbackId;
+    final boolean reportPlayout;
+    final PlayoutProbe playout = new PlayoutProbe();
     final String text, mood, role;
     volatile CaptionTimeline timings;
     long renderSequence;
@@ -1145,7 +1149,7 @@ final class VoiceSession {
     volatile AudioTrack track;
     volatile long written = 0;
 
-    Player(int g, String t, String m, String role, int id, CaptionTimeline line) {
+    Player(int g, String t, String m, String role, int id, CaptionTimeline line, boolean report) {
       super("cc8-speaker");
       generation = g;
       text = t;
@@ -1153,6 +1157,7 @@ final class VoiceSession {
       this.role = role;
       playbackId = id;
       timings = line;
+      reportPlayout = report;
     }
 
     void offer(byte[] pcm) throws IOException {
@@ -1287,6 +1292,30 @@ final class VoiceSession {
           Wire.pcm(accepted, count));
       written += count;
       renderFrames += count;
+      if (reportPlayout) {
+        playout.accepted(samples, offset, count);
+        reportPlayout(t);
+      }
+    }
+
+    void reportPlayout(AudioTrack t) {
+      if (!reportPlayout || !playout.pending()) return;
+      PlayoutProbe.Observation seen =
+          playout.observe(
+              t.getPlaybackHeadPosition() & 0xffffffffL,
+              System.nanoTime(),
+              t.getPlayState() == AudioTrack.PLAYSTATE_PLAYING,
+              paused,
+              allowed());
+      if (seen == null) return;
+      JSONObject ack = Wire.event("playout_progress");
+      Wire.put(ack, "generation", generation);
+      Wire.put(ack, "playback_id", playbackId);
+      Wire.put(ack, "first_signal_frame", seen.firstSignal);
+      Wire.put(ack, "played_frames", seen.played);
+      Wire.put(ack, "accepted_frames", seen.accepted);
+      Wire.put(ack, "nanos", seen.nanos);
+      send(ack);
     }
 
     @Override
@@ -1328,6 +1357,7 @@ final class VoiceSession {
           if (!allowed()) break;
           byte[] bytes = queue.poll(50, TimeUnit.MILLISECONDS);
           if (bytes == null) {
+            reportPlayout(t);
             if (ended && queue.isEmpty()) break;
             continue;
           }
@@ -1340,8 +1370,10 @@ final class VoiceSession {
           long before = SystemClock.elapsedRealtime();
           waitIfPaused();
           deadline += SystemClock.elapsedRealtime() - before;
+          reportPlayout(t);
           Thread.sleep(10);
         }
+        if (allowed()) reportPlayout(t);
         if (allowed() && (t.getPlaybackHeadPosition() & 0xffffffffL) < written)
           throw new IOException("播放排空超时");
         if (allowed()) {

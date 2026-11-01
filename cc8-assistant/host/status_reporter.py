@@ -82,6 +82,7 @@ class StatusReporter:
             'runtime_instance': self.instance,
             'resources': self.resources.sample(),
             'model_ready': True,
+            'playout_receipt_supported': self.hooks.playback().device_can_report_playout,
             'local_wake_ready': self.hooks.wake().ready,
             'waiting_for_wake': state.active
             and not self.hooks.calibration().active
@@ -113,6 +114,7 @@ class StatusReporter:
             'generation': state.generation,
             'wake_mode': state.wake,
             'wake_word': self.hooks.wake_word,
+            'playout_receipt_supported': self.hooks.playback().device_can_report_playout,
             'local_wake_ready': self.hooks.wake().ready,
             'waiting_for_wake': state.active
             and not self.hooks.calibration().active

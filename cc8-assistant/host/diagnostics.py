@@ -21,6 +21,7 @@ STAGES = frozenset(
         'tts_start',
         'first_pcm',
         'render_ack',
+        'playout_ack',
         'playback_done',
         'task_result',
         'pause_request',
@@ -38,6 +39,8 @@ INTERVALS = {
     'brain_first_clause_ms': ('brain_start', 'first_clause'),
     'tts_first_pcm_ms': ('tts_start', 'first_pcm'),
     'utterance_to_render_ack_ms': ('utterance_end', 'render_ack'),
+    'utterance_to_playout_ack_ms': ('utterance_end', 'playout_ack'),
+    'pcm_to_playout_ack_ms': ('first_pcm', 'playout_ack'),
     'pause_roundtrip_ms': ('pause_request', 'pause_ack'),
 }
 
@@ -242,6 +245,7 @@ class TraceBook:
             'window': 'recent_requests_only',
             'contains_content': False,
             'render_ack_is_audible_onset': False,
+            'playout_ack_is_audible_onset': False,
             'groups': {
                 o: summarize_requests([r for r in rows if r['origin'] == o])
                 for o in sorted(ORIGINS)

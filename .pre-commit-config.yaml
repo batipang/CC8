@@ -6,7 +6,7 @@ repos:
         name: CC8 Python lint and formatting
         entry: python tools/quality.py check --python-only
         language: python
-        additional_dependencies: [ruff==0.17.3, mypy==2.4.1]
+        additional_dependencies: [ruff==0.17.3, mypy==2.4.1, numpy==2.3.4]
         pass_filenames: false
         always_run: true
       - id: cc8-java-format
