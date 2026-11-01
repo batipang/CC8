@@ -211,3 +211,14 @@ Android 0.5.2 已使用原签名安装到当前 CC8，Mac 后台已更新为 0.8
 - Ruff 0.17.3 lint / format check、google-java-format 1.35.0 check、`pre_commit run --all-files` 两个真实隔离钩子与 Git 空白检查通过。已在当前仓库安装 pre-commit hook；没有覆盖原有 hook。Java 注释二次格式化行为采用有界两遍加最终只读复查，避免 format 返回成功但紧接的 check 失败。
 - 格式基线后的最终 Android `assembleRelease` / `lintRelease` 两工程均通过；安装器 helper 本机构建和 `cc8_install.py --check` 通过，未调用设备安装。本轮没有部署后台、安装 APK、操作设备、打开麦克风/摄像头或调用模型；实际运行版本不变。
 - F-04 的轻量入口交付；F-07 的本地规则/格式基线/钩子交付。CI 工作流尚不存在，本地通过不写成 CI 通过；F-07 的 CI 验收继续关联 F-05。
+
+## 2026-11-01：F-05 / F-19 真实 CI、安全门槛与 F-07 验收
+
+- [PR #1](https://github.com/batipang/CC8/pull/1) 的 [真实 CI 运行](https://github.com/batipang/CC8/actions/runs/41319975312) 全部 8 个 job 成功：Ubuntu 24.04 与 macOS 15 离线回归、同版 Python/Java/工作流检查、两个 Android 工程编译/lint、脱敏 Git 历史密钥扫描、Python 清单审计，以及 Required checks 汇总。F-07 的原 CI 缺口补齐；不以本轮 Ubuntu 回归宣称完整 Linux 语音运行或实机验收完成。
+- 本机轻量测试：安装器 11 项、后台 297 项（293 通过、4 项私人录音显式 skip）、工具 24 项，无 errors/failures；Java 音频 15 项检查、Ruff、Java formatter、actionlint 与真实提交钩子通过。新增 9 项离线回归覆盖审计失败/缺失或陈旧报告/无法查询包、分环境继续执行、扫描脱敏及全历史参数、CLI 校验和/符号链接/缓存篡改边界。
+- 首轮 CI 真实暴露 SDK manager 不在 PATH、macOS 14 退役 brownout；改为显式 SDK 路径和 macOS 15 后复跑全绿。保留 [首轮失败记录](https://github.com/batipang/CC8/actions/runs/41319754527)。在这次失败状态下，main 已启用 Required checks 严格必需检查（绑定 GitHub Actions、管理员适用），API 实际确认 PR 的 merge state 为 BLOCKED；未调用 merge 尝试绕过。修复后才允许合入。另启用仓库 Actions SHA 固定策略，默认 token 保持只读。
+- gitleaks 8.30.1 全历史扫描仅发现一处误报：SenseVoice 公共词表 `tokens.txt` 的 SHA-256。`.gitleaksignore` 只登记原提交/文件/规则/行号指纹。隔离临时 Git 仓库放入随机生成的模拟 API key，扫描返回 1，verbose 输出也未包含原值；没有把模拟值或私人密钥加入本仓库，也没有上传泄露报告。
+- pip-audit 2.10.1 首次在源码声明的 MLX 0.29.3 检出两个独立已知漏洞（服务返回 3 条记录，包含一条重复）。源码锁将 mlx / mlx-metal 同步修补到 0.29.4，不加漏洞忽略项；开发 19、审计工具 27、运行清单 26 个包共 72 条环境记录再次审计，零已知漏洞、零查询 skip。不同环境重复包分别审计，不把版本冲突合并成一个环境。审计范围限定声明包，不代表所有间接依赖、Gradle 或模型内容均已扫描。
+- 在独立 Apple Silicon / CPython 3.13 环境安装 mlx / mlx-metal 0.29.4 与 numpy 2.3.4，pip check、正常 NPY 数组加载和求和结果核对通过，没有加载模型或采集录音。当前运行目录和实际 voice venv 未修改，语音模型兼容、真实问答与运行环境补丁部署留待单独验证。
+- Dependabot 配置为每周检查 pip、GitHub Actions 和两个 Gradle 工程，只生成更新 PR、不自动合并/发布。工具与模型下载来源、固定校验值、唯一误报证据及当前覆盖限制见 [CI_SECURITY.md](CI_SECURITY.md)。CI 仅保留 lint 和依赖审计公开信息报告 7 天，不上传 APK、开发签名、用户数据或本机配置。
+- 本轮未操作设备、打开麦克风/相机、部署后台、安装 APK或调用任何模型；当前实际运行助手不变。F-05 / F-07 / F-19 按上述范围完成，后续 F-20 / F-08 / F-09 与运行补丁部署仍在 TODO。

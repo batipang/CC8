@@ -1,0 +1,4 @@
+# False positive: SHA-256 of the public SenseVoice tokens.txt model vocabulary.
+# Reviewed in resources/sensevoice.json; this is a file checksum, not an API token.
+# Ignore this exact historical finding only, not the file or generic-api-key rule.
+43fef65f1585897e955254334cd7fa1d633fc159:cc8-assistant/host/resources/sensevoice.json:generic-api-key:9

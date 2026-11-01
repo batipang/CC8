@@ -1,5 +1,7 @@
 # CC8：APK 安装与大黄蜂语音助手
 
+[![CI](https://github.com/batipang/CC8/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/batipang/CC8/actions/workflows/ci.yml)
+
 整理自一台天猫精灵 CC8 的实际开发记录，包含 **APK 安装工具、离线能力检测器，以及完整的大黄蜂（Bumblebee）语音助手代码**。
 
 已验证设备：底部型号 **TG_S6B01**，Android 型号 **AILABS_S6**，Android SDK **27**，固件 **6.1.8-RS-20251125.1919**。其他硬件或固件的工程入口、ADB 限制和安装权限未验证。
@@ -11,6 +13,7 @@
 - [从准备设备到安装 APK 的完整步骤](docs/APK_INSTALL.md)
 - [构建、签名与测试](docs/DEVELOPMENT.md)
 - [轻量测试、格式规范与提交钩子](docs/DEVELOPMENT.md#轻量测试与质量检查)
+- [CI、密钥扫描、依赖审计与更新边界](docs/CI_SECURITY.md)
 - [语音助手配置与使用](cc8-assistant/README.md)
 - [方案一界面、任务与提醒](docs/WORKSPACE.md)
 - [功能迭代列表](docs/ROADMAP.md)
