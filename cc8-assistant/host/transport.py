@@ -16,15 +16,34 @@ import subprocess
 import threading
 import time
 import uuid
-from protocol import Packet, receive, EVENT, decode_event, decode_json_object
+from typing import Callable, Literal, Protocol, TypeAlias
+from protocol import Packet, receive, EVENT, decode_event, decode_json_object, JsonValue, JsonObject
 
 ROOT = Path(__file__).resolve().parents[2]
 PAIR_DIR = ROOT / '.toolchains/cc8/transport'
 TLS_PORT = 18766
 DISCOVERY_PORT = 18767
+TransportKind: TypeAlias = Literal['usb', 'wifi']
+TransportEvent: TypeAlias = tuple[Literal['up', 'down', 'packet'], 'Channel', Packet | None]
+CHANNEL_PRIORITY: tuple[TransportKind, ...] = ('usb', 'wifi')
 
 
-def private_ipv4(value):
+class DuplexStream(Protocol):
+    def recv(self, count: int, /) -> bytes: ...
+    def sendall(self, data: bytes, /) -> None: ...
+    def shutdown(self, how: int, /) -> None: ...
+    def close(self) -> None: ...
+
+
+class LogSink(Protocol):
+    def __call__(self, event: str, **fields: JsonValue) -> None: ...
+
+
+def quiet_log(event: str, **fields: JsonValue) -> None:
+    pass
+
+
+def private_ipv4(value: str) -> bool:
     try:
         ip = ipaddress.ip_address(value)
         return ip.version == 4 and (
@@ -38,11 +57,11 @@ def private_ipv4(value):
         return False
 
 
-def signature(token, message):
+def signature(token: str, message: str) -> str:
     return hmac.new(bytes.fromhex(token), message.encode(), hashlib.sha256).hexdigest()
 
 
-def local_addresses():
+def local_addresses() -> list[str]:
     values = []
     try:
         text = subprocess.run(['/sbin/ifconfig'], capture_output=True, text=True, timeout=3).stdout
@@ -58,7 +77,7 @@ def local_addresses():
 
 class Pairing:
     # 私有文件保存共享密钥与 TLS 证书；USB 负责初次交付设备侧配对信息。
-    def __init__(self, folder=PAIR_DIR):
+    def __init__(self, folder: str | Path = PAIR_DIR) -> None:
         self.folder = Path(folder)
         self.folder.mkdir(parents=True, exist_ok=True)
         os.chmod(self.folder, 0o700)
@@ -93,35 +112,40 @@ class Pairing:
         os.chmod(key, 0o600)
         os.chmod(cert, 0o600)
         if config.exists():
-            data = json.loads(config.read_text())
+            data = decode_json_object(config.read_bytes(), max_bytes=4096)
         else:
             data = {'server_id': secrets.token_hex(16), 'token': secrets.token_hex(32)}
             fd = os.open(config, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, 'w') as out:
                 json.dump(data, out)
         os.chmod(config, 0o600)
-        if not re.fullmatch('[0-9a-f]{32}', data.get('server_id', '')) or not re.fullmatch(
-            '[0-9a-f]{64}', data.get('token', '')
+        server_id, token = data.get('server_id'), data.get('token')
+        if (
+            not isinstance(server_id, str)
+            or not re.fullmatch('[0-9a-f]{32}', server_id)
+            or not isinstance(token, str)
+            or not re.fullmatch('[0-9a-f]{64}', token)
         ):
             raise ValueError('Invalid local transport pairing file')
-        self.server_id = data['server_id']
-        self.token = data['token']
+        self.server_id = server_id
+        self.token = token
         der = ssl.PEM_cert_to_DER_cert(cert.read_text())
         self.pin = hashlib.sha256(der).hexdigest()
         self.context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         self.context.minimum_version = ssl.TLSVersion.TLSv1_2
         self.context.load_cert_chain(str(cert), str(key))
 
-    def device_config(self):
+    def device_config(self) -> JsonObject:
+        hosts: list[JsonValue] = [*local_addresses()]
         return {
             'server_id': self.server_id,
             'token': self.token,
             'certificate_sha256': self.pin,
             'port': TLS_PORT,
-            'hosts': local_addresses(),
+            'hosts': hosts,
         }
 
-    def offer(self, data):
+    def offer(self, data: object) -> JsonObject | None:
         if not isinstance(data, dict) or data.get('type') != 'cc8_discover':
             return None
         nonce = data.get('nonce', '')
@@ -148,21 +172,23 @@ class Pairing:
 
 class Channel:
     # USB 与 TLS 统一为包流；读线程投递事件，主循环选择唯一生效的通道。
-    def __init__(self, stream, kind, events):
+    def __init__(
+        self, stream: DuplexStream, kind: TransportKind, events: queue.Queue[TransportEvent]
+    ) -> None:
         self.stream = stream
         self.kind = kind
         self.events = events
         self.ident = uuid.uuid4().hex
         self.lock = threading.Lock()
         self.state_lock = threading.Lock()
-        self.reader = None
+        self.reader: threading.Thread | None = None
         self.reader_running = False
         self.io_closed = False
         self.closed = False
         self.ready = False
         self.last_rx = time.monotonic()
 
-    def start(self):
+    def start(self) -> None:
         with self.state_lock:
             if self.closed:
                 return
@@ -174,16 +200,16 @@ class Channel:
             )
         self.reader.start()
 
-    def sendall(self, raw):
+    def sendall(self, raw: bytes) -> None:
         with self.lock:
             if self.closed:
                 raise EOFError('Transport closed')
             self.stream.sendall(raw)
 
-    def event(self, name, **fields):
-        self.sendall(Packet.event(name, **fields).encode())
+    def event(self, name: str, generation: int = 0, **fields: JsonValue) -> None:
+        self.sendall(Packet.event(name, generation, **fields).encode())
 
-    def read(self):
+    def read(self) -> None:
         with self.state_lock:
             self.reader_running = True
         try:
@@ -223,10 +249,10 @@ class Channel:
             except queue.Full:
                 pass
 
-    def shutdown(self, *unused):
+    def shutdown(self, *unused: object) -> None:
         self.close()
 
-    def close(self):
+    def close(self) -> None:
         with self.state_lock:
             if self.closed:
                 return
@@ -240,7 +266,7 @@ class Channel:
         if finish:
             self._finish_close()
 
-    def _finish_close(self):
+    def _finish_close(self) -> None:
         with self.state_lock:
             if self.io_closed:
                 return
@@ -255,14 +281,14 @@ class Channel:
 class TransportHub:
     def __init__(
         self,
-        pairing,
-        usb_connect,
-        usb_present,
-        log=lambda *a, **kw: None,
-        bind='0.0.0.0',
-        tls_port=TLS_PORT,
-        discovery_port=DISCOVERY_PORT,
-    ):
+        pairing: Pairing,
+        usb_connect: Callable[[], DuplexStream],
+        usb_present: Callable[[], bool],
+        log: LogSink = quiet_log,
+        bind: str = '0.0.0.0',
+        tls_port: int = TLS_PORT,
+        discovery_port: int = DISCOVERY_PORT,
+    ) -> None:
         self.pairing = pairing
         self.usb_connect = usb_connect
         self.usb_present = usb_present
@@ -270,19 +296,19 @@ class TransportHub:
         self.bind = bind
         self.tls_port = tls_port
         self.discovery_port = discovery_port
-        self.events = queue.Queue(maxsize=512)
-        self.channels = {}
-        self.active = None
+        self.events: queue.Queue[TransportEvent] = queue.Queue(maxsize=512)
+        self.channels: dict[TransportKind, Channel] = {}
+        self.active: Channel | None = None
         self.guard = threading.RLock()
         self.stop = threading.Event()
         self.usb_disabled_until = 0.0
         self.switches = 0
         self.auth_failures = 0
-        self.server = None
-        self.discovery = None
-        self.workers = []
+        self.server: socket.socket | None = None
+        self.discovery: socket.socket | None = None
+        self.workers: list[threading.Thread] = []
 
-    def start(self):
+    def start(self) -> None:
         if self.workers or self.stop.is_set():
             raise RuntimeError('Transport hub cannot be started twice or after close')
         try:
@@ -303,7 +329,7 @@ class TransportHub:
             self.workers.append(worker)
             worker.start()
 
-    def register(self, stream, kind):
+    def register(self, stream: DuplexStream, kind: TransportKind) -> Channel:
         channel = Channel(stream, kind, self.events)
         with self.guard:
             if self.stop.is_set():
@@ -316,10 +342,13 @@ class TransportHub:
         channel.start()
         return channel
 
-    def accept_wifi(self):
+    def accept_wifi(self) -> None:
+        server = self.server
+        if server is None:
+            raise RuntimeError('Transport hub has not started')
         while not self.stop.is_set():
             try:
-                raw, peer = self.server.accept()
+                raw, peer = server.accept()
             except socket.timeout:
                 continue
             except OSError:
@@ -328,12 +357,12 @@ class TransportHub:
                 raw.close()
                 continue
             # Bound expensive unauthenticated handshakes. One paired device.
-            tls = None
+            tls: ssl.SSLSocket | None = None
             try:
                 raw.settimeout(3)
                 tls = self.pairing.context.wrap_socket(raw, server_side=True)
                 packet = receive(tls)
-                auth = (
+                auth: JsonObject = (
                     decode_json_object(packet.data, max_bytes=1024)
                     if packet.kind == EVENT and len(packet.data) <= 1024
                     else {}
@@ -360,22 +389,25 @@ class TransportHub:
                 except OSError:
                     pass
 
-    def discover(self):
+    def discover(self) -> None:
+        discovery = self.discovery
+        if discovery is None:
+            raise RuntimeError('Transport hub has not started')
         while not self.stop.is_set():
             try:
-                raw, peer = self.discovery.recvfrom(2048)
+                raw, peer = discovery.recvfrom(2048)
                 if not private_ipv4(peer[0]):
                     continue
                 value = self.pairing.offer(decode_json_object(raw, max_bytes=2048))
                 if value:
-                    self.discovery.sendto(json.dumps(value, separators=(',', ':')).encode(), peer)
+                    discovery.sendto(json.dumps(value, separators=(',', ':')).encode(), peer)
             except socket.timeout:
                 continue
             except (OSError, ValueError, TypeError):
                 if self.stop.is_set():
                     break
 
-    def monitor_usb(self):
+    def monitor_usb(self) -> None:
         while not self.stop.is_set():
             try:
                 with self.guard:
@@ -394,7 +426,7 @@ class TransportHub:
                 pass
             self.stop.wait(1)
 
-    def heartbeat(self):
+    def heartbeat(self) -> None:
         while not self.stop.wait(2):
             with self.guard:
                 channels = list(self.channels.values())
@@ -409,10 +441,10 @@ class TransportHub:
                 except (OSError, EOFError):
                     channel.close()
 
-    def preferred(self):
+    def preferred(self) -> Channel | None:
         # socket 连通不等于已就绪；只从可用通道中优先选 USB，否则选 Wi-Fi。
         with self.guard:
-            for kind in ['usb', 'wifi']:
+            for kind in CHANNEL_PRIORITY:
                 channel = self.channels.get(kind)
                 if kind == 'usb' and time.monotonic() < self.usb_disabled_until:
                     continue
@@ -420,7 +452,7 @@ class TransportHub:
                     return channel
         return None
 
-    def selected(self, channel):
+    def selected(self, channel: Channel | None) -> None:
         # 明确激活/备用角色，防止两路同时处理音频；配对配置只经 USB 下发。
         self.active = channel
         self.switches += 1
@@ -442,7 +474,7 @@ class TransportHub:
             switches=self.switches,
         )
 
-    def diagnostics(self):
+    def diagnostics(self) -> JsonObject:
         with self.guard:
             return {
                 'transport': self.active.kind if self.active and not self.active.closed else 'none',
@@ -461,7 +493,7 @@ class TransportHub:
                 'usb_test_suppressed': time.monotonic() < self.usb_disabled_until,
             }
 
-    def suppress_usb_for_test(self, seconds):
+    def suppress_usb_for_test(self, seconds: int | float) -> JsonObject:
         if type(seconds) not in (int, float) or not 1 <= seconds <= 60:
             raise ValueError('USB test suppression must be 1–60 seconds')
         self.usb_disabled_until = time.monotonic() + seconds
@@ -471,7 +503,7 @@ class TransportHub:
             channel.close()
         return {'ok': True, 'seconds': seconds}
 
-    def close(self):
+    def close(self) -> None:
         self.stop.set()
         for listener in [self.server, self.discovery]:
             if listener:

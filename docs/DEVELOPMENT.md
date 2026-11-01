@@ -44,6 +44,8 @@ python -m pre_commit run --all-files
 
 Python 固定 Ruff 0.17.3、100 列、单引号、4 空格；检查 F/E4/E9 和多语句规则。Java 固定 google-java-format 1.35.0、JDK 21+，不自动重排/删除 import、不重写长字符串或 Javadoc。设置来源：[Ruff 配置](https://docs.astral.sh/ruff/configuration/)、[Java formatter](https://github.com/google/google-java-format/releases/tag/v1.35.0)、[本地 pre-commit hooks](https://pre-commit.com/#repository-local-hooks)。
 
+Python 检查同时运行固定 mypy 2.4.1：`python -m mypy` 从 pyproject.toml 读取 strict=true，只覆盖 protocol.py、transport.py、workspace.py 三个边界模块。本地 quality、提交钩子和 CI 使用同一入口，不设全局忽略或 Any 兜底。协议递归 JSON、字节流 Protocol、传输事件/通道、任务/提醒 TypedDict 明确输入输出；反序列化后的少量 cast 紧接运行时结构校验并写明理由。注解不能替代不可信 JSON、权限、代次和数值的运行时校验；bridge、DSP、平台集成等尚不在严格类型覆盖中。
+
 Java JAR 留在忽略的 .toolchains/cc8/quality，下载大小和 SHA-256 锁在 tools/resources/google-java-format.json；缺失/损坏时 check 失败，只有显式 setup 才下载。1.35.0 对部分注释需要二次格式化，因此 format 有界执行两遍并最终只读检查，仍不稳定则失败。Python 检查/格式化排除工具链、产物、私有数据、构建目录与签名目录。钩子使用独立 Python 环境，仅检查，不调用模型、设备或安装 APK。
 
 纯格式基线提交登记在 .git-blame-ignore-revs；可用 `git config --local blame.ignoreRevsFile .git-blame-ignore-revs` 在当前仓库启用，不修改全局配置。CI 复用上述检查命令，平台、工作流状态和安全扫描说明见 [CI_SECURITY.md](CI_SECURITY.md)；本地通过与真实 CI 结果分别记录。

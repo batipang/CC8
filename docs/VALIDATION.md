@@ -228,3 +228,14 @@ Android 0.5.2 已使用原签名安装到当前 CC8，Mac 后台已更新为 0.8
 main 的 [CI 运行](https://github.com/batipang/CC8/actions/runs/41320525409) 已全绿。GitHub Actions / Gradle 更新器成功并产生待审 PR，但首次 pip updater 报错，原因是上游文件发现器只递归取回 .txt/.in，未取回原跨目录 .lock 引用；此时将 F-19 恢复为未完成。
 
 [PR #5](https://github.com/batipang/CC8/pull/5) 保留原 .lock 为 -r 兼容入口，将唯一版本列表移到标准 `cc8-assistant/host/requirements-runtime.txt`，版本未改变；三份清单审计及 PR CI 再次通过后合入。通过已登录的仓库网页 Check for updates 触发真实 pip 更新，[复跑 41321754075](https://github.com/batipang/CC8/actions/runs/41321754075) 成功，F-19 才重新关闭。没有用普通 Actions 重跑失败 API 的 403 作为成功证据，也没有忽略运行清单或自动合入 bot 更新。
+
+2026-11-02 补验发现：此前审计兼容 -r 入口时，--disable-pip 返回空依赖列表，退出码与零告警没有揭示漏扫。该阶段的“审计通过”不代表实际覆盖运行清单。[PR #12](https://github.com/batipang/CC8/pull/12) 改为直接审计标准清单，逐包核对规范化名称、固定版本和数量，并拒绝空/未固定/include 清单；新增 3 项回归覆盖空报告与错误包/版本等漏扫情形。[真实 CI 41324197547](https://github.com/batipang/CC8/actions/runs/41324197547) 通过，运行清单实际返回 26 个包，非零覆盖核验通过，不再仅凭退出码结项。
+
+## 2026-11-01：F-20 协议边界与 TLS 生命周期
+
+- [PR #11](https://github.com/batipang/CC8/pull/11) 已在 [真实 PR CI](https://github.com/batipang/CC8/actions/runs/41322860864) 全部 8 个 job 通过后合入，随后 [main CI](https://github.com/batipang/CC8/actions/runs/41323092681) 全绿。后台候选 0.12.3，未部署到实际运行目录。
+- 本机安装器 11、后台 315（311 通过、4 私人录音 skip）、工具 24、Java 音频 15 项检查通过；8 组固定种子 Hypothesis 属性测试各最多 150 个有效生成例，加显式包长/JSON/字段边界例。真实 CI 同时覆盖 Ubuntu / macOS 与两工程 Android 编译/lint。开发依赖新增 Hypothesis 及 sortedcontainers，仍不安装模型。
+- 首轮 Linux 并发连接替换复现 SSL 握手异常；修复外部 close 先 shutdown 唤醒、读线程退出后才最终释放描述符的顺序，防止 SSL_read 尚在使用的 FD 被新连接复用。确定性阻塞流回归验证不提前释放描述符；3 个并发客户端改为 20 轮替换后实际 Ubuntu/macOS 均通过，没有降低为串行或取消 Linux 验收。
+- 新增严格 UTF-8、重复字段/非有限值/孤立代理字符拒绝、JSON 深度/节点预算、会话字段真实整数/布尔校验、协议版本 2 校验。UDP 深层数组之后合法发现仍响应；认证歧义拒绝后合法认证成功；队列饱和读线程及时退出；未完成 TLS 握手期间关闭后的受管线程在预算内退出。没有将异常正文、令牌或原始音视频加入日志。
+- 本轮 Linux 本地 Docker 辅助复现的启动未完成并已终止，不报告为通过；Linux 验收证据来自上面的真实 GitHub Ubuntu job。资源预算、固定 seed 和最小回归见 [PROTOCOL_BOUNDARIES.md](PROTOCOL_BOUNDARIES.md)。旧代播放/交接/全断停止/重连不启用的既有测试继续通过；上述有限自动测试不代表 20 次物理切换、声学或长时运行已完成。
+- 用户已说明稍后配合设备旁实测。当前没有打开麦克风/相机、连接设备、改动运行环境、调用模型或部署 APK；P0 的真人与长时验收继续保留待完成。

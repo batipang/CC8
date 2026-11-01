@@ -195,6 +195,8 @@ class JsonBoundaryTests(unittest.TestCase):
             {'event': 'settings', 'wake_mode': 1},
             {'event': 'play_done', 'generation': None},
             {'event': 'playback_paused', 'token': 1, 'generation': 2},
+            {'event': 'screen_touch', 'extra': object()},
+            {'event': 'screen_touch', 1: 'non-string key'},
         ):
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):

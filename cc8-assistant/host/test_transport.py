@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import secrets
 import queue
+import shutil
 import socket
 import ssl
 import subprocess
@@ -282,6 +283,21 @@ class TransportTests(unittest.TestCase):
             self.assertTrue(private_ipv4(value))
         for value in ['8.8.8.8', '2001:4860:4860::8888', 'bad']:
             self.assertFalse(private_ipv4(value))
+
+    def test_pairing_json_boundary_rejects_wrong_types_duplicates_and_size(self):
+        payloads = (
+            json.dumps({'server_id': 7, 'token': self.pairing.token}).encode(),
+            b'{"server_id":"x","server_id":"y","token":"z"}',
+            b' ' * 4097,
+        )
+        for payload in payloads:
+            with tempfile.TemporaryDirectory() as folder:
+                directory = Path(folder)
+                for name in ('server.pem', 'server-key.pem'):
+                    shutil.copyfile(self.pairing.folder / name, directory / name)
+                (directory / 'pairing.json').write_bytes(payload)
+                with self.assertRaises(ValueError):
+                    Pairing(directory)
 
     def test_usb_detection_excludes_network_adb_and_ambiguous_devices(self):
         prefix = 'List of devices attached\n'

@@ -105,6 +105,7 @@ def check_or_format(action, python=True, java=True, run=subprocess.run):
             commands.reverse()
         for command in commands:
             run(command, cwd=ROOT, check=True)
+        run([sys.executable, '-m', 'mypy'], cwd=ROOT, check=True)
     if java:
         info, jar = verified_formatter()
         java_home = require_java(info['minimum_java'])
