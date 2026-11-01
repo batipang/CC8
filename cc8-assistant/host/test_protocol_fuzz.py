@@ -180,11 +180,11 @@ class JsonBoundaryTests(unittest.TestCase):
     )
     def test_invalid_epoch_never_starts_capture(self, value):
         bridge = Bridge(None, None)
-        generation = bridge.generation
+        generation = bridge.session.generation
         with self.assertRaises(ValueError):
             bridge.on_event({'event': 'session_start', 'epoch': value})
-        self.assertFalse(bridge.active)
-        self.assertEqual(bridge.generation, generation)
+        self.assertFalse(bridge.session.active)
+        self.assertEqual(bridge.session.generation, generation)
 
     def test_missing_fields_and_truthy_strings_are_rejected_before_state_changes(self):
         for value in (

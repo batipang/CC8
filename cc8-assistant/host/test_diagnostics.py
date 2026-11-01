@@ -123,7 +123,7 @@ class DiagnosticsTests(unittest.TestCase):
         bridge = Bridge(None, None)
         bridge.log = lambda *a, **k: None
         bridge.status = lambda *a: None
-        old = bridge.diagnostics.begin('text', bridge.generation)
+        old = bridge.diagnostics.begin('text', bridge.session.generation)
         candidate = bridge.diagnostics.begin('voice')
         bridge.diagnostics.mark(candidate, 'asr_start')
         bridge.failure('识别失败', TimeoutError(), trace_key=candidate)
@@ -179,7 +179,7 @@ class DiagnosticsTests(unittest.TestCase):
                 self.assertFalse(health['microphone_active'])
                 self.assertFalse(health['connected'])
                 self.assertNotIn('SECRET', json.dumps(report))
-                self.assertFalse(bridge.active)
+                self.assertFalse(bridge.session.active)
                 self.assertEqual(path.stat().st_mode & 0o777, 0o600)
             finally:
                 server.close()
@@ -228,8 +228,8 @@ class DiagnosticsTests(unittest.TestCase):
                 yield np.ones(320, dtype=np.int16)
 
         bridge = Bridge(Speech(), None)
-        bridge.connection = object()
-        bridge.text_generation = bridge.generation
+        bridge.session.connection = object()
+        bridge.session.text_generation = bridge.session.generation
         bridge.save_status = lambda: None
 
         def event(name, **fields):
@@ -240,7 +240,7 @@ class DiagnosticsTests(unittest.TestCase):
         bridge.send = lambda p: bridge.on_packet(
             Packet(RENDER, p.generation, p.sequence, p.frame, 1_000_000_000, p.data)
         )
-        bridge.answer('PRIVATE-UTTERANCE', bridge.generation)
+        bridge.answer('PRIVATE-UTTERANCE', bridge.session.generation)
         report = bridge.diagnostics_report()
         row = report['requests'][0]
         self.assertEqual(row['outcome'], 'completed')

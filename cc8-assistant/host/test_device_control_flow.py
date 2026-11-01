@@ -12,7 +12,7 @@ class DeviceControlFlowTests(unittest.TestCase):
     def session(self):
         with patch('threading.Thread.start'):
             session = Bridge(None, None)
-        session.connection = object()
+        session.session.connection = object()
         session.event = Mock()
         return session
 
@@ -54,7 +54,7 @@ class DeviceControlFlowTests(unittest.TestCase):
             self.assertEqual(receipt, {'ok': True, 'volume_percent': percent})
         self.assertEqual(session.device.waiters, {})
         session.on_event({'event': 'device_control_result', 'request_id': 'unknown', 'ok': True})
-        self.assertFalse(session.active)
+        self.assertFalse(session.session.active)
 
     def test_timeout_and_send_failure_release_waiters(self):
         for send_failure in (False, True):
@@ -71,20 +71,20 @@ class DeviceControlFlowTests(unittest.TestCase):
                 self.assertEqual(session.device.waiters, {})
                 if not send_failure:
                     waiter.get.assert_called_once_with(timeout=5)
-                self.assertFalse(session.active)
+                self.assertFalse(session.session.active)
 
     def test_rejected_actions_cannot_send_or_start_capture(self):
         session = self.session()
         for action in ('start_microphone', 'camera', 'unknown'):
             with self.subTest(action=action), self.assertRaises(ValueError):
                 session.control_device(action)
-        session.connection = None
+        session.session.connection = None
         with self.assertRaises(RuntimeError):
             session.control_device('status')
         session.event.assert_not_called()
         self.assertEqual(session.device.waiters, {})
         self.assertEqual(session.device.serial, 0)
-        self.assertFalse(session.active)
+        self.assertFalse(session.session.active)
 
 
 if __name__ == '__main__':

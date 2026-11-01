@@ -192,7 +192,7 @@ class DotImageTests(unittest.TestCase):
 class BridgeVisionTests(unittest.TestCase):
     def bridge(self):
         b = Bridge(None, BrainRouter(StubBrain('mini'), StubBrain('dot')))
-        b.connection = object()
+        b.session.connection = object()
         b.save_status = lambda: None
         b.events = []
         b.event = lambda event, **kw: b.events.append((event, kw))
@@ -204,7 +204,7 @@ class BridgeVisionTests(unittest.TestCase):
     def test_button_picture_does_not_enable_microphone(self):
         b = self.bridge()
         b.on_event({'event': 'vision_request', 'nonce': 'a' * 32})
-        self.assertFalse(b.active)
+        self.assertFalse(b.session.active)
         self.assertIsInstance(b.job, VisualReply)
         self.assertTrue(b.valid(b.job.generation))
         self.assertEqual(b.events[-1][0], 'vision_begin')
@@ -215,9 +215,9 @@ class BridgeVisionTests(unittest.TestCase):
     def test_cancel_for_old_picture_cannot_cancel_new_one(self):
         b = self.bridge()
         b.begin_visual('第一张', 'button', 'a' * 32)
-        old = b.generation
+        old = b.session.generation
         b.begin_visual('第二张', 'button', 'b' * 32)
-        new = b.generation
+        new = b.session.generation
         b.on_event({'event': 'vision_cancel', 'vision_generation': old, 'nonce': 'a' * 32})
         self.assertEqual(b.visual.generation, new)
         self.assertTrue(b.valid(new))
@@ -227,19 +227,19 @@ class BridgeVisionTests(unittest.TestCase):
     def test_microphone_start_cancels_old_visual_session(self):
         b = self.bridge()
         b.begin_visual('看图', 'button', 'a' * 32)
-        old = b.generation
+        old = b.session.generation
         with patch('bridge.WebRtcEchoCanceller'), patch.object(b, 'calibrate'):
             b.on_event({'event': 'session_start', 'epoch': 9})
         self.assertIsNone(b.visual.generation)
-        self.assertNotEqual(old, b.generation)
+        self.assertNotEqual(old, b.session.generation)
         self.assertFalse(b.valid(old))
 
     def test_duplicate_microphone_handshake_does_not_cancel_visual_turn(self):
         b = self.bridge()
-        b.active = True
-        b.epoch = 9
+        b.session.active = True
+        b.session.epoch = 9
         b.begin_visual('看图', 'voice')
-        old = b.generation
+        old = b.session.generation
         b.on_event({'event': 'session_start', 'epoch': 9})
         self.assertEqual(b.visual.generation, old)
         self.assertTrue(b.valid(old))
@@ -257,7 +257,7 @@ class BridgeVisionTests(unittest.TestCase):
     def test_cancel_and_transport_switch_invalidate_inflight_picture(self):
         b = self.bridge()
         b.begin_visual('看图', 'button', 'a' * 32)
-        c = b.visual.inbox.begin(b.generation)
+        c = b.visual.inbox.begin(b.session.generation)
         b.visual.inbox.feed(next(events(c)))
         b.cancel('test')
         self.assertTrue(c.done.is_set())
@@ -285,7 +285,7 @@ class BridgeVisionTests(unittest.TestCase):
         self.assertIsNone(b.visual.generation)
         self.assertNotIn('image', b.metrics)
         self.assertEqual(b.events[-1][0], 'vision_done')
-        self.assertFalse(b.active)
+        self.assertFalse(b.session.active)
 
     def test_failure_never_runs_dot_with_a_stale_or_missing_image(self):
         b = self.bridge()

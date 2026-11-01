@@ -255,27 +255,27 @@ class ProviderSettingsTests(unittest.TestCase):
         b = Bridge(None, BrainRouter(StubBrain('mini'), StubBrain('dot')))
         b.save_status = lambda: None
         b.event = lambda *args, **kwargs: None
-        b.wake = True
-        b.awake = False
+        b.session.wake = True
+        b.session.awake = False
         return b
 
     def test_switch_cancels_old_turn_without_waking_or_starting_microphone(self):
         b = self.bridge()
-        old = b.generation
+        old = b.session.generation
         b.on_event({'event': 'settings', 'brain_provider': 'dot'})
         self.assertEqual(b.brain.selected, 'dot')
-        self.assertGreater(b.generation, old)
-        self.assertTrue(b.wake)
-        self.assertFalse(b.awake)
-        self.assertFalse(b.active)
+        self.assertGreater(b.session.generation, old)
+        self.assertTrue(b.session.wake)
+        self.assertFalse(b.session.awake)
+        self.assertFalse(b.session.active)
 
     def test_provider_change_cannot_interrupt_calibration(self):
         b = self.bridge()
         b.calibration.active = True
-        old = b.generation
+        old = b.session.generation
         b.on_event({'event': 'settings', 'brain_provider': 'dot'})
         self.assertEqual(b.brain.selected, 'dot')
-        self.assertEqual(b.generation, old)
+        self.assertEqual(b.session.generation, old)
 
 
 if __name__ == '__main__':

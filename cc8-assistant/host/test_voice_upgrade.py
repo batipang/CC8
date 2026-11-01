@@ -40,26 +40,26 @@ class TimingTests(unittest.TestCase):
 class IdleTests(unittest.TestCase):
     def bridge(self):
         b = Bridge(None, None)
-        b.active = True
-        b.connection = object()
-        b.last_interaction = time.monotonic() - 901
+        b.session.active = True
+        b.session.connection = object()
+        b.session.last_interaction = time.monotonic() - 901
         b.events = []
         b.event = lambda kind, **kw: b.events.append(kind)
         return b
 
     def test_idle_goes_to_wake_only_and_touch_restores_without_starting_capture(self):
         b = self.bridge()
-        b.wake = False
-        b.awake = True
+        b.session.wake = False
+        b.session.awake = True
         b.idle_tick()
-        self.assertTrue(b.screen_sleeping)
-        self.assertFalse(b.awake)
+        self.assertTrue(b.session.screen_sleeping)
+        self.assertFalse(b.session.awake)
         self.assertEqual(b.events, ['screen_sleep'])
         b.idle_tick()
         self.assertEqual(len(b.events), 1)
         b.touch_activity()
-        self.assertFalse(b.screen_sleeping)
-        self.assertFalse(b.awake)
+        self.assertFalse(b.session.screen_sleeping)
+        self.assertFalse(b.session.awake)
         self.assertEqual(b.events[-1], 'screen_wake')
 
     def test_never_sleep_during_answer_calibration_or_without_user_microphone(self):
@@ -86,15 +86,15 @@ class IdleTests(unittest.TestCase):
                 True,
             )
             b.idle_tick()
-            self.assertFalse(b.screen_sleeping)
+            self.assertFalse(b.session.screen_sleeping)
         b = self.bridge()
-        b.active = False
+        b.session.active = False
         b.idle_tick()
-        self.assertFalse(b.screen_sleeping)
+        self.assertFalse(b.session.screen_sleeping)
 
     def test_device_wake_receipt_resets_standby_state_and_timer(self):
         b = self.bridge()
-        b.screen_sleeping = True
+        b.session.screen_sleeping = True
 
         def event(kind, **kw):
             b.events.append(kind)
@@ -106,8 +106,8 @@ class IdleTests(unittest.TestCase):
         b.event = event
         result = b.control_device('wake_screen')
         self.assertTrue(result['ok'])
-        self.assertFalse(b.screen_sleeping)
-        self.assertLess(time.monotonic() - b.last_interaction, 1)
+        self.assertFalse(b.session.screen_sleeping)
+        self.assertLess(time.monotonic() - b.session.last_interaction, 1)
         self.assertEqual(b.events, ['device_control', 'screen_wake'])
 
 

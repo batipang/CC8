@@ -303,31 +303,31 @@ class AudioTests(unittest.TestCase):
 class CancellationTests(unittest.TestCase):
     def bridge(self, speech):
         b = Bridge(speech, None)
-        b.connection = Sink()
-        b.active = True
+        b.session.connection = Sink()
+        b.session.active = True
         b.save_status = lambda: None
         return b
 
     def test_stale_generation_never_queues_audio(self):
         b = self.bridge(None)
-        self.assertFalse(b.play(np.ones(320, dtype=np.int16), 'old', b.generation - 1))
-        self.assertEqual(b.connection.packets, [])
+        self.assertFalse(b.play(np.ones(320, dtype=np.int16), 'old', b.session.generation - 1))
+        self.assertEqual(b.session.connection.packets, [])
 
     def test_cancel_increments_generation_and_notifies_device(self):
         b = self.bridge(None)
         b.playback.playing = True
-        old = b.generation
+        old = b.session.generation
         b.cancel('test')
-        self.assertEqual(b.generation, old + 1)
+        self.assertEqual(b.session.generation, old + 1)
         self.assertFalse(b.playback.playing)
-        p = b.connection.packets[-1]
-        self.assertEqual(p.generation, b.generation)
+        p = b.session.connection.packets[-1]
+        self.assertEqual(p.generation, b.session.generation)
         self.assertEqual(json.loads(p.data)['event'], 'cancel')
 
     def test_late_old_play_done_does_not_stop_new_playback(self):
         b = self.bridge(None)
         b.playback.playing = True
-        b.on_event({'event': 'play_done', 'generation': b.generation - 1})
+        b.on_event({'event': 'play_done', 'generation': b.session.generation - 1})
         self.assertTrue(b.playback.playing)
 
     def test_recognized_playback_fragment_does_not_cancel_or_reply(self):
@@ -340,12 +340,14 @@ class CancellationTests(unittest.TestCase):
 
         b = self.bridge(Speech())
         b.playback.playing = True
-        b.recognition.queue.put((b.generation, np.ones(RATE), True, ['我在。你可以开始说话。']))
+        b.recognition.queue.put(
+            (b.session.generation, np.ones(RATE), True, ['我在。你可以开始说话。'])
+        )
         self.assertTrue(completed.wait(1))
         time.sleep(0.05)
         self.assertTrue(b.playback.playing)
-        self.assertEqual(b.generation, 100)
-        self.assertEqual(b.connection.packets, [])
+        self.assertEqual(b.session.generation, 100)
+        self.assertEqual(b.session.connection.packets, [])
 
     def test_late_playback_tail_is_not_a_new_web_question(self):
         completed = threading.Event()
@@ -363,11 +365,14 @@ class CancellationTests(unittest.TestCase):
                 '这次联网查询没有成功，我暂时无法核实最新信息。请稍后让我再查一次。',
             )
         )
-        b.recognition.queue.put((b.generation, np.ones(RATE), False, []))
+        b.recognition.queue.put((b.session.generation, np.ones(RATE), False, []))
         self.assertTrue(completed.wait(1))
         time.sleep(0.05)
         self.assertFalse(
-            any(json.loads(p.data).get('event') == 'transcript' for p in b.connection.packets)
+            any(
+                json.loads(p.data).get('event') == 'transcript'
+                for p in b.session.connection.packets
+            )
         )
 
     def test_echo_capture_evidence_survives_long_asr_and_queue_delays(self):
@@ -383,7 +388,7 @@ class CancellationTests(unittest.TestCase):
         refs = ['国产GPU沐曦第三季度实现单季扭亏。']
         b.recognition.queue.put(
             (
-                b.generation,
+                b.session.generation,
                 np.ones(RATE),
                 False,
                 refs,
@@ -393,7 +398,10 @@ class CancellationTests(unittest.TestCase):
         self.assertTrue(completed.wait(1))
         time.sleep(0.05)
         self.assertFalse(
-            any(json.loads(p.data).get('event') == 'transcript' for p in b.connection.packets)
+            any(
+                json.loads(p.data).get('event') == 'transcript'
+                for p in b.session.connection.packets
+            )
         )
         self.assertEqual(b.metrics.get('echo_transcripts_rejected'), 1)
 
@@ -418,7 +426,7 @@ class CancellationTests(unittest.TestCase):
         b.speak = lambda text, generation: answered.set() or True
         b.recognition.queue.put(
             (
-                b.generation,
+                b.session.generation,
                 np.ones(RATE),
                 True,
                 ['今天科技新闻可关注几条。'],
@@ -428,7 +436,7 @@ class CancellationTests(unittest.TestCase):
         self.assertTrue(answered.wait(1))
         transcripts = [
             json.loads(p.data).get('text')
-            for p in b.connection.packets
+            for p in b.session.connection.packets
             if json.loads(p.data).get('event') == 'transcript'
         ]
         self.assertIn('别讲新闻了，给我讲个故事', transcripts)
@@ -442,11 +450,11 @@ class CancellationTests(unittest.TestCase):
                 return '请说大黄蜂开始聊天'
 
         b = self.bridge(Speech())
-        b.awake = False
-        b.wake = True
+        b.session.awake = False
+        b.session.wake = True
         b.recognition.queue.put(
             (
-                b.generation,
+                b.session.generation,
                 np.ones(RATE),
                 False,
                 ['请说“大黄蜂”开始聊天'],
@@ -455,7 +463,7 @@ class CancellationTests(unittest.TestCase):
         )
         self.assertTrue(done.wait(1))
         time.sleep(0.05)
-        self.assertFalse(b.awake)
+        self.assertFalse(b.session.awake)
 
     def test_self_check_counts_a_missed_echo_without_calling_brain(self):
         done = threading.Event()
@@ -478,7 +486,7 @@ class CancellationTests(unittest.TestCase):
         b.metrics['echo_self_check'] = {'unmatched_candidates': 0}
         b.recognition.queue.put(
             (
-                b.generation,
+                b.session.generation,
                 np.ones(RATE),
                 True,
                 ['声音测试。'],
@@ -489,7 +497,10 @@ class CancellationTests(unittest.TestCase):
         time.sleep(0.05)
         self.assertEqual(b.metrics['echo_self_check']['unmatched_candidates'], 1)
         self.assertFalse(
-            any(json.loads(p.data).get('event') == 'transcript' for p in b.connection.packets)
+            any(
+                json.loads(p.data).get('event') == 'transcript'
+                for p in b.session.connection.packets
+            )
         )
 
     def test_render_asr_rejects_a_name_spelled_differently_from_caption(self):
@@ -509,7 +520,7 @@ class CancellationTests(unittest.TestCase):
         b = self.bridge(speech)
         b.recognition.queue.put(
             (
-                b.generation,
+                b.session.generation,
                 np.ones(RATE),
                 True,
                 ['MiniMax、OpenAI、GPU。'],
@@ -521,7 +532,10 @@ class CancellationTests(unittest.TestCase):
         time.sleep(0.05)
         self.assertEqual(b.metrics.get('render_asr_rejections'), 1)
         self.assertFalse(
-            any(json.loads(p.data).get('event') == 'transcript' for p in b.connection.packets)
+            any(
+                json.loads(p.data).get('event') == 'transcript'
+                for p in b.session.connection.packets
+            )
         )
 
     def test_novel_barge_in_passes_both_caption_and_render_asr_comparison(self):
@@ -548,7 +562,7 @@ class CancellationTests(unittest.TestCase):
         b.speak = lambda *args: answered.set() or True
         b.recognition.queue.put(
             (
-                b.generation,
+                b.session.generation,
                 np.ones(RATE),
                 True,
                 ['MiniMax、OpenAI、GPU。'],
@@ -578,7 +592,7 @@ class CancellationTests(unittest.TestCase):
         b = self.bridge(Speech())
         b.recognition.queue.put(
             (
-                b.generation,
+                b.session.generation,
                 np.ones(RATE),
                 True,
                 ['声音示例。'],
@@ -591,7 +605,10 @@ class CancellationTests(unittest.TestCase):
         release.set()
         time.sleep(0.05)
         self.assertFalse(
-            any(json.loads(p.data).get('event') == 'transcript' for p in b.connection.packets)
+            any(
+                json.loads(p.data).get('event') == 'transcript'
+                for p in b.session.connection.packets
+            )
         )
 
     def test_recognizer_result_after_interrupt_is_discarded(self):
@@ -605,13 +622,16 @@ class CancellationTests(unittest.TestCase):
                 return '旧的问题'
 
         b = self.bridge(SlowSpeech())
-        b.recognition.queue.put((b.generation, np.ones(RATE)))
+        b.recognition.queue.put((b.session.generation, np.ones(RATE)))
         self.assertTrue(started.wait(1))
         b.cancel('new_speech')
         release.set()
         time.sleep(0.1)
         self.assertFalse(
-            any(json.loads(p.data).get('event') == 'transcript' for p in b.connection.packets)
+            any(
+                json.loads(p.data).get('event') == 'transcript'
+                for p in b.session.connection.packets
+            )
         )
 
 
@@ -640,15 +660,15 @@ class WakeRoutingTests(unittest.TestCase):
 
         brain = Brain()
         b = Bridge(Speech(), brain)
-        b.connection = Sink()
-        b.active = True
-        b.wake = True
-        b.awake = awake
+        b.session.connection = Sink()
+        b.session.active = True
+        b.session.wake = True
+        b.session.awake = awake
         b.save_status = lambda: None
         b.speak = lambda *args: answered.set() or True
         b.recognition.queue.put(
             (
-                b.generation,
+                b.session.generation,
                 np.ones(RATE),
                 False,
                 [],
@@ -661,14 +681,14 @@ class WakeRoutingTests(unittest.TestCase):
     def test_new_wake_word_strips_prefix_and_routes_same_utterance(self):
         b, brain, done = self.run_turn('大黄蜂，介绍一下你自己')
         self.assertTrue(done.wait(1))
-        self.assertTrue(b.awake)
+        self.assertTrue(b.session.awake)
         self.assertEqual(brain.requests, ['介绍一下你自己'])
 
     def test_old_wake_word_no_longer_wakes(self):
         for word in ['小薄荷', '贾维斯', 'JARVIS', 'bumblebees']:
             b, brain, done = self.run_turn(word + '，介绍一下你自己')
             self.assertFalse(done.wait(0.1))
-            self.assertFalse(b.awake)
+            self.assertFalse(b.session.awake)
             self.assertEqual(brain.requests, [])
 
     def test_english_and_common_asr_spelling_can_wake(self):
@@ -680,7 +700,7 @@ class WakeRoutingTests(unittest.TestCase):
     def test_new_sleep_phrase_returns_to_waiting(self):
         b, brain, done = self.run_turn('大黄蜂，你先休息一会儿吧', awake=True)
         self.assertFalse(done.wait(0.1))
-        self.assertFalse(b.awake)
+        self.assertFalse(b.session.awake)
         self.assertEqual(brain.requests, [])
 
 
@@ -705,8 +725,8 @@ class CaptureEvidenceTests(unittest.TestCase):
                 return False, np.ones(RATE), -30
 
         b = QuietWorker(None, None)
-        b.connection = Sink()
-        b.active = True
+        b.session.connection = Sink()
+        b.session.active = True
         b.capture.echo.aec = AEC()
         b.capture.endpoint.vad = VAD()
         b.save_status = lambda: None
@@ -714,7 +734,7 @@ class CaptureEvidenceTests(unittest.TestCase):
         b.playback.last_audio_end = time.monotonic() - 500
         b.playback.spoken.append((time.monotonic() - 100, '较早开始的一段长播报。'))
         stamp = 1_000_000_000
-        b.capture.echo.timeline.add(b.generation, 0, stamp, np.ones(320) * 0.1)
+        b.capture.echo.timeline.add(b.session.generation, 0, stamp, np.ones(320) * 0.1)
         b.process_microphone(
             Packet(MIC, 1, 0, 0, stamp, (np.ones(FRAME) * 1200).astype('<i2').tobytes())
         )
@@ -734,7 +754,7 @@ class CaptureEvidenceTests(unittest.TestCase):
         self.assertFalse(job[2])
         self.assertIn('较早开始的一段长播报。', job[3])
         self.assertIn('同一段录音开始后播报的下一句。', job[3])
-        self.assertEqual(b.generation, 100)  # Unverified echo does not cancel a turn.
+        self.assertEqual(b.session.generation, 100)  # Unverified echo does not cancel a turn.
 
     def test_quiet_reference_does_not_mark_idle_user_as_playback(self):
         class QuietWorker(Bridge):
@@ -756,8 +776,8 @@ class CaptureEvidenceTests(unittest.TestCase):
                 return False, np.ones(RATE), -30
 
         b = QuietWorker(None, None)
-        b.connection = Sink()
-        b.active = True
+        b.session.connection = Sink()
+        b.session.active = True
         b.capture.echo.aec = AEC()
         b.capture.endpoint.vad = VAD()
         b.save_status = lambda: None
@@ -767,7 +787,7 @@ class CaptureEvidenceTests(unittest.TestCase):
         )
         job = b.recognition.queue.get_nowait()
         self.assertFalse(job[4]['echo_risk'])
-        self.assertEqual(b.generation, 101)
+        self.assertEqual(b.session.generation, 101)
 
 
 class FastStopTests(unittest.TestCase):
@@ -784,8 +804,8 @@ class FastStopTests(unittest.TestCase):
                 return mic
 
         b = Bridge(None, None, fast_stop=Detector())
-        b.connection = Sink()
-        b.active = True
+        b.session.connection = Sink()
+        b.session.active = True
         b.playback.playing = True
         b.playback.last_spoken = spoken
         b.capture.echo.aec = AEC()
@@ -861,17 +881,17 @@ class FastStopTests(unittest.TestCase):
         b = self.bridge('你可以说停一下来中断。')
         b.process_microphone(Packet(MIC, 0, 0, 0, 10_000_000_000, b'\x00\x00' * 320))
         self.assertTrue(b.playback.playing)
-        self.assertEqual(b.generation, 100)
-        self.assertEqual(b.connection.packets, [])
+        self.assertEqual(b.session.generation, 100)
+        self.assertEqual(b.session.connection.packets, [])
 
     def test_streaming_keyword_stops_without_utterance_endpoint(self):
         b = self.bridge()
         b.process_microphone(Packet(MIC, 0, 0, 0, 10_000_000_000, b'\x00\x00' * 320))
         self.assertFalse(b.playback.playing)
-        self.assertEqual(b.generation, 101)
-        self.assertTrue(b.active)
+        self.assertEqual(b.session.generation, 101)
+        self.assertTrue(b.session.active)
         self.assertEqual(b.metrics['fast_stop_count'], 1)
-        events = [json.loads(p.data) for p in b.connection.packets]
+        events = [json.loads(p.data) for p in b.session.connection.packets]
         self.assertEqual(events[0]['event'], 'cancel')
         self.assertTrue(
             any(e.get('event') == 'transcript' and e.get('text') == '停一下' for e in events)
@@ -883,7 +903,7 @@ class FastStopTests(unittest.TestCase):
         b.playback.previous_spoken_until = time.monotonic() + 1
         b.process_microphone(Packet(MIC, 0, 0, 0, 10_000_000_000, b'\x00\x00' * 320))
         self.assertTrue(b.playback.playing)
-        self.assertEqual(b.connection.packets, [])
+        self.assertEqual(b.session.connection.packets, [])
 
     def test_calibration_never_activates_fast_stop(self):
         b = self.bridge(calibrating=True)
@@ -902,18 +922,18 @@ class FastStopTests(unittest.TestCase):
                 return '迟到的旧问题'
 
         b = Bridge(SlowSpeech(), None)
-        b.connection = Sink()
-        b.active = True
+        b.session.connection = Sink()
+        b.session.active = True
         b.playback.playing = True
         b.save_status = lambda: None
-        b.recognition.queue.put((b.generation, np.ones(RATE)))
+        b.recognition.queue.put((b.session.generation, np.ones(RATE)))
         self.assertTrue(started.wait(1))
         b.apply_fast_stop('停一下', 10_000_000_000)
         release.set()
         time.sleep(0.1)
         transcripts = [
             json.loads(p.data).get('text')
-            for p in b.connection.packets
+            for p in b.session.connection.packets
             if json.loads(p.data).get('event') == 'transcript'
         ]
         self.assertEqual(transcripts, ['停一下'])
