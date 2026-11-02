@@ -289,6 +289,8 @@ class SessionController:
             if self.hooks.calibration().pending
             else '大黄蜂已就绪 · 点击开始语音',
             transport=self.transport_kind,
+            supports_dot_chat_handoff=True,
+            supports_saved_task_results=True,
             asr_engine=getattr(
                 getattr(self.hooks.speech(), 'recognizer', None), 'engine', 'sensevoice'
             ),

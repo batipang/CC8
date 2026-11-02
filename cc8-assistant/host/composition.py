@@ -27,6 +27,8 @@ from announcement_controller import AnnouncementController, AnnouncementHooks
 from reminder_scheduler import ReminderScheduler, ReminderHooks
 from device_controller import DeviceController, DeviceControlHooks
 from chat_controller import ChatController, ChatHooks
+from saved_tasks import SavedTasks
+from saved_task_controller import SavedTaskController, SavedTaskHooks
 
 if TYPE_CHECKING:
     from bridge import Bridge
@@ -46,6 +48,7 @@ class Components:
     reporting: StatusReporter
     wake: WakeController
     chats: ChatController
+    saved_tasks: SavedTaskController
 
 
 def build_components(
@@ -366,6 +369,15 @@ def build_components(
             event=lambda name, **fields: host.event(name, **fields),
         )
     )
+    saved_tasks = SavedTaskController(
+        SavedTaskHooks(
+            lock=host.session.guard,
+            connection=lambda: host.session.connection,
+            tasks=lambda: host.workspace.snapshot()['tasks'],
+            event=lambda name, **fields: host.event(name, **fields),
+        ),
+        SavedTasks(private_directory() / 'saved-task-results.json'),
+    )
     reporting = StatusReporter(
         ReportingHooks(
             session=lambda: host.session.snapshot(),
@@ -405,6 +417,7 @@ def build_components(
         reporting,
         wake,
         chats,
+        saved_tasks,
     )
 
 

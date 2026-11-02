@@ -111,6 +111,7 @@ class Bridge:
         self.reporting = components.reporting
         self.wake = components.wake
         self.chats = components.chats
+        self.saved_tasks = components.saved_tasks
         self.recognition.start()
         self.response.start()
 
@@ -227,6 +228,8 @@ class Bridge:
             self.chats.request(j)
         elif event == 'dot_chat_cancel':
             self.chats.cancel(j['request_id'])
+        elif event == 'saved_task_request':
+            self.saved_tasks.request(j)
         elif event == 'workspace_get':
             self.publish_workspace()
         elif event == 'text_request':

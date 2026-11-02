@@ -18,3 +18,5 @@
 - [Dot 聊天摘要接续](DOT_CHAT_HANDOFF.md)：显式选择、独立上下文、来源与验证边界。
 
 - [离线升级准备](UPGRADE_PREPARATION.md)：声明兼容、私有非密钥配置快照和不覆盖的恢复预生成。
+
+- [已保存任务结果](SAVED_TASK_RESULTS.md)：显式终态快照、私有存储、重启查看/删除与当前边界。
