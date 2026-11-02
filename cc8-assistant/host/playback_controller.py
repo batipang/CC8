@@ -134,15 +134,18 @@ class PlaybackController:
                     self.hooks.metric('playout_receipts', increment=True)
             return
         if name == 'play_done':
-            if int(event['generation']) == self.hooks.generation():
-                self.hooks.diagnostics().mark(self.hooks.generation(), 'playback_done')
-            with self.done:
-                if int(event['generation']) == self.hooks.generation():
-                    self.completed = {self.hooks.generation()}
-                self.done.notify_all()
-            if int(event['generation']) == self.hooks.generation():
-                self.playing = False
-                self.last_audio_end = time.monotonic()
+            generation = int(event['generation'])
+            # Publish the old clause's state before waking its renderer. That
+            # renderer may immediately publish the next clause of this turn.
+            # Order is publication -> completion, never completion -> session.
+            with self.publication_lock:
+                with self.done:
+                    if generation == self.hooks.generation():
+                        self.hooks.diagnostics().mark(generation, 'playback_done')
+                        self.completed = {generation}
+                        self.playing = False
+                        self.last_audio_end = time.monotonic()
+                    self.done.notify_all()
         elif (
             name in ('playback_paused', 'playback_resumed')
             and int(event.get('token', -1)) == self.pause_token
@@ -154,23 +157,23 @@ class PlaybackController:
             else:
                 self.hooks.diagnostics().mark(self.hooks.trace(), 'resume_ack')
                 self.hooks.resume_timeline(int(event['nanos']))
-        elif (
-            name == 'playback_error'
-            and int(event.get('generation', self.hooks.generation())) == self.hooks.generation()
-        ):
-            self.hooks.diagnostics().failure(self.hooks.generation(), 'playback', RuntimeError())
-            self.hooks.log(
-                'device_playback_error', error_type=str(event.get('error_type', 'Unknown'))[:50]
-            )
-            generation = self.hooks.generation()
-            self.hooks.cancel_session('playback_error')
-            self.hooks.failure(
-                '设备播放失败',
-                OperationFailure(
-                    'Device playback failed', stage='playback', kind='provider_or_runtime'
-                ),
-                trace_key=generation,
-            )
+        elif name == 'playback_error':
+            generation = int(event.get('generation', self.hooks.generation()))
+            with self.hooks.lock:
+                if generation != self.hooks.generation():
+                    return
+                self.hooks.diagnostics().failure(generation, 'playback', RuntimeError())
+                self.hooks.log(
+                    'device_playback_error', error_type=str(event.get('error_type', 'Unknown'))[:50]
+                )
+                self.hooks.cancel_session('playback_error')
+                self.hooks.failure(
+                    '设备播放失败',
+                    OperationFailure(
+                        'Device playback failed', stage='playback', kind='provider_or_runtime'
+                    ),
+                    trace_key=generation,
+                )
 
     def pause_for_voice(self):
         # A tentative pause retains generation; confirmed speech cancels later.
@@ -233,7 +236,7 @@ class PlaybackController:
                     if not self.hooks.valid(generation):
                         break
                     self.hooks.cancel_session('barge_in_timeout')
-                self.hooks.status('listening', '插话识别超时，已停止旧播报')
+                    self.hooks.status('listening', '插话识别超时，已停止旧播报')
                 break
             with self.done:
                 self.done.wait(0.02)
@@ -388,22 +391,29 @@ class PlaybackController:
             with self.done:
                 completed = generation in self.completed
             if not completed and self.hooks.valid(generation):
-                self.hooks.log('playback_completion_timeout')
-                error = OperationFailure(
-                    'Playback acknowledgement timed out', stage='playback', kind='timeout'
-                )
-                self.hooks.diagnostics().failure(generation, 'playback', error)
-                self.hooks.cancel_session('completion_timeout')
-                self.hooks.failure('设备播放未确认', error, trace_key=generation)
-                return False
+                # Admission, cancellation and error UI belong to one owner
+                # transaction. A new request must not enter between them.
+                with self.hooks.lock:
+                    with self.done:
+                        completed = generation in self.completed
+                    if not completed and self.hooks.valid(generation):
+                        self.hooks.log('playback_completion_timeout')
+                        error = OperationFailure(
+                            'Playback acknowledgement timed out', stage='playback', kind='timeout'
+                        )
+                        self.hooks.diagnostics().failure(generation, 'playback', error)
+                        self.hooks.cancel_session('completion_timeout')
+                        self.hooks.failure('设备播放未确认', error, trace_key=generation)
+                        return False
             return self.hooks.valid(generation)
         except Exception as error:
             self.hooks.diagnostics().failure(
                 generation, self.hooks.diagnostics().current_stage(generation), error
             )
-            if self.hooks.valid(generation) and started:
-                self.hooks.cancel_session('audio_stream_error')
-                self.hooks.failure('这次播报没有完成', error, trace_key=generation)
+            with self.hooks.lock:
+                if self.hooks.valid(generation) and started:
+                    self.hooks.cancel_session('audio_stream_error')
+                    self.hooks.failure('这次播报没有完成', error, trace_key=generation)
             raise
         finally:
             close = getattr(iterator, 'close', None)

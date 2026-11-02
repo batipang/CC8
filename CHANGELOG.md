@@ -1,6 +1,19 @@
 # Changelog
 
-## Unreleased — p0-playout-20261102.1
+## Unreleased — p0-review-20261102.1
+
+Backend 0.13.7; APK 0.8.8 / code 33 and protocol 2 unchanged.
+
+- Publish completed-clause playback state before waking its renderer, so a
+  previous ACK cannot clear the next clause's active state.
+- Serialize playback timeout/device/provider error cancellation and error UI
+  with owner requests; recheck completion after acquiring the session guard.
+- Keep an expired-pause status in the same owner transaction, preventing a
+  late listening label from replacing a new request's thinking state.
+- Add four bounded real-thread regressions reproducing five failures on the
+  pre-fix controller. No device capture or production service change.
+
+## p0-playout-20261102.1 — source snapshot
 
 Backend 0.13.6; assistant APK 0.8.8 / code 33; protocol 2.
 

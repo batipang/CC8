@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-playout-20261102.1",
+  "release_id": "p0-review-20261102.1",
   "backend": {
-    "version": "0.13.6"
+    "version": "0.13.7"
   },
   "assistant": {
     "version": "0.8.8",
