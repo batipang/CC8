@@ -90,6 +90,28 @@ class DeviceAutomationTests(unittest.TestCase):
                     main(['--runtime-root', '/unused', *flags])
                 device.assert_not_called()
 
+    def test_preflight_transport_errors_are_redacted_by_cli(self):
+        import device_smoke
+        from release_info import RELEASE
+
+        with (
+            tempfile.TemporaryDirectory() as folder,
+            patch(
+                'device_smoke.rpc',
+                return_value={
+                    'bridge_version': RELEASE.backend_version,
+                    'protocol_version': RELEASE.protocol_version,
+                },
+            ),
+            patch('device_smoke.private_directory', return_value=Path(folder)),
+            patch('device_smoke.Device', side_effect=RuntimeError('PRIVATE_DEVICE_OUTPUT')),
+            redirect_stderr(io.StringIO()) as error,
+        ):
+            with self.assertRaises(SystemExit) as stopped:
+                main(['--runtime-root', str(device_smoke.ROOT), '--execute'])
+            self.assertEqual(stopped.exception.code, 2)
+            self.assertNotIn('PRIVATE_DEVICE_OUTPUT', error.getvalue())
+
     def test_preflight_busy_owner_or_camera_never_mutates_device(self):
         for camera in (False, True):
             run, device, health, _ = self.fixture()

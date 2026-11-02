@@ -581,7 +581,7 @@ def main(argv=None):
                 )
                 print(output.path)
                 return 0 if result['state'] == 'passed' else 2
-    except (OSError, ValueError, CheckFailure):
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
         parser.exit(2, '自动设备检查未启动或未完成；未自动重复设备动作。\n')
 
 
