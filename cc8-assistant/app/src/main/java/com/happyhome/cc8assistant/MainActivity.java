@@ -1484,6 +1484,22 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   public void dump(String prefix, FileDescriptor fd, PrintWriter writer, String[] args) {
     writer.println("CC8_ASSISTANT_STATUS " + session.snapshot());
     JSONObject ui = new JSONObject();
+    Wire.put(
+        ui,
+        "ui_phase",
+        java.util.Arrays.asList("idle", "listening", "thinking", "speaking", "calibrating", "error")
+                .contains(phase)
+            ? phase
+            : "unknown");
+    JSONObject latestTask = tasksData.optJSONObject(0);
+    String taskStatus = latestTask == null ? "none" : latestTask.optString("status");
+    Wire.put(
+        ui,
+        "latest_task_status",
+        java.util.Arrays.asList("none", "running", "completed", "failed", "cancelled")
+                .contains(taskStatus)
+            ? taskStatus
+            : "unknown");
     Wire.put(ui, "theme", "bumblebee_orbit_reference");
     Wire.put(ui, "camera_open", eyes != null && eyes.cameraOpen());
     Wire.put(ui, "camera_captures", eyes == null ? 0 : eyes.captures());

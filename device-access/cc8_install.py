@@ -196,7 +196,18 @@ def apk_package(apk: Path):
 
 
 def package_paths(transport, package):
-    output = shell(transport, 'pm path ' + shlex.quote(package)).strip()
+    try:
+        output = shell(transport, 'pm path ' + shlex.quote(package)).strip()
+    except RuntimeError as error:
+        # This firmware returns status 1 with no stdout/stderr for an absent
+        # package. Accept only that exact result AND a successful independent
+        # PackageManager list query; permission/transport/parser errors still fail.
+        if str(error) != 'CC8 shell command failed (1): ':
+            raise
+        listed = shell(transport, 'pm list packages ' + shlex.quote(package)).strip()
+        if listed:
+            raise RuntimeError('Package absence could not be verified') from None
+        return []
     if not output:
         return []
     lines = output.splitlines()

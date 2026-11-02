@@ -85,6 +85,30 @@ class PreflightTests(unittest.TestCase):
             with patch.object(access, 'shell', return_value=value), self.assertRaises(RuntimeError):
                 access.package_paths('7', 'com.example.app')
 
+    def test_oem_absent_path_status_one_requires_independent_successful_empty_list(self):
+        absent = RuntimeError('CC8 shell command failed (1): ')
+        with patch.object(access, 'shell', side_effect=[absent, '']) as shell:
+            self.assertEqual(access.package_paths('7', 'com.example.app'), [])
+            self.assertEqual(shell.call_args.args[1], 'pm list packages com.example.app')
+        for second in ('package:com.example.app', 'Error: blocked', RuntimeError('closed')):
+            with (
+                self.subTest(second=type(second).__name__),
+                patch.object(access, 'shell', side_effect=[absent, second]),
+                self.assertRaises(RuntimeError),
+            ):
+                access.package_paths('7', 'com.example.app')
+        for error in (
+            'CC8 shell command failed (1): denied',
+            'CC8 shell command failed (2): ',
+            'closed',
+        ):
+            with (
+                patch.object(access, 'shell', side_effect=RuntimeError(error)) as shell,
+                self.assertRaises(RuntimeError),
+            ):
+                access.package_paths('7', 'com.example.app')
+            self.assertEqual(shell.call_count, 1)
+
     def test_failed_preflight_never_sends_helper_or_apk(self):
         with tempfile.TemporaryDirectory() as folder:
             apk = Path(folder) / 'candidate.apk'

@@ -418,6 +418,10 @@ def run_runtime(args, root=ROOT):
 
 
 def main():
+    if sys.argv[1:2] == ['verify-failure-ui']:
+        from tools.check_failure_ui import main as failure_ui_main
+
+        return failure_ui_main(sys.argv[2:])
     if sys.argv[1:2] == ['verify-local-speech']:
         from check_local_commands import main as local_speech_main
 
@@ -480,6 +484,7 @@ def main():
         'verify-local-speech', help='Plan or explicitly check Chinese wake and stop keywords'
     )
     commands.add_parser('verify-device', help='Plan or explicitly run bounded CC8 hardware checks')
+    commands.add_parser('verify-failure-ui', help='Plan or check isolated CC8 error/recovery UI')
     commands.add_parser(
         'verify-asr', help='Plan or explicitly measure public-synthetic MiniMax ASR'
     )
