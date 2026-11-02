@@ -2,3 +2,8 @@
 # Reviewed in resources/sensevoice.json; this is a file checksum, not an API token.
 # Ignore this exact historical finding only, not the file or generic-api-key rule.
 43fef65f1585897e955254334cd7fa1d633fc159:cc8-assistant/host/resources/sensevoice.json:generic-api-key:9
+
+# False positive: the backup() comment and read_profile() assignment were matched
+# across lines as generic-api-key. This immutable source span contains code only.
+# Restrict to this historical commit/path/rule/line, never a file or rule wildcard.
+aa61861dd0d8c45d3dfbff7bd50f3a8e9d5bea7a:cc8-assistant/host/upgrade_preparation.py:generic-api-key:81

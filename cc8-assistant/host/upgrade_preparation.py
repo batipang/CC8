@@ -78,7 +78,7 @@ def plan(before_root, after_root, assistant_apk=None):
 
 
 def backup(profile, source_root=ROOT):
-    # Existing schema rejects secrets, duplicate/unknown fields and public files.
+    # Reuse bounded configuration validation before constructing the snapshot.
     values, legacy = read_profile(Path(profile), private=True)
     settings = {
         'schema_version': 1,
