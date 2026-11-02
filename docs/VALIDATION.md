@@ -474,3 +474,10 @@ CI 通过的干净源码 5f1c087cfa8c4cdea42758dd26b7f0597b1c31ef 已包含在 m
 十六项新方法覆盖只读元数据/显式选定、分页容量和过期、文本筛选/截断、资源关闭、取消/代次/断连/忙碌、失败保留、不落盘上下文与 scoped interrupt。原 Dot 二十六项定向回归保留并通过；Android 原签名引用 assemble/lint 实际通过（首次遗漏的旧清空回调参数已补齐）。全套最终结果以本次提交/PR 检查为准，不将合成五聊天 fixture 或同 ID 发现写成真实端到端验收。没有安装、重启、调用模型、采音或摄像。
 
 本批最终本机 installer 22、host 473（4 项私人音频依赖跳过）、tooling 51、Java 15 checks，固定格式/lint/strict 七模块通过，原签名 APK 构建/lint 通过。新增来源项目目录隔离回归，远端/失效目录不冒充本机已接入。P0 原源码 d359552 的 main CI 41366676544 已实际成功，已固定 source-only annotated tag p0-validation-base-20261102.1；该标记不声称设备验收或新构建清单。
+
+
+### P1-09：离线版本规划与配置恢复预生成（未部署）
+
+后台工具 0.14.1 / APK 0.8.9 不变。十项新离线方法覆盖两向协议、降级、实际检查入口复用、owner-only/链接/公开目录拒绝、原文件不覆盖、备份完整性、原引用固定且不读取秘密、legacy 白名单和最小 PATH 根 CLI。全套 installer 22 / host 483（4 private skip）/ tooling 51 / Java 15 checks，固定格式/lint/strict 七模块通过。首个 legacy 测试错误使用非白名单旧格式，修正为原 asr-only fixture，未放宽 schema。
+
+系统 Python 3.9.6 / PATH=/usr/bin:/bin 实际 root CLI：固定 P0 source manifest → 当前候选的声明规划，真实原签名助手 0.8.9 做 AAPT/API-27 包检查；合成配置 backup/verify/stage-restore，原字节不变，输出 0600。没有读真实配置/凭据/配对，没有设备通信、安装、服务重启或模型请求。详见 [UPGRADE_PREPARATION](UPGRADE_PREPARATION.md)；真实升级/回退仍未验收。
