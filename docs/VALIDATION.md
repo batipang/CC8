@@ -534,3 +534,11 @@ P1-09 后续 CI 安全扫描成功，但 macOS 的既有 measure CLI 集成用�
 完整本机 installer 22 / host 498（4 private-audio skip）/ tooling 51 / Java 15 checks，固定格式/lint/strict 七模块通过。保存内容限当前后台真实终态回执，普通任务仍 RAM-only；原代码中的任务执行完成与播报完成分立规则保留。Android 原 JKS 路径引用 assembleRelease/lintRelease、AAPT 包版本与 API-27 签名检查已实际通过（0.9.0/code35，原证书集合一致）；本批合入仍须全部必需 CI，P1-02 完整桌面授权/来源文件和实机验收保持开放，见 [SAVED_TASK_RESULTS](SAVED_TASK_RESULTS.md)。
 
 前置升级准备已通过 [PR #42](https://github.com/batipang/CC8/pull/42) 最终八项 CI（head 3bb5039）并合入，包含仅限定旧注释误报指纹和真实 IPC 集成窗口夹具修正；没有绕过失败检查。聊天摘要接续已通过 [PR #41](https://github.com/batipang/CC8/pull/41) 的八项检查并合入。
+
+### 2026-11-03：MiniMax ASR 公开合成语料自动基线
+
+先用隔离操作脚本完成75条实际 API 测量：calibration 15条、14条规范化全文相同、汉字0/157错误、英文1/5错误；acceptance 60条、55条全文相同、汉字2/496错误、英文10/102错误。报告分别为私有 `baseline-calibration-2b6bdebbf6.json` 和 `baseline-acceptance-b34199d7a7.json`，没有保留识别正文。旧脚本 elapsed 包括合成及识别，不能当成纯 ASR 延迟。
+
+随后将流程整理为正式 `verify-asr` 命令，新增14项离线回归；共用原有音色校验与有界 WAV 合成函数，不修改正在运行的识别源码、模型、阈值或配置。命令在实际0.13.7运行目录的现有语音 Python/配置下，再完成15条 calibration 集成检查：14条全文相同，汉字0/157、英文1/5，错例仍为 mixed-03；已评分识别阶段 p50 636.0ms、p95 1153.2ms。新报告 `api-calibration-20261102T182829Z-71341d08.json` 的执行脚本/音色模块摘要与提交源码一致，四个识别/配置模块也与实际运行目录一致。
+
+公开合成输入仅数字上传 MiniMax asr-1.0，不播放、不接麦、不操作设备、不调用 Dot、不执行语料指令、不保存 WAV/转录。不能据此声称1/3米、电视、轻声或人声打断已验收，也不能将69/75规范化全文相同比例当作任务意图准确率。全套 installer22 / host546（4 private-audio skip）/ tooling62 / Java15，以及格式/lint/strict七模块通过；真实 zsh login + PATH=/usr/bin:/bin 的系统Python计划模式通过，不加载凭据或创建输出。PR仍须全部必需CI通过后合入。

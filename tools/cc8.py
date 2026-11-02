@@ -417,6 +417,10 @@ def run_runtime(args, root=ROOT):
 
 
 def main():
+    if sys.argv[1:2] == ['verify-asr']:
+        from synthetic_asr import main as synthetic_asr_main
+
+        return synthetic_asr_main(sys.argv[2:])
     if sys.argv[1:2] == ['verify-service']:
         from service_smoke import main as service_main
 
@@ -468,6 +472,9 @@ def main():
         'verify-wake', help='Plan or explicitly run public synthetic keyword boundary checks'
     )
     commands.add_parser('verify-device', help='Plan or explicitly run bounded CC8 hardware checks')
+    commands.add_parser(
+        'verify-asr', help='Plan or explicitly measure public-synthetic MiniMax ASR'
+    )
     commands.add_parser(
         'verify-service', help='Plan or explicitly check managed backend crash recovery'
     )

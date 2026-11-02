@@ -143,7 +143,7 @@ class SyntheticWakeTests(unittest.TestCase):
                 return_value=frozenset(('Samantha (English US)',)),
             ) as voices,
             patch('tools.check_wake.subprocess.run') as run,
-            patch('tools.check_wake.read_pcm', return_value=b'\0' * 320),
+            patch('mac_voice.read_pcm', return_value=b'\0' * 320),
         ):
             synthesize(Path(folder), 'Samantha', 170, 'Bumblebee')
             self.assertEqual(run.call_args_list[0].args[0][1:3], ['-v', 'Samantha (English US)'])
