@@ -45,7 +45,7 @@ final class VoiceSession {
 
     void screen(boolean sleeping);
 
-    void vision(boolean active, String message);
+    void vision(boolean active, String message, boolean preserveError);
 
     void cameraCapture(JSONObject request);
 
@@ -262,7 +262,7 @@ final class VoiceSession {
         desktopCameraAuth.reset();
         if (visual) {
           visual = false;
-          listener.vision(false, "连接切换，请重新看图");
+          listener.vision(false, "连接切换，请重新看图", false);
         }
         cancelPlayback();
         announcement = false;
@@ -492,6 +492,7 @@ final class VoiceSession {
         if (!desktop
             && ((!recording && !nonce.equals(pendingVisionNonce))
                 || (nonce.isEmpty() && !recording))) return;
+        if (!statusFeedback.begin(p.generation)) return;
         desktopVisionNonce = desktop ? nonce : "";
         visual = true;
         visualGeneration = p.generation;
@@ -501,7 +502,7 @@ final class VoiceSession {
             desktop ? "Dot 请求拍照，请调整画面；预览 5 秒后拍摄并返回当前聊天。" : "请调整画面，预览 5 秒后自动拍摄并交给 Dot 分析。",
             "attentive");
         listener.screen(false);
-        listener.vision(true, "请调整画面 · 预览 5 秒后拍摄");
+        listener.vision(true, "请调整画面 · 预览 5 秒后拍摄", false);
         final int waitingGeneration = visualGeneration;
         new android.os.Handler(android.os.Looper.getMainLooper())
             .postDelayed(
@@ -543,6 +544,9 @@ final class VoiceSession {
           visual = false;
           pendingVisionNonce = "";
           desktopVisionNonce = "";
+          if (!foreground
+              || p.generation < minimumGeneration
+              || !statusFeedback.current(p.generation)) return;
           boolean desktop = "desktop".equals(j.optString("origin"));
           if (desktop && "completed".equals(j.optString("result")))
             listener.caption("照片已交给 Mac，请在 Dot 查看本次拍照结果。", "friendly");
@@ -550,12 +554,13 @@ final class VoiceSession {
               false,
               "completed".equals(j.optString("result"))
                   ? desktop ? "拍照完成 · 摄像头关闭" : "看图已结束 · 摄像头关闭"
-                  : "看图未完成 · 摄像头关闭");
+                  : "看图未完成 · 摄像头关闭",
+              statusFeedback.failed(p.generation));
         }
       } else if ("vision_unavailable".equals(event)) {
         visual = false;
         pendingVisionNonce = "";
-        listener.vision(false, j.optString("message", "看图暂不可用"));
+        listener.vision(false, j.optString("message", "看图暂不可用"), false);
       } else if ("caption_timing".equals(event)) {
         Player current = player;
         if (current != null
@@ -628,7 +633,7 @@ final class VoiceSession {
         minimumGeneration = Math.max(minimumGeneration, p.generation);
         if (visual) {
           visual = false;
-          listener.vision(false, "已停止看图 · 摄像头关闭");
+          listener.vision(false, "已停止看图 · 摄像头关闭", false);
         }
         announcement = false;
         textSession = false;
@@ -785,7 +790,7 @@ final class VoiceSession {
     JSONObject e = Wire.event("vision_request");
     Wire.put(e, "nonce", pendingVisionNonce);
     send(e);
-    listener.vision(true, "正在请求拍摄 · 图片将交给 Dot");
+    listener.vision(true, "正在请求拍摄 · 图片将交给 Dot", false);
     final String nonce = pendingVisionNonce;
     new android.os.Handler(android.os.Looper.getMainLooper())
         .postDelayed(
@@ -813,7 +818,7 @@ final class VoiceSession {
       Wire.put(stopped, "vision_generation", stoppedGeneration);
       Wire.put(stopped, "nonce", stoppedNonce);
       send(stopped);
-      listener.vision(false, "已取消看图 · 摄像头关闭");
+      listener.vision(false, "已取消看图 · 摄像头关闭", false);
     }
   }
 

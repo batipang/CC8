@@ -5,6 +5,7 @@ from copy import deepcopy
 import math
 import re
 from diagnostics import ORIGINS, SCENARIOS, OUTCOMES, STAGES, summarize_requests
+from operation_failure import STAGES as ERROR_STAGES
 
 ERRORS = frozenset(
     (
@@ -17,7 +18,6 @@ ERRORS = frozenset(
         'provider_or_runtime',
     )
 )
-ERROR_STAGES = frozenset(('asr', 'brain', 'tts', 'playback', 'transport', 'runtime'))
 ROW_FIELDS = frozenset(
     (
         'request_id',

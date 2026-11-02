@@ -327,6 +327,7 @@ class DeviceFeedbackTests(unittest.TestCase):
             'announcement_begin',
             'announcement_done',
             'cancel',
+            'vision_done',
         )
         # Compile the real event branch bodies, not a Python reimplementation.
         # Minimal interfaces exclude Android I/O; actual device rendering remains
@@ -349,14 +350,16 @@ class FeedbackCheck {
  boolean foreground=true,recording=false,announcement=false,visual=false,textSession=false;
  int minimumGeneration=0,textGeneration=0,announcementGeneration=0,visualGeneration=0;
  String phase="idle";
+ String pendingVisionNonce="",desktopVisionNonce="";
  static class Packet{int generation;Packet(int g){generation=g;}}
  static class Data{String next,message;Data(String n,String m){next=n;message=m;}
   String optString(String k){return "phase".equals(k)?next:message;}
   String optString(String k,String fallback){return optString(k);}}
- static class Listener{String phase="idle",message="";boolean playing;
+ static class Listener{String phase="idle",message="";boolean playing;int visionCalls;boolean preserveVisionError;
   void state(String p,String m){phase=p;message=m;}
   void playback(boolean active){playing=active;}
-  void vision(boolean active,String message){}
+  void vision(boolean active,String message){vision(active,message,false);}
+  void vision(boolean active,String message,boolean preserve){visionCalls++;preserveVisionError=preserve;}
   void heard(String text){} void caption(String text,String mood){} void announcement(){}}
  final Listener listener=new Listener();
  void cancelPlayback(){}
@@ -447,6 +450,15 @@ class FeedbackCheck {
  yes(c.listener.phase.equals("thinking")&&c.listener.playing,"old announcement completed over new text");
  c.announcement_begin(10,"","");c.status(10,"thinking","new announcement");c.text_done(9,"","");
  yes(c.listener.phase.equals("thinking")&&c.listener.playing,"old text completed over new announcement");""")
+
+    def test_vision_cleanup_is_current_and_cannot_close_a_newer_owner(self):
+        self.compile_and_run("""c.text_begin(8,"","");c.textSession=false;
+ c.visual=true;c.visualGeneration=8;c.status(8,"error","capture failed");
+ c.vision_done(8,"","failed");yes(!c.visual&&c.listener.visionCalls==1,"current vision was not released");
+ yes(c.listener.preserveVisionError,"current error was not preserved by completion");
+ c.text_begin(9,"","");c.status(9,"thinking","new");
+ c.visual=true;c.visualGeneration=8;c.vision_done(8,"","failed");
+ yes(c.listener.visionCalls==1&&c.listener.playing,"old vision cleanup reached newer owner");""")
 
 
 if __name__ == '__main__':
