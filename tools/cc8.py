@@ -417,6 +417,14 @@ def run_runtime(args, root=ROOT):
 
 
 def main():
+    if sys.argv[1:2] == ['verify-service']:
+        from service_smoke import main as service_main
+
+        return service_main(sys.argv[2:])
+    if sys.argv[1:2] == ['verify-wake']:
+        from check_wake import main as wake_main
+
+        return wake_main(sys.argv[2:])
     if sys.argv[1:2] == ['verify-device']:
         from device_smoke import main as device_main
 
@@ -456,7 +464,13 @@ def main():
     group.add_argument('--foreground', action='store_true')
     group.add_argument('--stop', action='store_true')
     commands.add_parser('measure', help='Collect content-free host receipts without capture')
+    commands.add_parser(
+        'verify-wake', help='Plan or explicitly run public synthetic keyword boundary checks'
+    )
     commands.add_parser('verify-device', help='Plan or explicitly run bounded CC8 hardware checks')
+    commands.add_parser(
+        'verify-service', help='Plan or explicitly check managed backend crash recovery'
+    )
     commands.add_parser(
         'upgrade',
         help='Offline source checks, explicit settings backup and restore staging; never deploys',
