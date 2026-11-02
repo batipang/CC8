@@ -485,3 +485,5 @@ CI 通过的干净源码 5f1c087cfa8c4cdea42758dd26b7f0597b1c31ef 已包含在 m
 P1-09 首次 CI 其余六项通过，密钥扫描将 backup() 的单行英文注释误判。已检查 redacted finding 的提交/文件/起止位置和该源代码段，未发现凭据；改写当前注释并仅加入 aa61861:upgrade_preparation.py:generic-api-key:81 的不可变历史指纹例外，未忽略文件或默认规则。全历史脱敏扫描复验随后运行，CI 仍强制通过后才合入。
 
 误报范围复核：redacted finding 的 StartLine 与 EndLine 均为 81（columns 32–58）；之前关于跨行的初步判断不准确，现以注释单行命中记录为准，例外指纹范围未扩大。
+
+P1-09 后续 CI 安全扫描成功，但 macOS 的既有 measure CLI 集成用例在 0.2 秒窗口只观察到一次 IPC，未达到该用例要求的两次；Linux 同项成功。将该真实 IPC 集成窗口改为 2 秒，保留至少两次读取、仅 diagnostics、单样本去重、0600 与 worker 收尾断言及 10 秒进程上限；生产计时和虚拟时钟截止回归不变。此处不把 CI 机器调度/文件同步抖动作为语音时延指标。
