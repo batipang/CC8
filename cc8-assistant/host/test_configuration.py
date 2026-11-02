@@ -186,6 +186,7 @@ class ConfigurationTests(unittest.TestCase):
     def test_external_profile_parent_permissions_are_not_changed(self):
         directory = self.root / 'existing'
         directory.mkdir(mode=0o755)
+        directory.chmod(0o755)  # The fixture must remain public even under umask 077.
         path = directory / 'profile.json'
         write_profile(path, {'schema_version': 1})
         self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o755)

@@ -20,9 +20,9 @@
     "device_max": 2
   },
   "known_deployed_pair": {
-    "assistant_version": "0.8.6",
-    "assistant_version_code": 31,
-    "backend_version": "0.12.2",
+    "assistant_version": "0.8.8",
+    "assistant_version_code": 33,
+    "backend_version": "0.13.7",
     "protocol": 2
   }
 }

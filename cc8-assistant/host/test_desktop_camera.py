@@ -276,6 +276,7 @@ class PhotoArtifactTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder) / 'photos'
             root.mkdir(mode=0o755)
+            root.chmod(0o755)  # Exercise rejection independently of the caller's umask.
             with self.assertRaises(ValueError):
                 save_photo(jpeg(), root)
             link = Path(folder) / 'link'

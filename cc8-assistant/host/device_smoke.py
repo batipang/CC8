@@ -1,0 +1,589 @@
+"""Explicit, bounded CC8 hardware checks; default invocation only prints a plan."""
+
+import argparse
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import socket
+import stat
+import subprocess
+import sys
+import time
+import uuid
+
+from private_output import PrivateOutput, private_directory
+from release_info import load_release
+
+ROOT = Path(__file__).resolve().parents[2]
+COMPONENT = 'com.happyhome.cc8assistant/.MainActivity'
+TEST_TEXT = (
+    '这是大黄蜂自动测试。现在检查语音播放、字幕高亮和播放完成回执。'
+    '这段固定文字只用于设备检查，测试结束后会恢复麦克风关闭状态。'
+)
+CHECKS = (
+    'preflight',
+    'maintenance_open_keeps_microphone_off',
+    'announcement_and_playout',
+    'logical_wifi_handover',
+    'explicit_open_starts_capture',
+    'home_stops_capture',
+    'maintenance_reopen_keeps_microphone_off',
+    'real_idle_black_screen',
+    'synthetic_acoustic_wake_and_response',
+)
+
+
+class CheckFailure(RuntimeError):
+    pass
+
+
+def require(condition, reason):
+    if not condition:
+        raise CheckFailure(reason)
+
+
+def objects(text, marker):
+    # dumpsys also contains captions and OEM details. Return only the requested
+    # JSON object in memory; the report builder never copies these objects.
+    matches = re.findall(re.escape(marker) + r'(\{[^\n]*\})', text)
+    require(len(matches) == 1, 'device_status_missing_or_ambiguous')
+    value = json.loads(matches[0])
+    require(isinstance(value, dict), 'invalid_device_status')
+    return value
+
+
+def rpc(path, request, timeout=5):
+    # This test client deliberately has no camera, task or arbitrary tool route.
+    allowed = (
+        {'operation': 'health'},
+        {'operation': 'diagnostics'},
+        {'operation': 'transport_status'},
+    )
+    require(
+        request in allowed
+        or request == {'operation': 'transport_test', 'seconds': 12}
+        or request == {'text': TEST_TEXT},
+        'unsupported_test_operation',
+    )
+    info = path.lstat()
+    require(
+        stat.S_ISSOCK(info.st_mode) and info.st_uid == os.getuid() and not info.st_mode & 0o077,
+        'unsafe_runtime_socket',
+    )
+    deadline = time.monotonic() + timeout
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+
+        def arm():
+            remaining = deadline - time.monotonic()
+            require(remaining > 0, 'ipc_deadline')
+            conn.settimeout(remaining)
+
+        arm()
+        conn.connect(str(path))
+        arm()
+        conn.sendall((json.dumps(request) + '\n').encode())
+        data = bytearray()
+        while b'\n' not in data:
+            arm()
+            block = conn.recv(4096)
+            require(bool(block), 'incomplete_ipc_response')
+            data.extend(block)
+            require(len(data) <= 1024 * 1024, 'oversized_ipc_response')
+    result = json.loads(data)
+    require(isinstance(result, dict), 'invalid_ipc_response')
+    return result
+
+
+class Device:
+    def __init__(self):
+        sys.path.insert(0, str(ROOT / 'device-access'))
+        import cc8_install
+
+        self.access = cc8_install
+        self.transport = self.access.target()
+        self.access.probe(self.transport)
+
+    def shell(self, command):
+        # Recheck the physical target before each operation, never choose a new
+        # USB target after a cable/device replacement during this test.
+        require(self.access.target() == self.transport, 'usb_target_changed')
+        return self.access.shell(self.transport, command, timeout=15)
+
+    def open(self, capture=False):
+        self.shell(
+            'input keyevent 224; am start --activity-clear-top -n '
+            + COMPONENT
+            + ' --ez auto_start_voice '
+            + ('true' if capture else 'false')
+        )
+
+    def home(self):
+        self.shell('input keyevent 3')
+
+    def status(self):
+        text = self.shell('dumpsys activity ' + COMPONENT)
+        return objects(text, 'CC8_ASSISTANT_STATUS '), objects(text, 'HUD_UI_STATUS ')
+
+    def speak_probe(self):
+        subprocess.run(
+            ['/usr/bin/say', '-v', 'Tingting', '大黄蜂，一加一等于几？'],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True,
+            timeout=20,
+        )
+
+    def version(self):
+        text = self.shell('dumpsys package com.happyhome.cc8assistant')
+        name = re.search(r'\bversionName=([^\s]+)', text)
+        code = re.search(r'\bversionCode=(\d+)', text)
+        require(name is not None and code is not None, 'device_package_version_missing')
+        return name.group(1), int(code.group(1))
+
+
+class SmokeRun:
+    def __init__(
+        self,
+        device,
+        request,
+        *,
+        capture=False,
+        standby=False,
+        acoustic=False,
+        clock=time.monotonic,
+        sleep=time.sleep,
+        checkpoint=lambda value: None,
+        expected_apk=None,
+    ):
+        self.device, self.request = device, request
+        self.capture, self.standby, self.acoustic = capture, standby, acoustic
+        self.clock, self.sleep, self.checkpoint = clock, sleep, checkpoint
+        self.started = clock()
+        self.checks = []
+        self.touched = False
+        self.cleanup_verified = False
+        self.initial_instance = None
+        self.source_sha256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+        self.expected_apk = expected_apk
+
+    def health(self):
+        value = self.request({'operation': 'health'})
+        require(value.get('ok') is True, 'health_unavailable')
+        instance = value.get('runtime_instance')
+        require(isinstance(instance, str) and bool(instance), 'runtime_instance_missing')
+        if self.initial_instance is not None:
+            require(instance == self.initial_instance, 'runtime_restarted_during_test')
+        return value
+
+    def wait(self, condition, seconds, reason):
+        deadline = self.clock() + seconds
+        while True:
+            value = condition()
+            if value:
+                return value
+            require(self.clock() < deadline, reason)
+            self.sleep(min(0.5, max(0, deadline - self.clock())))
+
+    def report(self, state):
+        return {
+            'schema': 1,
+            'automation_source_sha256': self.source_sha256,
+            'expected_apk_version': self.expected_apk[0] if self.expected_apk else None,
+            'expected_apk_code': self.expected_apk[1] if self.expected_apk else None,
+            'state': state,
+            'elapsed_seconds': round(self.clock() - self.started, 3),
+            'checks': list(self.checks),
+            'cleanup_microphone_off_verified': self.cleanup_verified,
+            'capture_tests_enabled': self.capture,
+            'standby_enabled': self.standby,
+            'synthetic_acoustic_probe_enabled': self.acoustic,
+            'raw_audio_saved': False,
+            'contains_conversation_content': False,
+            'physical_usb_unplug_tested': False,
+            'human_accuracy_asserted': False,
+            'acoustic_latency_asserted': False,
+            'full_p0_acceptance': False,
+        }
+
+    def check(self, name, action):
+        began = self.clock()
+        row = {'name': name, 'state': 'running'}
+        self.checks.append(row)
+        self.checkpoint(self.report('running'))
+        try:
+            action()
+            row['state'] = 'passed'
+        except CheckFailure as error:
+            row.update(state='failed', reason=str(error))
+            raise
+        except KeyboardInterrupt:
+            row['state'] = 'interrupted'
+            raise
+        except Exception:
+            # Provider errors, dumpsys output and arbitrary exception messages
+            # never enter the report or terminal.
+            row.update(state='failed', reason='test_operation_failed')
+            raise CheckFailure('test_operation_failed') from None
+        finally:
+            row['elapsed_seconds'] = round(self.clock() - began, 3)
+            self.checkpoint(self.report('running'))
+
+    def preflight(self):
+        h = self.health()
+        require(h.get('connected') is True and h.get('transport') == 'usb', 'usb_not_ready')
+        require(h.get('microphone_active') is False, 'owner_microphone_already_active')
+        require(h.get('playing') is False and h.get('calibrating') is False, 'owner_audio_busy')
+        self.initial_instance = h['runtime_instance']
+        if self.expected_apk is not None:
+            require(self.device.version() == self.expected_apk, 'device_source_version_mismatch')
+        device, ui = self.device.status()
+        require(device.get('foreground') is True, 'assistant_not_foreground')
+        require(device.get('microphone_active') is False, 'device_microphone_already_active')
+        require(
+            device.get('vision_active') is False and ui.get('camera_open') is False, 'camera_busy'
+        )
+        require(ui.get('wake_checked') is True or not self.standby, 'standby_requires_wake_mode')
+        t = self.request({'operation': 'transport_status'})
+        require(
+            t.get('wifi_ready') is True and t.get('usb_ready') is True, 'standby_route_not_ready'
+        )
+
+    def inactive(self):
+        h = self.health()
+        return h.get('connected') is True and h.get('microphone_active') is False
+
+    def maintenance_open(self):
+        self.touched = True
+        self.device.open(False)
+        self.wait(self.inactive, 20, 'maintenance_capture_state_invalid')
+        self.sleep(2)
+        require(self.inactive(), 'maintenance_open_started_capture')
+        d, ui = self.device.status()
+        require(
+            d.get('foreground') is True and d.get('microphone_active') is False,
+            'maintenance_device_state_invalid',
+        )
+        require(ui.get('camera_open') is False, 'unexpected_camera_open')
+
+    def playback(self):
+        before = self.request({'operation': 'diagnostics'})
+        ids = {r.get('request_id') for r in before.get('requests', [])}
+        observed = 0
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            result = pool.submit(self.request, {'text': TEST_TEXT})
+            while not result.done():
+                if self.health().get('playing') is True:
+                    d, ui = self.device.status()
+                    require(d.get('microphone_active') is False, 'playback_started_capture')
+                    require(ui.get('caption_progress_overlap') is False, 'caption_progress_overlap')
+                    require(ui.get('halo_status_overlap') is False, 'halo_status_overlap')
+                    require(ui.get('caption_line_visible') is True, 'caption_line_clipped')
+                    require(ui.get('camera_open') is False, 'unexpected_camera_open')
+                    observed += 1
+                self.sleep(0.25)
+            require(result.result().get('status') == 'completed', 'announcement_not_completed')
+        after = self.request({'operation': 'diagnostics'})
+        rows = [
+            r
+            for r in after.get('requests', [])
+            if r.get('request_id') not in ids and r.get('origin') == 'announcement'
+        ]
+        require(len(rows) == 1, 'announcement_receipt_missing_or_ambiguous')
+        row = rows[0]
+        require(row.get('outcome') == 'completed', 'announcement_receipt_not_completed')
+        require(
+            {'playout_ack', 'playback_done'} <= set(row.get('stages', {})),
+            'playout_receipt_missing',
+        )
+        require(observed > 0, 'no_playing_ui_sample')
+
+    def handover(self):
+        require(self.inactive(), 'handover_requires_microphone_off')
+        require(
+            self.request({'operation': 'transport_test', 'seconds': 12}).get('ok') is True,
+            'route_suppression_rejected',
+        )
+
+        def route(kind):
+            h = self.health()
+            require(h.get('microphone_active') is False, 'handover_started_capture')
+            return h.get('connected') is True and h.get('transport') == kind
+
+        self.wait(lambda: route('wifi'), 10, 'wifi_route_not_selected')
+        self.wait(lambda: route('usb'), 25, 'usb_priority_not_restored')
+        d, _ = self.device.status()
+        require(
+            d.get('microphone_active') is False and d.get('transport') == 'usb',
+            'device_handover_state_invalid',
+        )
+
+    def start_capture(self):
+        self.device.open(True)
+        self.wait(lambda: self.health().get('microphone_active') is True, 15, 'capture_not_started')
+        self.wait(lambda: self.health().get('calibrating') is False, 25, 'calibration_not_finished')
+        h = self.health()
+        require(
+            h.get('microphone_active') is True and h.get('local_wake_ready') is True,
+            'wake_capture_not_ready',
+        )
+        d, ui = self.device.status()
+        require(
+            d.get('microphone_active') is True and ui.get('camera_open') is False,
+            'device_capture_state_invalid',
+        )
+
+    def home(self):
+        self.device.home()
+        self.wait(
+            lambda: self.health().get('microphone_active') is False, 15, 'home_did_not_stop_capture'
+        )
+        before = self.health().get('mic_frames')
+        self.sleep(2)
+        require(self.health().get('microphone_active') is False, 'home_restarted_capture')
+        require(self.health().get('mic_frames') == before, 'home_microphone_frames_increasing')
+
+    def idle(self):
+        began = self.clock()
+        self.start_capture()
+        deadline = self.clock() + 970
+        while True:
+            h = self.health()
+            require(
+                h.get('microphone_active') is True and h.get('connected') is True,
+                'idle_capture_or_connection_lost',
+            )
+            d, ui = self.device.status()
+            require(ui.get('camera_open') is False, 'unexpected_camera_open')
+            if ui.get('screen_sleeping') is True:
+                require(d.get('foreground') is True, 'idle_left_foreground')
+                require(self.clock() - began >= 895, 'idle_black_screen_too_early')
+                break
+            require(self.clock() < deadline, 'idle_black_screen_timeout')
+            self.checkpoint(self.report('running'))
+            self.sleep(5)
+
+    def acoustic_probe(self):
+        # A computer speaker is a synthetic source with unknown room geometry.
+        # This can verify the live chain, never a human recall rate or dB level.
+        d, ui = self.device.status()
+        require(
+            ui.get('screen_sleeping') is True and d.get('microphone_active') is True,
+            'acoustic_probe_requires_idle_capture',
+        )
+        ids = {
+            r.get('request_id')
+            for r in self.request({'operation': 'diagnostics'}).get('requests', [])
+        }
+        self.device.speak_probe()
+
+        def received():
+            p = self.request({'operation': 'diagnostics'})
+            rows = [
+                r
+                for r in p.get('requests', [])
+                if r.get('request_id') not in ids
+                and r.get('origin') == 'voice'
+                and r.get('outcome') == 'completed'
+            ]
+            return any(
+                {'wake_detected', 'asr_end', 'brain_start', 'playback_done'}
+                <= set(r.get('stages', {}))
+                for r in rows
+            )
+
+        self.wait(received, 120, 'synthetic_acoustic_chain_not_confirmed')
+        d, ui = self.device.status()
+        require(
+            ui.get('screen_sleeping') is False and d.get('foreground') is True,
+            'acoustic_probe_did_not_wake_foreground',
+        )
+
+    def cleanup(self):
+        if not self.touched:
+            return
+        # Home always stops AudioRecord and disarms automatic startup. A fresh
+        # maintenance open then restores the original foreground, mic-off state.
+        self.device.home()
+        self.wait(
+            lambda: self.health().get('microphone_active') is False,
+            15,
+            'cleanup_capture_not_stopped',
+        )
+        self.device.open(False)
+        self.wait(self.inactive, 25, 'cleanup_connection_not_restored')
+        self.sleep(2)
+        d, ui = self.device.status()
+        require(
+            d.get('foreground') is True
+            and d.get('microphone_active') is False
+            and ui.get('camera_open') is False
+            and self.inactive(),
+            'cleanup_not_confirmed',
+        )
+        self.cleanup_verified = True
+
+    def run(self):
+        state = 'failed'
+        try:
+            self.check(CHECKS[0], self.preflight)
+            self.check(CHECKS[1], self.maintenance_open)
+            self.check(CHECKS[2], self.playback)
+            self.check(CHECKS[3], self.handover)
+            if self.capture:
+                self.check(CHECKS[4], self.start_capture)
+                self.check(CHECKS[5], self.home)
+                self.check(CHECKS[6], self.maintenance_open)
+            if self.standby:
+                self.check(CHECKS[7], self.idle)
+            if self.acoustic:
+                self.check(CHECKS[8], self.acoustic_probe)
+            state = 'passed'
+        except CheckFailure:
+            pass
+        except KeyboardInterrupt:
+            state = 'interrupted'
+        finally:
+            try:
+                self.cleanup()
+            except Exception:
+                state = 'cleanup_unconfirmed'
+            self.checkpoint(self.report(state))
+        return self.report(state)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--runtime-root', type=Path, required=True)
+    parser.add_argument(
+        '--execute', action='store_true', help='Run visible hardware checks and fixed MiniMax TTS'
+    )
+    parser.add_argument(
+        '--capture',
+        action='store_true',
+        help='Explicitly enable bounded foreground mic lifecycle tests',
+    )
+    parser.add_argument(
+        '--standby',
+        action='store_true',
+        help='Also wait for a real 15-minute foreground idle screen',
+    )
+    parser.add_argument(
+        '--acoustic',
+        action='store_true',
+        help='Play one public synthetic query on Mac speakers after standby',
+    )
+    args = parser.parse_args(argv)
+    if args.standby and not args.capture or args.acoustic and not args.standby:
+        parser.error('--standby requires --capture; --acoustic requires --standby')
+    plan = {
+        'checks': list(CHECKS[:4])
+        + (list(CHECKS[4:7]) if args.capture else [])
+        + ([CHECKS[7]] if args.standby else [])
+        + ([CHECKS[8]] if args.acoustic else []),
+        'execute': args.execute,
+        'capture': args.capture,
+        'full_p0_acceptance': False,
+    }
+    if not args.execute:
+        print(json.dumps(plan, ensure_ascii=False, indent=2))
+        return 0
+    try:
+        runtime = args.runtime_root
+        require(
+            runtime.is_absolute() and runtime.resolve() == runtime,
+            'runtime_root_must_be_real_absolute',
+        )
+        socket_path = runtime / 'device-access/private/voice-runtime/announce.sock'
+        # Check the intended live workspace before any Android/UI operation.
+        health = rpc(socket_path, {'operation': 'health'})
+        manifest = load_release(runtime)
+        require(
+            health.get('bridge_version') == manifest.backend_version
+            and type(health.get('protocol_version')) is int
+            and health['protocol_version'] == manifest.protocol_version,
+            'runtime_source_version_mismatch',
+        )
+        folder = private_directory(
+            private_directory(ROOT / 'device-access/private') / 'device-checks'
+        )
+        # All callers targeting this runtime share one lock, even when their
+        # command sources/report directories are in different checkouts.
+        lock = private_directory(socket_path.parent) / 'automation-test.lock'
+        fd = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+        with os.fdopen(fd, 'r+') as handle:
+            info = os.fstat(handle.fileno())
+            require(
+                stat.S_ISREG(info.st_mode)
+                and info.st_uid == os.getuid()
+                and not info.st_mode & 0o077
+                and info.st_nlink == 1,
+                'unsafe_test_lock',
+            )
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            name = (
+                'device-'
+                + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-')
+                + uuid.uuid4().hex[:8]
+                + '.json'
+            )
+            with PrivateOutput(folder / name) as output:
+
+                def save(value):
+                    output.write(
+                        {
+                            **value,
+                            'backend_version': health.get('bridge_version'),
+                            'protocol_version': health.get('protocol_version'),
+                        }
+                    )
+
+                run = SmokeRun(
+                    Device(),
+                    lambda p: rpc(socket_path, p, 125 if 'text' in p else 5),
+                    capture=args.capture,
+                    standby=args.standby,
+                    acoustic=args.acoustic,
+                    checkpoint=save,
+                    expected_apk=(manifest.assistant.version, manifest.assistant.version_code),
+                )
+                print('自动设备检查已开始；结果仅保存状态，不留录音、图像或对话正文。', flush=True)
+                keep_awake = None
+                try:
+                    if args.standby and sys.platform == 'darwin':
+                        keep_awake = subprocess.Popen(
+                            ['/usr/bin/caffeinate', '-i', '-w', str(os.getpid())],
+                            stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+                    result = run.run()
+                finally:
+                    if keep_awake is not None and keep_awake.poll() is None:
+                        keep_awake.terminate()
+                        keep_awake.wait(timeout=5)
+                print(
+                    json.dumps(
+                        {
+                            'state': result['state'],
+                            'checks': result['checks'],
+                            'cleanup_microphone_off_verified': result[
+                                'cleanup_microphone_off_verified'
+                            ],
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+                print(output.path)
+                return 0 if result['state'] == 'passed' else 2
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+        parser.exit(2, '自动设备检查未启动或未完成；未自动重复设备动作。\n')
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

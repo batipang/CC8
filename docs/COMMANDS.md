@@ -43,6 +43,10 @@ setup 可加 `--dry-run` 输出 argv 计划，不创建环境、不下载、不�
 `./cc8 score-asr --template <私有新文件.json>` 生成未测矩阵；`--input` 评分已有私有转录，`--baseline-input` 做覆盖一致的 A/B。标准库、不收音、不上传、不执行指令，报告不留正文。语料、标注与缺测规则见 [ASR_EVALUATION](ASR_EVALUATION.md)。
 
 
+## 自动设备检查
+
+自动设备检查：`./cc8 verify-device --runtime-root /absolute/live/workspace` 默认只输出计划。`--execute` 执行播报/布局/逻辑连接检查，`--capture` 明确启用相关前台语音测试；`--standby --acoustic` 追加真实待机和一次 Mac 合成声学唤醒。结束核对恢复前台、麦克风关闭。详见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)。
+
 ## 长时只读观察
 
 `./cc8 observe` 默认 72 小时、每分钟 owner health 轮询；Ctrl+C 保存已采数据。记录私有资源曲线/实例分段与采样缺口，不自动开麦或恢复服务。旧后台无资源字段会明确 partial。见 [RUNTIME_OBSERVATION](RUNTIME_OBSERVATION.md)。
