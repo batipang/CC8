@@ -37,7 +37,9 @@ final class VoiceSession {
 
     void recognition(String engine);
 
-    void dotResult(String text, boolean truncated);
+    void dotResult(String text, boolean truncated, String sourceTitle);
+
+    void dotChats(JSONObject data);
 
     void screen(boolean sleeping);
 
@@ -468,7 +470,7 @@ final class VoiceSession {
         visual = true;
         visualGeneration = p.generation;
         visionRequestId = "";
-        listener.dotResult("", false);
+        listener.dotResult("", false, "");
         listener.caption(
             desktop ? "Dot 请求拍照，请调整画面；预览 5 秒后拍摄并返回当前聊天。" : "请调整画面，预览 5 秒后自动拍摄并交给 Dot 分析。",
             "attentive");
@@ -565,7 +567,10 @@ final class VoiceSession {
         listener.brain(j.optString("provider", "minimax"));
       } else if ("dot_result".equals(event)) {
         if ((recording || visual || textSession) && p.generation >= minimumGeneration)
-          listener.dotResult(j.optString("text"), j.optBoolean("truncated"));
+          listener.dotResult(
+              j.optString("text"), j.optBoolean("truncated"), j.optString("handoff_source_title"));
+      } else if ("dot_chat_state".equals(event)) {
+        if (foreground) listener.dotChats(j);
       } else if ("web_sources".equals(event)) {
         if ((recording || visual || textSession) && p.generation >= minimumGeneration)
           listener.sources(j.optJSONArray("items"), j.optString("retrieved_at"));
@@ -648,6 +653,22 @@ final class VoiceSession {
 
   void workspaceGet() {
     send(Wire.event("workspace_get"));
+  }
+
+  void dotChatRequest(String requestId, String action, String sourceId, String cursor) {
+    if (!foreground || !isConnected()) return;
+    JSONObject j = Wire.event("dot_chat_request");
+    Wire.put(j, "request_id", requestId);
+    Wire.put(j, "action", action);
+    if (sourceId != null) Wire.put(j, "source_id", sourceId);
+    if (cursor != null) Wire.put(j, "cursor", cursor);
+    send(j);
+  }
+
+  void dotChatCancel(String requestId) {
+    JSONObject j = Wire.event("dot_chat_cancel");
+    Wire.put(j, "request_id", requestId);
+    send(j);
   }
 
   void reminderAction(JSONObject args) {

@@ -1,6 +1,21 @@
 # Changelog
 
-## Unreleased — p0-review-20261102.1
+## Unreleased — p1-chat-handoff-20261102.1
+
+Backend 0.14.0; assistant APK 0.8.9 / code 34; protocol 2.
+
+- Add explicit, paginated metadata-only desktop chat discovery and selected-chat
+  excerpt handoff in Settings. Read only the confirmed source's completed text,
+  keep excerpts in RAM, and label the independent result with its source.
+- Preserve native owner configuration and existing tool/approval boundaries.
+  Do not resume/write desktop chats when shared-host access is unverified.
+- Reset owned voice context when selecting/clearing a source, reject busy or
+  stale operations, cancel subsequent reads and keep late interrupts scoped.
+- Add result copy for manual desktop handoff; no automatic messages or capture.
+
+Not deployed; P0 baseline remains host 0.13.7 / APK 0.8.8.
+
+## p0-review-20261102.1 — source candidate
 
 Backend 0.13.7; APK 0.8.8 / code 33 and protocol 2 unchanged.
 

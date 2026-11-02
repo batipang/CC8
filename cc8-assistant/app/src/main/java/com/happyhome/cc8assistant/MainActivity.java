@@ -37,6 +37,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   private JSONArray tasksData = new JSONArray(), remindersData = new JSONArray();
   private String lastStateMessage = "系统待命";
   private VoiceSession session;
+  private DotChatsDialog dotChats;
+  private String dotResultSource = "";
   private CompanionView companion;
   private WaveformView waveform;
   private KaraokeTextView captionText;
@@ -144,6 +146,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
                 | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                 | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
     session = new VoiceSession(this, this);
+    dotChats = new DotChatsDialog(this, session);
     requestOpenVoice(getIntent());
     build();
   }
@@ -859,7 +862,15 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
         .setTitle("大黄蜂设置")
         .setItems(
             new String[] {
-              "媒体音量", "助理大脑", "提醒管理", "检索来源", "最近 Dot 完整结果", "连接与桌面入口", "隐私与语音说明", "立即打断播报"
+              "媒体音量",
+              "助理大脑",
+              "提醒管理",
+              "检索来源",
+              "最近 Dot 完整结果",
+              "连接与桌面入口",
+              "隐私与语音说明",
+              "立即打断播报",
+              "Dot 聊天接续"
             },
             (d, n) -> {
               if (n == 0) {
@@ -902,7 +913,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
                     .setMessage(privacyText.getText())
                     .setPositiveButton("知道了", null)
                     .show();
-              } else session.interrupt();
+              } else if (n == 7) session.interrupt();
+              else dotChats.open();
             })
         .setNegativeButton("关闭", null)
         .show();
@@ -992,7 +1004,10 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   private void showDotResult() {
     if (dotResult.isEmpty()) return;
-    TextView detail = text(dotResult, 22, INK);
+    String displayed =
+        (dotResultSource.isEmpty() ? "" : "摘要接续来源：" + dotResultSource + "\n结果未追加原桌面聊天\n\n")
+            + dotResult;
+    TextView detail = text(displayed, 22, INK);
     detail.setTextIsSelectable(true);
     detail.setPadding(dp(22), dp(16), dp(22), dp(16));
     ScrollView scroll = new ScrollView(this);
@@ -1000,6 +1015,15 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     new AlertDialog.Builder(this)
         .setTitle("Dot / Codex · 任务结果")
         .setView(scroll)
+        .setNeutralButton(
+            "复制结果",
+            (d, n) -> {
+              android.content.ClipboardManager clipboard =
+                  (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+              clipboard.setPrimaryClip(
+                  android.content.ClipData.newPlainText("Dot 任务结果", displayed));
+              Toast.makeText(this, "已复制，可在目标桌面聊天中粘贴", Toast.LENGTH_SHORT).show();
+            })
         .setPositiveButton("关闭", null)
         .show();
   }
@@ -1016,11 +1040,17 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   }
 
   @Override
-  public void dotResult(String value, boolean truncated) {
+  public void dotResult(String value, boolean truncated, String sourceTitle) {
     runOnUiThread(
         () -> {
           dotResult = value;
+          dotResultSource = sourceTitle;
         });
+  }
+
+  @Override
+  public void dotChats(JSONObject data) {
+    runOnUiThread(() -> dotChats.accept(data));
   }
 
   private void traceAuto(String event) {
@@ -1186,6 +1216,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
           linked = connected;
           workspaceRevision = -1;
           if (!connected) {
+            dotChats.close();
             tasksData = new JSONArray();
             remindersData = new JSONArray();
             renderWorkspace();
@@ -1375,6 +1406,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   protected void onPause() {
+    if (dotChats != null) dotChats.close();
     screen(false);
     foreground = false;
     if (eyes != null) eyes.cancel();
