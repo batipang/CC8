@@ -11,7 +11,6 @@ import subprocess
 import sys
 import tempfile
 import uuid
-import wave
 
 if __package__:
     from .private_output import PrivateOutput, private_directory
@@ -23,6 +22,8 @@ from mac_voice import (
     available_voices as available_voices,
     parse_voices as parse_voices,
     resolve_voice,
+    synthesize,
+    read_pcm as read_pcm,
     __file__ as voice_source,
 )
 
@@ -81,59 +82,6 @@ CASES = (
 )
 
 CORPUS_VERSION = 'installed-voices-and-explicit-default-v2'
-
-
-def synthesize(folder, voice, rate, text):
-    resolved = resolve_voice(voice)
-    source, output = folder / 'source.aiff', folder / 'source.wav'
-    subprocess.run(
-        [
-            '/usr/bin/say',
-            *(['-v', resolved] if resolved is not None else []),
-            '-r',
-            str(rate),
-            '-o',
-            str(source),
-            text,
-        ],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=True,
-        timeout=30,
-    )
-    subprocess.run(
-        [
-            '/usr/bin/afconvert',
-            '-f',
-            'WAVE',
-            '-d',
-            'LEI16@16000',
-            '-c',
-            '1',
-            str(source),
-            str(output),
-        ],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=True,
-        timeout=15,
-    )
-    return read_pcm(output)
-
-
-def read_pcm(path):
-    with wave.open(str(path), 'rb') as audio:
-        if (audio.getframerate(), audio.getnchannels(), audio.getsampwidth()) != (16000, 1, 2):
-            raise ValueError('Invalid synthetic fixture format')
-        if not 0 < audio.getnframes() <= 16000 * 10:
-            raise ValueError('Synthetic fixture exceeds duration bound')
-        expected = audio.getnframes() * 2
-        pcm = audio.readframes(audio.getnframes())
-        if len(pcm) != expected:
-            raise ValueError('Truncated synthetic fixture')
-        return pcm
 
 
 def summary(rows):

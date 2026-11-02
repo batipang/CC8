@@ -65,3 +65,21 @@ fields 是操作人员核对的**实际听到/解释成的字段值**，只能�
 先用当前 0.12.2 建立基线，冻结验收语料及音量/位置，再对候选同样执行。调参只看 calibration，最终比较 acceptance；报告完整缺测和错例编号，按 TODO 的静音/电视与 1/3 米门槛判断，不能拿合成分数宣布准确率提高。插话起点到实际暂停、误打断、自播报和多人冲突仍需独立的真实声音测试，评分器不推断这些指标。
 
 本机全套 installer 16、host 425（4 private-audio skip）、tooling 51、Java 15 checks，以及格式/lint、strict 六模块和脱敏扫描通过；新增评分回归 12 项，待真实 CI。
+
+## 无需朗读的 API 组件回归
+
+用户要求自动测试后，新增 `verify-asr`，与上述只读评分器分开。它用 Mac 已安装且身份校验通过的 Tingting 音色生成公开语料，直接走当前 MiniMax ASR 的同一去直流、增益、补静音和上传路径，不播放声音、不读取麦克风、不操作 CC8，也不将指令交给 Dot 执行。
+
+```sh
+# 只看计划；系统 Python 可运行，不读凭据、不创建输出、不联网
+./cc8 verify-asr --runtime-root /absolute/live/workspace
+# 已有语音 Python 环境执行：默认15条调参；显式选择60条验收或全部75条
+/absolute/voice/python cc8 verify-asr --runtime-root /absolute/live/workspace --execute
+/absolute/voice/python cc8 verify-asr --runtime-root /absolute/live/workspace --execute --partition acceptance
+```
+
+执行需 macOS、已配置的 MiniMax ASR 和匹配的四个识别/配置源码文件；不下载音色、不安装依赖或改变运行提供方。共享运行目录的自动化排他锁，避免与设备/故障测试重叠。上传的是公开合成单句，使用现有 API 配额；每条最多一次工具级调用，连续三条生成或请求失败即结束，支持 Ctrl+C 收尾。
+
+执行源码目录的 `device-access/private/synthetic-asr/` 保存原子 0600 报告：固定样本 ID、分区、失败类别、CER/WER、完整转录规范化精确计数、音频/源码/语料摘要。临时 WAV 删除，不保存识别正文。合成耗时、识别耗时分别计时；`recognition_ms` 使用已评分请求的识别阶段 p50/p95（线性插值），不包含生成时间，也不是用户句尾到实际出声延迟。失败和缺测另列，不混入成功分母。
+
+completed/退出0仅代表选定样本全部完成测量；有错字仍可是 completed，不能解释为准确率达标。partial/退出2、cancelled/退出130均保留已测和剩余覆盖。默认计划退出0也不代表实际执行通过。即使类别名是 pause_soft，当前输入仍是正常合成读法，不冒充轻声/自然停顿；没有声学距离、电视、人声打断、关键字段或任务意图验收。

@@ -42,6 +42,8 @@ setup 可加 `--dry-run` 输出 argv 计划，不创建环境、不下载、不�
 
 `./cc8 score-asr --template <私有新文件.json>` 生成未测矩阵；`--input` 评分已有私有转录，`--baseline-input` 做覆盖一致的 A/B。标准库、不收音、不上传、不执行指令，报告不留正文。语料、标注与缺测规则见 [ASR_EVALUATION](ASR_EVALUATION.md)。
 
+`./cc8 verify-asr --runtime-root /absolute/live/workspace` 默认只看计划；使用已有语音 Python 加 `--execute`，自动生成公开合成单句并测已配置 MiniMax ASR。默认15条调参，`--partition acceptance|all` 显式选择60/75条。不开麦、不播放、不交办任务；真实请求使用 API 配额，私有报告不留音频或转录。完成测量不代表真人准确率达标，详见 [ASR_EVALUATION](ASR_EVALUATION.md)。
+
 
 ## 自动设备检查
 
