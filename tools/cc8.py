@@ -417,6 +417,10 @@ def run_runtime(args, root=ROOT):
 
 
 def main():
+    if sys.argv[1:2] == ['upgrade']:
+        from upgrade_preparation import main as upgrade_main
+
+        return upgrade_main(sys.argv[2:])
     if sys.argv[1:2] == ['measure']:
         from measure import main as measure_main
 
@@ -448,6 +452,10 @@ def main():
     group.add_argument('--foreground', action='store_true')
     group.add_argument('--stop', action='store_true')
     commands.add_parser('measure', help='Collect content-free host receipts without capture')
+    commands.add_parser(
+        'upgrade',
+        help='Offline source checks, explicit settings backup and restore staging; never deploys',
+    )
     commands.add_parser(
         'observe', help='Read-only bounded health/resource curves; never starts capture'
     )

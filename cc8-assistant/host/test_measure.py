@@ -222,6 +222,8 @@ class MeasurementTests(unittest.TestCase):
                 except Exception as error:
                     errors.append(type(error).__name__)
 
+            # This integration proves real CLI/IPC and deduplication, not a
+            # 200 ms CI filesystem budget. Clock-injected cases cover deadlines.
             worker = threading.Thread(target=serve, daemon=True)
             worker.start()
             try:
@@ -231,7 +233,7 @@ class MeasurementTests(unittest.TestCase):
                         str(ROOT / 'cc8'),
                         'measure',
                         '--seconds',
-                        '0.2',
+                        '2',
                         '--interval',
                         '0.05',
                         '--socket',

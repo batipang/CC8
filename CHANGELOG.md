@@ -1,6 +1,18 @@
 # Changelog
 
-## Unreleased — p1-chat-handoff-20261102.1
+## Unreleased — p1-upgrade-preparation-20261102.1
+
+Backend tools 0.14.1; APK 0.8.9 / code 34 and protocol 2 unchanged.
+
+- Add offline source-version planning with both protocol directions, downgrade
+  flags and optional existing AAPT/API-27 APK validation. Never assert installed
+  signature continuity or deployment readiness from source declarations.
+- Explicitly back up a validated non-secret profile and pinned original key
+  references, verify integrity, and stage restore to a new private file only.
+  Never read key contents, replace the live profile or manage devices/services.
+- Verify synthetic restore roundtrips and root CLI under a minimal environment.
+
+## p1-chat-handoff-20261102.1 — source candidate
 
 Backend 0.14.0; assistant APK 0.8.9 / code 34; protocol 2.
 

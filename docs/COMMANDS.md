@@ -46,3 +46,7 @@ setup 可加 `--dry-run` 输出 argv 计划，不创建环境、不下载、不�
 ## 长时只读观察
 
 `./cc8 observe` 默认 72 小时、每分钟 owner health 轮询；Ctrl+C 保存已采数据。记录私有资源曲线/实例分段与采样缺口，不自动开麦或恢复服务。旧后台无资源字段会明确 partial。见 [RUNTIME_OBSERVATION](RUNTIME_OBSERVATION.md)。
+
+## 离线升级准备
+
+`./cc8 upgrade --help` 提供源码版本规划、显式非密钥配置备份、只读校验及新恢复文件预生成；不安装或替换配置。入口与界限见 [UPGRADE_PREPARATION](UPGRADE_PREPARATION.md)。

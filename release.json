@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p1-chat-handoff-20261102.1",
+  "release_id": "p1-upgrade-preparation-20261102.1",
   "backend": {
-    "version": "0.14.0"
+    "version": "0.14.1"
   },
   "assistant": {
     "version": "0.8.9",

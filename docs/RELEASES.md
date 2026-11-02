@@ -11,7 +11,7 @@
 
 `known_deployed_pair` 记录原现场助手 0.8.6 / code 31、后台 0.12.2、协议 2；它不是候选已部署的声明。相同协议表示声明的传输兼容，不代表每个可选功能、声学效果或物理切换已验收。破坏协议的改动必须改清单/兼容范围并补回归，不强迫所有组件版本号相同。
 
-工作中候选以 `python3 tools/release.py show` 和 CHANGELOG 的 Unreleased 为准：当前 P0 待测基线为后台 0.13.7 / 助手 APK 0.8.8 code 33 / p0-review-20261102.1；独立 P1 工作候选为后台 0.14.0 / APK 0.8.9 code 34 / p1-chat-handoff-20261102.1，协议仍为 2，尚未部署。先前 p0-software-20261102.1 和 p0-playout-20261102.1 已标记并核验，见 [原交接](P0_SOFTWARE_HANDOFF.md)；其版本和产物证据只适用于该快照。下方 .1 命令用于 checkout 到该已标记源码时复验其原清单。
+工作中候选以 `python3 tools/release.py show` 和 CHANGELOG 的 Unreleased 为准：当前 P0 待测基线为后台 0.13.7 / 助手 APK 0.8.8 code 33 / p0-review-20261102.1；独立 P1 工作候选为后台工具 0.14.1 / APK 0.8.9 code 34 / p1-upgrade-preparation-20261102.1，协议仍为 2，尚未部署。先前 p0-software-20261102.1 和 p0-playout-20261102.1 已标记并核验，见 [原交接](P0_SOFTWARE_HANDOFF.md)；其版本和产物证据只适用于该快照。下方 .1 命令用于 checkout 到该已标记源码时复验其原清单。
 
 ## 构建与内容核验
 
