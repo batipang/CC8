@@ -83,6 +83,7 @@ final class VoiceSession {
   private volatile int epoch = 0, minimumGeneration = 0, lifecycle = 0;
   private volatile long micFrames = 0, renderFrames = 0;
   private volatile String phase = "idle";
+  private final StatusFeedback statusFeedback = new StatusFeedback();
   private volatile boolean dotChatSupported, savedTasksSupported;
 
   boolean supportsDotChatHandoff() {
@@ -269,6 +270,7 @@ final class VoiceSession {
         listener.playback(false);
         listener.caption("", "attentive");
         minimumGeneration = 0;
+        statusFeedback.reset();
         activeLink = next;
         dotChatSupported = savedTasksSupported = false;
         socket = next.connection;
@@ -453,7 +455,7 @@ final class VoiceSession {
       } else if ("device_control".equals(event)) {
         deviceControl(j);
       } else if ("text_begin".equals(event)) {
-        if (foreground && p.generation >= minimumGeneration) {
+        if (foreground && p.generation >= minimumGeneration && statusFeedback.begin(p.generation)) {
           textSession = true;
           textGeneration = p.generation;
           listener.playback(true);
@@ -463,8 +465,16 @@ final class VoiceSession {
       } else if ("text_done".equals(event)) {
         if (textSession && p.generation == textGeneration) {
           textSession = false;
+          if (!foreground
+              || p.generation < minimumGeneration
+              || !statusFeedback.current(p.generation)) return;
           listener.playback(false);
-          listener.state(recording ? "listening" : "idle", recording ? "我在听" : "任务已结束 · 麦克风关闭");
+          // Finishing a failed task still releases controls, but must leave
+          // the actionable error visible until the next explicit interaction.
+          if (!statusFeedback.failed(p.generation)) {
+            phase = recording ? "listening" : "idle";
+            listener.state(phase, recording ? "我在听" : "任务已结束 · 麦克风关闭");
+          }
         }
       } else if ("workspace".equals(event)) {
         if (foreground) listener.workspace(j);
@@ -555,14 +565,26 @@ final class VoiceSession {
       } else if ("ping".equals(event)) {
         send(Wire.event("pong"));
       } else if ("status".equals(event)) {
-        if (recording || announcement || visual || textSession) {
-          phase = j.optString("phase", "listening");
+        String nextPhase = j.optString("phase", "listening");
+        boolean permitted =
+            recording
+                || (announcement && p.generation == announcementGeneration)
+                || (visual && p.generation == visualGeneration)
+                || (textSession && p.generation == textGeneration)
+                // Playback failure first cancels output, then reports why.
+                // Admit that one terminal error only for the request we owned.
+                || ("error".equals(nextPhase) && statusFeedback.cancelled(p.generation));
+        if (foreground
+            && permitted
+            && p.generation >= minimumGeneration
+            && statusFeedback.accept(p.generation, nextPhase)) {
+          phase = nextPhase;
           listener.state(phase, j.optString("message"));
         }
       } else if ("transcript".equals(event)) {
         if (recording) listener.heard(j.optString("text"));
       } else if ("announcement_begin".equals(event)) {
-        if (foreground && p.generation >= minimumGeneration) {
+        if (foreground && p.generation >= minimumGeneration && statusFeedback.begin(p.generation)) {
           announcement = true;
           announcementGeneration = p.generation;
           listener.announcement();
@@ -571,13 +593,18 @@ final class VoiceSession {
       } else if ("announcement_done".equals(event)) {
         if (announcement && p.generation == announcementGeneration) {
           announcement = false;
+          if (!foreground
+              || p.generation < minimumGeneration
+              || !statusFeedback.current(p.generation)) return;
           listener.playback(false);
-          phase = recording ? "listening" : "idle";
-          listener.state(
-              phase,
-              "completed".equals(j.optString("result"))
-                  ? (recording ? "播报已结束，我在听" : "播报已结束 · 麦克风关闭")
-                  : (recording ? "播报未完成，我在听" : "播报未完成 · 麦克风关闭"));
+          if (!statusFeedback.failed(p.generation)) {
+            phase = recording ? "listening" : "idle";
+            listener.state(
+                phase,
+                "completed".equals(j.optString("result"))
+                    ? (recording ? "播报已结束，我在听" : "播报已结束 · 麦克风关闭")
+                    : (recording ? "播报未完成，我在听" : "播报未完成 · 麦克风关闭"));
+          }
         }
       } else if ("brain_provider".equals(event)) {
         listener.brain(j.optString("provider", "minimax"));
@@ -594,7 +621,10 @@ final class VoiceSession {
         if ((recording || visual || textSession) && p.generation >= minimumGeneration)
           listener.sources(j.optJSONArray("items"), j.optString("retrieved_at"));
       } else if ("cancel".equals(event)) {
-        if (p.generation < minimumGeneration || (visual && p.generation < visualGeneration)) return;
+        if (p.generation < minimumGeneration
+            || (visual && p.generation < visualGeneration)
+            || !statusFeedback.cancel(
+                p.generation, recording || announcement || visual || textSession)) return;
         minimumGeneration = Math.max(minimumGeneration, p.generation);
         if (visual) {
           visual = false;
@@ -895,6 +925,7 @@ final class VoiceSession {
       micFrames = 0;
       renderFrames = 0;
       minimumGeneration = 0;
+      statusFeedback.reset();
     }
     listener.microphone(true);
     listener.state("calibrating", "正在准备音频，请保持安静");

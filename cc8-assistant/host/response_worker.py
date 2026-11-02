@@ -10,7 +10,7 @@ from dataclasses import dataclass
 import queue
 import sys
 import threading
-from typing import Callable
+from typing import Callable, ContextManager
 from announce import Announcement
 from diagnostics import TraceBook, error_kind
 from failure_feedback import FailureSink, feedback
@@ -22,6 +22,7 @@ from workspace import Workspace
 
 @dataclass(frozen=True)
 class ResponseHooks:
+    lock: ContextManager[object]
     valid: Callable[[int], bool]
     diagnostics: Callable[[], TraceBook]
     workspace: Callable[[], Workspace]
@@ -82,10 +83,21 @@ class ResponseWorker:
             try:
                 self.hooks.dispatch(job)
             except Exception as error:
-                if self.hooks.valid(job.generation):
-                    self.hooks.failure('这次回答没有完成', error, trace_key=job.generation)
-                else:
-                    self.hooks.log('response_worker_error', error_type=type(error).__name__)
+                # Keep owner admission and failure publication atomic. Text
+                # validity must remain live until its error has been sent.
+                with self.hooks.lock:
+                    if self.hooks.valid(job.generation):
+                        self.hooks.failure('这次回答没有完成', error, trace_key=job.generation)
+                    else:
+                        self.hooks.log('response_worker_error', error_type=type(error).__name__)
+            finally:
+                if isinstance(job, TextReply):
+                    try:
+                        self.hooks.finish_text(job.generation)
+                    except Exception as error:
+                        # A broken connection during cleanup must not kill the
+                        # serial worker or retry a task with possible effects.
+                        self.hooks.log('text_finish_error', error_type=type(error).__name__)
 
     def respond_job(self, job):
         if isinstance(job, Announcement):
@@ -101,8 +113,6 @@ class ResponseWorker:
                 self.hooks.answer(job.text, job.generation)
         finally:
             self.busy = False
-            if isinstance(job, TextReply):
-                self.hooks.finish_text(job.generation)
 
     def answer(self, text, generation, image=None):
         # 任务成功以大脑真实回执为准，后续停止朗读不能把已完成工作改为取消。

@@ -262,10 +262,11 @@ class SessionController:
             self.hooks.awake_changed(value)
 
     def finish_text_response(self, generation):
-        if self.text_generation == generation:
-            self.text_generation = None
-            if self.connection is not None:
-                self.hooks.event('text_done', generation=generation)
+        with self.guard:
+            if self.text_generation == generation:
+                self.text_generation = None
+                if self.connection is not None:
+                    self.hooks.event('text_done', generation=generation)
 
     def ready(self, j):
         self.hooks.visual().update_peer(j)

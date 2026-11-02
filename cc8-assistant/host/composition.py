@@ -207,6 +207,7 @@ def build_components(
     )
     recognition = RecognitionWorker(
         RecognitionHooks(
+            lock=host.session.guard,
             valid=lambda generation: host.valid(generation),
             diagnostics=lambda: host.diagnostics,
             playing=lambda: host.playback.playing,
@@ -240,6 +241,7 @@ def build_components(
     )
     response = ResponseWorker(
         ResponseHooks(
+            lock=host.session.guard,
             valid=lambda generation: host.valid(generation),
             diagnostics=lambda: host.diagnostics,
             workspace=lambda: host.workspace,

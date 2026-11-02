@@ -70,8 +70,9 @@ class AnnouncementController:
                 job.result = 'completed'
         except Exception as error:
             job.result = 'failed'
-            if self.hooks.valid(generation):
-                self.hooks.failure('这次播报没有完成', error)
+            with self.hooks.lock:
+                if self.hooks.valid(generation):
+                    self.hooks.failure('这次播报没有完成', error)
         finally:
             if self.hooks.connected():
                 try:

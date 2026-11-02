@@ -10,7 +10,7 @@ import queue
 import re
 import threading
 import time
-from typing import Callable, Mapping, Pattern, Protocol
+from typing import Callable, ContextManager, Mapping, Pattern, Protocol
 import numpy as np
 from diagnostics import TraceBook
 from dsp import RATE, resembles_playback
@@ -36,6 +36,7 @@ class PairSink(Protocol):
 
 @dataclass(frozen=True)
 class RecognitionHooks:
+    lock: ContextManager[object]
     valid: Callable[[int], bool]
     diagnostics: Callable[[], TraceBook]
     playing: Callable[[], bool]
@@ -267,17 +268,20 @@ class RecognitionWorker:
                     self.hooks.enqueue_response(Reply(generation, text))
             except Exception as e:
                 self.hooks.diagnostics().failure(trace_id, 'asr', e)
-                if self.hooks.valid(generation):
-                    try:
-                        if (
-                            self.hooks.pause_state()
-                            and evidence
-                            and (evidence.get('pause_token') == self.hooks.pause_state()['token'])
-                        ):
-                            self.hooks.cancel_session('barge_asr_error')
-                    except (OSError, EOFError):
-                        pass
-                    self.hooks.failure('这次识别没有完成，请再说一次', e, trace_key=trace_id)
+                with self.hooks.lock:
+                    if self.hooks.valid(generation):
+                        try:
+                            if (
+                                self.hooks.pause_state()
+                                and evidence
+                                and (
+                                    evidence.get('pause_token') == self.hooks.pause_state()['token']
+                                )
+                            ):
+                                self.hooks.cancel_session('barge_asr_error')
+                        except (OSError, EOFError):
+                            pass
+                        self.hooks.failure('这次识别没有完成，请再说一次', e, trace_key=trace_id)
             finally:
                 self.busy = False
                 if not accepted:
