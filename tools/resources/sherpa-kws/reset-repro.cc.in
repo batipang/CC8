@@ -1,0 +1,48 @@
+// Compile actual reset methods against minimal state interfaces. This checks
+// ownership of encoder/result reset, not neural model inference or acoustics.
+#include <iostream>
+#include <map>
+#include <memory>
+#include "sherpa-onnx/csrc/context-graph.h"
+
+using sherpa_onnx::ContextGraph;
+using sherpa_onnx::ContextState;
+struct Hypothesis { const ContextState *context_state = nullptr; };
+struct Hypotheses {
+  std::map<int, Hypothesis> values{{0, {}}};
+  size_t Size() const { return values.size(); }
+  auto begin() { return values.begin(); }
+};
+struct Result { Hypotheses hyps; };
+struct Decoder { Result GetEmptyResult() const { return {}; } };
+struct Model { int GetEncoderInitStates() const { return 123; } };
+struct OnlineStream {
+  ContextGraph graph{{{1, 2, 3}}, 1.0f, .25f};
+  int encoder = 777;
+  Result result;
+  const ContextGraph *GetContextGraph() const { return &graph; }
+  void SetKeywordResult(const Result &r) { result = r; }
+  void SetStates(int value) { encoder = value; }
+};
+struct Base { virtual void Reset(OnlineStream *) const = 0; };
+struct Fixture : Base {
+  std::unique_ptr<Decoder> decoder_ = std::make_unique<Decoder>();
+  std::unique_ptr<Model> model_ = std::make_unique<Model>();
+  /* CC8_NATIVE_RESET_MEMBERS */
+  void Automatic(OnlineStream *s) const {
+    float trailing_silence = 2.0f, threshold = 1.5f;
+    /* CC8_NATIVE_AUTOMATIC_RESET */
+  }
+};
+int main() {
+  Fixture fixture;
+  OnlineStream stream;
+  fixture.Automatic(&stream);
+  const bool preserved = stream.encoder == 777;
+  const bool result_reset = stream.result.hyps.begin()->second.context_state == stream.graph.Root();
+  fixture.Reset(&stream);
+  std::cout << std::boolalpha
+            << "{\"automatic_encoder_preserved\":" << preserved
+            << ",\"explicit_encoder_reset\":" << (stream.encoder == 123)
+            << ",\"keyword_result_reset\":" << result_reset << "}";
+}

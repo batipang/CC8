@@ -6,7 +6,7 @@
 
 | 命令 | 实际动作 | 边界 |
 | --- | --- | --- |
-| `./cc8 setup --profile dev` | 创建本仓库 `.toolchains/cc8/dev-venv`、安装固定 dev 依赖，下载校验固定 Java formatter | 不装语音模型、不开设备；JDK 21+ / OpenSSL 仍由 doctor 检查 |
+| `./cc8 setup --profile dev` | 创建本仓库 `.toolchains/cc8/dev-venv`、安装固定 dev 依赖，下载校验固定 Java formatter | 不装语音模型、不开设备；JDK 21+ / OpenSSL / C++17 编译器仍由 doctor 检查 |
 | `./cc8 setup --profile android` | 复用已校验归档的 bootstrap 与 sdkmanager 入口 | SDK 许可交互式展示；不构建/安装 APK，不复制签名 |
 | `./cc8 setup --profile voice` | 复用现有语音准备脚本，核对原生 AEC wheel、固定 runtime 清单和停止词模型 | 独立运行环境；不读取凭证内容、不连接设备、不启动助手 |
 | `./cc8 setup --profile voice --sensevoice` | 额外准备固定版本和摘要的可选 SenseVoice 模型 | 不改变默认 MiniMax ASR 配置 |
@@ -17,7 +17,7 @@ setup 可加 `--dry-run` 输出 argv 计划，不创建环境、不下载、不�
 
 `./cc8 doctor --profile dev|android|voice|all [--json]`，默认 all。必要条件不足退出 2；可选状态未出现不阻止首次启动。每项失败提供修复入口，报告只含就绪位和固定提示，不输出配置值、进程命令、设备身份或密钥。dev 诊断不读语音配置或模型。
 
-- dev：Python 版本与固定包版本、JDK 21+、OpenSSL、Java formatter 摘要。
+- dev：Python 版本与固定包版本、JDK 21+、OpenSSL、C++ 编译器存在性、Java formatter 摘要。实际 C++17 支持由原生源码回归编译验证。
 - android：本机路径中的 JDK、Gradle / SDK 所需文件、配置和签名引用存在性；签名连续性仍须安装前 F-14 核验。未指定签名且尚未首次构建时作为 INFO；显式指定却缺失则必须修复。
 - voice：CPython 3.13 / Apple Silicon、完整固定包元数据、停止词模型归档与解压文件摘要、所选 SenseVoice 摘要、配置、MiniMax 文件权限/格式、Codex 与所需 Node 的存在性、跨目录运行所有权。
 - 已运行后台的 health / 已认证连接只是附加状态。doctor 不枚举 USB 序列号、不启动桥接、不开麦/摄像头、不下载、不启动 Codex app-server、不调用模型服务。
@@ -50,6 +50,8 @@ setup 可加 `--dry-run` 输出 argv 计划，不创建环境、不下载、不�
 后台恢复实机检查：`./cc8 verify-service --runtime-root /absolute/live/workspace` 默认只计划；显式 `--execute --cycles 10` 在严格空闲/身份门控后模拟本项目后台崩溃，观察已有守护恢复，不开麦、不安装服务。详见 [AUTOMATED_SERVICE_CHECKS](AUTOMATED_SERVICE_CHECKS.md)。
 
 英文唤醒组件回归：`./cc8 verify-wake --model-root /absolute/model/workspace` 默认只输出计划；显式 `--execute` 用现有模型环境对固定公开合成正负样本和流边界评测，不开麦、不播放、不联网。结果失败也保存私有报告，详见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)。
+
+原生源码补丁回归：`python tools/native_kws.py` 用已固定的 C++ 片段编译修复前后置信度复现；`--overlay <新目录>` 额外导出两个源码修改和许可。不是已安装原生库的验证或升级，不加载模型或收音，详见 [NATIVE_KWS_REGRESSION](NATIVE_KWS_REGRESSION.md)。
 
 自动设备检查：`./cc8 verify-device --runtime-root /absolute/live/workspace` 默认只输出计划。`--execute` 执行播报/布局/逻辑连接检查，`--capture` 明确启用相关前台语音测试；`--standby --acoustic` 追加真实待机和一次 Mac 合成声学唤醒。结束核对恢复前台、麦克风关闭。详见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)。
 

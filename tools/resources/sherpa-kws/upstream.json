@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "repository": "https://github.com/k2-fsa/sherpa-onnx",
+  "commit": "af2d8d81dbfa61c4cea4c568da78f3982edca005",
+  "version": "2.0.1",
+  "license": "Apache-2.0",
+  "source_archive_sha256": "afcafe3c34bc2f15a363ad791fa1644a69bf0977a58c1b4f617468976c2faeb5",
+  "files": {
+    "LICENSE": {
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    "sherpa-onnx/csrc/context-graph.h": {
+      "bytes": 2920,
+      "sha256": "bc3a51c1dfa0d967f97cd3173c21785e9c9f35d3e739e5cfd67197ad0c0675e0"
+    },
+    "sherpa-onnx/csrc/context-graph.cc": {
+      "bytes": 5703,
+      "sha256": "6ef729180e26e6ff3eb3a4cc9235346aabd70fff02fe39366e6b88c4bcd9d2f3"
+    },
+    "sherpa-onnx/csrc/log.h": {
+      "bytes": 11480,
+      "sha256": "697f7d53daeee5923eeb802c3da132f849306f262359fc6d31a8b9f67a2c0448"
+    },
+    "sherpa-onnx/csrc/macros.h": {
+      "bytes": 11225,
+      "sha256": "25abcee5880edb481b299106058b272e8311bd6281829695babd6df6821b36b3"
+    },
+    "sherpa-onnx/csrc/transducer-keyword-decoder.cc": {
+      "bytes": 6482,
+      "sha256": "872a9e074e626ce66914a4a1bb48948790851c281907340ea319d9817f888edb"
+    },
+    "sherpa-onnx/csrc/keyword-spotter-transducer-impl.h": {
+      "bytes": 12876,
+      "sha256": "2f31beddd77047bf0761172c0579e38af10549026ecdbaae36aa67cce9ae3653"
+    }
+  },
+  "scope": "source regression fixtures only; not a runtime library",
+  "evaluated_patched_body_sha256": {
+    "sherpa-onnx/csrc/transducer-keyword-decoder.cc": "da6ca557dae2befb0581e818ee916741da371ef5a984338b07e09abb77d9ae4b",
+    "sherpa-onnx/csrc/keyword-spotter-transducer-impl.h": "7f126466c78f9d90c51079292cfc4d74dd0e2bbb36b725276dce684a1914bd61"
+  }
+}

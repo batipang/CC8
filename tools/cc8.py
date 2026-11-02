@@ -239,6 +239,7 @@ def doctor(profile, root=ROOT):
         check(
             'openssl', lambda: shutil.which('openssl', path=command_path()), 'Install OpenSSL CLI'
         )
+        check('cxx', lambda: shutil.which('c++', path=command_path()), 'Install a C++17 compiler')
 
         def formatter():
             value = json.loads((root / 'tools/resources/google-java-format.json').read_text())

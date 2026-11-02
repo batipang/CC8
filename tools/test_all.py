@@ -48,6 +48,8 @@ def preflight():
     require_java()
     if not shutil.which('openssl'):
         raise RuntimeError('OpenSSL CLI is required for local TLS tests')
+    if not shutil.which('c++'):
+        raise RuntimeError('C++17 compiler is required for native keyword source regressions')
 
 
 def run_suites(names, private_audio=False, run=subprocess.run):

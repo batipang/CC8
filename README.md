@@ -48,7 +48,7 @@
 统一入口（Python 3.9+ 可显示帮助和自检；实际准备选 Python 3.13）：
 
 ```sh
-./cc8 setup --profile dev       # 独立轻量开发环境；仍需 JDK 21+ / OpenSSL
+./cc8 setup --profile dev       # 独立开发环境；仍需 JDK 21+ / OpenSSL / C++17 编译器
 ./cc8 doctor --profile dev
 
 ./cc8 setup --profile android   # 官方构建工具与交互式 SDK 许可

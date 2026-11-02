@@ -1,0 +1,33 @@
+// CC8 regression driver. The context graph and confidence expression are
+// compiled from the verified upstream snapshot, before and after the patch.
+#include <cmath>
+#include <iostream>
+#include <vector>
+#include "sherpa-onnx/csrc/context-graph.h"
+
+float Confidence(const std::vector<int>& tokens,
+                 const std::vector<float>& probabilities) {
+  sherpa_onnx::ContextGraph graph({{1, 2, 3}}, 1.0f, .25f);
+  const auto* state = graph.Root();
+  struct { std::vector<float> ys_probs; } best_hyp;
+  for (size_t i = 0; i < tokens.size(); ++i) {
+    state = std::get<1>(graph.ForwardOneStep(state, tokens[i]));
+    best_hyp.ys_probs.push_back(probabilities[i]);
+    if (state->token == -1) best_hyp.ys_probs.clear();
+  }
+  const auto match = graph.IsMatched(state);
+  const auto* matched_state = match.second;
+  if (!match.first || matched_state->level != 3 ||
+      best_hyp.ys_probs.size() != probabilities.size()) std::exit(2);
+  /* CC8_NATIVE_CONFIDENCE_EXPRESSION */
+  return ys_prob;
+}
+
+int main() {
+  const float high_history = Confidence({1,2,1,2,3}, {.99f,.99f,.01f,.01f,.01f});
+  const float low_history = Confidence({1,2,1,2,3}, {.01f,.01f,.30f,.30f,.30f});
+  const float control = Confidence({1,2,3}, {.30f,.40f,.50f});
+  std::cout << "{\"high_history\":" << high_history
+            << ",\"low_history\":" << low_history
+            << ",\"no_backoff_control\":" << control << "}";
+}
