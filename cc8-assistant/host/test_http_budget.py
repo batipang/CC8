@@ -25,6 +25,7 @@ class DripServer:
         self.headers_received = threading.Event()
         self.errors = []
         self.sent = 0
+        self.first_byte_at = self.last_byte_at = None
         self.listener = socket.socket()
         self.listener.bind(('127.0.0.1', 0))
         self.listener.listen(1)
@@ -67,7 +68,7 @@ class DripServer:
                 self.stopped.wait(2)
                 return
             if self.mode == 'proxy_headers':
-                wire = b'HTTP/1.0 200 Connection established\r\nX-Test: ' + b'a' * 60 + b'\r\n\r\n'
+                wire = b'HTTP/1.0 200 Connection established\r\nX-Test: ' + b'a' * 512 + b'\r\n\r\n'
             else:
                 headers = (
                     b'HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: '
@@ -91,6 +92,9 @@ class DripServer:
                     return
                 peer.sendall(bytes((byte,)))
                 self.sent += 1
+                self.last_byte_at = time.monotonic()
+                if self.first_byte_at is None:
+                    self.first_byte_at = self.last_byte_at
         except (OSError, ssl.SSLError):
             # A deadline/cancellation deliberately interrupts the local peer.
             pass
@@ -225,9 +229,14 @@ class HTTPBudgetTLS(unittest.TestCase):
             if operation == 'events'
             else json.dumps({'base_resp': {'status_code': 0}, 'text': 'public-fixture'}).encode()
         )
+        # The old 300ms total left too few bytes after TLS/setup on busy macOS
+        # runners. Use a longer finite drip AND budget; a completed response is
+        # still impossible within that budget, without changing production.
+        body = (b':' + b'a' * 512 + b'\n\n' if operation == 'events' else b' ' * 512) + body
         server = DripServer(self.context, mode, body)
         try:
             client = self.client(server)
+            client.timeout = (0.75, 0.75)
             started = time.monotonic()
             with self.assertRaises(MiniMaxError) as failure:
                 if operation == 'transcribe':
@@ -238,8 +247,13 @@ class HTTPBudgetTLS(unittest.TestCase):
                     list(client.events('/v1/test', {}))
             self.assertEqual(failure.exception.kind, 'timeout')
             self.assertNotIn('public-fixture', str(failure.exception))
-            self.assertLess(time.monotonic() - started, 2)
+            self.assertLess(time.monotonic() - started, 3.5)
             self.assertGreater(server.sent, 5)
+            # This is a responsive-drip test, not an ordinary inactive socket:
+            # traffic must have continued beyond a whole read-timeout window.
+            self.assertIsNotNone(server.first_byte_at)
+            self.assertIsNotNone(server.last_byte_at)
+            self.assertGreater(server.last_byte_at - server.first_byte_at, client.timeout[1])
             self.assertEqual(client.slots, set())
         finally:
             server.close()

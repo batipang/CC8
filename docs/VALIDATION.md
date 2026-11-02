@@ -588,3 +588,12 @@ PR #51八项必需CI通过后已合入main `1cd8a55`。隔离构建的Python扩�
 9项新增回归使用实际Bridge/路由/worker/inbox和固定JPEG头，Dot六类错误各3次、相机五类错误各3次；另有实际完成回执与TTS失败、桌面失败、代码脱敏、超时/取消、两个线程屏障、JDK实际MainActivity方法和VoiceSession回执分支。固定7eaef1b归档对同一测试复现41处失败、零fixture error；修复后通过。旧方法仅加参数适配器，实际方法正文不重写；没有以Python模拟相同算法充当Android逻辑证据。
 
 完整installer22 / host587（4明确private-audio skip）/ tooling79 / Java15及格式/lint/strict七模块通过；原钥APK assembleRelease/lintRelease通过。无模型/云端调用、无设备采集、无图像或用户录音；仅本地测试固定字节。现场0.13.7 / APK0.8.8与持续观察未替换。旧数据和新vision阶段的诊断采集均有回归；这些不是实际设备渲染、真实权限拒绝/网络/额度或图像识别精度验收，P0-06仍开放。
+
+
+### 2026-11-03：隔离QA实机故障UI自动回归
+
+新增独立QA构建和 `verify-failure-ui`：不具备录音、摄像头或悬浮窗权限，独立包名和设备回环端口，不替换生产助手。48组由实际ASR/Response控制器与假提供方I/O生成的固定故障协议，在实体CC8完成摘要/完整指引点击、任务终态、新请求恢复及旧错误隔离；ASR15、Dot18、TTS15全部通过，耗时614.238秒。恢复只检验UI，不合成/播放，不调用真实模型或工具。测试包结束后相同APK摘要校验并移除，原生产实例、前台与采集关闭恢复确认。
+
+私有报告 `qa-ui-20261102T222214Z-5dcb3d19.json` 绑定实际协议语料及自动化模块摘要；QA构建回执如实保留dirty状态，应用输入和四个自动化模块后续与提交85456d9逐文件一致核验。初期受保护暂存、旧pm卸载及界面树格式适配失败报告保持原状，残留QA已核验移除，最终完整批次清理通过。生产仍0.13.7/APK0.8.8，后台及72小时观察未重启；QA窗口可能出现计划内断连，不当成物理拔插或新版持续运行证据。范围和命令见 [AUTOMATED_FAILURE_UI](AUTOMATED_FAILURE_UI.md)。
+
+本机完整installer23 / host587（4项明确private-audio skip）/ tooling100 / Java15、格式/lint/strict七模块、原签名APK0.9.3/code38 assembleRelease/lintRelease及系统Python真实login最小PATH计划通过。CI macOS发现原网络滴流测试300ms窗口内只发送4字节而计数断言失败：仅延长fixture预算和滴流，不改生产，并增加实际滴流跨度必须大于一次read timeout的断言。新fixture对旧bfb6388传输复现5处失败、零fixture error，当前18项网络回归通过；完整CI仍须新head全部成功才能合入。
