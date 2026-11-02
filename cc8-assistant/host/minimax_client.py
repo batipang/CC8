@@ -13,10 +13,12 @@ import time
 from urllib.parse import urlparse
 import numpy as np
 import requests
+from urllib3.exceptions import ReadTimeoutError
 from web_search import now, wants_web, normalize, parse_plan, SpeechClauses
 from configuration import load_config
 from operation_failure import ClassifiedFailure
 from diagnostics import error_kind
+from http_budget import BudgetAdapter, IOBudget
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -126,14 +128,12 @@ def response_json(response, is_current, slot, limit):
     chunks = []
     size = 0
     for chunk in response.iter_content(chunk_size=8192):
-        if slot.stopped.is_set() or not is_current():
-            raise Cancelled('Turn cancelled')
+        slot.check(is_current)
         size += len(chunk)
         if size > limit:
             raise MiniMaxError('MiniMax response exceeds size limit')
         chunks.append(chunk)
-    if slot.stopped.is_set() or not is_current():
-        raise Cancelled('Turn cancelled')
+    slot.check(is_current)
     data = json.loads(b''.join(chunks))
     if not isinstance(data, dict) or not isinstance(data.get('base_resp', {}), dict):
         raise MiniMaxError('Invalid MiniMax response')
@@ -177,9 +177,23 @@ class RequestSlot:
     stopped: threading.Event = field(default_factory=threading.Event)
     response: object = None
     session: object = None
+    budget: IOBudget | None = None
+    cancel_lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def check(self, is_current=lambda: True):
+        if self.stopped.is_set() or not is_current():
+            raise Cancelled('Turn cancelled')
+        if self.budget is not None:
+            self.budget.remaining()
+        return True
 
     def cancel(self):
-        self.stopped.set()
+        with self.cancel_lock:
+            if self.stopped.is_set():
+                return
+            self.stopped.set()
+        if self.budget is not None:
+            self.budget.cancel()
 
         # Closing a network response may wait for another thread's read lock;
         # never let that delay the USB playback-cancel command.
@@ -224,17 +238,33 @@ class Transport:
         for slot in slots:
             slot.cancel()
 
+    def request_slot(self):
+        slot = RequestSlot(budget=IOBudget(sum(self.timeout)))
+        slot.session = self.factory()
+        if isinstance(slot.session, requests.Session):
+            slot.session.mount('https://', BudgetAdapter(slot.budget))
+        with self.lock:
+            self.slots.add(slot)
+        return slot
+
+    @staticmethod
+    def network_kind(error, slot):
+        # Requests wraps streaming urllib3 read timeouts as ConnectionError.
+        return (
+            'timeout'
+            if slot.budget.expired
+            or isinstance(error, (TimeoutError, requests.Timeout))
+            or (error.args and isinstance(error.args[0], ReadTimeoutError))
+            else 'transport_or_io'
+        )
+
     def transcribe(self, wav, is_current=lambda: True):
         """Bounded in-memory WAV upload, only for explicitly selected cloud ASR."""
         if len(wav) > 16000 * 2 * 14:
             raise ValueError('ASR audio exceeds the utterance bound')
-        slot = RequestSlot()
-        slot.session = self.factory()
-        with self.lock:
-            self.slots.add(slot)
+        slot = self.request_slot()
         try:
-            if slot.stopped.is_set() or not is_current():
-                raise Cancelled('Turn cancelled')
+            slot.check(is_current)
             response = slot.session.post(
                 self.base + '/v1/speech_to_text',
                 data={'model': self.config.asr_model, 'response_format': 'json', 'stream': 'false'},
@@ -245,6 +275,7 @@ class Transport:
                 timeout=self.timeout,
             )
             slot.response = response
+            slot.check(is_current)
             if response.status_code != 200:
                 raise MiniMaxError(
                     'MiniMax ASR HTTP request failed', http_status=response.status_code
@@ -257,12 +288,12 @@ class Transport:
             if not isinstance(text, str) or len(text) > 10000:
                 raise MiniMaxError('Invalid MiniMax ASR transcript')
             return text.strip()
-        except requests.RequestException as error:
+        except (requests.RequestException, TimeoutError) as error:
             if slot.stopped.is_set() or not is_current():
                 raise Cancelled('Turn cancelled') from None
             raise MiniMaxError(
                 'MiniMax ASR network request failed',
-                kind='timeout' if isinstance(error, requests.Timeout) else 'transport_or_io',
+                kind=self.network_kind(error, slot),
             ) from None
         except (ValueError, TypeError, AttributeError):
             raise MiniMaxError('Invalid MiniMax ASR response') from None
@@ -274,13 +305,9 @@ class Transport:
             slot.session.close()
 
     def post_json(self, route, payload, is_current=lambda: True):
-        slot = RequestSlot()
-        slot.session = self.factory()
-        with self.lock:
-            self.slots.add(slot)
+        slot = self.request_slot()
         try:
-            if slot.stopped.is_set() or not is_current():
-                raise Cancelled('Turn cancelled')
+            slot.check(is_current)
             response = slot.session.post(
                 self.base + route,
                 json=payload,
@@ -290,6 +317,7 @@ class Transport:
                 timeout=self.timeout,
             )
             slot.response = response
+            slot.check(is_current)
             if response.status_code != 200:
                 raise MiniMaxError('MiniMax HTTP request failed', http_status=response.status_code)
             data = response_json(response, is_current, slot, 2 * 1024 * 1024)
@@ -297,12 +325,12 @@ class Transport:
             if code != 0 or data.get('error'):
                 raise MiniMaxError('MiniMax API request failed', code=code)
             return data
-        except requests.RequestException as error:
+        except (requests.RequestException, TimeoutError) as error:
             if slot.stopped.is_set() or not is_current():
                 raise Cancelled('Turn cancelled') from None
             raise MiniMaxError(
                 'MiniMax network request failed',
-                kind='timeout' if isinstance(error, requests.Timeout) else 'transport_or_io',
+                kind=self.network_kind(error, slot),
             ) from None
         except (ValueError, TypeError):
             raise MiniMaxError('Invalid MiniMax JSON response') from None
@@ -314,13 +342,9 @@ class Transport:
             slot.session.close()
 
     def events(self, route, payload, is_current=lambda: True):
-        slot = RequestSlot()
-        slot.session = self.factory()
-        with self.lock:
-            self.slots.add(slot)
+        slot = self.request_slot()
         try:
-            if slot.stopped.is_set() or not is_current():
-                raise Cancelled('Turn cancelled')
+            slot.check(is_current)
             response = slot.session.post(
                 self.base + route,
                 json=payload,
@@ -330,8 +354,7 @@ class Transport:
                 timeout=self.timeout,
             )
             slot.response = response
-            if slot.stopped.is_set() or not is_current():
-                raise Cancelled('Turn cancelled')
+            slot.check(is_current)
             if response.status_code != 200:
                 raise MiniMaxError('MiniMax HTTP request failed', http_status=response.status_code)
             response.encoding = 'utf-8'
@@ -343,11 +366,10 @@ class Transport:
             for event in sse_events(
                 bounded_lines(
                     response.iter_content(chunk_size=8192),
-                    is_current=lambda: not slot.stopped.is_set() and is_current(),
+                    is_current=lambda: slot.check(is_current),
                 )
             ):
-                if slot.stopped.is_set() or not is_current():
-                    raise Cancelled('Turn cancelled')
+                slot.check(is_current)
                 base = event.get('base_resp') or {}
                 if not isinstance(base, dict):
                     raise MiniMaxError('Invalid MiniMax stream status')
@@ -356,12 +378,12 @@ class Transport:
                 if event.get('error'):
                     raise MiniMaxError('MiniMax streaming error')
                 yield event
-        except requests.RequestException as error:
+        except (requests.RequestException, TimeoutError) as error:
             if slot.stopped.is_set() or not is_current():
                 raise Cancelled('Turn cancelled') from None
             raise MiniMaxError(
                 'MiniMax network request failed',
-                kind='timeout' if isinstance(error, requests.Timeout) else 'transport_or_io',
+                kind=self.network_kind(error, slot),
             ) from None
         except (ValueError, TypeError, AttributeError):
             raise MiniMaxError('Invalid MiniMax streaming response') from None

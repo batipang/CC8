@@ -33,7 +33,13 @@ from private_output import PrivateOutput, private_directory
 from release_info import load_release
 
 ROOT = Path(__file__).resolve().parents[2]
-PIPELINE_FILES = ('recognition.py', 'minimax_client.py', 'configuration.py', 'config_schema.py')
+PIPELINE_FILES = (
+    'recognition.py',
+    'minimax_client.py',
+    'configuration.py',
+    'config_schema.py',
+    'http_budget.py',
+)
 
 
 def select_samples(partition):

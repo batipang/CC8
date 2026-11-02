@@ -220,6 +220,37 @@ class SyntheticASRTests(unittest.TestCase):
             provider.assert_not_called()
             self.assertFalse(any(Path(folder).iterdir()))
 
+    def test_network_budget_dependency_is_hash_bound_before_provider_creation(self):
+        with (
+            tempfile.TemporaryDirectory() as folder,
+            patch(
+                'configuration.load_config',
+                return_value=SimpleNamespace(asr='minimax', asr_model='asr-1.0'),
+            ),
+            patch('recognition.MandarinRecognizer') as constructor,
+        ):
+            runtime = Path(folder)
+            target = runtime / 'cc8-assistant/host'
+            target.mkdir(parents=True)
+            for name in synthetic_asr.PIPELINE_FILES:
+                if name != 'http_budget.py':
+                    (target / name).write_bytes(
+                        (synthetic_asr.ROOT / 'cc8-assistant/host' / name).read_bytes()
+                    )
+            with self.assertRaises(OSError):
+                pipeline(runtime)
+            constructor.assert_not_called()
+            (target / 'http_budget.py').write_bytes(b'changed-network-policy')
+            with self.assertRaises(ValueError):
+                pipeline(runtime)
+            constructor.assert_not_called()
+            (target / 'http_budget.py').write_bytes(
+                (synthetic_asr.ROOT / 'cc8-assistant/host/http_budget.py').read_bytes()
+            )
+            _, _, metadata = pipeline(runtime)
+            self.assertEqual(set(metadata['pipeline_sha256']), set(synthetic_asr.PIPELINE_FILES))
+            constructor.assert_called_once()
+
     def test_cli_cancellation_closes_provider_and_keeps_report_private(self):
         cancel = Mock()
         with tempfile.TemporaryDirectory() as folder:

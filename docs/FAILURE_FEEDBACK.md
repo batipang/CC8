@@ -19,7 +19,7 @@ OperationFailure 传递固定 stage/kind；Dot RPC 和 turn 的已知超时、�
 
 流式 TTS 的下一块 PCM 失败仍属于 TTS，不因前一块 PCM 已播放而误标播放失败。任务回执和播报结果独立；取消音频不撤销已完成工作。错误 UI、任务恢复说明和日志不拼接异常正文、服务响应、密钥、地址或识别内容。
 
-现有 HTTP connect/read timeout、Dot turn 截止时间和播放 ACK 截止时间保持。此轮没有声称网络所有慢速滴流都受一个全局墙钟预算控制，或提供方已恢复可用；恢复状态需实际请求证明。
+Dot turn 截止时间和播放 ACK 截止时间保持。MiniMax 的累计网络预算补充见下文；恢复状态仍需实际请求证明。
 
 ## 验证
 
@@ -34,3 +34,15 @@ OperationFailure 传递固定 stage/kind；Dot RPC 和 turn 的已知超时、�
 补充真实路径回归：MiniMax 搜索错误原先仍被转换成普通回答，可能关闭成完成任务；候选 0.13.4 改为失败向上透传，并仅记录白名单错误类别。实际 MiniMaxBrain→BrainRouter→ResponseWorker 的五类失败各 3 次及 failed 进度正文注入在修复前均复现、修复后通过；无模型请求。未修改查询规划失败时原有的直接关键词准备逻辑，也不将“成功检索但无结果”改成服务错误。
 
 补充断连收尾：0.13.5 在发取消通知之前先作废本地状态并唤醒播放 waiter，普通连接错误不阻止 Stop 释放采集；即使提供方取消抛出未预期错误，Stop 的 finally 仍关闭 AEC/收音并保存状态，错误本身保留。play_begin、PCM、play_end 和字幕发送错误统一定位 transport，provider iterator 内的字幕失败不重标成 TTS。该软件回归不代表已完成物理拔插。
+
+## 0.14.3：慢速响应的累计网络预算（软件候选，未部署）
+
+Requests 的 read_timeout 只限制一次读取。服务每隔一小段时间返回几个字节，可让响应头、JSON 或 SSE 持续拖延，即使每次读取都没超时。现在每个 MiniMax ASR / JSON / SSE 请求独立累计连接与 socket 读写耗时，预算为现有 connect_timeout + read_timeout（默认8+20=28秒），每次实际 socket 操作的等待上限同时受剩余预算约束；不增加重试、不改服务或凭证。
+
+预算经过 HTTP 缓冲解析器生效，涵盖响应头、正文、chunk framing 和普通 HTTP 代理 CONNECT。池类映射按请求复制，保持证书/主机名验证与已有代理配置；不修改 urllib3 全局池映射。当前 Requests/urllib3/Python 固定版本已做真实 TLS 回归；没有声称未测网络栈或所有代理实现都兼容。
+
+正常播报、暂停和消费已返回事件的时间不算网络等待，避免长回答仅因播放较慢而失败。它是累计网络 I/O 预算，**不是整段对话的墙钟上限**；系统 DNS 解析不能在此处中断，返回后才计入连接耗时，这个界限仍保留。没有将该补充当作完整 P0-06 验收。
+
+取消先只 shutdown 当前请求拥有的 socket，唤醒响应头或正文阻塞读取，再沿既有异步关闭路径收尾；重复取消不再持续创建关闭线程。TLS-in-TLS 包装本身没有 shutdown，取消沿它的已拥有底层 socket 执行；该分支有固定版本结构回归，不冒充完整 HTTPS 代理实测。旧请求不能关闭后来的独立请求。Requests 将流式读取超时包装成 ConnectionError 时，也归为 timeout，保留现有分阶段失败指引和已完成任务结果。
+
+自动测试使用临时证书、证书验证开启的 loopback TLS 服务：修正为完整消费请求体的 fixture 在旧 bfb6388 实现上复现5处预期失败、零 fixture error；修复后响应头/JSON/SSE/CONNECT 滴流均按预算结束。另有正常三入口、成功 CONNECT 后的 TLS/JSON、取消阻塞头/正文读取、错误主机名拒绝、缓冲 makefile、嵌套不重复记账、消费者时间不计费、请求/代理池隔离和重复取消回归。不联系模型服务、不启停设备或开麦。
