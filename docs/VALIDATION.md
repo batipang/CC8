@@ -465,3 +465,12 @@ CI 通过的干净源码 5f1c087cfa8c4cdea42758dd26b7f0597b1c31ef 已包含在 m
 ### 2026-11-02 代码检查：播放完成与失败收尾并发
 
 基于 main 84ff49f，发现并修复完成 ACK 覆盖后继句 playing、旧超时/设备/iterator 错误误取消新请求、插话超时 listening 覆盖新状态。新增四项有界真实线程测试，在基线方法上确认五处预期失败且零 fixture error；修复后定向通过。原取消锁回归未改动。后台候选 0.13.7，APK 0.8.8 / 协议 2 不变；没有设备/云调用、安装或重启。最终本机 installer 22、host 457（4 项私人音频依赖跳过）、tooling 51、Java 15 checks，以及 Ruff / Java format / strict 七模块通过。合入须通过对应 PR 的全部必需 CI，真实状态以 GitHub 为准；详见 [代码检查](CODE_REVIEW_20261102.md)。
+
+
+### P1-01：独立聊天摘要接续候选（未部署）
+
+基于 main d359552 独立开发，后台 0.14.0 / APK 0.8.9 code 34 / 协议 2。本机 CLI 0.166.0 实际 read-only list 返回十条元数据，与桌面 API 列出的五条聊天 ID 全部匹配；未读取正文、resume 或 start turn。proxy/受管 daemon 不可用，独立进程全为 notLoaded，不把它当桌面空闲。按计划采用明确来源的摘要交接，不追加原聊天。功能、隐私、工具范围及待验收见 [DOT_CHAT_HANDOFF](DOT_CHAT_HANDOFF.md)。
+
+十六项新方法覆盖只读元数据/显式选定、分页容量和过期、文本筛选/截断、资源关闭、取消/代次/断连/忙碌、失败保留、不落盘上下文与 scoped interrupt。原 Dot 二十六项定向回归保留并通过；Android 原签名引用 assemble/lint 实际通过（首次遗漏的旧清空回调参数已补齐）。全套最终结果以本次提交/PR 检查为准，不将合成五聊天 fixture 或同 ID 发现写成真实端到端验收。没有安装、重启、调用模型、采音或摄像。
+
+本批最终本机 installer 22、host 473（4 项私人音频依赖跳过）、tooling 51、Java 15 checks，固定格式/lint/strict 七模块通过，原签名 APK 构建/lint 通过。新增来源项目目录隔离回归，远端/失效目录不冒充本机已接入。P0 原源码 d359552 的 main CI 41366676544 已实际成功，已固定 source-only annotated tag p0-validation-base-20261102.1；该标记不声称设备验收或新构建清单。

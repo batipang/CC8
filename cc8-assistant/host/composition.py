@@ -26,6 +26,7 @@ from wake_controller import WakeController, WakeHooks, Detector as WakeDetectorP
 from announcement_controller import AnnouncementController, AnnouncementHooks
 from reminder_scheduler import ReminderScheduler, ReminderHooks
 from device_controller import DeviceController, DeviceControlHooks
+from chat_controller import ChatController, ChatHooks
 
 if TYPE_CHECKING:
     from bridge import Bridge
@@ -44,6 +45,7 @@ class Components:
     device: DeviceController
     reporting: StatusReporter
     wake: WakeController
+    chats: ChatController
 
 
 def build_components(
@@ -332,6 +334,38 @@ def build_components(
         wake_detector,
         window_seconds=wake_window_seconds,
     )
+
+    def select_chat(value):
+        host.brain.dot.set_handoff(value)
+        host.brain.select('dot')
+
+    chats = ChatController(
+        ChatHooks(
+            lock=host.session.guard,
+            generation=lambda: host.session.generation,
+            connection=lambda: host.session.connection,
+            available=lambda: (
+                isinstance(host.brain, BrainRouter) and hasattr(host.brain.dot, 'set_handoff')
+            ),
+            idle=lambda: (
+                not (
+                    host.calibration.active
+                    or host.calibration.running
+                    or host.playback.playing
+                    or host.playback.pause_state is not None
+                    or host.recognition.busy
+                    or not host.recognition.queue.empty()
+                    or host.response.busy
+                    or not host.response.queue.empty()
+                    or host.visual.generation is not None
+                    or host.announcements.generation is not None
+                    or host.capture.endpoint.vad.talking
+                )
+            ),
+            select=select_chat,
+            event=lambda name, **fields: host.event(name, **fields),
+        )
+    )
     reporting = StatusReporter(
         ReportingHooks(
             session=lambda: host.session.snapshot(),
@@ -370,6 +404,7 @@ def build_components(
         device,
         reporting,
         wake,
+        chats,
     )
 
 

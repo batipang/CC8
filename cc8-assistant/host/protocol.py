@@ -93,6 +93,8 @@ def validate_device_event(value: object) -> JsonObject:
         'session_start': ('epoch',),
         'session_rebind': ('epoch',),
         'play_done': ('generation',),
+        'dot_chat_request': ('request_id', 'action'),
+        'dot_chat_cancel': ('request_id',),
         'playout_progress': (
             'generation',
             'playback_id',
@@ -107,6 +109,17 @@ def validate_device_event(value: object) -> JsonObject:
     for key in required:
         if key not in value:
             raise ValueError('Missing device event field: ' + key)
+    if name in ('dot_chat_request', 'dot_chat_cancel'):
+        request_id = value['request_id']
+        if not isinstance(request_id, str) or not re.fullmatch('[a-f0-9]{32}', request_id):
+            raise ValueError('Invalid chat request ID')
+        if name == 'dot_chat_request' and value['action'] not in (
+            'state',
+            'list',
+            'select',
+            'clear',
+        ):
+            raise ValueError('Invalid chat action')
     integers = {
         'epoch': 32,
         'generation': 32,

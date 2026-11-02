@@ -110,6 +110,7 @@ class Bridge:
         self.device = components.device
         self.reporting = components.reporting
         self.wake = components.wake
+        self.chats = components.chats
         self.recognition.start()
         self.response.start()
 
@@ -221,6 +222,11 @@ class Bridge:
                 self.status('listening' if self.session.active else 'idle', '已停止看图')
         elif event == 'device_ready':
             self.session.ready(j)
+            self.chats.publish(ok=True)
+        elif event == 'dot_chat_request':
+            self.chats.request(j)
+        elif event == 'dot_chat_cancel':
+            self.chats.cancel(j['request_id'])
         elif event == 'workspace_get':
             self.publish_workspace()
         elif event == 'text_request':

@@ -1,0 +1,145 @@
+"""Bound one explicit foreground chat-catalog operation; no automatic history reads."""
+
+from dataclasses import dataclass
+import re
+import threading
+from typing import Callable, ContextManager
+from dot_handoff import ChatCatalog
+
+
+@dataclass(frozen=True)
+class ChatHooks:
+    lock: ContextManager[object]
+    generation: Callable[[], int]
+    connection: Callable[[], object]
+    available: Callable[[], bool]
+    idle: Callable[[], bool]
+    select: Callable[[object], None]
+    event: Callable[..., None]
+
+
+class ChatController:
+    def __init__(self, hooks, catalog=None):
+        self.hooks = hooks
+        self.catalog = catalog or ChatCatalog()
+        self.lock = threading.Lock()
+        self.busy = False
+        self.selection = None
+        self.active_request = None
+        self.worker = None
+
+    def cancel(self, request_id):
+        with self.hooks.lock:
+            with self.lock:
+                if self.active_request == request_id:
+                    self.active_request = None
+
+    def state(self):
+        return {
+            'mode': 'summary_handoff' if self.selection else 'independent',
+            'source_title': self.selection.source_title if self.selection else '',
+            'shared_chat': False,
+            'history_persisted': False,
+            'local_project_available': bool(self.selection and self.selection.cwd),
+        }
+
+    def publish(self, request_id='', **fields):
+        self.hooks.event('dot_chat_state', request_id=request_id, **self.state(), **fields)
+
+    def request(self, data):
+        request_id = data.get('request_id')
+        if not isinstance(request_id, str) or not re.fullmatch('[a-f0-9]{32}', request_id):
+            raise ValueError('Invalid chat request ID')
+        action = data.get('action')
+        if action not in ('state', 'list', 'select', 'clear'):
+            raise ValueError('Invalid chat action')
+        with self.hooks.lock:
+            if not self.hooks.available() or self.hooks.connection() is None:
+                self.publish(request_id, ok=False, message='Dot 聊天入口不可用')
+                return
+            if action == 'state':
+                self.publish(request_id, ok=True)
+                return
+            if not self.hooks.idle():
+                self.publish(
+                    request_id, ok=False, message='请等待当前任务、播报或校准结束后再选择聊天'
+                )
+                return
+            with self.lock:
+                if self.busy:
+                    self.publish(request_id, ok=False, message='正在读取聊天，请稍后再试')
+                    return
+                self.busy = True
+                self.active_request = request_id
+            generation, connection = self.hooks.generation(), self.hooks.connection()
+        # RPC may take seconds. Never block the packet/capture reader on it.
+        worker = threading.Thread(
+            target=self.run,
+            args=(request_id, action, data, generation, connection),
+            daemon=True,
+            name='cc8-chat-catalog',
+        )
+        self.worker = worker
+        try:
+            worker.start()
+        except BaseException:
+            with self.lock:
+                self.busy = False
+                self.active_request = None
+            raise
+
+    def run(self, request_id, action, data, generation, connection):
+        def current():
+            with self.hooks.lock:
+                with self.lock:
+                    return (
+                        self.active_request == request_id
+                        and generation == self.hooks.generation()
+                        and connection is self.hooks.connection()
+                    )
+
+        try:
+            result, selected = {}, None
+            if action == 'list':
+                result = self.catalog.list(data.get('cursor'), is_current=current)
+            elif action == 'select':
+                selected = self.catalog.select(data.get('source_id'), is_current=current)
+            with self.hooks.lock:
+                with self.lock:
+                    if self.active_request != request_id:
+                        return
+                if (
+                    generation != self.hooks.generation()
+                    or connection is not self.hooks.connection()
+                ):
+                    return
+                if action in ('select', 'clear'):
+                    if not self.hooks.idle():
+                        self.publish(
+                            request_id, ok=False, message='当前任务已开始，聊天选择没有更改'
+                        )
+                        return
+                    self.hooks.select(selected)
+                    self.selection = selected
+                    self.hooks.event('brain_provider', provider='dot')
+                self.publish(request_id, ok=True, action=action, **result)
+        except Exception:
+            with self.hooks.lock:
+                if (
+                    generation == self.hooks.generation()
+                    and connection is self.hooks.connection()
+                    and self.active_request == request_id
+                ):
+                    # RPC errors and selected history never reach logs/UI.
+                    try:
+                        self.publish(
+                            request_id,
+                            ok=False,
+                            message='无法确认聊天状态，请刷新查看；原聊天未追加消息',
+                        )
+                    except (OSError, EOFError, ValueError):
+                        pass
+        finally:
+            with self.lock:
+                self.busy = False
+                self.active_request = None

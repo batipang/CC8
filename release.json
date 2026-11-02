@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "p0-review-20261102.1",
+  "release_id": "p1-chat-handoff-20261102.1",
   "backend": {
-    "version": "0.13.7"
+    "version": "0.14.0"
   },
   "assistant": {
-    "version": "0.8.8",
-    "version_code": 33,
+    "version": "0.8.9",
+    "version_code": 34,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {
