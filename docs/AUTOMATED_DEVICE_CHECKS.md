@@ -43,3 +43,21 @@ runtime-root 指**实际运行目录**。现场候选为 `/Volumes/AI/Codex/CC8-
 同一实际运行目录共享排他测试锁。后台实例改变即中止；已触及 UI 的路径在失败、超时或 Ctrl+C 后均尝试 Home 停采，再维护打开恢复前台，核对两端麦克风及相机关闭。无法确认则 cleanup_unconfirmed，不能给出通过结论。启动前拒绝不改变原状态；SIGKILL 或断电等无法运行 finally 的情况不保证进程外清理。
 
 报告固定 physical_usb_unplug_tested=false、human_accuracy_asserted=false、acoustic_latency_asserted=false、full_p0_acceptance=false。离线 fixture 验证门控、计时、旧回执排除、失败清理和脱敏；实机结果另记 VALIDATION。一轮自动通过不关闭整个 P0。
+
+
+## 无录音的英文唤醒回归
+
+```sh
+# 默认只打印计划，普通 Python 可运行，不载入模型或创建文件
+./cc8 verify-wake --model-root /absolute/live/workspace
+# 用已准备的模型环境执行；模型缓存必须先通过既有哈希校验
+/path/to/evaluation/python cc8 verify-wake --model-root /absolute/live/workspace --execute
+```
+
+这项检查只生成 Mac 公开合成语音，不播放声音、不读取麦克风、不联系云端、不操作 CC8，也不修改运行环境。执行源码目录的 `local_wake.py` 是被测实现；model-root 仅指定校验过的模型缓存，不代表自动改测该目录的源码。
+
+固定语料含 12 个正样本（Samantha、Alex、Daniel、Tingting，各三档语速）及 10 个普通/近音负样本（含 Bumble、Bubble bee）。逐个以 20ms 帧馈送，覆盖即时、60/140/160/480ms 前导和 1s 连续上下文；另保留无初始化的两组参照。六组 production 条件全部正样本命中且全部负样本不触发才通过；少样本、生成失败、取消或条件缺失均不能通过。参照条件只作观察，不参与放宽标准。
+
+仅在私有 wake-checks 目录保留固定样本 ID、标签、布尔结果、源码/语料/合成 PCM 摘要、原生库版本和二进制摘要；临时合成音自动删除。失败退出 2，Ctrl+C 退出 130 并在已开始评测时写 cancelled；普通计划退出 0 不代表通过。合成语音覆盖只能定位回归，不能替代真人、声学距离、电视背景噪声或中英文实际召回率。
+
+2026-11-03 隔离研究发现原生 KWS 在连续静音后的重置边界也存在漏检；上游已有 [issue 3990](https://github.com/k2-fsa/sherpa-onnx/issues/3990) 和 [待合入修复 3994](https://github.com/k2-fsa/sherpa-onnx/pull/3994)。以固定 v2.0.1 源码隔离回编，官方复现从 59/65 改为 65/65，但自定义 Bumblebee 语料仍有漏检；扩大解码路径还出现近音误触发。320ms 初始化也未覆盖全部时点。因此未合入这些运行行为改动、未把实验原生库安装到正在运行的助手中，P0-03 保持开放。
