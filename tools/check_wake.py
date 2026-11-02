@@ -18,8 +18,16 @@ if __package__:
 else:
     from private_output import PrivateOutput, private_directory
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'cc8-assistant/host'))
+from mac_voice import (
+    available_voices as available_voices,
+    parse_voices as parse_voices,
+    resolve_voice,
+    __file__ as voice_source,
+)
+
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'cc8-assistant/host'))
+
 CONDITIONS = (
     'cold_reference',
     'production_immediate',
@@ -40,39 +48,54 @@ PREFIX_SAMPLES = {
     'production_continuous': 16000,
     'continuous_reference': 16000,
 }
-CASES = tuple(
-    (
-        f'{voice.lower()}-{rate}',
-        voice,
-        rate,
-        'Bumblebee，你好。' if voice == 'Tingting' else 'Bumblebee',
-        True,
-    )
-    for voice in ('Samantha', 'Alex', 'Daniel', 'Tingting')
-    for rate in (140, 170, 200)
-) + tuple(
-    (f'negative-{index:02}', 'Tingting' if index >= 7 else 'Samantha', 170, text, False)
-    for index, text in enumerate(
+CASES = (
+    tuple(
         (
-            'Bumble',
-            'Bubble bee',
-            'Bee',
-            'Bumble by',
-            'Hello everybody',
-            'Turn on the light',
-            'The bee is near a bubble',
-            '今天的天气很好',
-            '帮我把灯打开',
-            '把这个放到旁边',
+            f'{voice.lower()}-{rate}',
+            voice,
+            rate,
+            'Bumblebee，你好。' if voice == 'Tingting' else 'Bumblebee',
+            True,
+        )
+        for voice in ('Samantha', 'Karen', 'Daniel', 'Tingting')
+        for rate in (140, 170, 200)
+    )
+    + tuple(
+        (f'negative-{index:02}', 'Tingting' if index >= 7 else 'Samantha', 170, text, False)
+        for index, text in enumerate(
+            (
+                'Bumble',
+                'Bubble bee',
+                'Bee',
+                'Bumble by',
+                'Hello everybody',
+                'Turn on the light',
+                'The bee is near a bubble',
+                '今天的天气很好',
+                '帮我把灯打开',
+                '把这个放到旁边',
+            )
         )
     )
+    + tuple((f'legacy-default-{rate}', None, rate, 'Bumblebee', True) for rate in (140, 170, 200))
 )
+
+CORPUS_VERSION = 'installed-voices-and-explicit-default-v2'
 
 
 def synthesize(folder, voice, rate, text):
+    resolved = resolve_voice(voice)
     source, output = folder / 'source.aiff', folder / 'source.wav'
     subprocess.run(
-        ['/usr/bin/say', '-v', voice, '-r', str(rate), '-o', str(source), text],
+        [
+            '/usr/bin/say',
+            *(['-v', resolved] if resolved is not None else []),
+            '-r',
+            str(rate),
+            '-o',
+            str(source),
+            text,
+        ],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -176,6 +199,8 @@ def evaluate(model_root, output):
     from local_wake import __file__ as wake_source
 
     source_hash = hashlib.sha256(Path(wake_source).read_bytes()).hexdigest()
+    automation_hash = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    speech_source_hash = hashlib.sha256(Path(voice_source).read_bytes()).hexdigest()
     native_versions = {}
     for name in ('sherpa-onnx', 'sherpa-onnx-core'):
         try:
@@ -193,6 +218,9 @@ def evaluate(model_root, output):
                 'schema': 1,
                 'state': state,
                 'scope': 'public_synthetic_keyword_boundaries',
+                'corpus_version': CORPUS_VERSION,
+                'automation_source_sha256': automation_hash,
+                'speech_probe_source_sha256': speech_source_hash,
                 'source_sha256': source_hash,
                 'corpus_sha256': corpus_hash,
                 'native_package_versions': native_versions,
@@ -212,6 +240,9 @@ def evaluate(model_root, output):
         for ident, voice, rate, text, positive in CASES:
             row = {'case': ident, 'expected_keyword': positive}
             try:
+                row['voice_selection'] = 'system_default' if voice is None else 'installed_name'
+                row['requested_voice'] = voice
+                row['resolved_voice'] = resolve_voice(voice)
                 with tempfile.TemporaryDirectory(prefix='cc8-public-wake-fixture-') as temporary:
                     pcm = synthesize(Path(temporary), voice, rate, text)
                 samples = np.frombuffer(pcm, dtype='<i2').astype(np.float32) / 32768
@@ -253,6 +284,7 @@ def main(argv=None):
             json.dumps(
                 {
                     'execute': False,
+                    'corpus_version': CORPUS_VERSION,
                     'sample_count': len(CASES),
                     'conditions': CONDITIONS,
                     'microphone_used': False,

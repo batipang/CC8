@@ -12,10 +12,35 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 
-from device_smoke import CheckFailure, SmokeRun, main, objects, rpc
+from device_smoke import CheckFailure, Device, SmokeRun, main, objects, rpc
 
 
 class DeviceAutomationTests(unittest.TestCase):
+    def test_missing_speech_probe_voice_aborts_before_ui_or_capture(self):
+        run, device, health, now = self.fixture(capture=True, standby=True, acoustic=True)
+        device.prepare_speech_probe.side_effect = ValueError('unavailable_voice')
+        result = run.run()
+        self.assertEqual(result['state'], 'failed')
+        device.open.assert_not_called()
+        device.speak_probe.assert_not_called()
+
+    def test_speech_probe_resolves_actual_installed_voice_before_say(self):
+        device = Device.__new__(Device)
+        with (
+            patch('device_smoke.resolve_voice', return_value='Tingting (Chinese CN)') as resolve,
+            patch('device_smoke.subprocess.run') as command,
+        ):
+            device.speak_probe()
+            resolve.assert_called_once_with('Tingting')
+            self.assertEqual(command.call_args.args[0][1:3], ['-v', 'Tingting (Chinese CN)'])
+        with (
+            patch('device_smoke.resolve_voice', side_effect=ValueError),
+            patch('device_smoke.subprocess.run') as command,
+        ):
+            with self.assertRaises(ValueError):
+                device.speak_probe()
+            command.assert_not_called()
+
     def fixture(self, **options):
         now = [0.0]
         device = Mock()
