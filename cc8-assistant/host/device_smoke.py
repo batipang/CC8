@@ -18,6 +18,7 @@ import uuid
 
 from private_output import PrivateOutput, private_directory
 from release_info import load_release
+from mac_voice import resolve_voice, __file__ as voice_source
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPONENT = 'com.happyhome.cc8assistant/.MainActivity'
@@ -129,9 +130,13 @@ class Device:
         text = self.shell('dumpsys activity ' + COMPONENT)
         return objects(text, 'CC8_ASSISTANT_STATUS '), objects(text, 'HUD_UI_STATUS ')
 
+    def prepare_speech_probe(self):
+        return resolve_voice('Tingting')
+
     def speak_probe(self):
+        voice = self.prepare_speech_probe()
         subprocess.run(
-            ['/usr/bin/say', '-v', 'Tingting', '大黄蜂，一加一等于几？'],
+            ['/usr/bin/say', '-v', voice, '大黄蜂，一加一等于几？'],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -170,6 +175,7 @@ class SmokeRun:
         self.cleanup_verified = False
         self.initial_instance = None
         self.source_sha256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+        self.speech_source_sha256 = hashlib.sha256(Path(voice_source).read_bytes()).hexdigest()
         self.expected_apk = expected_apk
 
     def health(self):
@@ -194,6 +200,7 @@ class SmokeRun:
         return {
             'schema': 1,
             'automation_source_sha256': self.source_sha256,
+            'speech_probe_source_sha256': self.speech_source_sha256,
             'expected_apk_version': self.expected_apk[0] if self.expected_apk else None,
             'expected_apk_code': self.expected_apk[1] if self.expected_apk else None,
             'state': state,
@@ -235,6 +242,8 @@ class SmokeRun:
             self.checkpoint(self.report('running'))
 
     def preflight(self):
+        if self.acoustic:
+            self.device.prepare_speech_probe()
         h = self.health()
         require(h.get('connected') is True and h.get('transport') == 'usb', 'usb_not_ready')
         require(h.get('microphone_active') is False, 'owner_microphone_already_active')
