@@ -477,6 +477,22 @@ class BudgetUnitTests(unittest.TestCase):
             threading.Event().wait(0.01)
         response.close.assert_called_once()
 
+    def test_tls_in_tls_cancel_reaches_owned_underlying_socket(self):
+        from urllib3.util.ssltransport import SSLTransport
+
+        budget = IOBudget(1)
+        raw = Mock()
+        inner = budget.wrap(raw)
+        # Exercise the actual pinned transport type without a second network
+        # service. Its gettimeout/socket protocol is real, not a fake shutdown.
+        tls = object.__new__(SSLTransport)
+        tls.socket = inner
+        outer = budget.wrap(tls)
+        outer.abort()
+        raw.shutdown.assert_called_once_with(socket.SHUT_RDWR)
+        budget.cancel()
+        self.assertTrue(budget.cancelled)
+
 
 if __name__ == '__main__':
     unittest.main()

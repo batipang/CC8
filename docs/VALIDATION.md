@@ -547,8 +547,8 @@ P1-09 后续 CI 安全扫描成功，但 macOS 的既有 measure CLI 集成用�
 
 0.14.3源码候选修复 MiniMax 慢速滴流可绕过单次 read_timeout、流式读取超时被误分为连接错误，以及响应头未返回时取消无法及时唤醒读取。使用当前固定 Requests2.34.2 / urllib3 2.8.0 栈，保持 HTTPS/主机名验证、代理设置和零自动重试。预算是每请求 connect_timeout + read_timeout 的累计网络等待，不计正常播放/消费；不是整个对话墙钟截止，系统DNS仍不能在此处中断。细节见 [FAILURE_FEEDBACK](FAILURE_FEEDBACK.md)。
 
-临时证书 loopback TLS/普通 CONNECT fixture 完整消费请求体后，在 bfb6388 旧实现内存加载复现5处预期失败、零错误；修复后17项回归覆盖头/JSON/SSE/CONNECT滴流、正常三入口及成功CONNECT后的TLS/JSON、取消阻塞头/正文、证书主机名拒绝、缓冲读取、嵌套记账、消费者时间、请求池隔离与重复取消。新网络依赖还加入 verify-asr 源码摘要门控，另1项回归验证缺失/篡改依赖时不构造识别器。
+临时证书 loopback TLS/普通 CONNECT fixture 完整消费请求体后，在 bfb6388 旧实现内存加载复现5处预期失败、零错误；修复后18项回归覆盖头/JSON/SSE/CONNECT滴流、正常三入口及成功CONNECT后的TLS/JSON、取消阻塞头/正文、证书主机名拒绝、缓冲读取、嵌套记账、消费者时间、请求池隔离与重复取消。TLS-in-TLS取消沿真实固定版本类的底层socket验证，不声称完整HTTPS代理实测。新网络依赖还加入 verify-asr 源码摘要门控，另1项回归验证缺失/篡改依赖时不构造识别器。
 
-实际 MiniMax 探针使用0.14.3源码和现有P0配置，仅生成公开合成句上传，不连接设备或大脑、不播放/收音：ASR规范化全文一致，请求阶段0.623秒；TTS完整返回30836帧，请求阶段0.382秒。私有 `budget-provider-37610fb1.json` 保存对应源码摘要、布尔结果、帧数和PCM摘要，不保存转录/音频。此处是独立API兼容性检查，不是实机0.14.3已部署或整条语音延迟证明。
+实际 MiniMax 探针使用0.14.3源码和现有P0配置，仅生成公开合成句上传，不连接设备或大脑、不播放/收音。补齐TLS-in-TLS取消分支后的最终源码探针：ASR规范化全文一致，请求阶段0.719秒；TTS完整返回30093帧，请求阶段0.367秒，私有 `budget-provider-a1015379.json` 保存对应源码摘要、布尔结果、帧数和PCM摘要，不保存转录/音频。此前 `budget-provider-37610fb1.json` 仍按旧源码摘要保留，不改写为新执行结果。此处是独立API兼容性检查，不是实机0.14.3已部署或整条语音延迟证明。
 
-最终本机 installer22 / host564（4 private-audio skip）/ tooling62 / Java15、格式/lint/strict七模块通过。zsh login + PATH=/usr/bin:/bin 使用独立dev Python和系统LibreSSL执行17项网络回归通过。实机仍为0.13.7 / APK0.8.8，72小时只读观察未重启；PR合入仍由全部必需CI把关，P0-06实机界面矩阵和完整验收保持开放。
+最终本机 installer22 / host565（4 private-audio skip）/ tooling62 / Java15、格式/lint/strict七模块通过。zsh login + PATH=/usr/bin:/bin 使用独立dev Python和系统LibreSSL执行18项网络回归通过。实机仍为0.13.7 / APK0.8.8，72小时只读观察未重启；PR合入仍由全部必需CI把关，P0-06实机界面矩阵和完整验收保持开放。

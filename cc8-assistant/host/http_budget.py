@@ -14,6 +14,7 @@ import time
 import weakref
 
 from requests.adapters import HTTPAdapter
+from urllib3.util.ssltransport import SSLTransport
 
 
 class IOBudget:
@@ -131,8 +132,16 @@ class BudgetSocket:
             self.peer.close()
 
     def abort(self):
+        peer = self.peer
+        # HTTPS proxies use urllib3's TLS-in-TLS transport, which has no
+        # shutdown method. Interrupt its owned underlying socket instead.
+        if isinstance(peer, SSLTransport):
+            peer = peer.socket
+        if isinstance(peer, BudgetSocket):
+            peer.abort()
+            return
         try:
-            self.peer.shutdown(socket.SHUT_RDWR)
+            peer.shutdown(socket.SHUT_RDWR)
         except (OSError, ValueError):
             pass
 
