@@ -1,5 +1,20 @@
 # Changelog
 
+## p0-vision-errors-20261103.1 — source candidate
+
+Backend 0.14.5; assistant APK 0.9.2 / code 37; protocol 2.
+
+- Keep camera acquisition, Dot analysis and TTS failures classified through
+  vision cleanup, without replacing actual results with generic failure text.
+- Whitelist camera error codes before metrics and desktop IPC; distinguish
+  acquisition timeout from cancellation and add a shared vision error stage.
+- Trace accepted vision requests before acquisition and serialize failure and
+  completion against a newer picture. Preserve completed tasks when narration fails.
+- Release camera controls while leaving actionable errors visible; keep explicit
+  foreground authorization and cancel-then-begin protocol behavior.
+
+Not deployed; running P0 baseline remains backend 0.13.7 / APK 0.8.8.
+
 ## p0-error-completion-20261103.1 — source candidate
 
 Backend 0.14.4; assistant APK 0.9.1 / code 36; protocol 2.

@@ -580,3 +580,11 @@ PR #51八项必需CI通过后已合入main `1cd8a55`。隔离构建的Python扩�
 13项新增回归含真实worker、三个错误发布线程竞态和文字完成竞态、六类文字模式错误各三次、清理断连后继续下个任务，以及JDK编译的真实VoiceSession六事件分支/StatusFeedback。覆盖取消后终态错误、无任务不接受被动错误、旧状态/旧完成、前后台、正常多句、实际cancel(N)→begin(N)及重复begin。固定旧ada7aa3归档在明确JDK环境下复现30处失败、零fixture error，修复后通过；不以Python重写设备逻辑冒充原代码回归。
 
 完整installer22 / host578（4明确private-audio skip）/ tooling79 / Java15、Ruff/Java格式/lint/strict七模块通过；APK0.9.1 code36以历史原钥assembleRelease/lintRelease成功。状态栏错误可打开持久可读详情，关闭不触发重试或审批。实际设备渲染/恢复、网络传输上的故障注入仍未验证，P0-06保持开放；现场0.13.7 / APK0.8.8、模型和72小时观察未替换。
+
+### 2026-11-03：视觉失败分类、私密错误代码和清理隔离（未部署）
+
+0.14.5 / APK0.9.2 code37 / 协议2。修正看图把Dot/TTS错误改成普通idle和假结果、相机释放覆盖错误，以及视觉错误/完成与新画面准入之间的竞态。建立采集前诊断记录，新增共享vision错误阶段；VisionError仅保留固定代码及类别，未知小写消息不能进入指标或桌面IPC；超时不再与取消混为一类。完成的Dot结果/任务不因后续TTS失败降级；桌面拍照失败无照片且释放等待方。内部回调显式指明是否保留本次错误，避免以全局error状态遮住后续新提示。
+
+9项新增回归使用实际Bridge/路由/worker/inbox和固定JPEG头，Dot六类错误各3次、相机五类错误各3次；另有实际完成回执与TTS失败、桌面失败、代码脱敏、超时/取消、两个线程屏障、JDK实际MainActivity方法和VoiceSession回执分支。固定7eaef1b归档对同一测试复现41处失败、零fixture error；修复后通过。旧方法仅加参数适配器，实际方法正文不重写；没有以Python模拟相同算法充当Android逻辑证据。
+
+完整installer22 / host587（4明确private-audio skip）/ tooling79 / Java15及格式/lint/strict七模块通过；原钥APK assembleRelease/lintRelease通过。无模型/云端调用、无设备采集、无图像或用户录音；仅本地测试固定字节。现场0.13.7 / APK0.8.8与持续观察未替换。旧数据和新vision阶段的诊断采集均有回归；这些不是实际设备渲染、真实权限拒绝/网络/额度或图像识别精度验收，P0-06仍开放。

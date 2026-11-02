@@ -113,6 +113,8 @@ def build_components(
             answer_completed=lambda: host.brain.last_metrics.get('completed'),
             metric=host.record_metric,
             log=lambda name, **fields: host.log(name, **fields),
+            diagnostics=lambda: host.diagnostics,
+            failure=lambda message, error, **fields: host.failure(message, error, **fields),
         )
     )
     playback = PlaybackController(

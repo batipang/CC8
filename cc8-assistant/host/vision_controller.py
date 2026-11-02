@@ -12,6 +12,9 @@ from typing import Callable, ContextManager
 from reply_types import VisualReply
 from vision import CameraInbox, DesktopSnapshot, VisionError
 from session_ports import EventSink, AnswerSink, MetricSink
+from diagnostics import TraceBook, error_kind
+from failure_feedback import FailureSink
+from operation_failure import OperationFailure
 
 
 @dataclass(frozen=True)
@@ -34,6 +37,8 @@ class VisionHooks:
     answer_completed: Callable[[], bool | None]
     metric: MetricSink
     log: EventSink
+    diagnostics: Callable[[], TraceBook]
+    failure: FailureSink
 
 
 class VisionController:
@@ -97,6 +102,7 @@ class VisionController:
             self.snapshot_job = job
             self.generation = generation
             self.nonce = capture.ident
+            self.hooks.diagnostics().begin('vision', generation)
             self.hooks.touch()
             authorization = self.hooks.authorize(self.challenge, capture.ident, generation)
             self.hooks.event(
@@ -137,11 +143,19 @@ class VisionController:
                 job.result = 'completed'
                 self.hooks.metric('desktop_snapshots_captured', increment=True)
         except Exception as error:
-            if current():
-                job.result = 'failed'
-                job.error = (
-                    str(error)[:60] if isinstance(error, VisionError) else type(error).__name__
-                )
+            with self.hooks.lock:
+                if current():
+                    job.result = 'failed'
+                    job.image = None
+                    job.error = error.code if isinstance(error, VisionError) else error_kind(error)
+                    failure = (
+                        error
+                        if isinstance(error, OperationFailure)
+                        else OperationFailure(
+                            'Camera capture failed', stage='vision', kind=error_kind(error)
+                        )
+                    )
+                    self.hooks.failure('这次拍照没有完成', failure, trace_key=generation)
         finally:
             self.inbox.cancel_capture(capture)
             with self.hooks.lock:
@@ -158,6 +172,14 @@ class VisionController:
                                     result=job.result,
                                     origin='desktop',
                                 )
+                    self.hooks.diagnostics().finish(
+                        generation,
+                        'completed'
+                        if job.result == 'completed'
+                        else 'failed'
+                        if job.result == 'failed'
+                        else 'cancelled',
+                    )
                 finally:
                     job.done.set()
             self.hooks.save_status()
@@ -173,6 +195,7 @@ class VisionController:
             generation = self.hooks.cancel_session('vision_request')
             self.generation = generation
             self.nonce = nonce
+            self.hooks.diagnostics().begin('vision', generation)
             self.hooks.touch()
             self.hooks.event('vision_begin', generation=generation, nonce=nonce)
             self.hooks.enqueue(VisualReply(generation, text, origin, nonce))
@@ -212,26 +235,33 @@ class VisionController:
                 self.hooks.metric('vision_dot_completed', increment=True)
         except Exception as error:
             outcome = 'failed'
-            if self.hooks.valid(generation):
-                self.hooks.metric(
-                    'vision_last_error',
-                    str(error)[:60] if isinstance(error, VisionError) else type(error).__name__,
-                )
-                message = (
-                    '没有取得新画面，请检查镜头或摄像头权限后重试'
-                    if isinstance(error, VisionError)
-                    else '这次看图没有完成，请稍后重试'
-                )
-                self.hooks.event('dot_result', generation=generation, text=message, truncated=False)
-                self.hooks.status('idle', message)
+            with self.hooks.lock:
+                if self.hooks.valid(generation):
+                    self.hooks.metric(
+                        'vision_last_error',
+                        error.code if isinstance(error, VisionError) else error_kind(error),
+                    )
+                    stage = self.hooks.diagnostics().current_stage(
+                        generation, default='vision' if image is None else 'brain'
+                    )
+                    failure = (
+                        error
+                        if isinstance(error, OperationFailure)
+                        else OperationFailure(
+                            'Vision operation failed', stage=stage, kind=error_kind(error)
+                        )
+                    )
+                    self.hooks.failure('这次看图没有完成', failure, trace_key=generation)
         finally:
             image = None
             if capture is not None:
                 self.inbox.cancel_capture(capture)
-            if self.generation == generation:
-                self.generation = None
-                self.nonce = ''
-                self.hooks.metric('vision_last_result', outcome)
-                if self.hooks.connected():
-                    self.hooks.event('vision_done', generation=generation, result=outcome)
+            with self.hooks.lock:
+                if self.generation == generation:
+                    self.generation = None
+                    self.nonce = ''
+                    self.hooks.metric('vision_last_result', outcome)
+                    if self.hooks.connected():
+                        self.hooks.event('vision_done', generation=generation, result=outcome)
+                self.hooks.diagnostics().finish(generation, outcome)
             self.hooks.save_status()

@@ -1,6 +1,6 @@
 # 大黄蜂统一待办：功能与工程质量
 
-更新：2026-11-03。原排期基线为 Android 0.8.6 / 后台 0.11.0；当前已部署 P0 候选为后台 0.13.7 / APK 0.8.8；main软件候选为0.14.4 / APK0.9.1，含独立P1功能，未部署；P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)；复选框仍按完整验收标准关闭。
+更新：2026-11-03。原排期基线为 Android 0.8.6 / 后台 0.11.0；当前已部署 P0 候选为后台 0.13.7 / APK 0.8.8；main软件候选为0.14.5 / APK0.9.2，含独立P1功能，未部署；P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)；复选框仍按完整验收标准关闭。
 
 依据：[竞品复盘](COMPETITOR_REVIEW_2026-11-01.md)、[当前架构](ARCHITECTURE.md)、[实机与回归记录](VALIDATION.md)。本次已合并 [ToFix](ToFix.md) 的 20 个工程条目；这是功能与工程质量的唯一详细清单；[ROADMAP](ROADMAP.md)保留完成情况和阶段概览。
 
@@ -69,6 +69,7 @@
   - 依赖：P0-01、P0-02；本地唤醒场景依赖 P0-03。范围：CC8 / Mac 联调。不改变“应用内黑屏仍在前台”的既有含义。
 
 - [ ] **P0-06 — 超时、额度、权限和断网的明确反馈**
+  - 看图路径补齐（2026-11-03）：0.14.5 / APK0.9.2让画面获取、Dot、TTS错误保留分类并先于清理回执；未知相机错误只保留固定代码，不伪造Dot结果，不改变已经完成的任务。9项新增回归在旧7eaef1b复现41处失败、无fixture error；修复后通过，完整host587 / tooling79及Android编译/lint通过。新增vision诊断阶段随采集器一并更新；实机故障注入/恢复仍待验证，见 [失败反馈](FAILURE_FEEDBACK.md)。
   - 自动检查修复（2026-11-03）：0.14.4 / APK0.9.1修正文字任务先清理owner导致错误漏发、结束回执覆盖错误、旧状态/结束回执覆盖新请求，以及播放失败取消后错误被丢弃；ASR/回答/播报错误发布与新owner隔离。13项真实worker/线程和实际Java事件分支回归在旧ada7aa3复现30处失败、无fixture error；修复后通过。完整指引可点状态栏查看持久对话框；实机渲染/恢复矩阵尚未验证，见 [失败反馈](FAILURE_FEEDBACK.md)。
   - 软件补充（2026-11-03）：0.14.3 main候选增加 MiniMax 每请求累计网络 I/O 预算，修复持续滴流绕过 read_timeout；真实 loopback TLS/普通 CONNECT、三入口、取消及池隔离自动回归见 [FAILURE_FEEDBACK](FAILURE_FEEDBACK.md)。不计正常播报/消费时间；系统DNS仍不能在此处中断。当前实机0.13.7未替换，整项及部署后错误界面矩阵保持开放。
   - 代码检查补充：0.13.7 修复完成回执覆盖下一句播放状态、旧播放失败误取消新请求、插话超时提示覆盖新状态三个并发问题。四项真实线程回归在旧控制器复现五处失败；详见 [代码检查](CODE_REVIEW_20261102.md)。已部署当前0.13.7候选，真人/实机错误矩阵验收仍开放。

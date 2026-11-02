@@ -9,6 +9,7 @@ import re
 import secrets
 import threading
 import time
+from operation_failure import OperationFailure
 
 
 def desktop_signature(token, challenge, nonce, generation):
@@ -34,8 +35,64 @@ MAX_IMAGE = 384 * 1024
 CHUNK = 12288
 
 
-class VisionError(RuntimeError):
-    pass
+ERROR_CODES = frozenset(
+    (
+        'invalid_jpeg',
+        'invalid_jpeg_header',
+        'invalid_jpeg_segment',
+        'unsupported_jpeg',
+        'image_dimensions_exceeded',
+        'missing_jpeg_dimensions',
+        'cancelled',
+        'stale_capture',
+        'capture_timeout',
+        'capture_cancelled_or_timeout',
+        'camera_timeout',
+        'camera_failed',
+        'permission_required',
+        'permission_denied',
+        'not_foreground',
+        'request_not_authorized',
+        'camera_unavailable',
+        'unsupported_preview',
+        'invalid_frame',
+        'preview_failed',
+        'image_encode_failed',
+        'camera_open_failed',
+        'preview_surface_lost',
+        'image_transfer_failed',
+        'duplicate_image_begin',
+        'image_size_exceeded',
+        'invalid_image_hash',
+        'invalid_image_chunk',
+        'invalid_base64',
+        'image_size_mismatch',
+        'incomplete_image',
+        'image_hash_mismatch',
+        'image_dimensions_mismatch',
+    )
+)
+
+
+class VisionError(OperationFailure):
+    def __init__(self, code):
+        # Device input and arbitrary exception text must not become metric/IPC
+        # content merely because they resemble a lower-case error identifier.
+        self.code = code if isinstance(code, str) and code in ERROR_CODES else 'camera_failed'
+        if self.code in (
+            'permission_required',
+            'permission_denied',
+            'not_foreground',
+            'request_not_authorized',
+        ):
+            kind = 'credential_or_permission'
+        elif self.code in ('capture_timeout', 'camera_timeout'):
+            kind = 'timeout'
+        elif self.code == 'image_transfer_failed':
+            kind = 'transport_or_io'
+        else:
+            kind = 'provider_or_runtime'
+        super().__init__(self.code, stage='vision', kind=kind)
 
 
 def visual_request(text):
@@ -172,12 +229,7 @@ class CameraInbox:
                     raise VisionError('capture_timeout')
                 event = value.get('event')
                 if event == 'camera_error':
-                    reason = value.get('error')
-                    raise VisionError(
-                        reason
-                        if isinstance(reason, str) and re.fullmatch('[a-z0-9_]{1,60}', reason)
-                        else 'camera_failed'
-                    )
+                    raise VisionError(value.get('error'))
                 if event == 'camera_image_begin':
                     if c.size:
                         raise VisionError('duplicate_image_begin')
@@ -241,12 +293,14 @@ class CameraInbox:
 
     def wait(self, capture, is_current):
         while not capture.done.wait(0.05):
-            if not is_current() or time.monotonic() > capture.expires:
-                with self.lock:
-                    if self.pending is capture:
-                        self._cancel()
-                raise VisionError('capture_cancelled_or_timeout')
-        if not is_current() or capture.error or capture.image is None:
+            current = is_current()
+            if not current or time.monotonic() > capture.expires:
+                self.cancel_capture(capture)
+                capture.error = 'cancelled' if not current else 'capture_timeout'
+                raise VisionError(capture.error)
+        if not is_current():
+            raise VisionError('cancelled')
+        if capture.error or capture.image is None:
             raise VisionError(capture.error or 'stale_capture')
         image = capture.image
         with self.lock:

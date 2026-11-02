@@ -7,7 +7,7 @@ import re
 import threading
 import time
 import uuid
-from operation_failure import OperationFailure, ClassifiedFailure
+from operation_failure import OperationFailure, ClassifiedFailure, STAGES as ERROR_STAGES
 
 STAGES = frozenset(
     (
@@ -224,7 +224,7 @@ class TraceBook:
     def failure(self, key, stage, error):
         if isinstance(error, OperationFailure):
             stage = error.stage
-        if stage not in ('asr', 'brain', 'tts', 'playback', 'transport'):
+        if stage not in ERROR_STAGES:
             stage = 'runtime'
         with self.lock:
             row = self._row(key)

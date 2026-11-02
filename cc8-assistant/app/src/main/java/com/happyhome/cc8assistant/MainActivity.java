@@ -946,7 +946,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   }
 
   @Override
-  public void vision(boolean busy, String message) {
+  public void vision(boolean busy, String message, boolean preserveError) {
     runOnUiThread(
         () -> {
           if (!busy && eyes != null) eyes.cancel();
@@ -954,7 +954,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
             visionButton.setText(busy ? "停止看图" : "看一看");
             visionButton.setContentDescription(busy ? "停止拍摄和 Dot 看图分析" : "拍一张画面交给 Dot 分析");
           }
-          state(busy ? "thinking" : active ? "listening" : "idle", message);
+          if (busy || !preserveError)
+            state(busy ? "thinking" : active ? "listening" : "idle", message);
         });
   }
 
