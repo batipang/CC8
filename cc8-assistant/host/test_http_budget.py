@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+import select
 import socket
 import ssl
 import subprocess
@@ -105,6 +106,64 @@ class DripServer:
         self.worker.join(3)
         if self.worker.is_alive() or self.errors:
             raise AssertionError('Local fixture did not terminate cleanly')
+
+
+class ConnectProxy:
+    """One bounded plaintext CONNECT tunnel to the local TLS fixture."""
+
+    def __init__(self, target_port):
+        self.target_port = target_port
+        self.stopped, self.tunnelled = threading.Event(), threading.Event()
+        self.errors = []
+        self.listener = socket.socket()
+        self.listener.bind(('127.0.0.1', 0))
+        self.listener.listen(1)
+        self.listener.settimeout(2)
+        self.port = self.listener.getsockname()[1]
+        self.worker = threading.Thread(target=self.run, daemon=True)
+        self.worker.start()
+
+    def run(self):
+        client, upstream = None, None
+        try:
+            client, _ = self.listener.accept()
+            client.settimeout(1)
+            data = b''
+            while b'\r\n\r\n' not in data:
+                piece = client.recv(4096)
+                if not piece:
+                    return
+                data += piece
+                if len(data) > 8192:
+                    raise ValueError('Fixture CONNECT header too large')
+            if not data.startswith(f'CONNECT localhost:{self.target_port} '.encode()):
+                raise ValueError('Unexpected fixture CONNECT target')
+            upstream = socket.create_connection(('127.0.0.1', self.target_port), timeout=1)
+            client.sendall(b'HTTP/1.0 200 Connection established\r\n\r\n')
+            self.tunnelled.set()
+            deadline = time.monotonic() + 4
+            while not self.stopped.is_set() and time.monotonic() < deadline:
+                for peer in select.select([client, upstream], [], [], 0.05)[0]:
+                    chunk = peer.recv(8192)
+                    if not chunk:
+                        return
+                    (upstream if peer is client else client).sendall(chunk)
+        except OSError:
+            pass
+        except Exception as error:
+            self.errors.append(type(error).__name__)
+        finally:
+            if client is not None:
+                client.close()
+            if upstream is not None:
+                upstream.close()
+
+    def close(self):
+        self.stopped.set()
+        self.listener.close()
+        self.worker.join(3)
+        if self.worker.is_alive() or self.errors:
+            raise AssertionError('Local proxy fixture did not terminate cleanly')
 
 
 class HTTPBudgetTLS(unittest.TestCase):
@@ -290,6 +349,28 @@ class HTTPBudgetTLS(unittest.TestCase):
             self.assertFalse(server.headers_received.is_set())
             self.assertEqual(client.slots, set())
         finally:
+            server.close()
+
+    def test_successful_connect_tunnel_preserves_verified_tls_and_json(self):
+        server = DripServer(self.context, 'immediate', b'{"value":1}')
+        proxy = ConnectProxy(server.port)
+        try:
+            client = self.client(server)
+            original_factory = client.factory
+
+            def factory():
+                session = original_factory()
+                session.proxies = {'https': f'http://127.0.0.1:{proxy.port}'}
+                return session
+
+            client.factory = factory
+            client.timeout = (0.5, 0.5)
+            self.assertEqual(client.post_json('/v1/test', {}), {'value': 1})
+            self.assertTrue(proxy.tunnelled.is_set())
+            self.assertTrue(server.headers_received.is_set())
+            self.assertEqual(client.slots, set())
+        finally:
+            proxy.close()
             server.close()
 
 
