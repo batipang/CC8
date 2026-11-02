@@ -45,6 +45,8 @@ setup 可加 `--dry-run` 输出 argv 计划，不创建环境、不下载、不�
 
 ## 自动设备检查
 
+后台恢复实机检查：`./cc8 verify-service --runtime-root /absolute/live/workspace` 默认只计划；显式 `--execute --cycles 10` 在严格空闲/身份门控后模拟本项目后台崩溃，观察已有守护恢复，不开麦、不安装服务。详见 [AUTOMATED_SERVICE_CHECKS](AUTOMATED_SERVICE_CHECKS.md)。
+
 英文唤醒组件回归：`./cc8 verify-wake --model-root /absolute/model/workspace` 默认只输出计划；显式 `--execute` 用现有模型环境对固定公开合成正负样本和流边界评测，不开麦、不播放、不联网。结果失败也保存私有报告，详见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)。
 
 自动设备检查：`./cc8 verify-device --runtime-root /absolute/live/workspace` 默认只输出计划。`--execute` 执行播报/布局/逻辑连接检查，`--capture` 明确启用相关前台语音测试；`--standby --acoustic` 追加真实待机和一次 Mac 合成声学唤醒。结束核对恢复前台、麦克风关闭。详见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)。
