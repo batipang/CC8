@@ -43,6 +43,10 @@ final class DotChatsDialog {
       toast("请先连接 Mac");
       return;
     }
+    if (!session.supportsDotChatHandoff()) {
+      toast("当前后台尚未确认支持聊天接续，请完成连接或更新后台");
+      return;
+    }
     pending = UUID.randomUUID().toString().replace("-", "");
     action = nextAction;
     String ident = pending;

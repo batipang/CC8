@@ -38,6 +38,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   private String lastStateMessage = "系统待命";
   private VoiceSession session;
   private DotChatsDialog dotChats;
+  private SavedTasksDialog savedTasks;
   private String dotResultSource = "";
   private CompanionView companion;
   private WaveformView waveform;
@@ -147,6 +148,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
                 | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
     session = new VoiceSession(this, this);
     dotChats = new DotChatsDialog(this, session);
+    savedTasks = new SavedTasksDialog(this, session);
     requestOpenVoice(getIntent());
     build();
   }
@@ -647,19 +649,26 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
           .setTitle("任务")
           .setMessage("还没有任务记录。你可以让大黄蜂查询资料、分析照片或操作当前 Mac。任务记录仅在本次 Mac 服务运行期间保留。")
           .setPositiveButton("文字指令", (d, n) -> inputTask())
+          .setNeutralButton("已保存结果", (d, n) -> savedTasks.open())
           .setNegativeButton("关闭", null)
           .show();
       return;
     }
     final JSONArray tasks = tasksData;
-    String[] names = new String[tasks.length()];
-    for (int i = 0; i < names.length; i++) {
+    String[] names = new String[tasks.length() + 1];
+    names[0] = "已保存结果 · 重启后可查";
+    for (int i = 0; i < tasks.length(); i++) {
       JSONObject t = tasks.optJSONObject(i);
-      names[i] = taskStatus(t.optString("status")) + " · " + t.optString("title");
+      names[i + 1] = taskStatus(t.optString("status")) + " · " + t.optString("title");
     }
     new AlertDialog.Builder(this)
         .setTitle("最近任务 · 本次服务")
-        .setItems(names, (d, n) -> showTaskDetail(tasks.optJSONObject(n)))
+        .setItems(
+            names,
+            (d, n) -> {
+              if (n == 0) savedTasks.open();
+              else showTaskDetail(tasks.optJSONObject(n - 1));
+            })
         .setNeutralButton("提醒", (d, n) -> showReminders())
         .setPositiveButton("文字指令", (d, n) -> inputTask())
         .setNegativeButton("关闭", null)
@@ -691,6 +700,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
             .setNegativeButton("关闭", null);
     if ("running".equals(task.optString("status")) && linked)
       dialog.setPositiveButton("停止任务", (d, n) -> session.cancelTask(task.optString("id")));
+    else if (linked)
+      dialog.setPositiveButton("保存结果", (d, n) -> savedTasks.save(task.optString("id")));
     dialog.show();
   }
 
@@ -1053,6 +1064,11 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     runOnUiThread(() -> dotChats.accept(data));
   }
 
+  @Override
+  public void savedTasks(JSONObject data) {
+    runOnUiThread(() -> savedTasks.accept(data));
+  }
+
   private void traceAuto(String event) {
     long now = SystemClock.elapsedRealtime();
     String value =
@@ -1217,6 +1233,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
           workspaceRevision = -1;
           if (!connected) {
             dotChats.close();
+            savedTasks.close();
             tasksData = new JSONArray();
             remindersData = new JSONArray();
             renderWorkspace();
@@ -1407,6 +1424,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   @Override
   protected void onPause() {
     if (dotChats != null) dotChats.close();
+    if (savedTasks != null) savedTasks.close();
     screen(false);
     foreground = false;
     if (eyes != null) eyes.cancel();

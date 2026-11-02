@@ -487,3 +487,12 @@ P1-09 首次 CI 其余六项通过，密钥扫描将 backup() 的单行英文注
 误报范围复核：redacted finding 的 StartLine 与 EndLine 均为 81（columns 32–58）；之前关于跨行的初步判断不准确，现以注释单行命中记录为准，例外指纹范围未扩大。
 
 P1-09 后续 CI 安全扫描成功，但 macOS 的既有 measure CLI 集成用例在 0.2 秒窗口只观察到一次 IPC，未达到该用例要求的两次；Linux 同项成功。将该真实 IPC 集成窗口改为 2 秒，保留至少两次读取、仅 diagnostics、单样本去重、0600 与 worker 收尾断言及 10 秒进程上限；生产计时和虚拟时钟截止回归不变。此处不把 CI 机器调度/文件同步抖动作为语音时延指标。
+
+
+### P1-02：显式终态结果私有保存（未部署）
+
+后台 0.14.2 / APK 0.9.0 code 35 / 协议 2。十五项新回归覆盖实际私有 JSON 的保存/重开/查看/删除、不默认持久化、幂等与不可改写、坏输入/伪造客户端字段、文件/目录权限和链接/硬链接拒绝、损坏/超长/重复字段不覆盖、原子替换失败不丢原数据、八个实例真实竞争写、锁竞争有界、32条满容量/最坏 Unicode 包预算、断连成功写入不回包到新连接、删除回执立即刷新与旧 worker 收尾、可选坏库不影响握手和能力广告。没有打开设备/模型或真实个人数据。
+
+完整本机 installer 22 / host 498（4 private-audio skip）/ tooling 51 / Java 15 checks，固定格式/lint/strict 七模块通过。保存内容限当前后台真实终态回执，普通任务仍 RAM-only；原代码中的任务执行完成与播报完成分立规则保留。Android 原 JKS 路径引用 assembleRelease/lintRelease、AAPT 包版本与 API-27 签名检查已实际通过（0.9.0/code35，原证书集合一致）；本批合入仍须全部必需 CI，P1-02 完整桌面授权/来源文件和实机验收保持开放，见 [SAVED_TASK_RESULTS](SAVED_TASK_RESULTS.md)。
+
+前置升级准备已通过 [PR #42](https://github.com/batipang/CC8/pull/42) 最终八项 CI（head 3bb5039）并合入，包含仅限定旧注释误报指纹和真实 IPC 集成窗口夹具修正；没有绕过失败检查。聊天摘要接续已通过 [PR #41](https://github.com/batipang/CC8/pull/41) 的八项检查并合入。

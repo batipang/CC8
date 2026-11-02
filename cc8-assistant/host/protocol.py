@@ -95,6 +95,7 @@ def validate_device_event(value: object) -> JsonObject:
         'play_done': ('generation',),
         'dot_chat_request': ('request_id', 'action'),
         'dot_chat_cancel': ('request_id',),
+        'saved_task_request': ('request_id', 'action'),
         'playout_progress': (
             'generation',
             'playback_id',
@@ -109,7 +110,7 @@ def validate_device_event(value: object) -> JsonObject:
     for key in required:
         if key not in value:
             raise ValueError('Missing device event field: ' + key)
-    if name in ('dot_chat_request', 'dot_chat_cancel'):
+    if name in ('dot_chat_request', 'dot_chat_cancel', 'saved_task_request'):
         request_id = value['request_id']
         if not isinstance(request_id, str) or not re.fullmatch('[a-f0-9]{32}', request_id):
             raise ValueError('Invalid chat request ID')
@@ -120,6 +121,13 @@ def validate_device_event(value: object) -> JsonObject:
             'clear',
         ):
             raise ValueError('Invalid chat action')
+        if name == 'saved_task_request':
+            if value['action'] not in ('list', 'get', 'save', 'delete'):
+                raise ValueError('Invalid saved result action')
+            if value['action'] != 'list':
+                task_id = value.get('id')
+                if not isinstance(task_id, str) or not re.fullmatch('[a-f0-9]{16}', task_id):
+                    raise ValueError('Invalid saved task ID')
     integers = {
         'epoch': 32,
         'generation': 32,

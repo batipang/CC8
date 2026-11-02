@@ -41,6 +41,8 @@ final class VoiceSession {
 
     void dotChats(JSONObject data);
 
+    void savedTasks(JSONObject data);
+
     void screen(boolean sleeping);
 
     void vision(boolean active, String message);
@@ -81,6 +83,15 @@ final class VoiceSession {
   private volatile int epoch = 0, minimumGeneration = 0, lifecycle = 0;
   private volatile long micFrames = 0, renderFrames = 0;
   private volatile String phase = "idle";
+  private volatile boolean dotChatSupported, savedTasksSupported;
+
+  boolean supportsDotChatHandoff() {
+    return dotChatSupported;
+  }
+
+  boolean supportsSavedTaskResults() {
+    return savedTasksSupported;
+  }
 
   VoiceSession(Context context, Listener listener) {
     this.context = context.getApplicationContext();
@@ -172,6 +183,7 @@ final class VoiceSession {
   private void closeSocket() {
     Link usb = usbLink, wifi = wifiLink;
     activeLink = null;
+    dotChatSupported = savedTasksSupported = false;
     output = null;
     socket = null;
     if (usb != null) usb.close();
@@ -258,6 +270,7 @@ final class VoiceSession {
         listener.caption("", "attentive");
         minimumGeneration = 0;
         activeLink = next;
+        dotChatSupported = savedTasksSupported = false;
         socket = next.connection;
         output = next.out;
         phase = recording ? "listening" : "idle";
@@ -292,6 +305,7 @@ final class VoiceSession {
       if (wifiLink == link) wifiLink = null;
       if (activeLink != link) return;
       activeLink = null;
+      dotChatSupported = savedTasksSupported = false;
       socket = null;
       output = null;
       Link backup =
@@ -428,6 +442,8 @@ final class VoiceSession {
       JSONObject j = Wire.json(p);
       String event = j.optString("event");
       if ("hello".equals(event)) {
+        dotChatSupported = Boolean.TRUE.equals(j.opt("supports_dot_chat_handoff"));
+        savedTasksSupported = Boolean.TRUE.equals(j.opt("supports_saved_task_results"));
         listener.recognition(j.optString("asr_engine", "sensevoice"));
         listener.state(recording ? "listening" : "idle", j.optString("message", "Mac 已连接，点击开始语音"));
       } else if ("screen_sleep".equals(event)) {
@@ -570,7 +586,10 @@ final class VoiceSession {
           listener.dotResult(
               j.optString("text"), j.optBoolean("truncated"), j.optString("handoff_source_title"));
       } else if ("dot_chat_state".equals(event)) {
+        dotChatSupported = true;
         if (foreground) listener.dotChats(j);
+      } else if ("saved_task_result".equals(event)) {
+        if (foreground) listener.savedTasks(j);
       } else if ("web_sources".equals(event)) {
         if ((recording || visual || textSession) && p.generation >= minimumGeneration)
           listener.sources(j.optJSONArray("items"), j.optString("retrieved_at"));
@@ -668,6 +687,15 @@ final class VoiceSession {
   void dotChatCancel(String requestId) {
     JSONObject j = Wire.event("dot_chat_cancel");
     Wire.put(j, "request_id", requestId);
+    send(j);
+  }
+
+  void savedTaskRequest(String requestId, String action, String id) {
+    if (!foreground || !isConnected()) return;
+    JSONObject j = Wire.event("saved_task_request");
+    Wire.put(j, "request_id", requestId);
+    Wire.put(j, "action", action);
+    if (id != null) Wire.put(j, "id", id);
     send(j);
   }
 

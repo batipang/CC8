@@ -1,6 +1,20 @@
 # Changelog
 
-## Unreleased — p1-upgrade-preparation-20261102.1
+## Unreleased — p1-saved-results-20261102.1
+
+Backend 0.14.2; assistant APK 0.9.0 / code 35; protocol 2.
+
+- Add explicit terminal-task result saving, restart-safe viewing/copy/delete,
+  owner-private atomic storage, bounded cross-instance locking and no eviction.
+- Keep ordinary history RAM-only; accept server-owned receipts only, never
+  client-supplied success text. Stored snapshots do not restart jobs or approval.
+- Isolate archive I/O, preserve uncertain-write semantics after disconnect,
+  and release completed slots without clearing a successor refresh worker.
+- Advertise optional UI capabilities and explain older backend limitations.
+
+Not deployed; P0 baseline and original running installation remain preserved.
+
+## p1-upgrade-preparation-20261102.1 — source candidate
 
 Backend tools 0.14.1; APK 0.8.9 / code 34 and protocol 2 unchanged.
 
