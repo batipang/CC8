@@ -1,5 +1,7 @@
 # P0 软件候选交接：2026-11-02
 
+现场更新：冻结源码 p0-validation-base-20261102.1 已在用户暂停语音后部署为后台 0.13.7 / APK 0.8.8 code 33；原签名、配对和配置保留。新增自动实机检查入口，用户无需逐项重复操作。安装、实际运行及已知缺口见 [VALIDATION](VALIDATION.md) 和 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)。下方保留软件交接时的历史快照，不代表本次已通过全部 P0 验收。
+
 当前追加的代码检查候选为后台 **0.13.7**，APK 保持 0.8.8 code 33，修复及测试见 [代码检查](CODE_REVIEW_20261102.md)。该后台修复没有重建下方旧快照或替换现场运行服务。
 
 本页下方固定记录 p0-software-20261102.1 快照。后续工作候选已到后台 **0.13.6 / APK 0.8.8 code 33**，新增[设备播放头回执](PLAYOUT_RECEIPT.md)，见 [PR #39](https://github.com/batipang/CC8/pull/39)。原版本文件/回执已保留在本机忽略的 artifacts/preserved/p0-software-20261102.1；不要将下方旧 APK 哈希用于新版。两批均未替换现场安装。
