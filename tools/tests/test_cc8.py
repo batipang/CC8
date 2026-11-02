@@ -94,7 +94,7 @@ class CommandTests(unittest.TestCase):
             self.assertFalse(result['device_capture_started'])
             self.assertEqual(
                 {c['id'] for c in result['checks']},
-                {'dev_python', 'jdk', 'openssl', 'java_formatter'},
+                {'dev_python', 'jdk', 'openssl', 'cxx', 'java_formatter'},
             )
 
     def test_invalid_profile_is_reported_without_its_values(self):
