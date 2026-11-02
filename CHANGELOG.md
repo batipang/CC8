@@ -1,5 +1,19 @@
 # Changelog
 
+## p0-error-completion-20261103.1 — source candidate
+
+Backend 0.14.4; assistant APK 0.9.1 / code 36; protocol 2.
+
+- Publish text-request errors before clearing their live owner, and serialize
+  failure publication and completion against a successor request. Keep ASR and
+  literal-announcement failure publication within the same owner boundary.
+- Preserve actionable errors after text/announcement cleanup, admit the terminal
+  playback error following an owned cancel, and reject stale status/completion.
+- Release playback controls on failure and show full recovery guidance in a
+  readable dialog when the status is tapped. No automatic retry or new capture.
+
+Not deployed; running P0 baseline remains backend 0.13.7 / APK 0.8.8.
+
 ## Unreleased — p1-saved-results-20261102.1
 
 Backend 0.14.2; assistant APK 0.9.0 / code 35; protocol 2.

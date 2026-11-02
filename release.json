@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "p0-network-budget-20261103.1",
+  "release_id": "p0-error-completion-20261103.1",
   "backend": {
-    "version": "0.14.3"
+    "version": "0.14.4"
   },
   "assistant": {
-    "version": "0.9.0",
-    "version_code": 35,
+    "version": "0.9.1",
+    "version_code": 36,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {

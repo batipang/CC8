@@ -332,8 +332,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     LinearLayout.LayoutParams statusTextLp = new LinearLayout.LayoutParams(-2, -1);
     statusTextLp.leftMargin = dp(9);
     status.addView(stateText, statusTextLp);
-    status.setOnClickListener(
-        v -> Toast.makeText(this, lastStateMessage, Toast.LENGTH_LONG).show());
+    status.setOnClickListener(v -> showStatusDetails());
     place(root, status, 24, 629, 528, 38);
     TextView eyebrow = label("对话", 23, INK);
     eyebrow.setCompoundDrawables(icon(R.drawable.ic_hud_chat, INK, 27), null, null, null);
@@ -467,6 +466,16 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     renderWorkspace();
   }
 
+  private void showStatusDetails() {
+    if ("error".equals(phase)) {
+      new AlertDialog.Builder(this)
+          .setTitle("错误详情与处理方法")
+          .setMessage(lastStateMessage)
+          .setPositiveButton("关闭", null)
+          .show();
+    } else Toast.makeText(this, lastStateMessage, Toast.LENGTH_LONG).show();
+  }
+
   private void statusLabel() {
     if (stateText == null) return;
     String message =
@@ -477,6 +486,10 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
                 : "listening".equals(phase)
                     ? "正在倾听 · 大黄蜂 / Bumblebee"
                     : "calibrating".equals(phase) ? "正在校准 · 请保持安静" : lastStateMessage;
+    if ("error".equals(phase)) {
+      int end = message.indexOf('。');
+      message = (end < 0 ? message : message.substring(0, end)) + " · 查看详情 ›";
+    }
     android.text.SpannableString value = new android.text.SpannableString(message);
     int stop = message.indexOf('·');
     value.setSpan(
@@ -487,6 +500,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
         android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
     stateText.setTextColor(INK);
     stateText.setText(value);
+    stateText.setContentDescription("error".equals(phase) ? message + "。点按查看完整错误与处理方法" : message);
     stateIcon.setImageDrawable(
         icon(R.drawable.ic_hud_voice, "speaking".equals(phase) ? AMBER : CYAN, 24));
   }
