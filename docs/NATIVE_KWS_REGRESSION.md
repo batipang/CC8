@@ -29,3 +29,11 @@ python tools/native_kws.py --overlay /absolute/new/patch-overlay
 更大的英文 transducer 固定到模型仓库 `csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26` 的 `672fbf1b30579d6585301139bb363f42a0ad4a24`，模型卡标 Apache-2.0，int8/fp32 文件均按上游摘要校验。新模型对公开合成样本的召回有所改善，但扩展45条矩阵仍有漏检及近音命中；增加尾部 blank 或换 fp32 并未通过全矩阵。新置信度补丁修正了确定的算法问题，也没有使该矩阵自动通过。
 
 所有实验权重、wheel、公开合成音和原始报告仍在忽略目录；没有删除失败样本、放宽通过条件或更换正在运行的助手。P0-03 保持开放；真人、距离、电视及自播报仍需独立证据。
+
+## 隔离安装验证
+
+源码回归已通过 [PR #51](https://github.com/batipang/CC8/pull/51) 的八项必需CI并合入。后续在全新隔离环境中验证了一个Python绑定补丁wheel：保留上游2.0.1版本及其core2.0.1依赖，额外Build标识为`1cc8kws1`，独立构建清单记录修改源码与扩展SHA。原始官方facade逐文件保留，仅替换Python扩展和wheel元数据、重建RECORD并增加构建清单；实际安装的扩展SHA与清单相同，官方core的ONNX Runtime内容相同。
+
+这项区别很关键：Python扩展静态包含关键词实现，不链接core的C API库；只替换core动态库不能证明Python路径已修正。本次只验证Python绑定，未修改官方core的C/C++ API库。wheel保守限定当前Mac arm64 / CPython3.13平台，尚无跨平台兼容结论；本地打包原型也不是正式可复现bootstrap。
+
+该分包安装实际完成上游公开LOVELY CHILD音频的65个前导时点检查，65/65检出；扩展SHA为`6300ddc7a982a73a7f7a7630746691ae8a834ca42928ba781d904dc92534685e`。这独立于默认source-only回归，不改写其`installed_native_tested=false`。中文/停止完整组件矩阵见 [自动检查](AUTOMATED_DEVICE_CHECKS.md#中文唤醒与停止指令的数字回归)，不能以单个上游复现通过替代整套语音验收。

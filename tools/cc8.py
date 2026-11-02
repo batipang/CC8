@@ -418,6 +418,10 @@ def run_runtime(args, root=ROOT):
 
 
 def main():
+    if sys.argv[1:2] == ['verify-local-speech']:
+        from check_local_commands import main as local_speech_main
+
+        return local_speech_main(sys.argv[2:])
     if sys.argv[1:2] == ['verify-asr']:
         from synthetic_asr import main as synthetic_asr_main
 
@@ -471,6 +475,9 @@ def main():
     commands.add_parser('measure', help='Collect content-free host receipts without capture')
     commands.add_parser(
         'verify-wake', help='Plan or explicitly run public synthetic keyword boundary checks'
+    )
+    commands.add_parser(
+        'verify-local-speech', help='Plan or explicitly check Chinese wake and stop keywords'
     )
     commands.add_parser('verify-device', help='Plan or explicitly run bounded CC8 hardware checks')
     commands.add_parser(
