@@ -3,7 +3,7 @@
 # Ignore this exact historical finding only, not the file or generic-api-key rule.
 43fef65f1585897e955254334cd7fa1d633fc159:cc8-assistant/host/resources/sensevoice.json:generic-api-key:9
 
-# False positive: the backup() comment and read_profile() assignment were matched
-# across lines as generic-api-key. This immutable source span contains code only.
+# False positive: English words inside the backup() source comment were
+# matched as generic-api-key. The finding starts and ends on comment line 81.
 # Restrict to this historical commit/path/rule/line, never a file or rule wildcard.
 aa61861dd0d8c45d3dfbff7bd50f3a8e9d5bea7a:cc8-assistant/host/upgrade_preparation.py:generic-api-key:81

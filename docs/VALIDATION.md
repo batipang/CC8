@@ -482,4 +482,6 @@ CI 通过的干净源码 5f1c087cfa8c4cdea42758dd26b7f0597b1c31ef 已包含在 m
 
 系统 Python 3.9.6 / PATH=/usr/bin:/bin 实际 root CLI：固定 P0 source manifest → 当前候选的声明规划，真实原签名助手 0.8.9 做 AAPT/API-27 包检查；合成配置 backup/verify/stage-restore，原字节不变，输出 0600。没有读真实配置/凭据/配对，没有设备通信、安装、服务重启或模型请求。详见 [UPGRADE_PREPARATION](UPGRADE_PREPARATION.md)；真实升级/回退仍未验收。
 
-P1-09 首次 CI 其余六项通过，密钥扫描将 backup() 的注释和下一行 read_profile 调用跨行误判。已检查 redacted finding 的提交/文件/起止位置和该源代码段，未发现凭据；改写当前注释并仅加入 aa61861:upgrade_preparation.py:generic-api-key:81 的不可变历史指纹例外，未忽略文件或默认规则。全历史脱敏扫描复验随后运行，CI 仍强制通过后才合入。
+P1-09 首次 CI 其余六项通过，密钥扫描将 backup() 的单行英文注释误判。已检查 redacted finding 的提交/文件/起止位置和该源代码段，未发现凭据；改写当前注释并仅加入 aa61861:upgrade_preparation.py:generic-api-key:81 的不可变历史指纹例外，未忽略文件或默认规则。全历史脱敏扫描复验随后运行，CI 仍强制通过后才合入。
+
+误报范围复核：redacted finding 的 StartLine 与 EndLine 均为 81（columns 32–58）；之前关于跨行的初步判断不准确，现以注释单行命中记录为准，例外指纹范围未扩大。
