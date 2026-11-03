@@ -36,3 +36,14 @@ Java15、固定格式/lint及八模块strict检查通过；Android正式源码�
 最小PATH下同样十项回归通过。远端CI仍须通过后才能合并。之前code44的六项
 隔离设备UI结果保留为该版本证据，不改标为本轮code45实机验收；本轮未安装、
 重启服务或开麦/拍照。
+
+补充构建验证：从clean源码05e8a89生成无录音/拍照/悬浮窗权限、无shared UID
+的独立QA包，Gradle构建/lint和原证书签名验证通过；摘要为
+`2aedb6904170e79be24c43d0f9379c1ad02b42defbb60918b56e093230418d61`。
+包未安装；设备只读检查为非助手前台、麦克风/摄像头关闭，保持该状态。
+
+首轮PR76 CI（41639199412）保留：六个独立作业成功，但macOS在Set up job
+下载固定setup-python Action时失败，尚未checkout/运行测试，Required checks
+相应失败。随后从同一官方codeload地址成功取得HTTP200／1664686字节的归档，
+官方commit API也确认固定SHA存在；不更换Action pin或放松必需检查。
+本补充记录新构建证据及基础设施失败，后续文档提交仍须通过全部新提交CI。
