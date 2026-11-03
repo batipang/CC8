@@ -20,7 +20,7 @@ final class VoiceSession {
   // 设备端资源所有者：前台期间维护双通道、AudioRecord 与 AudioTrack，退出即释放。
   // lifecycle 隔离前后台连接任务，epoch 隔离收音线程，generation 隔离回答/字幕。
   interface Listener {
-    void link(boolean connected);
+    void link(boolean connected, long route);
 
     void state(String phase, String message);
 
@@ -52,9 +52,9 @@ final class VoiceSession {
 
     void announcement();
 
-    void workspace(JSONObject data);
+    void workspace(JSONObject data, long route);
 
-    void workspaceResult(boolean ok, String message);
+    void workspaceResult(boolean ok, String message, long route);
   }
 
   private final Context context;
@@ -84,6 +84,8 @@ final class VoiceSession {
   private volatile boolean textSession;
   private volatile int textGeneration;
   private volatile int epoch = 0, minimumGeneration = 0, lifecycle = 0;
+  // UI ownership follows each activation, including reselecting the same Link.
+  private volatile long routeEpoch;
   private volatile long micFrames = 0, renderFrames = 0;
   private volatile String phase = "idle";
   private final StatusFeedback statusFeedback = new StatusFeedback();
@@ -110,6 +112,16 @@ final class VoiceSession {
   boolean isConnected() {
     Link link = activeLink;
     return link != null && !link.closed;
+  }
+
+  boolean currentRoute(long route) {
+    return route == routeEpoch;
+  }
+
+  private long routeFor(Link source) {
+    synchronized (routeLock) {
+      return foreground && source == activeLink ? routeEpoch : -1;
+    }
   }
 
   String transportName() {
@@ -165,6 +177,7 @@ final class VoiceSession {
     synchronized (routeLock) {
       foreground = false;
       lifecycle++;
+      routeEpoch++;
       listener = server;
       server = null;
     }
@@ -185,14 +198,20 @@ final class VoiceSession {
   }
 
   private void closeSocket() {
-    Link usb = usbLink, wifi = wifiLink;
-    activeLink = null;
-    dotChatSupported = savedTasksSupported = false;
-    output = null;
-    socket = null;
+    final Link usb, wifi;
+    final long route;
+    synchronized (routeLock) {
+      usb = usbLink;
+      wifi = wifiLink;
+      activeLink = null;
+      route = routeEpoch;
+      dotChatSupported = savedTasksSupported = false;
+      output = null;
+      socket = null;
+    }
     if (usb != null) usb.close();
     if (wifi != null) wifi.close();
-    listener.link(false);
+    listener.link(false, route);
   }
 
   private void accept(int ticket) {
@@ -262,6 +281,9 @@ final class VoiceSession {
       boolean captureWasActive = recording;
       int captureEpoch = epoch;
       if (changed) {
+        // A reused USB Link after Wi-Fi is still a new activation. Invalidate
+        // queued workspace callbacks before publishing this route's ready state.
+        routeEpoch++;
         desktopCameraAuth.reset();
         if (visual) {
           visual = false;
@@ -300,7 +322,7 @@ final class VoiceSession {
         next.event(rebound);
       }
       // Ready/rebind must enter the wire before a UI callback can start capture.
-      if (changed) listener.link(true);
+      if (changed) listener.link(true, routeEpoch);
     }
   }
 
@@ -310,6 +332,7 @@ final class VoiceSession {
       if (wifiLink == link) wifiLink = null;
       if (activeLink != link) return;
       activeLink = null;
+      routeEpoch++;
       dotChatSupported = savedTasksSupported = false;
       socket = null;
       output = null;
@@ -326,7 +349,7 @@ final class VoiceSession {
       cancelVision();
       stopMicrophone();
       cancelPlayback();
-      listener.link(false);
+      listener.link(false, routeEpoch);
       if (foreground) listener.state("idle", "连接已断开，正在自动重连 · 麦克风已关闭");
     }
   }
@@ -411,6 +434,7 @@ final class VoiceSession {
   }
 
   private void handle(Wire.Packet p, Link source) throws Exception {
+    final long route = routeFor(source);
     if (p.type == Wire.EVENT) {
       JSONObject control = Wire.json(p);
       String name = control.optString("event");
@@ -442,7 +466,7 @@ final class VoiceSession {
         return;
       }
     }
-    if (source != activeLink) return;
+    if (route < 0 || !currentRoute(route)) return;
     if (p.type == Wire.EVENT) {
       JSONObject j = Wire.json(p);
       String event = j.optString("event");
@@ -480,9 +504,9 @@ final class VoiceSession {
           }
         }
       } else if ("workspace".equals(event)) {
-        if (foreground) listener.workspace(j);
+        if (foreground) listener.workspace(j, route);
       } else if ("workspace_result".equals(event)) {
-        if (foreground) listener.workspaceResult(j.optBoolean("ok"), j.optString("message"));
+        if (foreground) listener.workspaceResult(j.optBoolean("ok"), j.optString("message"), route);
       } else if ("vision_begin".equals(event)) {
         String nonce = j.optString("nonce");
         if (!foreground

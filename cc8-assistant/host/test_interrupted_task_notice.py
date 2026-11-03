@@ -62,7 +62,7 @@ class ActivityCheck {
    void show(){last=this;}
   }
  }
- static class Session {int requests;String transportName(){return "usb";}void workspaceGet(){requests++;}}
+ static class Session {int requests;long routeEpoch;boolean currentRoute(long route){return route==routeEpoch;}String transportName(){return "usb";}void workspaceGet(){requests++;}}
  static class Dialog {void close(){}void open(){throw new AssertionError("Unrequested saved-results action");}}
  static class Companion {void setTransport(String value){}}
  static class Steps {void task(JSONObject value){}}
@@ -73,7 +73,7 @@ class ActivityCheck {
  final Companion companion=new Companion();final Steps taskSteps=new Steps();
  final Session session=new Session();
  JSONArray tasksData=new JSONArray(),remindersData=new JSONArray();
- long workspaceRevision=-1;boolean linked=true,taskResultUnconfirmed;
+ long workspaceRevision=-1,workspaceRoute=0;boolean linked=true,taskResultUnconfirmed;
  String brainProvider="dot";
  int taskActions;
  void runOnUiThread(Runnable work){work.run();}
@@ -84,6 +84,7 @@ class ActivityCheck {
  static JSONObject task(String status){return new JSONObject("id","same-id","generation",1,"status",status,"title","公开测试任务");}
  void snapshot(long revision,JSONObject... tasks){workspace(new JSONObject("revision",revision,"tasks",new JSONArray((Object[])tasks),"reminders",new JSONArray()));}
  static void yes(boolean value,String message){if(!value)throw new AssertionError(message);}
+ ROUTE_ADAPTERS
  METHODS
  public static void main(String[] args){
   ActivityCheck c=new ActivityCheck();
@@ -162,7 +163,13 @@ class InterruptedTaskNoticeTests(unittest.TestCase):
         cls.addClassCleanup(cls.temporary.cleanup)
         folder = Path(cls.temporary.name)
         path = folder / 'ActivityCheck.java'
-        path.write_text(HARNESS.replace('METHODS', '\n'.join(methods)))
+        adapters = ''
+        if 'long route' in method(source, 'public void workspace('):
+            adapters = """void workspace(JSONObject data){workspace(data,session.routeEpoch);}
+void link(boolean connected){link(connected,++session.routeEpoch);}"""
+        path.write_text(
+            HARNESS.replace('METHODS', '\n'.join(methods)).replace('ROUTE_ADAPTERS', adapters)
+        )
         cls.java = java_bin()
         cls.folder = folder
         result = subprocess.run(
