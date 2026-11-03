@@ -10,6 +10,9 @@
 - Record successful ownership boundaries. Four regressions reproduce four
   old-driver assertion failures, with no fixture errors. No production APK,
   runtime, model or audio-setting changes; ADB handoff is not atomic.
+- Verify the ignored installer bundle and tracked helper source before fixture
+  generation. A real QA attempt stopped on the missing local bundle before UI
+  takeover; preserve that failure and test the earlier prerequisite rejection.
 
 ## Automatic failure UI — optional verified loopback TLS fixture
 

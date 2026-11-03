@@ -314,6 +314,9 @@ def run(runtime, receipt_path, limit, output, *, shared_staging=False, http_fixt
     digest = hashlib.sha256(private_bytes(apk, 128 * 1024**2)).hexdigest()
     require(digest == receipt['apk_sha256'], 'qa_apk_changed')
     device = Device()
+    # Verify the ignored local installer bundle before fixture generation or
+    # any attempted installation, including its tracked Java source identity.
+    device.access.helper_artifact()
     metadata = apk_metadata(apk, device.access.AAPT)
     require(
         metadata['version_code'] == receipt['version_code']

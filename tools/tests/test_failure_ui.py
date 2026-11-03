@@ -472,6 +472,17 @@ class DriverExecutionTests(unittest.TestCase):
             device.access.install.assert_not_called()
             self.assertFalse(any('uninstall' in c.args[0] for c in device.shell.call_args_list))
 
+    def test_missing_local_installer_bundle_prevents_any_install_or_ui_takeover(self):
+        with self.driver() as (device, link, restore, output):
+            device.access.helper_artifact.side_effect = FileNotFoundError('missing local helper')
+            with self.assertRaises(FileNotFoundError):
+                check.run(Path('/runtime'), Path('/private/qa-build.json'), 1, output)
+            device.access.install.assert_not_called()
+            device.original.home.assert_not_called()
+            restore.assert_not_called()
+            link.close.assert_not_called()
+            check.generate.assert_not_called()
+
     def test_owner_starting_capture_during_fixture_generation_prevents_install_or_ui(self):
         with self.driver() as (device, link, restore, output):
             with patch('service_smoke.LiveService') as service:
