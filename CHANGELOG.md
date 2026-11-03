@@ -1,5 +1,21 @@
 # Changelog
 
+## p0-candidate-20261103.2 — deployed backend candidate
+
+Backend 0.14.8, source bb7767b; original assistant APK 0.9.3/code38 retained.
+
+- Deploy receive-path completion, turn linking, stage timings and initial Dot
+  connection preparation without changing the APK, model, voice or dependencies.
+- Preserve the first unsuccessful readiness check and confirmed rollback; the
+  corrected bounded wait then confirmed the new idle pair in 22.374 seconds.
+- Complete ten real idle backend recoveries, then start a separate version-bound
+  0.14.8 observation. Three new standby rounds remain in progress.
+- Record four existing native audio replays and four public human reference
+  clips separately from CI, synthetic wake failures and field acceptance.
+
+Earlier source-candidate notes below describe their state at the original merge.
+Current deployment evidence and limits are in docs/CURRENT_DEPLOYMENT.md.
+
 ## p0-dot-preconnect-20261103.1 — source candidate
 
 Backend 0.14.8; assistant APK 0.9.3 / code38; protocol2.

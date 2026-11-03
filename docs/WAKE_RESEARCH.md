@@ -1,8 +1,8 @@
 # 唤醒候选隔离对照：2026-11-03
 
-本批没有找到可替换运行英文KWS的方案，P0-03继续开放。设备仍为后台0.14.5／APK0.9.3，0.14.6是已合入、未部署的任务回执修复；本批不修改运行模型、阈值、依赖或采集状态。
+本批没有找到可替换运行英文KWS的方案，P0-03继续开放。首批实验时现场为后台0.14.5／APK0.9.3；实验不修改运行模型、阈值或采集状态。
 
-后续源码0.14.7补齐Dot分段时钟，0.14.8加入初始连接准备，均已合入但未部署。下面追加的Mac原生识别实验安装了独立系统英文语言资源，没有替换当前助手的KWS、MiniMax ASR/TTS或Dot；本页原来的“未改变依赖”只描述前一批隔离模型实验。
+后续0.14.6～0.14.8的Dot回执、分段时钟和初始连接准备已随p0-candidate-20261103.2部署，仍保留原KWS、MiniMax ASR/TTS和Dot配置，见 [当前部署](CURRENT_DEPLOYMENT.md)。下面的Mac原生识别实验安装了独立系统英文资源，没有替换运行模型；“未改变依赖”仅描述前一批隔离模型实验。
 
 ## 输入与判定口径
 
@@ -71,3 +71,20 @@ BPE变体只增加同一`▁BUMBLEBEE`拼写的合法分词，不添加近音别
 英文资源通过[AssetInventory安装接口](https://developer.apple.com/documentation/speech/assetinventory/assetinstallationrequest(supporting:))取得；该接口会自动为调用客户端保留语言项。实验检测到新增en_US保留项后，在相同安装客户端路径执行[release](https://developer.apple.com/documentation/speech/assetinventory/release(reservedlocale:))，确认该客户端从en_US回到原空列表，原zh_CN／zh_TW资源仍在。另一可执行文件的保护检查返回3、没有执行释放，随后使用原客户端正确完成；不把不同应用的保留列表混为全局状态。没有显式删除系统共享资源，新增英文资产由系统管理。
 
 苹果资源没有这批外部权重同样的逐文件固定哈希，故记录为不透明系统资产；报告保留OS build、已安装语言、Swift源码/可执行文件摘要和安装/清理回执，不声称跨系统版本精确复现。私有报告尾标识`a22b6f9f`／`306e2655`，整体验证`research-verification-20261103-v2.json`。当前仍没有可部署的英文替代方案；后续优先补独立、发音可核对的真人参考，不能在已见合成输入上不断接受近音拼写。
+
+## 公开真人参考：不计独立或远场验收
+
+改用固定revision的Parquet文字列检索，完成test/validation四分区及train.clean.100，共18片、39665行；上次TLS失败的partial报告保留。本轮复用已完成分片，连接池和逐范围摘要缓存读取5329229个新数据字节，196.636秒完成；只解析id/text，预取范围排除音频列，未下载整片音频数据。依赖独立环境的六个wheel均固定版本和哈希，没有安装进运行环境。
+
+语料为Vassil Panayotov等整理的[LibriSpeech（OpenSLR12，CC BY4.0）](https://www.openslr.org/12)。Parquet revision为`2b9f39377850ffce6bf6358257ae9f84b2349497`，音频资产源revision为`71cacbfb7e2354c4226d01e70d77d5fca3d04ba1`；对应源文件与转换分支的LFS引用相同。逐条核对row ID/行号/完整转写，再取四段短FLAC转为16kHz单声道PCM、冻结摘要；没有声称逐字节验证资产等于Parquet音频单元，也不保留签名临时URL到仓库。
+
+| 公开片段ID | 来源 / 时长 | 原KWS六种production起点 |
+| --- | --- | --- |
+| 4362-15663-0050 | train.clean.100，15.21秒，含BUMBLEBEE | 均有名字命中 |
+| 1320-122617-0034 | test.clean，9.485秒，HUMBLE | 均无命中 |
+| 4446-2275-0001 | test.clean，4.66秒，FUMBLED | 均无命中 |
+| 7902-96594-0024 | test.other，3.14秒，HUMBLY | 均无命中 |
+
+使用当前源码、已校验的运行模型缓存和原native摘要26434ad0…；关键词、gain、threshold、路径数均不变。全轮2.206秒是数字处理时间，不是唤醒延迟。整句命中没有人工词位核验；六种条件是同一位正例说话人的重复观察，正例也处于所用英文CTC模型的训练分区，不能当独立ASR或一般唤醒准确率。现有合成语料的全部漏检/误触发记录不变。
+
+这提供了新的真人组件参照，尚不足以选换模型或调整阈值。后续仍需更多独立正例、普通背景/自播报、流式边界与真实距离；本轮没有麦克风、云ASR或设备操作。报告`public-human-text-v2-a96b6324.json`、`human-english-kws-447ab1a6.json`及四段音频仅保存在本机忽略的私有目录。
