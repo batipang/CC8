@@ -34,6 +34,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   private TextView taskAction, reminderText;
   private ImageView stateIcon;
   private long workspaceRevision = -1;
+  private long workspaceRoute = -1;
   private JSONArray tasksData = new JSONArray(), remindersData = new JSONArray();
   // RAM-only notice: a lost connection cannot undo tool effects or prove failure.
   // Keep this separate from authoritative task receipts and never replay work.
@@ -562,9 +563,10 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   }
 
   @Override
-  public void workspace(JSONObject data) {
+  public void workspace(JSONObject data, long route) {
     runOnUiThread(
         () -> {
+          if (!linked || workspaceRoute != route || !session.currentRoute(route)) return;
           long revision = data.optLong("revision", -1);
           if (revision < workspaceRevision) return;
           JSONArray tasks = data.optJSONArray("tasks"), reminders = data.optJSONArray("reminders");
@@ -578,8 +580,12 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   }
 
   @Override
-  public void workspaceResult(boolean ok, String message) {
-    runOnUiThread(() -> Toast.makeText(this, message, Toast.LENGTH_LONG).show());
+  public void workspaceResult(boolean ok, String message, long route) {
+    runOnUiThread(
+        () -> {
+          if (!linked || workspaceRoute != route || !session.currentRoute(route)) return;
+          Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+        });
   }
 
   private String taskStatus(String status) {
@@ -1273,12 +1279,14 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   }
 
   @Override
-  public void link(boolean connected) {
+  public void link(boolean connected, long route) {
     runOnUiThread(
         () -> {
+          if (!session.currentRoute(route)) return;
           linked = connected;
-          workspaceRevision = -1;
-          if (!connected) {
+          if (workspaceRoute != route || !connected) {
+            workspaceRoute = route;
+            workspaceRevision = -1;
             taskResultUnconfirmed |= hasRunningTask(tasksData);
             dotChats.close();
             savedTasks.close();

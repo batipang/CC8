@@ -1,5 +1,19 @@
 # Changelog
 
+## p0-workspace-route-ownership-20261103.1 — client source candidate
+
+Assistant APK0.9.10/code45; backend candidate0.14.16 and protocol2 unchanged.
+
+- Bind workspace/link callbacks to their connection activation and recheck
+  ownership when applying queued UI changes. Invalidate on pause, loss and
+  route selection, including returning to the same USB Link after Wi-Fi.
+- Clear old workspace revisions on backup takeover even without an intervening
+  disconnected callback; preserve uncertainty about known unfinished work.
+- Compile actual lifecycle, dispatch and Activity callbacks under controlled
+  parse/queue interleavings: eight old-code assertions fail, ten candidate
+  checks pass. No capture, task replay or wire protocol changes.
+- Keep production unchanged; see [workspace ownership](docs/WORKSPACE_ROUTE_OWNERSHIP.md).
+
 ## p0-interrupted-task-notice-20261103.1 — client source candidate
 
 Assistant APK0.9.9/code44; backend candidate0.14.16 and protocol2 unchanged.
