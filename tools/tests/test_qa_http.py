@@ -99,6 +99,27 @@ class HTTPFixtureTests(unittest.TestCase):
         self.assertIsNone(fixture.worker)
         self.assertIsNone(fixture.listener)
 
+    def test_fixture_session_rejects_a_different_peer_certificate(self):
+        def current_case():
+            return Case('tts', 'rate_limit', 1)
+
+        with (
+            LoopbackHTTP(current_case, lambda: None) as fixture,
+            LoopbackHTTP(current_case, lambda: None) as other,
+        ):
+            # Keep the client's expected URL/CA unchanged, but serve a different
+            # valid localhost certificate. verify=False would incorrectly pass.
+            fixture.context = other.context
+            with fixture.session_factory() as client:
+                with self.assertRaises(requests.exceptions.SSLError):
+                    client.post(
+                        fixture.base + '/v1/t2a_v2',
+                        json={'text': 'fixed'},
+                        headers={'Authorization': 'Bearer qa-not-a-real-credential'},
+                        timeout=2,
+                    )
+            self.assertEqual(fixture.count('tts-rate_limit-1'), 0)
+
     def test_stdlib_minimal_path_tls_plan_does_not_create_runtime_or_open_network(self):
         root = Path(__file__).resolve().parents[2]
         with tempfile.TemporaryDirectory() as folder:

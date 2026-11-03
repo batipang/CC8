@@ -11,7 +11,7 @@
   endpoint validation, credentials, configuration and runtime unchanged.
 - Bind the I/O mode and wire count into corpus identity and include the fixture
   source hash. Keep default fake mode and standard-library dry plans offline.
-- Pass six new regressions, including trust rejection and cleanup. New-mode
+- Pass seven new regressions, including trust rejection and cleanup. New-mode
   physical QA remains pending; do not inherit the earlier fake-I/O device pass.
 
 ## Automatic acoustic checks — candidates and admitted dialogue
