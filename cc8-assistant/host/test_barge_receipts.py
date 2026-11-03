@@ -6,7 +6,7 @@ import threading
 import unittest
 
 import test_capture_evidence as fixture
-from test_pause_confirmation import Span
+from test_pause_preservation import Span
 
 
 class BargeReceiptTests(unittest.TestCase):

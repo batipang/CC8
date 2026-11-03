@@ -1,6 +1,21 @@
 # Changelog
 
-## p0-confirmed-playback-pause-20261103.1 — backend source candidate
+## p0-pause-candidate-withdrawn-20261103.1 — default backend restored
+
+Backend0.14.13 / original APK0.9.7/code42, protocol2 unchanged.
+
+- Reject the twelve-frame pause candidate after both planned eleven-case live
+  collections: it failed to retain all three baseline matching speech cases.
+- Preserve every result, missing-coverage case and frozen decision rule; fewer
+  reference-only pauses do not override speech regressions. Do not retune this
+  holdout and call it independent acceptance.
+- Restore the known backend without replacing APK/configuration/models. Remove
+  the extra pause wait in default source; retain tail drain and receipt isolation.
+- Add component checks preserving short-speech recognition handoff and immediate
+  confirmed pause, alongside independent streaming stop and existing ACK tests.
+
+
+## p0-confirmed-playback-pause-20261103.1 — rejected experimental candidate
 
 Backend0.14.14, retained original-signature APK0.9.7/code42, protocol2 unchanged.
 
