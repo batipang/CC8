@@ -13,7 +13,7 @@
 ./cc8 verify-device --runtime-root /absolute/live/workspace --execute --capture --standby --acoustic
 ```
 
-runtime-root 指**实际运行目录**。现场候选为 `/Volumes/AI/Codex/CC8-P0`，当前冻结运行源码0bf1172：后台0.14.13 / 保留原签名APK0.9.7 code42；实际部署与验收范围见 [CURRENT_DEPLOYMENT](CURRENT_DEPLOYMENT.md)。深层候选目录曾超出 macOS Unix socket 路径限制，已改为短路径并重新创建独立 venv。
+runtime-root 指**实际运行目录**。现场为 `/Volumes/AI/Codex/CC8-P0`，冻结运行源码867ff19：后台0.14.16 / 保留原签名APK0.9.11 code46；实际部署与验收范围见 [CURRENT_DEPLOYMENT](CURRENT_DEPLOYMENT.md)。自动检查脚本可来自另一份已验证源码；报告中的脚本摘要与受测后台版本分别记录。深层候选目录曾超出 macOS Unix socket 路径限制，已改为短路径并重新创建独立 venv。
 
 ## 门控与动作
 
@@ -22,6 +22,7 @@ runtime-root 指**实际运行目录**。现场候选为 `/Volumes/AI/Codex/CC8-
 - execute 会通过现有 MiniMax TTS 播放固定公开文字。capture 明确启用**相关语音测试**，仅通过既有可见 MainActivity 和 auto_start_voice=true 开始；维护打开仍为 false，不增加远程开麦 IPC。
 - standby 要求已选唤醒模式，真实等待约 900 秒，临时防止 Mac 空闲睡眠；过早黑屏、连接/采集丢失、超时均不算通过，没有修改待机阈值。
 - acoustic 在 preflight 先核对 Mac 已安装且唯一的 Tingting 音色；缺失/歧义时在打开 UI 或采集前拒绝。仅在黑屏且采集仍开启时，用解析后的完整音色名说一次“大黄蜂，一加一等于几？”。不调整音量；静音、距离、方向或噪声可能导致未确认。不要求用户代读，不自动重试。
+- 新版 acoustic 检查区分任务完成与声音播完：同一新 voice 回合须有唤醒、ASR、大脑与播放完成阶段。播完再观察20秒，出现额外 voice 请求、原回合取消、断连或采集关闭即失败；不再次播放问句。额外请求的来源可能是回声或现场人声，计数本身不证明原因。
 
 ## 证据与界限
 
@@ -40,9 +41,25 @@ runtime-root 指**实际运行目录**。现场候选为 `/Volumes/AI/Codex/CC8-
 
 执行源码目录的 device-access/private/device-checks/ 保存逐项原子检查点，目录 0700 / 文件 0600。仅保存测试名、状态、固定错误代码、版本、自动脚本及 Mac 音色解析模块开始时的 SHA-256 与单端耗时，不保存 dumpsys 全文、设备身份、识别/回答正文、录音、图像或凭据。开发中较早启动的报告不自动获得后续脚本摘要。
 
+新版 `acoustic_evidence` 仅包含本次新voice请求数、完成/取消/任务完成数、固定六个阶段的计数与已观察的播后时长。超时或取消也保留部分阶段证据；请求ID、文字与提供方错误原文均不写入该字段。未启用或未进入该检查时为null。
+
 同一实际运行目录共享排他测试锁。后台实例改变即中止；已触及 UI 的路径在失败、超时或 Ctrl+C 后均尝试 Home 停采，再维护打开恢复前台，核对两端麦克风及相机关闭。无法确认则 cleanup_unconfirmed，不能给出通过结论。启动前拒绝不改变原状态；SIGKILL 或断电等无法运行 finally 的情况不保证进程外清理。
 
 报告固定 physical_usb_unplug_tested=false、human_accuracy_asserted=false、acoustic_latency_asserted=false、full_p0_acceptance=false。离线 fixture 验证门控、计时、旧回执排除、失败清理和脱敏；实机结果另记 VALIDATION。一轮自动通过不关闭整个 P0。
+
+## 0.14.16现场结果与检查器补强
+
+本次三轮使用补强前的检查器，每轮都实际等待15分钟，未压缩待机时间：
+
+| 轮次 | 总耗时 | 结果 |
+| --- | --- | --- |
+| 1 | 986.527秒 | 九项通过，结束停采 |
+| 2 | 973.893秒 | 九项通过，结束停采 |
+| 3 | 1090.445秒 | 前八项通过，合成声学完整链未确认；结束停采 |
+
+第三轮内容无关的诊断显示：唤醒、ASR、Dot任务完成及播放头确认已到达，随后该回合被取消，另一个voice回合出现暂停请求。未保存录音或正文，不能判定声源；保留失败，不计作三轮问答全过，也没有原样重跑掩盖失败。
+
+此后才加入上述阶段计数与20秒窗口。五项新增离线回归在原检查器复现七处断言失败、零fixture错误；补强后定向29项及完整主机729项通过。该结果是检查器的软件验证，不追认三轮现场执行了新门控；后台、APK、音频阈值和模型未随此次检查器变更部署。
 
 
 ## 无录音的英文唤醒回归

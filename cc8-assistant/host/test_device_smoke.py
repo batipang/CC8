@@ -378,6 +378,121 @@ class DeviceAutomationTests(unittest.TestCase):
             run.acoustic_probe()
         device.speak_probe.assert_not_called()
 
+    def acoustic_fixture(self, rows):
+        run, device, health, now = self.fixture(capture=True, standby=True, acoustic=True)
+        health['microphone_active'] = True
+        spoken = [False]
+
+        def speak():
+            spoken[0] = True
+
+        def status():
+            return (
+                {'foreground': True, 'microphone_active': True},
+                {'camera_open': False, 'screen_sleeping': not spoken[0]},
+            )
+
+        def request(p):
+            if p == {'operation': 'health'}:
+                return dict(health)
+            self.assertEqual(p, {'operation': 'diagnostics'})
+            # Existing success must never count as a fresh spoken response.
+            return {'requests': rows(now[0]) if spoken[0] else []}
+
+        device.speak_probe.side_effect = speak
+        device.status.side_effect = status
+        run.request = request
+        return run, device, health, now
+
+    @staticmethod
+    def acoustic_row(**changes):
+        return {
+            'request_id': 'PRIVATE_REQUEST_ID',
+            'origin': 'voice',
+            'outcome': 'completed',
+            'task_outcome': 'completed',
+            'stages': dict.fromkeys(
+                ('wake_detected', 'asr_end', 'brain_start', 'playout_ack', 'playback_done'), 1
+            ),
+            'text': 'PRIVATE_BODY',
+            **changes,
+        }
+
+    def test_acoustic_success_observes_post_playback_window_and_only_counts_fixed_stages(self):
+        run, device, _, now = self.acoustic_fixture(lambda _: [self.acoustic_row()])
+        run.acoustic_probe()
+        self.assertGreaterEqual(now[0], 20)
+        self.assertLessEqual(now[0], 20.5)
+        device.speak_probe.assert_called_once_with()
+        evidence = run.report('passed').get('acoustic_evidence')
+        self.assertIsInstance(evidence, dict)
+        self.assertEqual(evidence['post_playback_quiet_seconds'], 20)
+        self.assertEqual(evidence['completed_tasks'], 1)
+        self.assertEqual(evidence['stage_counts']['playback_done'], 1)
+        self.assertNotIn('PRIVATE', json.dumps(evidence))
+
+    def test_acoustic_cancelled_narration_is_not_a_completed_answer(self):
+        row = self.acoustic_row(outcome='cancelled')
+        row['stages'].pop('playback_done')
+        run, device, _, now = self.acoustic_fixture(lambda _: [row])
+        with self.assertRaisesRegex(CheckFailure, 'synthetic_voice_request_not_completed'):
+            run.acoustic_probe()
+        self.assertLess(now[0], 1)
+        evidence = run.report('failed').get('acoustic_evidence')
+        self.assertIsInstance(evidence, dict)
+        self.assertEqual(evidence['completed_tasks'], 1)
+        self.assertEqual(evidence['cancelled_requests'], 1)
+        self.assertEqual(evidence['stage_counts']['playback_done'], 0)
+        device.speak_probe.assert_called_once_with()
+
+    def test_extra_voice_after_completed_playback_fails_without_replaying_stimulus(self):
+        first = self.acoustic_row()
+        extra = self.acoustic_row(
+            request_id='SECOND_PRIVATE_ID', outcome=None, stages={'pause_request': 1}
+        )
+        run, device, _, now = self.acoustic_fixture(
+            lambda seconds: [first] + ([extra] if seconds >= 5 else [])
+        )
+        with self.assertRaisesRegex(CheckFailure, 'unexpected_extra_voice_request'):
+            run.acoustic_probe()
+        self.assertEqual(now[0], 5)
+        evidence = run.report('failed').get('acoustic_evidence')
+        self.assertIsInstance(evidence, dict)
+        self.assertEqual(evidence['new_voice_requests'], 2)
+        self.assertEqual(evidence['stage_counts']['pause_request'], 1)
+        self.assertGreater(evidence['post_playback_quiet_seconds'], 0)
+        self.assertNotIn('PRIVATE', json.dumps(evidence))
+        device.speak_probe.assert_called_once_with()
+
+    def test_acoustic_missing_wake_stage_keeps_partial_evidence_on_timeout(self):
+        row = self.acoustic_row()
+        row['stages'].pop('wake_detected')
+        run, device, _, now = self.acoustic_fixture(lambda _: [row])
+        with self.assertRaisesRegex(CheckFailure, 'synthetic_acoustic_chain_not_confirmed'):
+            run.acoustic_probe()
+        self.assertEqual(now[0], 120)
+        evidence = run.report('failed').get('acoustic_evidence')
+        self.assertIsInstance(evidence, dict)
+        self.assertEqual(evidence['stage_counts']['wake_detected'], 0)
+        self.assertEqual(evidence['stage_counts']['asr_end'], 1)
+        device.speak_probe.assert_called_once_with()
+
+    def test_acoustic_observation_rejects_capture_loss_or_runtime_replacement(self):
+        for changed in ('microphone_active', 'connected', 'runtime_instance'):
+            with self.subTest(changed=changed):
+                run, device, health, _ = self.acoustic_fixture(lambda _: [self.acoustic_row()])
+                run.initial_instance = health['runtime_instance']
+
+                def lost(seconds):
+                    health[changed] = 'replacement' if changed == 'runtime_instance' else False
+
+                run.sleep = lost
+                with self.assertRaisesRegex(
+                    CheckFailure, 'acoustic_capture_or_connection_lost|runtime_restarted'
+                ):
+                    run.acoustic_probe()
+                device.speak_probe.assert_called_once_with()
+
     def test_dumpsys_missing_or_duplicate_receipt_is_not_success(self):
         for text in ('other output', 'HUD_UI_STATUS {}\nHUD_UI_STATUS {}'):
             with self.assertRaises(CheckFailure):
