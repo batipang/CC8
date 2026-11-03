@@ -353,7 +353,8 @@ class SmokeRun:
         )
 
     def start_capture(self):
-        self.device.open(True, capture_limit_ms=1200000 if self.standby else 180000)
+        limit = 1200000 if self.standby else 180000
+        self.device.open(True, capture_limit_ms=limit)
         self.wait(lambda: self.health().get('microphone_active') is True, 15, 'capture_not_started')
         self.wait(lambda: self.health().get('calibrating') is False, 25, 'calibration_not_finished')
         h = self.health()
@@ -362,6 +363,13 @@ class SmokeRun:
             'wake_capture_not_ready',
         )
         d, ui = self.device.status()
+        require(
+            type(d.get('test_capture_limit_ms')) is int
+            and d['test_capture_limit_ms'] == limit
+            and type(d.get('test_capture_remaining_ms')) is int
+            and 0 < d['test_capture_remaining_ms'] <= limit,
+            'device_test_capture_limit_not_active',
+        )
         require(
             d.get('microphone_active') is True and ui.get('camera_open') is False,
             'device_capture_state_invalid',

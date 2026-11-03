@@ -190,11 +190,35 @@ class DeviceAutomationTests(unittest.TestCase):
                 run, device, health, _ = self.fixture(capture=True, standby=standby)
                 health.update(microphone_active=True, local_wake_ready=True)
                 device.status.return_value[0]['microphone_active'] = True
+                device.status.return_value[0].update(
+                    test_capture_limit_ms=limit, test_capture_remaining_ms=limit - 7000
+                )
                 run.start_capture()
                 device.open.assert_called_once_with(True, capture_limit_ms=limit)
                 # Ordinary health/route observation never requests a new lease.
                 run.health()
                 self.assertEqual(device.open.call_count, 1)
+
+    def test_claimed_support_does_not_replace_actual_active_limit_receipt(self):
+        for limit, remaining in (
+            (None, None),
+            (180000.0, 1000),
+            (1000, 900),
+            (180000, 0),
+            (180000, 180001),
+            (180000, True),
+            (180000, 10.5),
+        ):
+            with self.subTest(limit=limit, remaining=remaining):
+                run, device, health, _ = self.fixture(capture=True)
+                health.update(microphone_active=True, local_wake_ready=True)
+                device.status.return_value[0].update(
+                    microphone_active=True,
+                    test_capture_limit_ms=limit,
+                    test_capture_remaining_ms=remaining,
+                )
+                with self.assertRaisesRegex(CheckFailure, 'device_test_capture_limit_not_active'):
+                    run.start_capture()
 
     def test_preflight_transport_errors_are_redacted_by_cli(self):
         import device_smoke

@@ -170,15 +170,35 @@ class Intent {
  Map<String,Object> getExtras(){return extras;}
  boolean getBooleanExtra(String key,boolean fallback){return (Boolean)extras.getOrDefault(key,fallback);}
 }
+class Manifest {static class permission {static final String RECORD_AUDIO="record";}}
+class PackageManager {static final int PERMISSION_GRANTED=0;}
+class Build {static class VERSION {static final int SDK_INT=27;}}
 public final class OpeningCheck {
  boolean pending,permissionGrantedAwaitingResume,lastOpenWantedVoice;
+ boolean foreground=true,linked=true,active,playbackActive;
  long pendingTestCaptureLimitMs;
  int autoVoiceOpens;
  final OpenVoiceGate autoVoice=new OpenVoiceGate();
  Session session;
- static class Session {boolean recording;boolean isRecording(){return recording;}}
+ static class Session {
+  boolean recording;long lastLimit=-1;int starts,stops;
+  boolean isRecording(){return recording;}
+  void settings(boolean wake){}
+  void startMicrophone(long limit){if(!recording){recording=true;lastLimit=limit;starts++;}}
+  void stopMicrophone(){recording=false;stops++;}
+  void interrupt(){}
+ }
+ static class Handler {void removeCallbacks(Runnable r){}}
+ static class Wake {boolean isChecked(){return true;}}
+ final Handler handler=new Handler();final Wake wake=new Wake();
+ final Runnable autoVoiceTick=()->{};
+ int checkSelfPermission(String value){return 0;}
+ void requestPermissions(String[] permissions,int request){throw new AssertionError("unexpected permission request");}
+ void state(String phase,String value){}void caption(String text,String mood){}
  void traceAuto(String value){}
  OPEN_METHOD
+ BEGIN_METHOD
+ TOGGLE_METHOD
  static void yes(boolean value){if(!value)throw new AssertionError();}
  public static void main(String[] args){
   OpeningCheck a=new OpeningCheck();
@@ -194,6 +214,14 @@ public final class OpeningCheck {
   a.session=new Session();a.session.recording=true;
   Intent i=new Intent();i.extras.put("test_capture_limit_ms",1000L);a.requestOpenVoice(i);
   yes(a.pendingTestCaptureLimitMs==0); // Another open cannot retime a current recording.
+  a.session.recording=false;a.requestOpenVoice(i);a.begin();
+  yes(a.session.starts==1&&a.session.lastLimit==1000&&a.pendingTestCaptureLimitMs==0);
+  a.session.recording=false;a.requestOpenVoice(null);a.begin();
+  yes(a.session.starts==2&&a.session.lastLimit==0); // Ordinary opening stays unlimited.
+  a.session.recording=false;a.requestOpenVoice(i);a.toggleVoice();
+  yes(a.session.starts==3&&a.session.lastLimit==0); // Manual start does not inherit a staged test.
+  a.active=true;a.toggleVoice();
+  yes(a.session.stops==1&&!a.session.recording&&a.pendingTestCaptureLimitMs==0);
  }
 }
 """
@@ -220,6 +248,8 @@ class CaptureWindowTests(unittest.TestCase):
             OPENING.replace(
                 'OPEN_METHOD', method(activity, 'private void requestOpenVoice(Intent intent)')
             )
+            .replace('BEGIN_METHOD', method(activity, 'private void begin()'))
+            .replace('TOGGLE_METHOD', method(activity, 'private void toggleVoice()'))
         )
         # The two isolated harnesses each define SystemClock.
         for source_name, package in (

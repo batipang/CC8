@@ -50,7 +50,9 @@ runtime-root 指**实际运行目录**。现场为 `/Volumes/AI/Codex/CC8-P0`，
 
 软件回归编译真实录音worker、finally、停止方法与实际intent回调，覆盖无Mac/UI回调的到期、阻塞read、跨截止帧丢弃、资源等待到期、正常长会话及旧新录音隔离。八项通过。两组旧源码对照分别暴露“持续收音”和“忽略无效test limit”：worker对照仅增加签名适配以调用未改动的旧实现，没有插入计时逻辑；编译均成功，两个断言失败、无fixture错误。它们不替代真实设备上的限额与宿主中断测试。
 
-本批本机完整installer23／host740（4项既有private opt-in skip）／tooling100／Java15、固定quality与八模块strict、最小PATH定向40项以及Android编译/lint均通过。没有凭此更新现场APK或关闭P0；实际部署与设备端限额另行留证。
+除能力位之外，开始采集后还须收到实际设备的同值整数限额与正的剩余时间；缺失、类型不符、错值或已过期都中止并收尾，不能把“声明支持”当作时限已经生效。
+
+本批本机完整installer23／host741（4项既有private opt-in skip）／tooling100／Java15、固定quality与八模块strict、最小PATH定向41项以及Android编译/lint均通过。没有凭此更新现场APK或关闭P0；实际部署与设备端限额另行留证。
 
 报告固定 physical_usb_unplug_tested=false、human_accuracy_asserted=false、acoustic_latency_asserted=false、full_p0_acceptance=false。离线 fixture 验证门控、计时、旧回执排除、失败清理和脱敏；实机结果另记 VALIDATION。一轮自动通过不关闭整个 P0。
 
