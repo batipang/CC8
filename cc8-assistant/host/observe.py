@@ -4,6 +4,7 @@ import argparse
 from datetime import datetime, timezone
 import math
 from pathlib import Path
+import re
 import sys
 import time
 import uuid
@@ -37,6 +38,13 @@ def default_output():
 
 def run(args, *, query_fn=query, clock=time.monotonic, wall_clock=time.time, sleep=time.sleep):
     validate(args.seconds, args.interval)
+    expected_backend = getattr(args, 'expect_backend', None)
+    if expected_backend is not None and (
+        not isinstance(expected_backend, str)
+        or len(expected_backend) > 100
+        or not re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', expected_backend)
+    ):
+        raise ValueError('Expected backend must be a bounded canonical version')
     book = ObservationRun(args.interval)
     started, wall_started = clock(), wall_clock()
     deadline = started + args.seconds
@@ -53,6 +61,7 @@ def run(args, *, query_fn=query, clock=time.monotonic, wall_clock=time.time, sle
                 'elapsed_seconds': round(max(0, clock() - started), 3),
                 'wall_elapsed_seconds': round(wall_clock() - wall_started, 3),
                 'checkpoint_seconds': 300,
+                'expected_backend_version': expected_backend,
             }
             output.write(result)
 
@@ -66,6 +75,11 @@ def run(args, *, query_fn=query, clock=time.monotonic, wall_clock=time.time, sle
                         operation='health',
                         timeout=min(5, max(0.001, deadline - clock())),
                     )
+                    if expected_backend is not None and (
+                        not isinstance(payload, dict)
+                        or payload.get('bridge_version') != expected_backend
+                    ):
+                        payload, error = None, 'backend_version_mismatch'
                 except OSError:
                     error = 'ipc_unavailable'
                 except (ValueError, TypeError, RecursionError):
@@ -114,6 +128,9 @@ def main(argv=None):
     parser.add_argument('--interval', type=float, default=60)
     parser.add_argument('--socket', type=Path, default=PRIVATE / 'announce.sock')
     parser.add_argument('--output', type=Path)
+    parser.add_argument(
+        '--expect-backend', help='Require this backend version on every health poll'
+    )
     args = parser.parse_args(argv)
     try:
         return run(args)

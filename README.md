@@ -12,7 +12,7 @@
 
 ## 文档
 
-[P0 软件候选交接：已合入的改造、可核验产物及待补实机证据](docs/P0_SOFTWARE_HANDOFF.md)（当前运行安装未替换）。
+[当前部署：后台0.14.5／APK0.9.3，以及自动验收范围](docs/CURRENT_DEPLOYMENT.md)。[原P0软件交接](docs/P0_SOFTWARE_HANDOFF.md)保留历史快照。
 
 - [从准备设备到安装 APK 的完整步骤](docs/APK_INSTALL.md)
 - [构建、签名与测试](docs/DEVELOPMENT.md)
