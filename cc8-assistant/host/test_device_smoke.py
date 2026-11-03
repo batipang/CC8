@@ -276,6 +276,32 @@ class DeviceAutomationTests(unittest.TestCase):
         with self.assertRaisesRegex(CheckFailure, 'runtime_restarted'):
             run.health()
 
+    def test_unsupported_acoustic_observer_aborts_before_ui_or_capture(self):
+        run, device, health, _ = self.fixture(capture=True, playback_evidence=True)
+        result = run.run()
+        self.assertEqual(result['state'], 'failed')
+        self.assertEqual(result['checks'][0]['reason'], 'backend_playback_evidence_unsupported')
+        device.open.assert_not_called()
+        device.home.assert_not_called()
+
+    def test_playback_probe_keeps_failed_numeric_evidence(self):
+        run, device, health, _ = self.fixture(capture=True, playback_evidence=True)
+        health['microphone_active'] = True
+        request = run.request
+        evidence = {'schema': 1, 'status': 'not_observed', 'correlation': 0.02}
+        run.request = lambda p: (
+            {'status': 'completed', 'evidence': evidence}
+            if p == {'operation': 'playback_probe'}
+            else request(p)
+        )
+        with self.assertRaisesRegex(CheckFailure, 'not_acoustically_corroborated'):
+            run.playback_probe()
+        self.assertEqual(run.report('failed')['playback_probe_evidence'], evidence)
+        evidence = {'schema': 1, 'status': 'observed', 'correlation': 0.9}
+        run.playback_probe()
+        self.assertEqual(run.report('passed')['playback_probe_evidence']['status'], 'observed')
+        device.open.assert_not_called()
+
     def test_device_version_mismatch_is_rejected_before_mutation(self):
         run, device, _, _ = self.fixture(expected_apk=('0.8.8', 33))
         device.version.return_value = ('0.8.6', 31)

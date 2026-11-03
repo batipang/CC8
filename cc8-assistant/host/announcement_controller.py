@@ -34,7 +34,7 @@ class AnnouncementController:
     def invalidate(self):
         self.generation = None
 
-    def announce(self, text):
+    def announce(self, text, *, prepare=None):
         text = validate_text(text)
         with self.hooks.lock:
             if (
@@ -48,10 +48,15 @@ class AnnouncementController:
             self.hooks.diagnostics().begin('announcement', generation)
             job = Announcement(generation, text)
             try:
+                if prepare is not None:
+                    prepare(generation)
                 self.hooks.offer(job)
-            except queue.Full:
+            except Exception as error:
                 self.generation = None
-                raise RuntimeError('Announcement queue busy') from None
+                self.hooks.diagnostics().finish(generation, 'failed')
+                if isinstance(error, queue.Full):
+                    raise RuntimeError('Announcement queue busy') from None
+                raise
             return job
 
     def read_announcement(self, job):

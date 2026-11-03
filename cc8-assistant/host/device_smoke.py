@@ -36,6 +36,7 @@ CHECKS = (
     'maintenance_reopen_keeps_microphone_off',
     'real_idle_black_screen',
     'synthetic_acoustic_wake_and_response',
+    'speaker_microphone_acoustic_evidence',
 )
 
 
@@ -95,6 +96,7 @@ def rpc(path, request, timeout=5):
     require(
         request in allowed
         or request == {'operation': 'transport_test', 'seconds': 12}
+        or request == {'operation': 'playback_probe'}
         or request == {'text': TEST_TEXT},
         'unsupported_test_operation',
     )
@@ -202,6 +204,7 @@ class SmokeRun:
         capture=False,
         standby=False,
         acoustic=False,
+        playback_evidence=False,
         clock=time.monotonic,
         sleep=time.sleep,
         checkpoint=lambda value: None,
@@ -209,6 +212,8 @@ class SmokeRun:
     ):
         self.device, self.request = device, request
         self.capture, self.standby, self.acoustic = capture, standby, acoustic
+        self.playback_evidence = playback_evidence
+        self.playback_probe_evidence = None
         self.clock, self.sleep, self.checkpoint = clock, sleep, checkpoint
         self.started = clock()
         self.checks = []
@@ -259,6 +264,7 @@ class SmokeRun:
             'acoustic_latency_asserted': False,
             'full_p0_acceptance': False,
             'acoustic_evidence': self.acoustic_evidence,
+            'playback_probe_evidence': self.playback_probe_evidence,
         }
 
     def check(self, name, action):
@@ -288,6 +294,10 @@ class SmokeRun:
         if self.acoustic:
             self.device.prepare_speech_probe()
         h = self.health()
+        require(
+            not self.playback_evidence or h.get('playback_evidence_supported') is True,
+            'backend_playback_evidence_unsupported',
+        )
         require(h.get('connected') is True and h.get('transport') == 'usb', 'usb_not_ready')
         require(h.get('microphone_active') is False, 'owner_microphone_already_active')
         require(h.get('playing') is False and h.get('calibrating') is False, 'owner_audio_busy')
@@ -403,6 +413,23 @@ class SmokeRun:
             d.get('microphone_active') is True and ui.get('camera_open') is False,
             'device_capture_state_invalid',
         )
+
+    def playback_probe(self):
+        h = self.health()
+        require(
+            h.get('microphone_active') is True
+            and h.get('playing') is False
+            and h.get('calibrating') is False,
+            'playback_probe_requires_idle_capture',
+        )
+        result = self.request({'operation': 'playback_probe'})
+        evidence = result.get('evidence')
+        require(isinstance(evidence, dict), 'playback_probe_evidence_missing')
+        # Keep the numeric result even on a failed observation. An absent match
+        # is not proof that the physical speaker was silent.
+        self.playback_probe_evidence = evidence
+        require(result.get('status') == 'completed', 'playback_probe_not_completed')
+        require(evidence.get('status') == 'observed', 'playback_not_acoustically_corroborated')
 
     def home(self):
         self.device.home()
@@ -577,6 +604,8 @@ class SmokeRun:
             self.check(CHECKS[3], self.handover)
             if self.capture:
                 self.check(CHECKS[4], self.start_capture)
+                if self.playback_evidence:
+                    self.check(CHECKS[9], self.playback_probe)
                 self.check(CHECKS[5], self.home)
                 self.check(CHECKS[6], self.maintenance_open)
             if self.standby:
@@ -618,16 +647,28 @@ def main(argv=None):
         action='store_true',
         help='Play one public synthetic query on Mac speakers after standby',
     )
+    parser.add_argument(
+        '--playback-evidence',
+        action='store_true',
+        help='Corroborate a fixed speaker phrase using already active bounded capture',
+    )
     args = parser.parse_args(argv)
     if args.standby and not args.capture or args.acoustic and not args.standby:
         parser.error('--standby requires --capture; --acoustic requires --standby')
+    if args.playback_evidence and not args.capture:
+        parser.error('--playback-evidence requires --capture')
     plan = {
         'checks': list(CHECKS[:4])
-        + (list(CHECKS[4:7]) if args.capture else [])
+        + (
+            [CHECKS[4]] + ([CHECKS[9]] if args.playback_evidence else []) + list(CHECKS[5:7])
+            if args.capture
+            else []
+        )
         + ([CHECKS[7]] if args.standby else [])
         + ([CHECKS[8]] if args.acoustic else []),
         'execute': args.execute,
         'capture': args.capture,
+        'playback_evidence': args.playback_evidence,
         'full_p0_acceptance': False,
     }
     if not args.execute:
@@ -685,10 +726,15 @@ def main(argv=None):
 
                 run = SmokeRun(
                     Device(),
-                    lambda p: rpc(socket_path, p, 125 if 'text' in p else 5),
+                    lambda p: rpc(
+                        socket_path,
+                        p,
+                        125 if 'text' in p else 25 if p == {'operation': 'playback_probe'} else 5,
+                    ),
                     capture=args.capture,
                     standby=args.standby,
                     acoustic=args.acoustic,
+                    playback_evidence=args.playback_evidence,
                     checkpoint=save,
                     expected_apk=(manifest.assistant.version, manifest.assistant.version_code),
                 )
