@@ -1,5 +1,7 @@
 # 版本、构建回执与源码快照
 
+最新实机候选已固定到 `p0-candidate-20261103.1` / `cdfa4c2`：后台0.14.5、APK0.9.3/code38、协议2。原签名双APK均在干净该提交构建，`record --tag p0-candidate-20261103.1 --output artifacts/releases/p0-candidate-20261103.1.json` 与verify通过，tag已推送；device_acceptance仍为not_asserted。实际部署、恢复准备与自动验收范围见 [CURRENT_DEPLOYMENT](CURRENT_DEPLOYMENT.md)。下文旧候选/命令保留历史依据，不替代最新状态。
+
 根目录 `release.json` 是独立组件版本与兼容关系的唯一来源。`release_info.py` 做有界/重复字段/类型/范围校验，后台 health / status 读取其版本；两个 Gradle 工程和构建脚本读取同一清单，APK 的 versionName / versionCode 不再各写一份。助手 BuildConfig.CC8_PROTOCOL 与后台握手兼容检查也来自清单。
 
 | foundation-20261102.1 已标记源码组件 | 版本 | 含义 |

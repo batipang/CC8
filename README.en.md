@@ -10,6 +10,8 @@ CC8 captures and renders audio. USB has priority over paired TLS Wi-Fi. Mac perf
 
 Source candidates and the deployed installation are different. See [release.json](release.json), [CHANGELOG](CHANGELOG.md) and [validation evidence](docs/VALIDATION.md). Passing CI or synthetic model checks does not prove human accuracy, acoustic echo cancellation, physical USB/Wi-Fi handover, standby wake or 72-hour reliability.
 
+The verified device now runs backend **0.14.5 / assistant0.9.3 (code38), protocol2**, from `p0-candidate-20261103.1`. The original signer, configuration and pairing were preserved. See [current deployment and acceptance limits](docs/CURRENT_DEPLOYMENT.md); the wake models were not changed and the full P0 acceptance remains open.
+
 Development starts with an isolated profile:
 
 ```sh

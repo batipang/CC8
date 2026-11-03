@@ -26,6 +26,7 @@ INSTANCE = 'f' * 32
 def health(rss=100, *, instance=INSTANCE, uptime=10, cpu=1):
     return {
         'ok': True,
+        'bridge_version': '0.14.5',
         'model_ready': True,
         'connected': False,
         'transport': 'none',
@@ -268,6 +269,37 @@ class ObservationTests(unittest.TestCase):
                     validate(seconds, interval)
             validate(72 * 3600, 60)
 
+    def test_expected_backend_rejects_changed_missing_and_nonstring_versions(self):
+        for wrong in ('0.13.7', None, True, {'message': SECRET}, SECRET):
+            with self.subTest(wrong=type(wrong).__name__), tempfile.TemporaryDirectory() as folder:
+                path = Path(folder) / 'version.json'
+                count = [0]
+
+                def query(*args, **kwargs):
+                    count[0] += 1
+                    payload = health()
+                    if count[0] == 2:
+                        payload['bridge_version'] = wrong
+                    return payload
+
+                code, _ = self.execute(self.args(path, expect_backend='0.14.5'), query)
+                report = json.loads(path.read_text())
+                self.assertEqual(code, 2)
+                self.assertEqual(report['observation']['state'], 'partial')
+                self.assertEqual(report['observation']['expected_backend_version'], '0.14.5')
+                self.assertEqual(report['errors'], {'backend_version_mismatch': 1})
+                self.assertGreater(report['successful_polls'], 0)
+                self.assertNotIn(SECRET, path.read_text())
+
+    def test_invalid_expected_backend_fails_before_ipc_or_report_creation(self):
+        for wrong in ('', '01.2.3', 'v1.2.3', '1.2', '1.2.3\n', SECRET, 145, True, '1' * 101):
+            with self.subTest(wrong=repr(wrong)), tempfile.TemporaryDirectory() as folder:
+                path = Path(folder) / 'version.json'
+                with self.assertRaises(ValueError), patch('observe.query') as query:
+                    self.execute(self.args(path, expect_backend=wrong), query)
+                query.assert_not_called()
+                self.assertFalse(path.exists())
+
     def test_real_root_cli_uses_only_owner_health_ipc_from_minimal_path(self):
         with tempfile.TemporaryDirectory(prefix='cc8-ob-') as folder:
             root = Path(folder)
@@ -309,6 +341,8 @@ class ObservationTests(unittest.TestCase):
                         '0.15',
                         '--interval',
                         '0.05',
+                        '--expect-backend',
+                        '0.14.5',
                         '--socket',
                         str(address),
                         '--output',
@@ -325,6 +359,10 @@ class ObservationTests(unittest.TestCase):
                 self.assertTrue(all(request == {'operation': 'health'} for request in operations))
                 self.assertNotIn(SECRET, output.read_text() + result.stdout + result.stderr)
                 self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(
+                    json.loads(output.read_text())['observation']['expected_backend_version'],
+                    '0.14.5',
+                )
             finally:
                 stopped.set()
                 thread.join(2)

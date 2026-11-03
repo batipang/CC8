@@ -126,7 +126,7 @@ class ObservationRun:
         ):
             raise ValueError('Invalid wall-clock sample')
         instance, sample = (None, None) if error else health_sample(payload)
-        if error not in (None, 'ipc_unavailable', 'invalid_health'):
+        if error not in (None, 'ipc_unavailable', 'invalid_health', 'backend_version_mismatch'):
             raise ValueError('Invalid observation error')
         if self.last_elapsed is not None:
             gap = elapsed - self.last_elapsed

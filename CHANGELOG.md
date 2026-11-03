@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased — version-bound observation tool
+
+- Add optional `observe --expect-backend` validation on every health poll;
+  missing/mismatched versions remain gaps and make the run partial.
+- Record the expected version without copying arbitrary service strings.
+  This CLI-only change does not restart or update the deployed backend.
+
+## p0-candidate-20261103.1 — deployed candidate
+
+Backend 0.14.5; assistant APK 0.9.3 / code38; protocol2, source cdfa4c2.
+
+- Deploy the reviewed network-budget and error-lifecycle fixes with the original
+  signer, configuration and pairing, keeping MiniMax ASR/TTS and Dot unchanged.
+- Add content-free UI state/task status diagnostics and isolated 48-case error
+  UI automation. The QA package is separate from the deployed assistant.
+- Preserve the previous functional source and prepare a forward-version recovery
+  package without uninstalling or clearing the original app.
+
+Actual deployment and acceptance limits: [CURRENT_DEPLOYMENT](docs/CURRENT_DEPLOYMENT.md).
+Complete P0 acceptance, wake-model improvements and long-run validation remain open.
+
 ## p0-vision-errors-20261103.1 — source candidate
 
 Backend 0.14.5; assistant APK 0.9.2 / code 37; protocol 2.
