@@ -1,5 +1,23 @@
 # Changelog
 
+## p0-workspace-action-ownership-20261103.1 — deployed diagnostic pair
+
+Backend0.14.16 / original-signature APK0.9.11/code46, frozen source867ff19.
+
+- Deploy the tested MiniMax business-failure classification, serialized LAN TLS,
+  interrupted-result notices and workspace callback/action ownership guards.
+- Verify clean build/source-tree equivalence, original API27 signature, strict
+  idle/configuration/model/dependency gates and a prepared forward-version
+  recovery artifact. Preserve the initial report-directory guard failure.
+- Pass complete pair readiness and stability in 54.004 seconds, then four real
+  no-capture device checks in 40.557 seconds. Recovery APKcode47 remains unused.
+- Complete 10/10 real idle backend SIGKILL/recovery cycles in 292.861 seconds,
+  with identity/idle guards and no capture or model tasks. Keep active-work,
+  full-service and OS sleep/login acceptance separate.
+- Cancel the old version-bound observer for this actual update; preserve its
+  incomplete window and disconnected samples. Do not combine version durations.
+- See [current deployment](docs/CURRENT_DEPLOYMENT.md) for limits and follow-ups.
+
 ## p0-workspace-action-ownership-20261103.1 — client source candidate
 
 Assistant APK0.9.11/code46; backend candidate0.14.16 and protocol2 unchanged.
