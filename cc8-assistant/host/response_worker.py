@@ -123,6 +123,20 @@ class ResponseWorker:
         clauses = None
 
         def web_update(kind, payload):
+            if kind == 'brain_stage':
+                with self.hooks.lock:
+                    if not self.hooks.valid(generation):
+                        return
+                    if (
+                        not isinstance(payload, dict)
+                        or not {'stage', 'at'} <= payload.keys()
+                        or payload.keys() - {'stage', 'at', 'reused'}
+                    ):
+                        raise ValueError('Invalid Dot timing signal')
+                    self.hooks.diagnostics().dot_stage(
+                        generation, payload['stage'], payload['at'], payload.get('reused')
+                    )
+                return
             if kind == 'dot_result':
                 with self.hooks.lock:
                     if not self.hooks.valid(generation):

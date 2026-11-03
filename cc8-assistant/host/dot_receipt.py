@@ -1,6 +1,7 @@
 """Bounded final-answer validation shared by delivery and speech consumption."""
 
 import threading
+import time
 from operation_failure import OperationFailure
 
 
@@ -107,7 +108,7 @@ class ReceiptWatch:
     Listener errors remain local and are raised by the ordinary turn consumer.
     """
 
-    def __init__(self, notifications, thread_id, valid, publish):
+    def __init__(self, notifications, thread_id, valid, publish, *, first_delta=None, clock=None):
         self.lock = threading.RLock()
         self.thread_id, self.valid, self.publish = thread_id, valid, publish
         self.state = None
@@ -116,16 +117,26 @@ class ReceiptWatch:
         self.closed = False
         self.delivered = False
         self.error = None
+        self.clock = clock or time.monotonic
+        self.first_delta = first_delta
+        self.delta_seen = False
         self.unsubscribe = notifications.listen(self.feed)
 
-    def _feed(self, event):
-        self.state.feed(event)
+    def _feed(self, event, observed_at):
+        delta = self.state.feed(event)
+        if delta and delta.strip() and not self.delta_seen:
+            self.delta_seen = True
+            if self.first_delta:
+                self.first_delta(observed_at)
         if self.state.status == 'completed' and not self.delivered:
             _, answer = self.state.answer()
             self.delivered = True
-            self.publish(answer)
+            self.publish(answer, observed_at)
 
-    def feed(self, event):
+    def feed(self, event, *, observed_at=None):
+        # Timestamp before waiting for binding/admission, not when speech later
+        # resumes. Buffered events keep this same local monotonic observation.
+        observed_at = self.clock() if observed_at is None else observed_at
         with self.lock:
             if self.closed or self.error:
                 return
@@ -159,9 +170,9 @@ class ReceiptWatch:
                     for key in ('item', 'turn'):
                         if isinstance(params.get(key), dict):
                             params[key] = dict(params[key])
-                    self.early.append({'method': method, 'params': params})
+                    self.early.append(({'method': method, 'params': params}, observed_at))
                 else:
-                    self._feed(event)
+                    self._feed(event, observed_at)
             except Exception as error:
                 self.error = error
                 self.early.clear()
@@ -171,8 +182,8 @@ class ReceiptWatch:
             self.state = FinalAnswer(self.thread_id, turn_id)
             early, self.early = self.early, []
             self.early_chars = 0
-            for event in early:
-                self.feed(event)
+            for event, observed_at in early:
+                self.feed(event, observed_at=observed_at)
 
     def check(self):
         with self.lock:

@@ -35,11 +35,32 @@ class BrainRouter:
         self.cancel()
         self.dot.close()
 
+    def updates(self, target, provider, on_web, *, vision=False):
+        if on_web is None:
+            return None
+
+        def update(kind, payload):
+            # Receive-path receipts may arrive while this router's generator is
+            # suspended in TTS. Expose current bounded provider metrics before
+            # forwarding, rather than waiting for yield-from to finish.
+            self.last_metrics = {**target.last_metrics, 'provider': provider}
+            if vision:
+                self.last_metrics['vision'] = True
+            on_web(kind, payload)
+
+        return update
+
     def vision_clauses(self, text, image, history, is_current=lambda: True, on_web=None):
         self.last_metrics = {'provider': 'dot', 'vision': True}
         # Camera input always goes to Dot, regardless of the text-chat selector.
         try:
-            yield from self.dot.clauses(text, history, is_current, on_web, image=image)
+            yield from self.dot.clauses(
+                text,
+                history,
+                is_current,
+                self.updates(self.dot, 'dot', on_web, vision=True),
+                image=image,
+            )
             self.last_metrics = {**self.dot.last_metrics, 'provider': 'dot', 'vision': True}
         except DotApprovalRequired:
             if not is_current():
@@ -80,7 +101,9 @@ class BrainRouter:
             yield '你想让 Dot 帮你查询或分析什么？'
             return
         try:
-            yield from target.clauses(prompt, history, is_current, on_web)
+            yield from target.clauses(
+                prompt, history, is_current, self.updates(target, provider, on_web)
+            )
             self.last_metrics = {**target.last_metrics, 'provider': provider}
         except DotApprovalRequired:
             if not is_current():

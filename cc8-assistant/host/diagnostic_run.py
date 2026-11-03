@@ -4,7 +4,15 @@ from collections import Counter
 from copy import deepcopy
 import math
 import re
-from diagnostics import ORIGINS, SCENARIOS, OUTCOMES, STAGES, summarize_requests
+from diagnostics import (
+    ORIGINS,
+    SCENARIOS,
+    OUTCOMES,
+    STAGES,
+    DOT_CONTEXT_FIELDS,
+    summarize_requests,
+    summarize_dot_contexts,
+)
 from operation_failure import STAGES as ERROR_STAGES
 
 ERRORS = frozenset(
@@ -30,6 +38,8 @@ ROW_FIELDS = frozenset(
         'active_stage',
         'turn_id',
         'task_outcome',
+        'dot_rpc_reused',
+        'dot_context_reused',
     )
 )
 
@@ -103,6 +113,11 @@ def receipt(value):
         if not enum(value['task_outcome'], OUTCOMES - {'rejected'}):
             raise ValueError('Invalid diagnostic task outcome')
         result['task_outcome'] = value['task_outcome']
+    for stage, field in DOT_CONTEXT_FIELDS.items():
+        if stage in clean_stages or field in value:
+            if stage not in clean_stages or type(value.get(field)) is not bool:
+                raise ValueError('Invalid Dot context receipt')
+            result[field] = value[field]
     return result
 
 
@@ -155,7 +170,13 @@ class DiagnosticRun:
             if old:
                 if old['origin'] != row['origin']:
                     raise ValueError('Conflicting diagnostic origin')
-                for field in ('outcome', 'task_outcome', 'error'):
+                for field in (
+                    'outcome',
+                    'task_outcome',
+                    'error',
+                    'dot_rpc_reused',
+                    'dot_context_reused',
+                ):
                     if old.get(field) is not None and row.get(field) != old[field]:
                         raise ValueError('Conflicting diagnostic result')
                 for name, elapsed in old['stages'].items():
@@ -197,5 +218,6 @@ class DiagnosticRun:
                 kind: summarize_requests([row for row in rows if row['scenario'] == kind])
                 for kind in sorted(SCENARIOS)
             },
+            'dot_contexts': summarize_dot_contexts(rows),
             'requests': rows,
         }
