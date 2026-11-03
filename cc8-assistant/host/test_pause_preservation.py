@@ -1,4 +1,4 @@
-"""Short confirmed bursts must not suspend playback; recognition still receives them."""
+"""Preserve the deployed pause path after the twelve-frame experiment was rejected."""
 
 from dataclasses import replace
 import json
@@ -27,7 +27,7 @@ class Span:
         return began, None if self.talking else pcm.copy(), -30
 
 
-class PauseConfirmationTests(unittest.TestCase):
+class PausePreservationTests(unittest.TestCase):
     def setup(self, sequence):
         b, frame, _ = fixture.CaptureDiagnosticsTests().endpoint()
         b.playback.device_can_pause = True
@@ -47,56 +47,41 @@ class PauseConfirmationTests(unittest.TestCase):
     def feed(self, b, frame, index):
         b.capture.endpoint.consume(replace(frame, nanos=frame.nanos + index * 10_000_000))
 
-    def test_observed_short_burst_shapes_do_not_pause_or_drop_recognition(self):
+    def test_short_confirmed_segments_pause_and_still_reach_recognition(self):
         for count in (2, 5, 10):
             with self.subTest(credible_frames=count):
                 b, frame = self.setup([True] * count)
-                for i in range(count + 1):
+                self.feed(b, frame, 0)
+                self.assertIsNotNone(b.playback.pause_state)
+                for i in range(1, count + 1):
                     self.feed(b, frame, i)
-                self.assertIsNone(b.playback.pause_state)
                 job = b.recognition.queue.get_nowait()
                 row = next(
                     r for r in b.diagnostics.report()['requests'] if r['request_id'] == job[6]
                 )
                 self.assertEqual(row['capture']['credible_frames'], count)
-                self.assertEqual(row['capture']['pause_requested_frames'], 0)
+                self.assertGreater(row['capture']['pause_requested_frames'], 0)
                 self.assertTrue(b.recognition.queue.empty())
 
-    def test_confirmed_voice_pauses_at_twelfth_frame_and_counter_saturates(self):
-        b, frame = self.setup([True] * 20)
-        for i in range(11):
+    def test_first_confirmed_frame_pauses_once_without_extra_accumulation(self):
+        b, frame = self.setup([False, False, True, True])
+        for i in range(2):
             self.feed(b, frame, i)
             self.assertIsNone(b.playback.pause_state)
-        self.feed(b, frame, 11)
+        self.feed(b, frame, 2)
         self.assertIsNotNone(b.playback.pause_state)
-        for i in range(12, 21):
+        for i in range(3, 5):
             self.feed(b, frame, i)
-        self.assertEqual(b.capture.endpoint.pause_confirmed_frames, 12)
         self.assertEqual(b.metrics.get('barge_in_pauses'), 1)
         job = b.recognition.queue.get_nowait()
         row = next(r for r in b.diagnostics.report()['requests'] if r['request_id'] == job[6])
-        self.assertEqual(row['capture']['credible_frames'], 20)
+        self.assertEqual(row['capture']['credible_frames'], 2)
 
-    def test_lifecycle_resets_cannot_carry_confirmation_into_another_utterance(self):
-        for method in ('reset_transport', 'reset_session', 'reset_voice_activity'):
-            with self.subTest(reset=method):
-                b, frame = self.setup([True] * 8)
-                for i in range(8):
-                    self.feed(b, frame, i)
-                getattr(b.capture.endpoint, method)()
-                self.install(b, [True] * 12)
-                for i in range(11):
-                    self.feed(b, frame, 20 + i)
-                    self.assertIsNone(b.playback.pause_state)
-                self.feed(b, frame, 31)
-                self.assertIsNotNone(b.playback.pause_state)
-
-    def test_streaming_stop_still_cancels_before_confirmation(self):
+    def test_streaming_stop_still_cancels_without_utterance_confirmation(self):
         b, frame = self.setup([False])
         b.capture.endpoint.fast_stop = SimpleNamespace(feed=lambda pcm: '停一下')
         b.capture.endpoint.consume(replace(frame, nanos=2_000_000_000))
         self.assertFalse(b.playback.playing)
-        self.assertEqual(b.capture.endpoint.pause_confirmed_frames, 0)
         events = [json.loads(p.data) for p in b.session.connection.packets]
         self.assertTrue(any(e['event'] == 'transcript' and e['text'] == '停一下' for e in events))
         self.assertEqual(b.metrics.get('fast_stop_count'), 1)

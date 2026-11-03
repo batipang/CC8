@@ -13,7 +13,7 @@
 ./cc8 verify-device --runtime-root /absolute/live/workspace --execute --capture --standby --acoustic
 ```
 
-runtime-root 指**实际运行目录**。现场候选为 `/Volumes/AI/Codex/CC8-P0`，当前冻结源码 p0-candidate-20261103.2：后台0.14.8 / 保留原签名APK0.9.3 code38；实际部署与验收范围见 [CURRENT_DEPLOYMENT](CURRENT_DEPLOYMENT.md)。深层候选目录曾超出 macOS Unix socket 路径限制，已改为短路径并重新创建独立 venv。
+runtime-root 指**实际运行目录**。现场候选为 `/Volumes/AI/Codex/CC8-P0`，当前冻结运行源码0bf1172：后台0.14.13 / 保留原签名APK0.9.7 code42；实际部署与验收范围见 [CURRENT_DEPLOYMENT](CURRENT_DEPLOYMENT.md)。深层候选目录曾超出 macOS Unix socket 路径限制，已改为短路径并重新创建独立 venv。
 
 ## 门控与动作
 
@@ -89,3 +89,7 @@ V2 固定25条语料：12个已核对安装的命名音色正样本（Samantha�
 model-root仅提供缓存；两份模型清单须先与执行源码中的受审清单一致，再用既有归档/逐文件摘要校验。报告绑定模型清单、实际源码、固定语料、合成PCM及原生扩展/动态库SHA；包版本相同的本地补丁也能区分。临时合成文件在每条结束后删除，结果仅保留owner-private JSON，不读旧录音、不播放、不联网、不操作CC8、不调用Dot。生产安装与配置保持原样。
 
 漏检、错词、意外另一流命中、少样本、缺时点或合成失败均不能通过。正常失败退出2，已开始测量时取消保存cancelled并退出130；前置失败输出固定指引，异常正文不写报告。默认计划退出0不算验收。数字输入不覆盖声学回声、VAD、远场、电视噪声、真人口音、停止指令的端到端延迟或自播报抑制。
+
+## 暂停策略配对实验
+
+2026-11-03已自动完成0.14.13基线与0.14.14候选各十一组声学测量，逐样本核对公开刺激摘要、识别准入、正文匹配、暂停阶段、参考播完及最终停采。候选未保留三组基线成功正文，按生成新音色前冻结的条件拒绝并自动恢复旧后台，不以失败后调参或无缺测声明代替验证。计划、结果、恢复和范围见 [暂停确认实验](PLAYBACK_CONFIRMATION.md)。
