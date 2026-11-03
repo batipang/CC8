@@ -1,5 +1,19 @@
 # Changelog
 
+## Automatic validation — TLS UI, supervisor recovery and observation
+
+- Complete 48/48 isolated physical QA error-detail/recovery/stale-event cases
+  with 30 verified loopback TLS requests; preserve the earlier missing-bundle
+  failure. Remove only the QA APK and verify the original assistant idle/off.
+- Pass ten fixed supervisor faults/adoptions and four subsequent no-capture
+  device checks. Keep the same backend/APK/models; do not generalize repeated
+  idle faults to sleep/login, arbitrary tools or physical USB unplugging.
+- Start a separate version-bound 72-hour read-only observer after planned
+  faults and QA. Record launch identity and minimal-PATH preflight; still running,
+  with no inherited observation time or full P0 completion claim.
+- Retain the real rejected/resumed echo pause. Its five credible frames do not
+  prove moving the ASR floor to the pause path would fix it; no threshold change.
+
 ## Automatic failure UI — recheck production ownership before takeover
 
 - Revalidate the same idle production backend after fixture generation, signer
