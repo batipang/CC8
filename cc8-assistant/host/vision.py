@@ -119,7 +119,7 @@ def visual_request(text):
     ):
         return True
     return bool(
-        re.fullmatch(r'(?:看看|看一看|看看我|这是什么[？?]?|(?:能)?看到(?:了)?什么[？?]?)', value)
+        re.fullmatch(r'(?:看看|看一看|看看我|这是什么|(?:能)?看到(?:了)?什么)[。.!！?？]*', value)
     )
 
 

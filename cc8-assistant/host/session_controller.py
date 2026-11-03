@@ -371,6 +371,7 @@ class SessionController:
             'utterances',
             'fast_stop_count',
             'echo_transcripts_rejected',
+            'weak_near_rejections',
         ]:
             self.hooks.metric(k, 0)
         generation = self.generation

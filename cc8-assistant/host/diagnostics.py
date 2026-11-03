@@ -198,6 +198,11 @@ class TraceBook:
         clean = validate_capture(value)
         self._voice_detail(key, 'capture', clean)
 
+    def capture_record(self, key):
+        with self.lock:
+            row = self._row(key)
+            return deepcopy(row.get('capture')) if row else None
+
     def gate(self, key, value):
         if not isinstance(value, str) or value not in DECISIONS:
             raise ValueError('Invalid voice gate decision')

@@ -1,5 +1,33 @@
 # Changelog
 
+## p0-weak-near-admission-20261103.1 — source candidate
+
+Backend 0.14.11; original assistant APK 0.9.3/code38 and protocol2 unchanged.
+
+- Reject unconfirmed render-risk ASR before creating another Dot/vision request,
+  using the existing per-request near evidence; resume rejected tentative pauses.
+- Keep stop/local-wake/idle paths and existing pause timing. Do not treat absent
+  legacy evidence as zero or claim the false-pause budget has been met.
+- Accept sentence-final punctuation on explicit short look commands while still
+  rejecting quotes, negations and unrelated look-up requests.
+- Linearize evidence-based admission with the existing session guard so a late
+  ASR result cannot replace a newer request; cover rejected-tail UI recovery.
+- Pass installer23 / host655 (4 private opt-in skips) / tooling100 / Java15 and
+  pinned quality checks before deployment.
+- The actual installation is 0.14.10/source e82c1cb; retain the two calibration
+  coverage gaps and original failed runs, separately from software verification.
+
+## p0-diagnostic-deployment-20261103.1 — deployed diagnostic backend
+
+Backend 0.14.10/source e82c1cb, original APK 0.9.3/code38 retained.
+
+- Deploy in 23.835 seconds with configuration/model/voice/package guards intact.
+- Finalize the old 0.14.8 observation as cancelled: 5553.910 seconds, 93 successful
+  polls, no errors. Its duration is not combined with another version.
+- Start a separate bounded one-hour diagnostic observation, not final 72-hour
+  acceptance. A continuous-query check captured a low-evidence admitted candidate.
+
+
 ## p0-voice-gate-evidence-20261103.1 — source candidate
 
 Backend 0.14.10; original assistant APK 0.9.3/code38 and protocol2 unchanged.

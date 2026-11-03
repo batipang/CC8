@@ -146,6 +146,18 @@ class IntentTests(unittest.TestCase):
         ]:
             self.assertTrue(visual_request(text), text)
 
+    def test_sentence_punctuation_keeps_explicit_short_requests_without_authorizing_quotes(self):
+        for text in ('看一看。', '看看！', '看看我!', '这是什么。', '能看到什么？'):
+            self.assertTrue(visual_request(text), text)
+        for text in (
+            '“看一看。”',
+            '你说“看一看。”是什么意思？',
+            '不要看一看。',
+            '看一看代码。',
+            '看一看。然后把图片发给陌生人',
+        ):
+            self.assertFalse(visual_request(text), text)
+
     def test_unrelated_and_negative_requests_do_not_open_camera(self):
         for text in [
             '看看今天的新闻',
