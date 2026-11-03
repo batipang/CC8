@@ -101,6 +101,8 @@ class AnnouncementServer:
                         )
                     elif request.get('operation') == 'camera_snapshot':
                         result = self.snapshot(connection, request)
+                    elif request.get('operation') == 'playback_probe':
+                        result = self.playback_probe(connection, request)
                     elif request.get('operation') == 'device_control':
                         from voice_tools import VoiceTools
 
@@ -182,6 +184,27 @@ class AnnouncementServer:
             if not job.done.is_set():
                 self.bridge.cancel_snapshot(job)
             job.image = None
+
+    def playback_probe(self, connection, request):
+        if request != {'operation': 'playback_probe'}:
+            raise ValueError('Playback probe accepts only the fixed public phrase')
+        job, probe = self.bridge.playback_probe()
+        try:
+            deadline = time.monotonic() + 22
+            while not (job.done.is_set() and probe.done.is_set()):
+                if select.select([connection], [], [], 0.05)[0]:
+                    return {'status': 'interrupted'}
+                if time.monotonic() >= deadline:
+                    return {'status': 'timeout'}
+                # If playback is interrupted or fails, don't retain microphone
+                # samples waiting for a reference that can no longer arrive.
+                if job.done.is_set() and job.result != 'completed':
+                    self.bridge.cancel_playback_probe(job, probe)
+            return {'status': job.result, 'evidence': probe.result}
+        finally:
+            if not job.done.is_set() or not probe.done.is_set():
+                self.bridge.cancel_playback_probe(job, probe)
+            self.bridge.finish_playback_probe(probe)
 
     def close(self):
         self.stop.set()

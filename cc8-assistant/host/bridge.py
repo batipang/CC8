@@ -190,6 +190,47 @@ class Bridge:
     def announce(self, text):
         return self.announcements.announce(text)
 
+    def playback_probe(self):
+        from playback_evidence import PROBE_TEXT
+
+        # Owner IPC may inspect an existing, bounded foreground capture, but
+        # cannot open it. Prepare before dispatch so even immediate PCM is owned.
+        with self.guard:
+            if (
+                not self.session.active
+                or self.response.busy
+                or self.recognition.busy
+                or self.playback.playing
+            ):
+                raise RuntimeError('Playback probe requires idle active capture')
+            probe = None
+
+            def prepare(generation):
+                nonlocal probe
+                probe = self.capture.begin_probe(generation, self.session.epoch)
+
+            try:
+                job = self.announcements.announce(PROBE_TEXT, prepare=prepare)
+            except Exception:
+                if probe is not None:
+                    self.capture.end_probe(probe, 'dispatch_failed')
+                raise
+            return job, probe
+
+    def cancel_playback_probe(self, job, probe):
+        with self.guard:
+            self.capture.end_probe(probe)
+            if self.generation == job.generation:
+                self.cancel('playback_probe_cancelled')
+
+    def finish_playback_probe(self, probe):
+        with self.guard:
+            self.capture.end_probe(probe)
+
+    def cancel_playback_observation(self):
+        self.capture.end_probe()
+        self.capture.evidence.cancel()
+
     def read_announcement(self, job):
         return self.announcements.read_announcement(job)
 
@@ -288,6 +329,7 @@ class Bridge:
         ):
             self.playback.device_event(j)
         elif event == 'capture_gap':
+            self.capture.evidence.cancel('capture_read_gap')
             self.log('capture_read_gap', milliseconds=j.get('milliseconds'))
 
     def on_packet(self, p):

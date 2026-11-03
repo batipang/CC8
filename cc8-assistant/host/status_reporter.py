@@ -87,6 +87,7 @@ class StatusReporter:
             'resources': self.resources.sample(),
             'model_ready': True,
             'playout_receipt_supported': self.hooks.playback().device_can_report_playout,
+            'playback_evidence_supported': True,
             'local_wake_ready': self.hooks.wake().ready,
             'waiting_for_wake': state.active
             and not self.hooks.calibration().active

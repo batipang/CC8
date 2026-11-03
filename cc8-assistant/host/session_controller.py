@@ -68,6 +68,7 @@ class SessionHooks:
     awake_changed: Callable[[bool], None]
     wake_tick: Callable[[], None]
     prepare_brain: Callable[[int], None]
+    cancel_observation: Callable[[], None] = lambda: None
 
 
 class SessionController:
@@ -214,6 +215,7 @@ class SessionController:
             # transport handover, it must not leave capture stuck calibrating.
             if reason in ('audio_stream_error', 'completion_timeout', 'playback_error'):
                 self.hooks.calibration().stop()
+            self.hooks.cancel_observation()
             self.hooks.diagnostics().finish(self.generation, 'cancelled')
             workspace_changed = self.hooks.workspace().cancel_generation(self.generation)
             self.generation += 1
