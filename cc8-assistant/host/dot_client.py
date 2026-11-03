@@ -359,9 +359,10 @@ class DotBrain:
         self.context_changed = False
         self.handoff_injected = False
         self.clock = time.monotonic
+        self.preparing = False
 
     def set_handoff(self, handoff):
-        if self.current is not None:
+        if self.current is not None or self.preparing:
             raise DotError('Cannot switch chat context during a turn')
         self.handoff = handoff
         self.context_changed = True
@@ -390,7 +391,36 @@ class DotBrain:
         self.cancel()
         self.rpc.close()
 
-    def _thread(self, mark=None):
+    def prepare(self, is_current=lambda: True):
+        """Create only an initial connection/context, never a model turn.
+
+        Called by the serial response owner during explicit voice calibration.
+        Existing or selected chat contexts remain the ordinary turn's concern.
+        A stopped generation cannot publish readiness or enable any capture.
+        """
+        if not is_current() or self.current is not None or self.preparing:
+            return False
+        if self.thread_id is not None or self.context_changed:
+            return bool(self.thread_id and not self.context_changed and not self.rpc.failed)
+        self.preparing = True
+        previous_metrics = self.last_metrics
+        self.last_metrics = {}
+        try:
+            self._thread(context_timeout=10)
+            return is_current()
+        except Exception:
+            # A timed-out thread/start has an unknown late response. Discard
+            # only this owned initial client, without retrying or starting work.
+            self.thread_id = None
+            self.rpc.close()
+            if self.rpc_factory:
+                self.rpc = self.rpc_factory()
+            raise
+        finally:
+            self.last_metrics = previous_metrics
+            self.preparing = False
+
+    def _thread(self, mark=None, *, context_timeout=150):
         # 沿用当前 Mac 的 Codex 配置创建临时语音上下文，不继承桌面聊天历史。
         if mark:
             mark('dot_rpc_start')
@@ -436,7 +466,7 @@ class DotBrain:
                     'serviceName': 'cc8_bumblebee_voice',
                     'dynamicTools': TOOLS,
                 },
-                timeout=150,
+                timeout=context_timeout,
             )
             self.thread_id = (result.get('thread') or {}).get('id')
             if not self.thread_id:

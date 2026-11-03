@@ -67,6 +67,7 @@ class SessionHooks:
     wake_touch: Callable[[], None]
     awake_changed: Callable[[bool], None]
     wake_tick: Callable[[], None]
+    prepare_brain: Callable[[int], None]
 
 
 class SessionController:
@@ -373,6 +374,7 @@ class SessionController:
         ]:
             self.hooks.metric(k, 0)
         generation = self.generation
+        self.hooks.prepare_brain(generation)
         threading.Thread(target=self.hooks.calibrate(), args=(generation,), daemon=True).start()
         self.hooks.log('foreground_capture_started')
 

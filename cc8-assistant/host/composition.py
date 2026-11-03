@@ -459,5 +459,6 @@ def build_session(host: Bridge) -> SessionController:
             wake_touch=lambda: host.wake.touch(),
             awake_changed=lambda value: host.wake.awake_changed(value),
             wake_tick=lambda: host.wake.tick(),
+            prepare_brain=lambda generation: host.response.prepare(generation),
         )
     )

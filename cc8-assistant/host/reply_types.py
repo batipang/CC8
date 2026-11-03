@@ -28,3 +28,10 @@ class VisualReply(Reply):
 @dataclass
 class TextReply(Reply):
     pass
+
+
+@dataclass(frozen=True)
+class BrainPreparation:
+    """Connection-only work in the existing serial response queue."""
+
+    generation: int

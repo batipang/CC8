@@ -15,7 +15,7 @@ from announce import Announcement
 from diagnostics import TraceBook, error_kind
 from failure_feedback import FailureSink, feedback
 from operation_failure import OperationFailure, KINDS
-from reply_types import Reply, TextReply, VisualReply
+from reply_types import Reply, TextReply, VisualReply, BrainPreparation
 from session_ports import EventSink, MetricSink
 from workspace import Workspace
 
@@ -30,7 +30,7 @@ class ResponseHooks:
     speech: Callable[[], object]
     active: Callable[[], bool]
     metric: MetricSink
-    dispatch: Callable[[Reply | Announcement], None]
+    dispatch: Callable[[Reply | Announcement | BrainPreparation], None]
     answer: Callable[[str, int], None]
     answer_visual: Callable[[VisualReply], None]
     read_announcement: Callable[[Announcement], None]
@@ -63,6 +63,15 @@ class ResponseWorker:
         # Literal announcements must fail when busy, never evict another job.
         self.queue.put_nowait(job)
 
+    def prepare(self, generation):
+        if not callable(getattr(self.hooks.brain(), 'prepare', None)):
+            return
+        try:
+            self.offer(BrainPreparation(generation))
+        except queue.Full:
+            # Preparation is optional and cannot evict a real request.
+            return
+
     def enqueue(self, job):
         while True:
             try:
@@ -83,6 +92,9 @@ class ResponseWorker:
             try:
                 self.hooks.dispatch(job)
             except Exception as error:
+                if isinstance(job, BrainPreparation):
+                    # Even failed diagnostic logging is not a failed user task.
+                    continue
                 # Keep owner admission and failure publication atomic. Text
                 # validity must remain live until its error has been sent.
                 with self.hooks.lock:
@@ -100,6 +112,21 @@ class ResponseWorker:
                         self.hooks.log('text_finish_error', error_type=type(error).__name__)
 
     def respond_job(self, job):
+        if isinstance(job, BrainPreparation):
+            if not self.hooks.active() or not self.hooks.valid(job.generation):
+                return
+            self.busy = True
+            try:
+                prepare = getattr(self.hooks.brain(), 'prepare', None)
+                if callable(prepare) and prepare(lambda: self.hooks.valid(job.generation)):
+                    self.hooks.log('brain_prepared')
+            except Exception as error:
+                # No user task exists yet. A later explicit request takes the
+                # normal failure/recovery path; never invent a failed task now.
+                self.hooks.log('brain_prepare_failed', error_type=type(error).__name__)
+            finally:
+                self.busy = False
+            return
         if isinstance(job, Announcement):
             self.hooks.read_announcement(job)
             return

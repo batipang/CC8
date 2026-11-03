@@ -35,6 +35,11 @@ class BrainRouter:
         self.cancel()
         self.dot.close()
 
+    def prepare(self, is_current=lambda: True):
+        if self.selected != 'dot':
+            return False
+        return self.dot.prepare(is_current)
+
     def updates(self, target, provider, on_web, *, vision=False):
         if on_web is None:
             return None
