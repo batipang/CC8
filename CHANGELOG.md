@@ -1,5 +1,20 @@
 # Changelog
 
+## p0-dot-preconnect-20261103.1 — source candidate
+
+Backend 0.14.8; assistant APK 0.9.3 / code38; protocol2.
+
+- Prepare the initial owned Dot connection and empty ephemeral context during
+  explicit voice calibration, using the existing serial response queue.
+- Do not submit a model turn or create a task, evict real queued requests, reset
+  selected/existing contexts, or enable capture on reconnect.
+- Keep preparation optional with a ten-second context creation budget. Failure
+  disposes of the initial owned client without retrying; the next explicit
+  request uses its normal handling. Failed preparation logging cannot become a
+  fictitious answer failure or kill the response worker.
+
+Not deployed; the version-bound 0.14.5 observation remains unchanged.
+
 ## p0-dot-timings-20261103.1 — source candidate
 
 Backend 0.14.7; assistant APK 0.9.3 / code38; protocol2.
