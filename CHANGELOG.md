@@ -1,5 +1,16 @@
 # Changelog
 
+## Local wake research — phase-matched warmup pair
+
+- Complete 2400 fixed trials across original/patched native extensions, four
+  chunk-aligned warmups, six offsets and production/evaluation packet sizes.
+  Keep all PCM hashes and reproduce each native's 150 historical control cells.
+- No fixed warmup passes every positive. Preserve misses and reject deployment;
+  the bundled patch improves some conditions but is not a single-factor proof.
+- Retain separate reports, plans, parameter/code identities, seven harness
+  safeguards per script and independent audits. Keep runtime and its ongoing
+  observer unchanged; no capture, cloud calls or audible synthesis.
+
 ## Local wake research — raw cached Whisper comparison
 
 - Verify an existing fixed-revision MLX checkpoint and 30 separately pinned
