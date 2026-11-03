@@ -110,14 +110,17 @@ class RecognitionWorker:
             render_audio = job[5] if len(job) > 5 else None
             if not self.hooks.valid(generation):
                 if len(job) > 6:
+                    self.hooks.diagnostics().gate(job[6], 'stale')
                     self.hooks.diagnostics().finish(job[6], 'cancelled')
                 continue
             trace_id = job[6] if len(job) > 6 else self.hooks.diagnostics().begin('voice')
             accepted = False
             self.busy = True
             rejected = False
+            decision = 'stale'
             try:
                 if not self.hooks.wake_allowed():
+                    decision = 'wake_closed'
                     rejected = True
                     self.hooks.status('listening', WAITING)
                     continue
@@ -133,6 +136,7 @@ class RecognitionWorker:
                     continue
                 clean = re.sub('\\W', '', text)
                 if not clean or clean in ['谢谢观看', '感谢观看', '字幕由Amaraorg社区提供']:
+                    decision = 'empty'
                     rejected = True
                     self.hooks.status('listening', '我在听')
                     continue
@@ -161,6 +165,7 @@ class RecognitionWorker:
                     and (len(clean) > 2 or during_playback)
                     and resembles_playback(text, available)
                 )
+                echo_decision = 'echo_text'
                 render_text = ''
                 if (
                     risky
@@ -177,12 +182,14 @@ class RecognitionWorker:
                         continue
                     echo = bool(render_text) and resembles_playback(text, [render_text])
                     if echo:
+                        echo_decision = 'echo_render'
                         self.hooks.metric('render_asr_rejections', increment=True)
                 if risky and ('明镜与点点' in clean or '明镜与点栏目' in clean):
                     echo = True
                 if self.hooks.echo_running() and render_text:
                     self.hooks.record_echo_pair(text, render_text, echo)
                 if echo:
+                    decision = echo_decision
                     rejected = True
                     self.hooks.set_metric_field('last_voice_gate', 'rejected', True)
                     self.hooks.metric('echo_transcripts_rejected', increment=True)
@@ -208,6 +215,7 @@ class RecognitionWorker:
                     '别说了',
                     '听我说',
                 }:
+                    decision = 'calibration'
                     if self.hooks.echo_running():
                         self.hooks.add_metric_field('echo_self_check', 'unmatched_candidates', 1)
                     self.hooks.log(
@@ -223,6 +231,7 @@ class RecognitionWorker:
                     if found:
                         text = stripped[found.end() :].lstrip('，。 ,！!')
                     if not text:
+                        decision = 'wake_only'
                         rejected = True
                         self.hooks.cancel_session('wake_only')
                         self.hooks.status('listening', '我在听，请说出你的问题')
@@ -232,6 +241,7 @@ class RecognitionWorker:
                     and '休息' in text
                     and (self.hooks.wake_pattern.search(text) or len(text) < 8)
                 ):
+                    decision = 'wake_sleep'
                     self.hooks.set_awake(False)
                     self.hooks.cancel_session('wake_sleep')
                     self.hooks.status('listening', '请说“大黄蜂”或“Bumblebee”开始聊天')
@@ -240,6 +250,7 @@ class RecognitionWorker:
                     generation = self.hooks.cancel_session('verified_voice')
                 self.hooks.diagnostics().bind(trace_id, generation)
                 accepted = True
+                decision = 'accepted'
                 self.hooks.touch()
                 self.hooks.event('transcript', text=text)
                 self.hooks.log(
@@ -267,6 +278,7 @@ class RecognitionWorker:
                 else:
                     self.hooks.enqueue_response(Reply(generation, text))
             except Exception as e:
+                decision = 'error'
                 self.hooks.diagnostics().failure(trace_id, 'asr', e)
                 with self.hooks.lock:
                     if self.hooks.valid(generation):
@@ -283,6 +295,7 @@ class RecognitionWorker:
                             pass
                         self.hooks.failure('这次识别没有完成，请再说一次', e, trace_key=trace_id)
             finally:
+                self.hooks.diagnostics().gate(trace_id, decision)
                 self.busy = False
                 if not accepted:
                     self.hooks.diagnostics().finish(

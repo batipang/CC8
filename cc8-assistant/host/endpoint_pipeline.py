@@ -6,6 +6,7 @@ import time
 from typing import Callable, Protocol
 import numpy as np
 from diagnostics import TraceBook
+from capture_evidence import CaptureEvidence
 from dsp import VoiceDetector, ReferenceCapture, NearSpeechDetector, level
 from fast_stop import can_fast_stop
 from protocol import JsonValue
@@ -63,6 +64,7 @@ class EndpointPipeline:
         self.turn_capture_started = 0
         self.last_capture_render_ns = None
         self.turn_pause_token = None
+        self.capture_evidence = None
         self.last_fast_stop_ns = 0
         self.ignore_vad_until_ns = 0
 
@@ -71,6 +73,7 @@ class EndpointPipeline:
         self.reference_capture.reset()
         self.near_speech.reset()
         self.turn_pause_token = None
+        self.capture_evidence = None
 
     def reset_session(self):
         self.vad = VoiceDetector()
@@ -81,6 +84,7 @@ class EndpointPipeline:
         self.reference_capture.reset()
         self.near_speech.reset()
         self.turn_pause_token = None
+        self.capture_evidence = None
         self.last_fast_stop_ns = 0
         self.ignore_vad_until_ns = 0
         if self.fast_stop:
@@ -89,6 +93,7 @@ class EndpointPipeline:
     def reset_voice_activity(self):
         self.vad.reset()
         self.reference_capture.reset()
+        self.capture_evidence = None
 
     def consume(self, frame):
         stamp = frame.nanos
@@ -134,6 +139,7 @@ class EndpointPipeline:
             self.hooks.claim_wake() if began or self.vad.talking or utterance is not None else False
         )
         if began:
+            self.capture_evidence = CaptureEvidence()
             self.turn_local_wake = claimed_wake
             self.voice_trace = self.hooks.diagnostics().begin('voice')
             self.hooks.diagnostics().mark(self.voice_trace, 'voice_detected')
@@ -164,9 +170,29 @@ class EndpointPipeline:
             self.turn_pause_token = self.hooks.pause_voice()
         if self.vad.talking or utterance is not None:
             self.turn_echo_risk |= echo_risk
+        if (
+            began or self.vad.talking or utterance is not None
+        ) and self.capture_evidence is not None:
+            self.capture_evidence.feed(
+                frame,
+                self.near_speech,
+                voiced=voiced,
+                credible=credible,
+                pause_requested=self.hooks.paused(),
+            )
         if utterance is not None:
             self.hooks.diagnostics().mark(self.voice_trace, 'utterance_end')
             self.hooks.add_metric('utterances', 1)
+            if self.capture_evidence is not None:
+                self.hooks.diagnostics().capture(
+                    self.voice_trace,
+                    self.capture_evidence.snapshot(
+                        echo_risk=self.turn_echo_risk,
+                        during_playback=self.turn_during_playback,
+                        local_wake=self.turn_local_wake,
+                    ),
+                )
+                self.capture_evidence = None
             references = list(dict.fromkeys([*self.turn_reference, *self.hooks.recent_spoken()]))[
                 -64:
             ]
@@ -186,6 +212,7 @@ class EndpointPipeline:
                 self.voice_trace,
             )
             if not self.hooks.wake_allowed():
+                self.hooks.diagnostics().gate(self.voice_trace, 'wake_closed')
                 self.hooks.diagnostics().finish(self.voice_trace, 'rejected')
                 self.hooks.metric('local_wake_utterances_withheld', increment=True)
                 return
@@ -197,6 +224,7 @@ class EndpointPipeline:
         self.ignore_vad_until_ns = stamp + 160_000_000
         self.hooks.cancel_session('streaming_stop_keyword')
         self.vad.reset()
+        self.capture_evidence = None
         self.live_turn = self.hooks.generation()
         self.reference_capture.reset()
         self.hooks.discard_recognition()

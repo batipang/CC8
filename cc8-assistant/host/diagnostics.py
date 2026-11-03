@@ -7,6 +7,7 @@ import re
 import threading
 import time
 import uuid
+from capture_evidence import validate as validate_capture, DECISIONS
 from operation_failure import OperationFailure, ClassifiedFailure, STAGES as ERROR_STAGES
 
 DOT_STAGES = frozenset(
@@ -192,6 +193,28 @@ class TraceBook:
                     self.generations.pop(old, None)
                 row['generation'] = generation
                 self.generations[generation] = ident
+
+    def capture(self, key, value):
+        clean = validate_capture(value)
+        self._voice_detail(key, 'capture', clean)
+
+    def gate(self, key, value):
+        if not isinstance(value, str) or value not in DECISIONS:
+            raise ValueError('Invalid voice gate decision')
+        self._voice_detail(key, 'gate', value)
+
+    def _voice_detail(self, key, name, value):
+        # These observations may finish after cancellation/terminal receipt.
+        # They cannot change its outcome, generation or an earlier observation.
+        with self.lock:
+            row = self._row(key)
+            if row is None:
+                return
+            if row['origin'] != 'voice':
+                raise ValueError('Voice evidence requires a voice request')
+            if name in row and row[name] != value:
+                raise ValueError('Conflicting voice evidence')
+            row[name] = value
 
     def task_result(self, key, outcome):
         if outcome not in OUTCOMES - {'rejected'}:

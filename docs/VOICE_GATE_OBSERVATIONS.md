@@ -1,0 +1,38 @@
+# 每句收音与门控的无内容观察
+
+0.14.10源码候选在原`diagnostics`／`cc8 measure`里补充可选`capture`和`gate`，用来定位连续测试发现的额外回合。当前设备仍是0.14.8；本项只是测量补齐，未改变VAD、AEC、唤醒、识别服务、阈值、打断规则或工具权限，也没有宣称已修复额外回合。
+
+## 自动测试发现
+
+0.14.8已完成三轮真实15分钟黑屏、合成声学唤醒及新问答播完确认。后续30问句原型先因将拒绝候选当成新请求而中止，原报告保留；修正测试判定后另开一次，首问完成，但播放第二个刺激之前出现了未由脚本交办的已准入语音回合，因此再次停止，最后确认设备前台、双端麦克风与相机关闭。没有继续重试，也没有将两次失败改写成30问通过。
+
+额外回合当时标记echo_risk=true，文字/本地参考ASR比较没有将其拒绝；现有记录没有足够声学证据判断来源。下一轮需要按同一request ID对照捕获与门控观察，不能直接把它当成真人输入或声称已证明是自播报回声。私有证据：`voice-sequence-5c22cc9a.json`、`voice-sequence-8de02db4.json`及`automated-qa-findings-1793684222.json`；不提交识别/回答正文或录音。
+
+## capture：已收尾句子的数值摘要
+
+| 字段 | 含义 |
+| --- | --- |
+| frames | VAD开始报告句首到句尾的10ms帧数，不含开始报告前的preroll |
+| voiced_frames / credible_frames | 现有近端检测器的voiced / credible帧数，非人工语音真值 |
+| render_frames | 当前帧数字参考音量大于−60dBFS的帧数，不证明扬声器实际发声 |
+| pause_requested_frames / voiced_after_pause_request_frames | 逻辑暂停请求仍有效时的帧数/其中voiced帧数，不冒充暂停ACK或声学停播之后的时长 |
+| raw_correlated_frames / residual_correlated_frames | 当前参考有效且原检测器滚动相关性分别大于0.78/0.60的帧数，沿用已有检测器数值，不增加决策阈值 |
+| max_raw_correlation / max_residual_correlation | 句内已观察到的原始/残差滚动相关性最大值，保留四位小数 |
+| raw_peak_dbfs / cleaned_peak_dbfs / render_peak_dbfs | 原始/处理后/参考的最高10ms帧数字电平，非校准SPL；三个峰值可能来自不同帧，不能相减当ERLE或SNR |
+| echo_risk / during_playback / local_wake | 已有句子级风险、句首逻辑播放状态、本地唤醒命中标志，非说话人身份 |
+
+只累计标量，不复制/保留音频帧。句尾一次性提交；重置会话、通道、VAD活动或本地停止时丢弃未完成的计数。固定字段、有限数值、帧数上限2000及子计数关系均校验；旧后台缺测即缺字段，不补零。
+
+## gate：识别入口作出的分类
+
+`accepted`表示本句已通过原语音门控，**不表示真人判断、工具授权或任务成功**。其他固定枚举为`empty`、`echo_text`、`echo_render`、`wake_closed`、`wake_only`、`wake_sleep`、`calibration`、`stale`、`error`。没有识别正文、参考正文、向量、文件名或提供方响应。
+
+终态之后可补齐当时的观察，不能改变任务/播报结果；同一观察一经提交不能改写。采集器严格重建字段，拒绝未知内容、错误来源、非有限数值、被删除/修改的既有观察；整次快照原子接收。schema仍为1，新字段可选，新采集器兼容旧后台；旧严格采集器会拒绝新字段，因此部署前须先更新采集入口。
+
+## 验证范围
+
+离线测试执行实际EndpointPipeline、RecognitionWorker、TraceBook和DiagnosticRun，覆盖句子绑定/PCM不变、跨重置计数隔离、各种门控分类、终态补齐与不可变、非法内容原子拒绝，以及弱引用确认聚合器不保留帧数组。无设备、模型或新录音。UI故障fixture保持text界面owner，给虚拟ASR单独建立voice诊断条目并验证error分类，未放松生产来源校验。
+
+验证还包括系统Python3.9.6从轻量采集模块导入时不载入numpy，以及根目录、最小PATH使用当前源码从实际0.14.8 IPC采集旧格式报告。该兼容检查不启动采集、模型或任务，也不是新字段的实机执行证据。
+
+本机全套installer23／host646（4项私有录音opt-in跳过）／tooling100／Java15与格式/lint/七模块strict检查通过。额外的独立Unix socket fixture从`/`、`PATH=/usr/bin:/bin`运行系统Python采集CLI，新`capture`/`gate`字段完整往返；这只验证受控数字摘要的IPC/CLI链路，未访问设备或模型。现场旧后台兼容采集完成0.203秒、零查询失败、零新请求，不当作语音或新字段的实机通过。
