@@ -123,6 +123,22 @@ class ResponseWorker:
         clauses = None
 
         def web_update(kind, payload):
+            if kind == 'dot_result':
+                with self.hooks.lock:
+                    if not self.hooks.valid(generation):
+                        return
+                    self.hooks.diagnostics().task_result(generation, 'completed')
+                    self.hooks.diagnostics().link_turn(
+                        generation, self.hooks.brain().last_metrics.get('turn_id')
+                    )
+                    result_text[0] = payload.get('text', '')
+                    # The Dot turn receipt closes the task, independently of the
+                    # remaining audio or device delivery. A disconnected display
+                    # cannot turn successfully executed work into a failed task.
+                    self.hooks.workspace().task_finish(task_id, 'completed', result_text[0])
+                    self.hooks.event('dot_result', generation=generation, **payload)
+                    self.hooks.publish_workspace()
+                return
             if not self.hooks.valid(generation):
                 return
             if kind == 'progress':
@@ -132,18 +148,6 @@ class ResponseWorker:
                 )
                 self.hooks.publish_workspace()
                 self.hooks.event('status', generation=generation, phase='thinking', message=message)
-            elif kind == 'dot_result':
-                self.hooks.diagnostics().task_result(generation, 'completed')
-                self.hooks.diagnostics().link_turn(
-                    generation, self.hooks.brain().last_metrics.get('turn_id')
-                )
-                result_text[0] = payload.get('text', '')
-                # The Dot turn receipt closes the task, independently of the
-                # remaining audio or device delivery. A disconnected display
-                # cannot turn successfully executed work into a failed task.
-                self.hooks.workspace().task_finish(task_id, 'completed', result_text[0])
-                self.hooks.event('dot_result', generation=generation, **payload)
-                self.hooks.publish_workspace()
             elif kind == 'task_stage':
                 self.hooks.diagnostics().scenario(
                     generation, 'web' if payload.get('kind') == 'webSearch' else 'tool'
@@ -186,6 +190,7 @@ class ResponseWorker:
                     self.hooks.log('web_search_ready', sources=len(payload['items']))
 
         completed = True
+        failure = None
         spoken = []
         try:
             self.hooks.publish_workspace()
@@ -217,34 +222,40 @@ class ResponseWorker:
         except Exception as error:
             stage = error.stage if isinstance(error, OperationFailure) else 'brain'
             self.hooks.diagnostics().failure(generation, stage, error)
-            # Persist only the fixed guidance in this RAM-only task receipt.
-            # A completed Dot receipt remains completed in Workspace.
-            self.hooks.workspace().task_finish(
-                task_id, 'failed', feedback(stage, error_kind(error)).message
-            )
+            failure = (stage, error)
             raise
         finally:
             close = getattr(clauses, 'close', None)
             if close:
                 close()
-            failed = bool(
-                self.hooks.brain()
-                and (
-                    self.hooks.brain().last_metrics.get('completed') is False
-                    or self.hooks.brain().last_metrics.get('approval_required')
+            # Closing unsubscribes/waits for a receipt already being admitted.
+            # Only then may a speech failure make an unfinished task terminal.
+            with self.hooks.lock:
+                if failure:
+                    stage, error = failure
+                    self.hooks.workspace().task_finish(
+                        task_id, 'failed', feedback(stage, error_kind(error)).message
+                    )
+                failed = bool(
+                    self.hooks.brain()
+                    and (
+                        self.hooks.brain().last_metrics.get('completed') is False
+                        or self.hooks.brain().last_metrics.get('approval_required')
+                    )
                 )
-            )
-            status = (
-                'cancelled'
-                if not self.hooks.valid(generation)
-                else 'failed'
-                if sys.exc_info()[0] or not completed or failed
-                else 'completed'
-            )
-            self.hooks.workspace().task_finish(task_id, status, result_text[0] or ''.join(spoken))
-            self.hooks.diagnostics().task_result(generation, status)
-            self.hooks.diagnostics().finish(generation, status)
-            self.hooks.publish_workspace()
+                status = (
+                    'cancelled'
+                    if not self.hooks.valid(generation)
+                    else 'failed'
+                    if sys.exc_info()[0] or not completed or failed
+                    else 'completed'
+                )
+                self.hooks.workspace().task_finish(
+                    task_id, status, result_text[0] or ''.join(spoken)
+                )
+                self.hooks.diagnostics().task_result(generation, status)
+                self.hooks.diagnostics().finish(generation, status)
+                self.hooks.publish_workspace()
         if completed and self.hooks.valid(generation):
             answer = ''.join(spoken)
             self.history.extend(

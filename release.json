@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-ui-fault-checks-20261103.1",
+  "release_id": "p0-dot-receipts-20261103.1",
   "backend": {
-    "version": "0.14.5"
+    "version": "0.14.6"
   },
   "assistant": {
     "version": "0.9.3",
