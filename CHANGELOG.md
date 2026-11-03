@@ -1,5 +1,20 @@
 # Changelog
 
+## p0-bounded-test-capture-20261103.1 — source candidate
+
+APK0.9.13/code48; backend0.14.16, protocol2 and deployed code46 unchanged.
+
+- Bound explicitly requested automatic capture on the device, independently of
+  a Mac runner's finally block. Drop reads that cross the device-clock deadline;
+  a per-record watchdog can stop a blocked native read and releases with its worker.
+- Keep normal opening/manual voice unlimited. Reject malformed test limits;
+  never retime an existing recording, extend on reconnect, or stop a replacement.
+- Require the advertised device capability before test capture. Ordinary smoke
+  capture requests 180 seconds, real standby 1200 seconds; no remote microphone IPC.
+- Compile actual recording/finally/opening paths: eight targeted cases pass;
+  preserve the interrupted physical reference test and separate cleanup proof.
+- Reserve code47 for the previously prepared original-signature recovery package.
+
 ## Automatic acoustic checks — evidence and post-playback observation
 
 - Preserve fixed content-free stage counts when an acoustic check fails; do

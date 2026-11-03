@@ -115,12 +115,26 @@ class Device:
         require(self.access.target() == self.transport, 'usb_target_changed')
         return self.access.shell(self.transport, command, timeout=15)
 
-    def open(self, capture=False):
+    def open(self, capture=False, *, capture_limit_ms=180000):
+        if capture:
+            require(
+                type(capture_limit_ms) is int and 1000 <= capture_limit_ms <= 1500000,
+                'invalid_test_capture_limit',
+            )
+            # An older APK ignores unknown extras. Refuse before opening it,
+            # rather than silently allowing a supposedly bounded recording.
+            device, _ = self.status()
+            require(
+                device.get('test_capture_limit_supported') is True,
+                'device_test_capture_limit_unsupported',
+            )
+            require(device.get('microphone_active') is False, 'device_microphone_already_active')
         self.shell(
             'input keyevent 224; am start -W --activity-clear-top -n '
             + COMPONENT
             + ' --ez auto_start_voice '
             + ('true' if capture else 'false')
+            + (' --el test_capture_limit_ms ' + str(capture_limit_ms) if capture else '')
         )
 
     def home(self):
@@ -254,6 +268,10 @@ class SmokeRun:
         if self.expected_apk is not None:
             require(self.device.version() == self.expected_apk, 'device_source_version_mismatch')
         device, ui = self.device.status()
+        require(
+            not self.capture or device.get('test_capture_limit_supported') is True,
+            'device_test_capture_limit_unsupported',
+        )
         require(device.get('foreground') is True, 'assistant_not_foreground')
         require(device.get('microphone_active') is False, 'device_microphone_already_active')
         require(
@@ -335,7 +353,7 @@ class SmokeRun:
         )
 
     def start_capture(self):
-        self.device.open(True)
+        self.device.open(True, capture_limit_ms=1200000 if self.standby else 180000)
         self.wait(lambda: self.health().get('microphone_active') is True, 15, 'capture_not_started')
         self.wait(lambda: self.health().get('calibrating') is False, 25, 'calibration_not_finished')
         h = self.health()

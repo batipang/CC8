@@ -20,6 +20,7 @@ runtime-root 指**实际运行目录**。现场为 `/Volumes/AI/Codex/CC8-P0`，
 - 唯一正常 Android USB AILABS_S6 / SDK 27 / shell UID 2000，原装电源连接。每次 Android 操作重核原 USB transport，不跟随被更换的目标。
 - 已有 owner-private IPC，实际后台版本与指定源码声明一致；USB、已认证 Wi-Fi 都就绪。助手须在前台，麦克风、播放、校准、相机均空闲；拒绝接管正在使用的设备。
 - execute 会通过现有 MiniMax TTS 播放固定公开文字。capture 明确启用**相关语音测试**，仅通过既有可见 MainActivity 和 auto_start_voice=true 开始；维护打开仍为 false，不增加远程开麦 IPC。
+- 0.9.13/code48候选加入设备端测试时限：普通采集检查180秒、包含真实待机时1200秒，均从本次启动计时；设备允许显式测试值1000～1500000ms。旧APK不会识别此约束，因此新版检查器在任何UI/播报动作前拒绝不支持它的采集测试；直接capture打开也核对能力和原采集关闭。候选尚未部署时不能沿用旧APK执行新版capture检查。
 - standby 要求已选唤醒模式，真实等待约 900 秒，临时防止 Mac 空闲睡眠；过早黑屏、连接/采集丢失、超时均不算通过，没有修改待机阈值。
 - acoustic 在 preflight 先核对 Mac 已安装且唯一的 Tingting 音色；缺失/歧义时在打开 UI 或采集前拒绝。仅在黑屏且采集仍开启时，用解析后的完整音色名说一次“大黄蜂，一加一等于几？”。不调整音量；静音、距离、方向或噪声可能导致未确认。不要求用户代读，不自动重试。
 - 新版 acoustic 检查区分任务完成与声音播完：同一新 voice 回合须有唤醒、ASR、大脑与播放完成阶段。播完再观察20秒，出现额外 voice 请求、原回合取消、断连或采集关闭即失败；不再次播放问句。额外请求的来源可能是回声或现场人声，计数本身不证明原因。
@@ -43,7 +44,13 @@ runtime-root 指**实际运行目录**。现场为 `/Volumes/AI/Codex/CC8-P0`，
 
 新版 `acoustic_evidence` 仅包含本次新voice请求数、完成/取消/任务完成数、固定六个阶段的计数与已观察的播后时长。超时或取消也保留部分阶段证据；请求ID、文字与提供方错误原文均不写入该字段。未启用或未进入该检查时为null。
 
-同一实际运行目录共享排他测试锁。后台实例改变即中止；已触及 UI 的路径在失败、超时或 Ctrl+C 后均尝试 Home 停采，再维护打开恢复前台，核对两端麦克风及相机关闭。无法确认则 cleanup_unconfirmed，不能给出通过结论。启动前拒绝不改变原状态；SIGKILL 或断电等无法运行 finally 的情况不保证进程外清理。
+同一实际运行目录共享排他测试锁。后台实例改变即中止；已触及 UI 的路径在失败、超时或 Ctrl+C 后均尝试 Home 停采，再维护打开恢复前台，核对两端麦克风及相机关闭。无法确认则 cleanup_unconfirmed，不能给出通过结论。启动前拒绝不改变原状态。
+
+仅靠Mac的finally不能处理测试进程被强制结束。本次参考句观察在前两组无暂停、无新任务且收尾完成后被中断，第三组报告停在running；现场核查仍在收音。独立恢复核对原实例、测试锁、无在途工作和镜头关闭后停采，保留原报告及`interrupted-run-cleanup.json`，不追认为第三组通过。0.9.13/code48候选因此把时限落实到AudioRecord线程：截止前后均检查、过期帧不发送；设备看门狗也仅停止本次AudioRecord，可解除阻塞读取，旧epoch不能停止新硬件。前台按钮正常开启语音仍无测试时限/看门狗；测试限额不持久化，重连不续期，人工停止后再手动开启不会继承旧限额。设备挂起/硬件驱动本身失效仍不能凭软件测试保证即时资源释放，实机执行证据另记。
+
+软件回归编译真实录音worker、finally、停止方法与实际intent回调，覆盖无Mac/UI回调的到期、阻塞read、跨截止帧丢弃、资源等待到期、正常长会话及旧新录音隔离。八项通过。两组旧源码对照分别暴露“持续收音”和“忽略无效test limit”：worker对照仅增加签名适配以调用未改动的旧实现，没有插入计时逻辑；编译均成功，两个断言失败、无fixture错误。它们不替代真实设备上的限额与宿主中断测试。
+
+本批本机完整installer23／host740（4项既有private opt-in skip）／tooling100／Java15、固定quality与八模块strict、最小PATH定向40项以及Android编译/lint均通过。没有凭此更新现场APK或关闭P0；实际部署与设备端限额另行留证。
 
 报告固定 physical_usb_unplug_tested=false、human_accuracy_asserted=false、acoustic_latency_asserted=false、full_p0_acceptance=false。离线 fixture 验证门控、计时、旧回执排除、失败清理和脱敏；实机结果另记 VALIDATION。一轮自动通过不关闭整个 P0。
 

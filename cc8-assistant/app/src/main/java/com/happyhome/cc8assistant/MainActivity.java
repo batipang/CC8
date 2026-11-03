@@ -27,6 +27,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   private boolean permissionGrantedAwaitingResume;
   private int autoVoiceOpens, autoVoiceStarts;
   private boolean lastOpenWantedVoice;
+  private long pendingTestCaptureLimitMs;
   private final Runnable autoVoiceTick = () -> maybeAutoVoice();
   private SingleFrameCamera eyes;
   private Button visionButton, wakeButton, freeButton;
@@ -510,6 +511,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   }
 
   private void toggleVoice() {
+    pendingTestCaptureLimitMs = 0;
     if (!active && playbackActive) {
       session.interrupt();
       return;
@@ -1163,6 +1165,18 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     pending = false;
     permissionGrantedAwaitingResume = false;
     lastOpenWantedVoice = intent == null || intent.getBooleanExtra("auto_start_voice", true);
+    pendingTestCaptureLimitMs =
+        CaptureWindow.requested(
+            intent != null && intent.hasExtra("test_capture_limit_ms"),
+            intent != null && intent.hasExtra("test_capture_limit_ms")
+                ? intent.getExtras().get("test_capture_limit_ms")
+                : null);
+    if (pendingTestCaptureLimitMs < 0) {
+      // A malformed test limit must not silently become unlimited capture.
+      lastOpenWantedVoice = false;
+      pendingTestCaptureLimitMs = 0;
+    }
+    if (session != null && session.isRecording()) pendingTestCaptureLimitMs = 0;
     autoVoiceOpens++;
     if (lastOpenWantedVoice) autoVoice.opened(SystemClock.elapsedRealtime());
     else autoVoice.cancel();
@@ -1214,7 +1228,9 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
       return;
     }
     session.settings(wake.isChecked());
-    session.startMicrophone();
+    long testLimit = pendingTestCaptureLimitMs;
+    pendingTestCaptureLimitMs = 0;
+    session.startMicrophone(testLimit);
   }
 
   @Override
@@ -1517,6 +1533,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   protected void onStop() {
+    pendingTestCaptureLimitMs = 0;
     pending = false;
     permissionGrantedAwaitingResume = false;
     autoVoice.stopped();
