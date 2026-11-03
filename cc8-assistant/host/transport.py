@@ -19,6 +19,7 @@ import uuid
 from typing import Callable, Literal, Protocol, TypeAlias
 from protocol import Packet, receive, EVENT, decode_event, decode_json_object, JsonValue, JsonObject
 from release_info import RELEASE
+from tls_stream import TLSStream
 
 ROOT = Path(__file__).resolve().parents[2]
 PAIR_DIR = ROOT / '.toolchains/cc8/transport'
@@ -334,6 +335,8 @@ class TransportHub:
             worker.start()
 
     def register(self, stream: DuplexStream, kind: TransportKind) -> Channel:
+        if isinstance(stream, ssl.SSLSocket):
+            stream = TLSStream(stream)
         channel = Channel(stream, kind, self.events)
         with self.guard:
             if self.stop.is_set():

@@ -30,12 +30,12 @@ class TransportTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.temp.cleanup()
 
-    def hub(self):
+    def hub(self, usb_present=lambda: False):
         def absent():
             raise RuntimeError('USB absent')
 
         hub = TransportHub(
-            self.pairing, absent, lambda: False, bind='127.0.0.1', tls_port=0, discovery_port=0
+            self.pairing, absent, usb_present, bind='127.0.0.1', tls_port=0, discovery_port=0
         )
         hub.start()
         self.addCleanup(hub.close)
@@ -87,13 +87,24 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(channel.kind, 'wifi')
 
     def test_usb_wins_and_same_authenticated_wifi_remains_available_on_unplug(self):
-        hub = self.hub()
+        present = threading.Event()
+        present.set()
+        hub = self.hub(present.is_set)
+
+        def event(peer):
+            for _ in range(8):
+                value = json.loads(receive(peer).data)
+                if value.get('event') != 'transport_ping':
+                    return value
+                peer.sendall(Packet.event('transport_pong').encode())
+            self.fail('Expected control event was not delivered')
+
         client = self.connect(hub)
         receive(client)
         client.sendall(Packet.event('transport_hello', protocol=2).encode())
         wifi = self.up(hub)
         hub.selected(wifi)
-        self.assertEqual(json.loads(receive(client).data)['event'], 'transport_activate')
+        self.assertEqual(event(client)['event'], 'transport_activate')
         a, b = socket.socketpair()
         self.addCleanup(b.close)
         usb = hub.register(a, 'usb')
@@ -101,18 +112,19 @@ class TransportTests(unittest.TestCase):
         self.assertIs(self.up(hub), usb)
         self.assertIs(hub.preferred(), usb)
         hub.selected(usb)
-        self.assertEqual(json.loads(receive(client).data)['event'], 'transport_standby')
-        self.assertEqual(json.loads(receive(b).data)['event'], 'transport_activate')
-        config = json.loads(receive(b).data)
+        self.assertEqual(event(client)['event'], 'transport_standby')
+        self.assertEqual(event(b)['event'], 'transport_activate')
+        config = event(b)
         self.assertEqual(config['event'], 'lan_config')
         self.assertEqual(config['config']['certificate_sha256'], self.pairing.pin)
+        present.clear()
         b.close()
         deadline = time.monotonic() + 2
         while not usb.closed and time.monotonic() < deadline:
             time.sleep(0.01)
         self.assertIs(hub.preferred(), wifi)
         hub.selected(wifi)
-        self.assertEqual(json.loads(receive(client).data)['event'], 'transport_activate')
+        self.assertEqual(event(client)['event'], 'transport_activate')
         self.assertEqual(hub.diagnostics()['transport'], 'wifi')
         self.assertEqual(hub.switches, 3)
 
