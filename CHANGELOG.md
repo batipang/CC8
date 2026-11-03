@@ -1,5 +1,16 @@
 # Changelog
 
+## Local wake research — raw cached Whisper comparison
+
+- Verify an existing fixed-revision MLX checkpoint and 30 separately pinned
+  research wheels; retain original runtime, models, configuration and observation.
+- Complete 225 offline decodes on the same 25 public fixtures and PCM hashes.
+  All configurations falsely trigger on Bumble by; a fixed name hint also
+  triggers Bubble bee. Reject this candidate without changing labels or aliases.
+- Preserve model/plan/source/report identities, seven harness checks and an
+  independent result audit. Whole-utterance decoding is not streaming wake or
+  human acoustic acceptance; P0-03 remains open.
+
 ## Automatic validation — TLS UI, supervisor recovery and observation
 
 - Complete 48/48 isolated physical QA error-detail/recovery/stale-event cases
