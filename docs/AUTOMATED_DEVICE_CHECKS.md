@@ -13,7 +13,7 @@
 ./cc8 verify-device --runtime-root /absolute/live/workspace --execute --capture --standby --acoustic
 ```
 
-runtime-root 指**实际运行目录**。现场候选为 `/Volumes/AI/Codex/CC8-P0`，冻结源码 p0-validation-base-20261102.1：后台 0.13.7 / APK 0.8.8 code 33；main 的 P1 软件保持独立。深层候选目录曾超出 macOS Unix socket 路径限制，已改为短路径并重新创建独立 venv。
+runtime-root 指**实际运行目录**。现场候选为 `/Volumes/AI/Codex/CC8-P0`，当前冻结源码 p0-candidate-20261103.1：后台0.14.5 / 原签名APK0.9.3 code38；实际部署与验收范围见 [CURRENT_DEPLOYMENT](CURRENT_DEPLOYMENT.md)。深层候选目录曾超出 macOS Unix socket 路径限制，已改为短路径并重新创建独立 venv。
 
 ## 门控与动作
 
@@ -69,7 +69,9 @@ V2 固定25条语料：12个已核对安装的命名音色正样本（Samantha�
 
 旧22条输入全部按PCM摘要保留：原3条Alex重标为明确省略 `-v` 的系统默认音色，其他19条摘要一致；额外加入3条可确认的Karen。原Alex不能算独立命名说话人，既有PCM漏检/误检记录仍有效。V2报告含语料版本、请求/解析后的音色、默认选择标志、脚本及音色模块摘要；默认音色变化仍须通过PCM摘要识别，不能声称复现了固定说话人。
 
-三轮真实待机已在0.13.7 / APK0.8.8候选完成，见 [VALIDATION](VALIDATION.md)。其中后两轮使用本次音色校验之前的 main `cf4f9e5` 自动脚本，摘要核对通过；不把它们改写成后续新增门控版本的执行记录。
+新版0.14.5 / APK0.9.3也已完成三轮九项实机检查，报告与执行脚本/音色模块摘要一致；每轮均恢复前台、双端停采。旧版三轮真实待机已在0.13.7 / APK0.8.8候选完成，见 [VALIDATION](VALIDATION.md)。其中后两轮使用本次音色校验之前的 main `cf4f9e5` 自动脚本，摘要核对通过；不把它们改写成后续新增门控版本的执行记录。
+
+最新隔离Python绑定补丁版正式重跑V2：与原版全部25条 `fixture_pcm_sha256` 一致，六组production正样本仍为2/15、7/15、9/15、11/15、13/15、13/15；各组10个负样本零触发，每个条件的预测逐条相同。连续上下文仍漏Samantha和Daniel的200档样本。上游65/65修复不能视作该名字的准确率修复，因此未部署补丁。单独的公开输入电平检查显示这两种音色的三档RMS相近；未证明削波或音量是漏检原因，不据此调阈值。
 
 ## 中文唤醒与停止指令的数字回归
 
