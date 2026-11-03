@@ -212,6 +212,10 @@ class MeasurementTests(unittest.TestCase):
                             operations.append(json.loads(data)['operation'])
                             if len(operations) == 2:
                                 ident = book.begin('text', 101)
+                                at = book.clock()
+                                book.dot_stage(ident, 'dot_rpc_start', at)
+                                book.dot_stage(ident, 'dot_rpc_ready', at, False)
+                                book.dot_stage(ident, 'dot_context_ready', at, False)
                                 book.finish(ident, 'completed')
                             peer.sendall(
                                 (json.dumps({'ok': True, **book.report()}) + '\n').encode()
@@ -257,6 +261,9 @@ class MeasurementTests(unittest.TestCase):
             self.assertEqual(errors, [])
             self.assertFalse(worker.is_alive())
             self.assertEqual(json.loads(output.read_text())['summary']['samples'], 1)
+            self.assertEqual(
+                json.loads(output.read_text())['dot_contexts']['thread']['new']['samples'], 1
+            )
             self.assertEqual(output.stat().st_mode & 0o777, 0o600)
 
 

@@ -9,25 +9,43 @@ import time
 import uuid
 from operation_failure import OperationFailure, ClassifiedFailure, STAGES as ERROR_STAGES
 
-STAGES = frozenset(
+DOT_STAGES = frozenset(
     (
-        'voice_detected',
-        'wake_detected',
-        'utterance_end',
-        'asr_start',
-        'asr_end',
-        'brain_start',
-        'first_clause',
-        'tts_start',
-        'first_pcm',
-        'render_ack',
-        'playout_ack',
-        'playback_done',
-        'task_result',
-        'pause_request',
-        'pause_ack',
-        'resume_ack',
+        'dot_rpc_start',
+        'dot_rpc_ready',
+        'dot_context_ready',
+        'dot_turn_start',
+        'dot_turn_ack',
+        'dot_first_delta',
+        'dot_receipt',
     )
+)
+DOT_CONTEXT_FIELDS = {
+    'dot_rpc_ready': 'dot_rpc_reused',
+    'dot_context_ready': 'dot_context_reused',
+}
+STAGES = (
+    frozenset(
+        (
+            'voice_detected',
+            'wake_detected',
+            'utterance_end',
+            'asr_start',
+            'asr_end',
+            'brain_start',
+            'first_clause',
+            'tts_start',
+            'first_pcm',
+            'render_ack',
+            'playout_ack',
+            'playback_done',
+            'task_result',
+            'pause_request',
+            'pause_ack',
+            'resume_ack',
+        )
+    )
+    | DOT_STAGES
 )
 ORIGINS = frozenset(('voice', 'text', 'vision', 'announcement'))
 SCENARIOS = frozenset(('qa', 'web', 'tool', 'vision', 'announcement'))
@@ -37,6 +55,13 @@ INTERVALS = {
     'asr_ms': ('asr_start', 'asr_end'),
     'utterance_to_asr_ms': ('utterance_end', 'asr_end'),
     'brain_first_clause_ms': ('brain_start', 'first_clause'),
+    'dot_rpc_prepare_ms': ('dot_rpc_start', 'dot_rpc_ready'),
+    'dot_context_ms': ('dot_rpc_ready', 'dot_context_ready'),
+    'dot_preparation_ms': ('brain_start', 'dot_turn_start'),
+    'dot_turn_ack_ms': ('dot_turn_start', 'dot_turn_ack'),
+    'dot_first_delta_ms': ('dot_turn_start', 'dot_first_delta'),
+    'dot_delta_to_clause_ms': ('dot_first_delta', 'first_clause'),
+    'dot_turn_complete_ms': ('dot_turn_start', 'dot_receipt'),
     'tts_first_pcm_ms': ('tts_start', 'first_pcm'),
     'utterance_to_render_ack_ms': ('utterance_end', 'render_ack'),
     'utterance_to_playout_ack_ms': ('utterance_end', 'playout_ack'),
@@ -104,6 +129,17 @@ def summarize_requests(samples):
             )
             for name, (a, b) in INTERVALS.items()
         },
+    }
+
+
+def summarize_dot_contexts(samples):
+    # Missing flags include older backends and non-Dot requests; never infer cold.
+    return {
+        name: {
+            label: summarize_requests([r for r in samples if r.get(field) is value])
+            for label, value in (('new', False), ('reused', True), ('unreported', None))
+        }
+        for name, field in (('rpc', 'dot_rpc_reused'), ('thread', 'dot_context_reused'))
     }
 
 
@@ -195,6 +231,34 @@ class TraceBook:
                     row['active_stage'] = phase
                 row['stages'].setdefault(stage, round((self.clock() - row['started']) * 1000, 1))
 
+    def dot_stage(self, key, stage, observed_at, reused=None):
+        """Admit only local Mac timestamps, including buffered pre-ACK events.
+
+        The source is the owned RPC reader, not a provider/device timestamp.
+        Commit flag and timestamp together; cancellation admission is the caller's
+        session guard. A late callback must not rewrite a previously seen mode.
+        """
+        if not isinstance(stage, str) or stage not in DOT_STAGES:
+            raise ValueError('Unknown Dot diagnostic stage')
+        field = DOT_CONTEXT_FIELDS.get(stage)
+        if (field and type(reused) is not bool) or (not field and reused is not None):
+            raise ValueError('Invalid Dot context mode')
+        with self.lock:
+            row = self._row(key)
+            if row is None:
+                return
+            if (
+                type(observed_at) not in (int, float)
+                or not row['started'] <= observed_at <= self.clock()
+                or not math.isfinite(observed_at)
+            ):
+                raise ValueError('Invalid Dot local observation time')
+            if field and field in row and row[field] is not reused:
+                raise ValueError('Conflicting Dot context mode')
+            row['stages'].setdefault(stage, round((observed_at - row['started']) * 1000, 1))
+            if field:
+                row[field] = reused
+
     def finish(self, key, outcome):
         if outcome not in OUTCOMES:
             raise ValueError('Unknown diagnostic outcome')
@@ -254,5 +318,6 @@ class TraceBook:
                 s: summarize_requests([r for r in rows if r['scenario'] == s])
                 for s in sorted(SCENARIOS)
             },
+            'dot_contexts': summarize_dot_contexts(rows),
             'requests': rows,
         }

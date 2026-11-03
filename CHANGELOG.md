@@ -1,5 +1,20 @@
 # Changelog
 
+## p0-dot-timings-20261103.1 — source candidate
+
+Backend 0.14.7; assistant APK 0.9.3 / code38; protocol2.
+
+- Split Dot preparation, context reuse, turn acknowledgement, final-text arrival
+  and authoritative completion on the Mac monotonic clock.
+- Preserve receive times for pre-ACK notifications and separate them from task
+  admission and audio consumption; do not emit synthetic model warm-up turns.
+- Keep strict, content-free cumulative receipts and new/reused/unreported groups;
+  older backends retain missing stages rather than invented zero latencies.
+- Forward current provider metrics before router callbacks, preserving turn links
+  when first-clause narration fails after a completed text or vision request.
+
+Not deployed; the version-bound 0.14.5 observation remains unchanged.
+
 ## p0-dot-receipts-20261103.1 — source candidate
 
 Backend 0.14.6; assistant APK 0.9.3 / code38; protocol2.

@@ -358,6 +358,7 @@ class DotBrain:
         self.handoff = None
         self.context_changed = False
         self.handoff_injected = False
+        self.clock = time.monotonic
 
     def set_handoff(self, handoff):
         if self.current is not None:
@@ -389,8 +390,10 @@ class DotBrain:
         self.cancel()
         self.rpc.close()
 
-    def _thread(self):
+    def _thread(self, mark=None):
         # 沿用当前 Mac 的 Codex 配置创建临时语音上下文，不继承桌面聊天历史。
+        if mark:
+            mark('dot_rpc_start')
         if self.context_changed:
             if self.rpc_factory:
                 self.rpc.close()
@@ -402,7 +405,12 @@ class DotBrain:
             self.rpc = self.rpc_factory()
             self.thread_id = None
             self.last_metrics['context_reset'] = True
+        rpc_reused = getattr(self.rpc, 'initialized', False) is True and not self.rpc.failed
         self.rpc.start()
+        self.last_metrics['rpc_reused'] = rpc_reused
+        if mark:
+            mark('dot_rpc_ready', reused=rpc_reused)
+        context_reused = bool(self.thread_id)
         if not self.thread_id:
             cwd = self.handoff.cwd if self.handoff and self.handoff.cwd else str(ROOT)
             if not Path(cwd).is_dir():
@@ -434,6 +442,9 @@ class DotBrain:
             if not self.thread_id:
                 raise DotError('Codex did not create a voice session')
             self.handoff_injected = False
+        self.last_metrics['context_reused'] = context_reused
+        if mark:
+            mark('dot_context_ready', reused=context_reused)
 
     def call_tool(self, turn, params, is_current=lambda: True):
         # Requests can arrive before turn/start is acknowledged. Never accept
@@ -467,12 +478,13 @@ class DotBrain:
         turn = Turn()
         handoff = self.handoff
         self.current = turn
-        start = time.monotonic()
+        start = self.clock()
         completed = False
         watch = None
         speech = SpeechClauses()
         said = 0
         limited = False
+        delta_seen = False
 
         def speakable(pieces):
             nonlocal said, limited
@@ -504,9 +516,22 @@ class DotBrain:
                         raise DotApprovalRequired('Codex task needs desktop approval') from None
                     raise
 
-        def publish_answer(answer):
+        def mark_stage(stage, *, at=None, reused=None):
+            observed_at = self.clock() if at is None else at
+            self.last_metrics.setdefault('timing_ms', {}).setdefault(
+                stage, round((observed_at - start) * 1000, 1)
+            )
+            if on_web:
+                payload = {'stage': stage, 'at': observed_at}
+                if reused is not None:
+                    payload['reused'] = reused
+                on_web('brain_stage', payload)
+
+        def publish_answer(answer, observed_at=None):
             turn.receipt_completed.set()
-            self.last_metrics.setdefault('receipt_ms', round((time.monotonic() - start) * 1000))
+            observed_at = self.clock() if observed_at is None else observed_at
+            self.last_metrics.setdefault('receipt_ms', round((observed_at - start) * 1000))
+            mark_stage('dot_receipt', at=observed_at)
             if on_web:
                 on_web(
                     'dot_result',
@@ -521,7 +546,7 @@ class DotBrain:
             if on_web:
                 on_web('clear', {})
                 on_web('progress', {'message': '正在连接 Dot / Codex…'})
-            self._thread()
+            self._thread(mark_stage)
             turn.thread_id = self.thread_id
             if self.last_metrics.get('context_reset') and on_web:
                 on_web('progress', {'message': 'Dot 已重新连接 · 开始新的语音上下文'})
@@ -551,7 +576,10 @@ class DotBrain:
                     turn.thread_id,
                     lambda: self.current is turn and not turn.stopped.is_set() and is_current(),
                     publish_answer,
+                    first_delta=lambda at: mark_stage('dot_first_delta', at=at),
+                    clock=self.clock,
                 )
+            mark_stage('dot_turn_start')
             result = self.rpc.request(
                 'turn/start',
                 {
@@ -561,12 +589,14 @@ class DotBrain:
                 },
                 timeout=20,
             )
+            ack_at = self.clock()
             turn.ident = (result.get('turn') or {}).get('id')
             self.handoff_injected = True
             self.last_metrics['turn_id'] = turn.ident
             turn.ident_ready.set()
             if not turn.ident:
                 raise DotError('Codex did not start a turn')
+            mark_stage('dot_turn_ack', at=ack_at)
             if turn.stopped.is_set() or not is_current():
                 self._interrupt(turn)
                 raise Cancelled('Turn cancelled')
@@ -596,11 +626,14 @@ class DotBrain:
                 if method == 'item/agentMessage/delta':
                     if value is None:
                         continue
+                    if value and value.strip() and not watch and not delta_seen:
+                        delta_seen = True
+                        mark_stage('dot_first_delta')
                     for piece in speakable(speech.feed(value)):
                         if not is_current() or turn.stopped.is_set():
                             raise Cancelled('Turn cancelled')
                         self.last_metrics.setdefault(
-                            'first_clause_ms', round((time.monotonic() - start) * 1000)
+                            'first_clause_ms', round((self.clock() - start) * 1000)
                         )
                         yield piece
                 elif method in ('item/started', 'item/completed'):
@@ -702,7 +735,7 @@ class DotBrain:
             self.last_metrics.update(
                 completed=True,
                 characters=len(answer),
-                elapsed_ms=round((time.monotonic() - start) * 1000),
+                elapsed_ms=round((self.clock() - start) * 1000),
             )
         finally:
             if watch:
