@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-minimax-business-failures-20261103.1",
+  "release_id": "p0-serialized-lan-tls-20261103.1",
   "backend": {
-    "version": "0.14.15"
+    "version": "0.14.16"
   },
   "assistant": {
     "version": "0.9.7",

@@ -1,5 +1,19 @@
 # Changelog
 
+## p0-serialized-lan-tls-20261103.1 — backend source candidate
+
+Backend0.14.16; original APK0.9.7/code42 and protocol2 unchanged.
+
+- Serialize native SSL operations on authenticated LAN channels using
+  nonblocking calls and readiness waits outside the lock, retaining deadlines,
+  partial-write correctness and cancellation. USB and provider HTTPS stay unchanged.
+- Reproduce overlapping real TLS entry points with a guard before unsafe native
+  access; add encrypted duplex, backpressure and cleanup regressions.
+- Make the USB handover fixture report presence and answer valid heartbeats.
+  Preserve PR74's original macOS EOF failure; its exact SSL cause is unconfirmed.
+- Keep the deployed assistant and its observer unchanged. See
+  [LAN TLS concurrency](docs/LAN_TLS_CONCURRENCY.md) for evidence and limits.
+
 ## p0-minimax-business-failures-20261103.1 — backend source candidate
 
 Backend0.14.15; original APK0.9.7/code42 and protocol2 unchanged.
