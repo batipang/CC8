@@ -23,6 +23,7 @@ DECISIONS = frozenset(
         'empty',
         'echo_text',
         'echo_render',
+        'weak_near',
         'wake_closed',
         'wake_only',
         'wake_sleep',

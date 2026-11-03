@@ -36,3 +36,5 @@
 验证还包括系统Python3.9.6从轻量采集模块导入时不载入numpy，以及根目录、最小PATH使用当前源码从实际0.14.8 IPC采集旧格式报告。该兼容检查不启动采集、模型或任务，也不是新字段的实机执行证据。
 
 本机全套installer23／host646（4项私有录音opt-in跳过）／tooling100／Java15与格式/lint/七模块strict检查通过。额外的独立Unix socket fixture从`/`、`PATH=/usr/bin:/bin`运行系统Python采集CLI，新`capture`/`gate`字段完整往返；这只验证受控数字摘要的IPC/CLI链路，未访问设备或模型。现场旧后台兼容采集完成0.203秒、零查询失败、零新请求，不当作语音或新字段的实机通过。
+
+后续0.14.10已实际部署并采集，额外候选的2帧credible形态与20组对照见 [低证据门控](WEAK_NEAR_ADMISSION.md)；上文“候选未部署”保留原软件批次口径。0.14.11另增加`weak_near`枚举，采集入口须同步更新。

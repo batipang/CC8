@@ -66,6 +66,20 @@ class RecognitionHooks:
     resume_rejected: Callable[[int | None, int], None]
 
 
+STOP_COMMANDS = frozenset(
+    ('停', '停下', '停一下', '停止', '暂停', '打住', '等等', '别说了', '听我说')
+)
+MIN_ECHO_RISK_CREDIBLE_FRAMES = 5
+
+
+def stop_request(text, wake_pattern):
+    if re.sub(r'\W', '', text) in STOP_COMMANDS:
+        return True
+    candidate = text.lstrip('，。 ,！!')
+    prefix = wake_pattern.match(candidate)
+    return bool(prefix and re.sub(r'\W', '', candidate[prefix.end() :]) in STOP_COMMANDS)
+
+
 class RecognitionWorker:
     def __init__(self, hooks: RecognitionHooks):
         self.hooks = hooks
@@ -140,6 +154,7 @@ class RecognitionWorker:
                     rejected = True
                     self.hooks.status('listening', '我在听')
                     continue
+                protected_stop = stop_request(text, self.hooks.wake_pattern)
                 risky = (
                     evidence['echo_risk']
                     if evidence is not None
@@ -204,17 +219,9 @@ class RecognitionWorker:
                     if not self.hooks.playing():
                         self.hooks.status('listening', '我在听')
                     continue
-                if (self.hooks.echo_running() or self.hooks.echo_failed()) and clean not in {
-                    '停',
-                    '停下',
-                    '停一下',
-                    '停止',
-                    '暂停',
-                    '打住',
-                    '等等',
-                    '别说了',
-                    '听我说',
-                }:
+                if (
+                    self.hooks.echo_running() or self.hooks.echo_failed()
+                ) and clean not in STOP_COMMANDS:
                     decision = 'calibration'
                     if self.hooks.echo_running():
                         self.hooks.add_metric_field('echo_self_check', 'unmatched_candidates', 1)
@@ -225,58 +232,73 @@ class RecognitionWorker:
                         references=len(available),
                     )
                     continue
-                if evidence and evidence.get('local_wake') is True:
-                    stripped = text.lstrip('，。 ,！!')
-                    found = self.hooks.wake_pattern.match(stripped)
-                    if found:
-                        text = stripped[found.end() :].lstrip('，。 ,！!')
-                    if not text:
-                        decision = 'wake_only'
-                        rejected = True
-                        self.hooks.cancel_session('wake_only')
-                        self.hooks.status('listening', '我在听，请说出你的问题')
+                captured = self.hooks.diagnostics().capture_record(trace_id)
+                # Recheck after reading evidence, then linearize admission,
+                # wake/stop actions and routing with the existing session guard.
+                # The capture-record lock was released before entering here.
+                with self.hooks.lock:
+                    if not self.hooks.valid(generation) or not self.hooks.wake_allowed():
                         continue
-                if (
-                    self.hooks.wake()
-                    and '休息' in text
-                    and (self.hooks.wake_pattern.search(text) or len(text) < 8)
-                ):
-                    decision = 'wake_sleep'
-                    self.hooks.set_awake(False)
-                    self.hooks.cancel_session('wake_sleep')
-                    self.hooks.status('listening', '请说“大黄蜂”或“Bumblebee”开始聊天')
-                    continue
-                if risky:
-                    generation = self.hooks.cancel_session('verified_voice')
-                self.hooks.diagnostics().bind(trace_id, generation)
-                accepted = True
-                decision = 'accepted'
-                self.hooks.touch()
-                self.hooks.event('transcript', text=text)
-                self.hooks.log(
-                    'user_turn_recognized',
-                    characters=len(text),
-                    echo_risk=risky,
-                    references=len(available),
-                )
-                if re.sub('\\W', '', text) in {
-                    '停',
-                    '停下',
-                    '停一下',
-                    '停止',
-                    '暂停',
-                    '打住',
-                    '等等',
-                    '别说了',
-                    '听我说',
-                }:
-                    self.hooks.diagnostics().finish(trace_id, 'completed')
-                    self.hooks.status('listening', '已停止播报，我在听')
-                    continue
-                if visual_request(text):
-                    self.hooks.begin_visual(text, 'voice')
-                else:
-                    self.hooks.enqueue_response(Reply(generation, text))
+                    if (
+                        risky
+                        and captured is not None
+                        and captured['echo_risk']
+                        and not captured['local_wake']
+                        and not protected_stop
+                        and captured['credible_frames'] < MIN_ECHO_RISK_CREDIBLE_FRAMES
+                    ):
+                        # ASR can turn a brief residual/noise burst into unrelated
+                        # fluent text. Require 50 ms of the existing near detector's
+                        # confirmed output before committing a new risky request.
+                        # This does not change VAD energy, tentative pause or ASR.
+                        decision = 'weak_near'
+                        rejected = True
+                        self.hooks.metric('weak_near_rejections', increment=True)
+                        if not self.hooks.playing():
+                            self.hooks.status('listening', '我在听')
+                        continue
+                    if evidence and evidence.get('local_wake') is True:
+                        stripped = text.lstrip('，。 ,！!')
+                        found = self.hooks.wake_pattern.match(stripped)
+                        if found:
+                            text = stripped[found.end() :].lstrip('，。 ,！!')
+                        if not text:
+                            decision = 'wake_only'
+                            rejected = True
+                            self.hooks.cancel_session('wake_only')
+                            self.hooks.status('listening', '我在听，请说出你的问题')
+                            continue
+                    if (
+                        self.hooks.wake()
+                        and '休息' in text
+                        and (self.hooks.wake_pattern.search(text) or len(text) < 8)
+                    ):
+                        decision = 'wake_sleep'
+                        self.hooks.set_awake(False)
+                        self.hooks.cancel_session('wake_sleep')
+                        self.hooks.status('listening', '请说“大黄蜂”或“Bumblebee”开始聊天')
+                        continue
+                    if risky:
+                        generation = self.hooks.cancel_session('verified_voice')
+                    self.hooks.diagnostics().bind(trace_id, generation)
+                    accepted = True
+                    decision = 'accepted'
+                    self.hooks.touch()
+                    self.hooks.event('transcript', text=text)
+                    self.hooks.log(
+                        'user_turn_recognized',
+                        characters=len(text),
+                        echo_risk=risky,
+                        references=len(available),
+                    )
+                    if re.sub(r'\W', '', text) in STOP_COMMANDS:
+                        self.hooks.diagnostics().finish(trace_id, 'completed')
+                        self.hooks.status('listening', '已停止播报，我在听')
+                        continue
+                    if visual_request(text):
+                        self.hooks.begin_visual(text, 'voice')
+                    else:
+                        self.hooks.enqueue_response(Reply(generation, text))
             except Exception as e:
                 decision = 'error'
                 self.hooks.diagnostics().failure(trace_id, 'asr', e)
