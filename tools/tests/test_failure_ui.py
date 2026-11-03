@@ -446,6 +446,10 @@ class DriverExecutionTests(unittest.TestCase):
             self.assertTrue(report['cleanup_verified'])
             self.assertTrue(report['checks'][0]['stale_error_ignored'])
             self.assertFalse(report['real_provider_requested'])
+            self.assertEqual(
+                report['owner_rechecks'],
+                ['owner_before_signer', 'owner_before_install', 'owner_before_ui'],
+            )
 
     def test_install_commit_then_exception_still_removes_owned_qa_without_opening_ui(self):
         with self.driver() as (device, link, restore, output):
@@ -467,6 +471,68 @@ class DriverExecutionTests(unittest.TestCase):
                 check.run(Path('/runtime'), Path('/private/qa-build.json'), 1, output)
             device.access.install.assert_not_called()
             self.assertFalse(any('uninstall' in c.args[0] for c in device.shell.call_args_list))
+
+    def test_owner_starting_capture_during_fixture_generation_prevents_install_or_ui(self):
+        with self.driver() as (device, link, restore, output):
+            with patch('service_smoke.LiveService') as service:
+                service.return_value.sample.side_effect = [
+                    {'pid': 7, 'instance': 'fixed'},
+                    RuntimeError('owner_capture_active'),
+                ]
+                with self.assertRaisesRegex(RuntimeError, 'owner_capture_active'):
+                    check.run(Path('/runtime'), Path('/private/qa-build.json'), 1, output)
+            device.access.install.assert_not_called()
+            device.original.home.assert_not_called()
+            restore.assert_not_called()
+
+    def test_owner_camera_activity_during_signer_check_prevents_install_or_ui(self):
+        with self.driver() as (device, link, restore, output):
+            with patch('service_smoke.LiveService') as service:
+                baseline = {'pid': 7, 'instance': 'fixed'}
+                service.return_value.sample.side_effect = [
+                    baseline,
+                    baseline,
+                    RuntimeError('owner_camera_active'),
+                ]
+                with self.assertRaisesRegex(RuntimeError, 'owner_camera_active'):
+                    check.run(Path('/runtime'), Path('/private/qa-build.json'), 1, output)
+            device.access.signature_preflight.assert_called_once()
+            device.access.install.assert_not_called()
+            device.original.home.assert_not_called()
+            restore.assert_not_called()
+
+    def test_owner_using_device_after_install_only_removes_new_qa_without_taking_ui(self):
+        with self.driver() as (device, link, restore, output):
+            with patch('service_smoke.LiveService') as service:
+                baseline = {'pid': 7, 'instance': 'fixed'}
+                service.return_value.sample.side_effect = [
+                    baseline,
+                    baseline,
+                    baseline,
+                    RuntimeError('owner_left_foreground'),
+                ]
+                with self.assertRaisesRegex(RuntimeError, 'owner_left_foreground'):
+                    check.run(Path('/runtime'), Path('/private/qa-build.json'), 1, output)
+            device.access.install.assert_called_once()
+            device.original.home.assert_not_called()
+            restore.assert_not_called()
+            commands = [call.args[0] for call in device.shell.call_args_list]
+            self.assertIn('cmd package uninstall ' + check.PACKAGE, commands)
+            self.assertFalse(any(command.startswith('am start ') for command in commands))
+            self.assertTrue(output.write.call_args.args[0]['cleanup_verified'])
+
+    def test_replaced_but_idle_backend_is_not_adopted_as_a_new_qa_target(self):
+        with self.driver() as (device, link, restore, output):
+            with patch('service_smoke.LiveService') as service:
+                service.return_value.sample.side_effect = [
+                    {'pid': 7, 'instance': 'fixed'},
+                    {'pid': 8, 'instance': 'new'},
+                ]
+                with self.assertRaisesRegex(RuntimeError, 'production_state_changed'):
+                    check.run(Path('/runtime'), Path('/private/qa-build.json'), 1, output)
+            device.access.install.assert_not_called()
+            device.original.home.assert_not_called()
+            restore.assert_not_called()
 
     def test_failed_qa_removal_cannot_be_reported_as_pass(self):
         with self.driver() as (device, link, restore, output):

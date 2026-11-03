@@ -1,5 +1,16 @@
 # Changelog
 
+## Automatic failure UI — recheck production ownership before takeover
+
+- Revalidate the same idle production backend after fixture generation, signer
+  inspection and QA installation, before taking the foreground UI.
+- If the owner resumes capture, camera or another foreground activity, stop;
+  remove only the newly installed identical QA package without reopening the
+  original UI when takeover has not begun. Reject replacement backend identities.
+- Record successful ownership boundaries. Four regressions reproduce four
+  old-driver assertion failures, with no fixture errors. No production APK,
+  runtime, model or audio-setting changes; ADB handoff is not atomic.
+
 ## Automatic failure UI — optional verified loopback TLS fixture
 
 - Add explicit `verify-failure-ui --http-fixture loopback_tls`: 30 ASR/TTS cases
