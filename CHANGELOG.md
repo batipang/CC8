@@ -1,5 +1,22 @@
 # Changelog
 
+## p0-interrupted-task-notice-20261103.1 — client source candidate
+
+Assistant APK0.9.9/code44; backend candidate0.14.16 and protocol2 unchanged.
+
+- Preserve a RAM-only uncertainty hint when a connection is lost with a known
+  running task, before clearing old workspace arrays. Keep authoritative terminal
+  receipts separate and do not fabricate outcomes or replay work.
+- Keep the hint over empty reconnects/reused IDs, let the owner view current tasks
+  or dismiss the hint without sending a request, and preserve the approved layout.
+- Compile real Activity callbacks in six lifecycle regressions; four assertions
+  fail on the old callbacks, with no fixture errors. Pass full local checks and
+  Android release compilation/lint. Complete six isolated device UI checks and
+  verify rebased QA package entries/signatures for evidence reuse; production
+  deployment stays open.
+- Retain the real isolated active-Dot parent-loss observation and first fixture
+  guard failure. A surviving first file effect is not transaction rollback.
+
 ## p0-serialized-lan-tls-20261103.1 — backend source candidate
 
 Backend0.14.16; original APK0.9.7/code42 and protocol2 unchanged.
@@ -13,6 +30,7 @@ Backend0.14.16; original APK0.9.7/code42 and protocol2 unchanged.
   Preserve PR74's original macOS EOF failure; its exact SSL cause is unconfirmed.
 - Keep the deployed assistant and its observer unchanged. See
   [LAN TLS concurrency](docs/LAN_TLS_CONCURRENCY.md) for evidence and limits.
+
 
 ## p0-minimax-business-failures-20261103.1 — backend source candidate
 

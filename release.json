@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "p0-serialized-lan-tls-20261103.1",
+  "release_id": "p0-interrupted-task-notice-20261103.1",
   "backend": {
     "version": "0.14.16"
   },
   "assistant": {
-    "version": "0.9.7",
-    "version_code": 42,
+    "version": "0.9.9",
+    "version_code": 44,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {
