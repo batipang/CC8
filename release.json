@@ -22,7 +22,7 @@
   "known_deployed_pair": {
     "assistant_version": "0.9.13",
     "assistant_version_code": 48,
-    "backend_version": "0.14.18",
+    "backend_version": "0.14.19",
     "protocol": 2
   }
 }
