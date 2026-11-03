@@ -11,7 +11,9 @@ Assistant APK0.9.9/code44; backend candidate0.14.16 and protocol2 unchanged.
   or dismiss the hint without sending a request, and preserve the approved layout.
 - Compile real Activity callbacks in six lifecycle regressions; four assertions
   fail on the old callbacks, with no fixture errors. Pass full local checks and
-  Android release compilation/lint; isolated device QA and deployment stay open.
+  Android release compilation/lint. Complete six isolated device UI checks and
+  verify rebased QA package entries/signatures for evidence reuse; production
+  deployment stays open.
 - Retain the real isolated active-Dot parent-loss observation and first fixture
   guard failure. A surviving first file effect is not transaction rollback.
 
