@@ -1,8 +1,37 @@
 # Changelog
 
-## p0-bounded-test-capture-20261103.1 — source candidate
+## p0-supervisor-log-recovery-20261104.1 — backend source candidate
 
-APK0.9.13/code48; backend0.14.16, protocol2 and deployed code46 unchanged.
+Backend0.14.17; APK0.9.13/code48 and protocol2 unchanged. Deployed backend remains
+0.14.16 until separately verified maintenance.
+
+- Keep optional log write/flush failures out of transport activation, device
+  handshake and workers after a supervisor's stdout pipe loses its reader.
+  Preserve JSON serialization failures and healthy output; do not add log files.
+- Reproduce the real closed OS pipe and connection path: three old-code
+  assertions fail, zero fixture errors; all five candidate cases pass.
+- Preserve the actual code48 standby attempt that stopped before capture when
+  its maintenance reopen lost communication. Its legacy failure label referred
+  to capture, but independent device/backend checks showed both microphones off.
+- Restore the original backend safely in 12.736 seconds before further work;
+  stop the incomplete observer/diagnostic collectors and retain their reports.
+
+## Automatic supervisor recovery — explicit fault and adoption checks
+
+- Add `verify-service --fault supervisor`; keep backend-only faults as default.
+  Require the exact owner LaunchAgent PID, complete idle gates, a replacement
+  supervisor and a ready write after the fault. Never start capture or replay work.
+- Recognize service.py's existing surviving-backend adoption only with parent1,
+  fresh private ready metadata and the matching launchd-owned supervisor.
+- Re-sample when a replacement appears between process snapshots; still reject
+  duplicates. Pass 21 targeted checks, including minimal-PATH plan execution.
+- Preserve the initial real-device checker failure and separately confirmed
+  recovery; do not repeat the fault merely to obtain a green combined report.
+
+## p0-bounded-test-capture-20261103.1 — deployed diagnostic pair
+
+Original-signature APK0.9.13/code48; backend0.14.16 and protocol2 unchanged.
+Frozen deployed source e689a1a; previous code46 results retain their own scope.
 
 - Bound explicitly requested automatic capture on the device, independently of
   a Mac runner's finally block. Drop reads that cross the device-clock deadline;
@@ -14,6 +43,14 @@ APK0.9.13/code48; backend0.14.16, protocol2 and deployed code46 unchanged.
 - Compile actual recording/finally/opening paths: eight targeted cases pass;
   preserve the interrupted physical reference test and separate cleanup proof.
 - Reserve code47 for the previously prepared original-signature recovery package.
+- Pass actual normal installation and complete pair readiness in 51.849 seconds;
+  forward recovery APKcode49 is prepared and unused. Preserve configuration,
+  model/native dependencies, original signature and user data.
+- Verify device expiry after killing the owned Mac test child, then separately
+  verify the original deadline survives live Wi-Fi/USB logical handover. Keep the
+  initial handover-wait failure and independent cleanup report unchanged.
+- Pass four no-capture device checks. Cancel the old code46 observation for this
+  update; its 4062.472 seconds are not a complete or cumulative 72-hour result.
 
 ## Automatic acoustic checks — evidence and post-playback observation
 

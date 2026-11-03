@@ -62,13 +62,17 @@ class StatusReporter:
         self.resources = ResourceSampler()
 
     def log(self, event, **fields):
-        print(
-            json.dumps(
-                {'event': event, 'monotonic_seconds': round(time.monotonic(), 3), **fields},
-                ensure_ascii=False,
-            ),
-            flush=True,
+        message = json.dumps(
+            {'event': event, 'monotonic_seconds': round(time.monotonic(), 3), **fields},
+            ensure_ascii=False,
         )
+        try:
+            print(message, flush=True)
+        except (OSError, ValueError):
+            # A replaced supervisor can no longer drain this process's stdout
+            # pipe. Optional diagnostics must not close a healthy transport or
+            # kill a worker; serialization errors above still reach the caller.
+            pass
 
     def health(self):
         state = self.hooks.session()

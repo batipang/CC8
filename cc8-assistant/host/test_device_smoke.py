@@ -151,6 +151,20 @@ class DeviceAutomationTests(unittest.TestCase):
                     main(['--runtime-root', '/unused', *flags])
                 device.assert_not_called()
 
+    def test_maintenance_reports_connection_loss_separately_from_capture(self):
+        for connected, capture, reason in (
+            (False, False, 'maintenance_connection_lost'),
+            (True, True, 'maintenance_open_started_capture'),
+        ):
+            run, _, health, _ = self.fixture()
+
+            def changed_during_stability(seconds):
+                health.update(connected=connected, microphone_active=capture)
+
+            run.sleep = changed_during_stability
+            with self.subTest(reason=reason), self.assertRaisesRegex(CheckFailure, reason):
+                run.maintenance_open()
+
     def test_capture_refuses_legacy_device_before_any_open_or_playback(self):
         run, device, _, _ = self.fixture(capture=True)
         device.status.return_value[0].pop('test_capture_limit_supported')
