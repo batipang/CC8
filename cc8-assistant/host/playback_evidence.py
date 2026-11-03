@@ -41,6 +41,8 @@ class PlaybackEvidence:
         self.render_frame = None
         self.template_start = None
         self.template_offset = None
+        self.clock_resets = 0
+        self.max_clock_step_ms = 0
 
     def arm(self, generation, epoch, *, seconds=20):
         if type(seconds) not in (int, float) or not math.isfinite(seconds) or not 0 < seconds <= 20:
@@ -50,6 +52,8 @@ class PlaybackEvidence:
                 raise RuntimeError('Playback probe already active')
             probe = Probe(generation, epoch)
             self.current = probe
+            self.clock_resets = 0
+            self.max_clock_step_ms = 0
             self.timer = threading.Timer(seconds, lambda: self.cancel('expired', probe))
             self.timer.daemon = True
             self.timer.start()
@@ -76,11 +80,13 @@ class PlaybackEvidence:
         self.render_start = self.render_end = self.render_frame = None
         self.template_start = self.template_offset = None
         probe.result = {
-            'schema': 1,
+            'schema': 2,
             'status': status,
             'generation': probe.generation,
             'capture_epoch': probe.epoch,
-            'method': 'device_clock_normalized_window_correlation_v1',
+            'method': 'device_clock_normalized_window_correlation_v2',
+            'render_clock_resets': self.clock_resets,
+            'max_render_clock_step_ms': round(self.max_clock_step_ms, 3),
             'raw_audio_saved': False,
             'first_audible_onset_measured': False,
             'human_dialogue_latency_measured': False,
@@ -103,8 +109,18 @@ class PlaybackEvidence:
                 self._finish('render_gap')
                 return
             if self.render_end is not None and abs(nanos - self.render_end) > 40_000_000:
-                self._finish('render_clock_gap')
-                return
+                # AudioTrack can refine its clock or actually underrun. Neither
+                # permits stitching old and new timestamps into one waveform.
+                # Corroborate a fresh contiguous window after the discontinuity;
+                # keep capture history, but discard the old reference template.
+                self.clock_resets += 1
+                self.max_clock_step_ms = max(
+                    self.max_clock_step_ms, abs(nanos - self.render_end) / 1e6
+                )
+                self.reference.fill(0)
+                self.reference = np.empty(0)
+                self.template_start = self.template_offset = None
+                self.render_start = nanos
             if self.render_start is None:
                 self.render_start = nanos
             self.render_frame = frame + len(pcm)

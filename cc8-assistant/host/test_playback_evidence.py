@@ -134,8 +134,82 @@ class AcousticEvidenceTests(unittest.TestCase):
         self.assertEqual(probe.result['status'], 'render_gap')
         probe = observer.arm(101, 7)
         observer.render(101, 0, START, samples)
-        observer.render(101, 1600, START + 200_000_000, samples)
-        self.assertEqual(probe.result['status'], 'render_clock_gap')
+        for i in range(1, 5):
+            observer.render(101, i * 1600, START + i * 200_000_000, samples)
+        self.assertFalse(probe.done.is_set())
+        observer.cancel('expired')
+        self.assertEqual(probe.result['status'], 'expired')
+        self.assertEqual(probe.result['render_clock_resets'], 4)
+        self.assertEqual(probe.result['max_render_clock_step_ms'], 100)
+
+    def test_clock_refinement_or_real_gap_uses_only_a_new_contiguous_window(self):
+        reference = public_signal()
+        for actual_gap in (False, True):
+            with self.subTest(actual_gap=actual_gap):
+                observer = PlaybackEvidence()
+                probe = observer.arm(101, 7)
+                first_stamp = START if actual_gap else START + 300_000_000
+                observer.render(101, 0, first_stamp, reference[:1600])
+                shift = 200_000_000 if actual_gap else 0
+                for frame in range(1600, len(reference), 320):
+                    observer.render(
+                        101,
+                        frame,
+                        START + round(frame * 1e9 / RATE) + shift,
+                        reference[frame : frame + 320],
+                    )
+                if actual_gap:
+                    mic = np.zeros(40000)
+                    start = 3200 + 1920
+                    mic[start : start + 1600] = reference[:1600] * 0.3
+                    tail = start + 1600 + 3200
+                    mic[tail : tail + len(reference) - 1600] = reference[1600:] * 0.3
+                else:
+                    mic = scene(reference)
+                for frame in range(0, len(mic), 320):
+                    observer.microphone(
+                        7, START - 200_000_000 + round(frame * 1e9 / RATE), mic[frame : frame + 320]
+                    )
+                self.assertEqual(probe.result['status'], 'observed')
+                self.assertEqual(probe.result['render_clock_resets'], 1)
+                self.assertAlmostEqual(probe.result['matched_window_delay_ms'], 120, delta=1)
+                self.assertFalse(probe.result['first_audible_onset_measured'])
+
+    def test_cannot_stitch_two_short_templates_across_a_clock_jump(self):
+        observer = PlaybackEvidence()
+        probe = observer.arm(101, 7)
+        ref = public_signal()[:3200]
+        observer.render(101, 0, START, ref[:1600])
+        observer.render(101, 1600, START + 300_000_000, ref[1600:])
+        mic = np.zeros(32000)
+        mic[5120:8320] = ref
+        for frame in range(0, len(mic), 320):
+            observer.microphone(
+                7, START - 200_000_000 + round(frame * 1e9 / RATE), mic[frame : frame + 320]
+            )
+        self.assertFalse(probe.done.is_set())
+        self.assertEqual(len(observer.reference), 1600)
+        observer.cancel('expired')
+        self.assertEqual(probe.result['status'], 'expired')
+        self.assertEqual(probe.result['render_clock_resets'], 1)
+
+    def test_repeated_clock_refinements_can_still_produce_a_stable_later_window(self):
+        observer = PlaybackEvidence()
+        probe = observer.arm(101, 7)
+        ref = public_signal()
+        for i in range(5):
+            observer.render(101, i * 160, START + i * 100_000_000, ref[i * 160 : (i + 1) * 160])
+        observer.render(101, 800, START + 500_000_000, ref[800:])
+        mic = np.zeros(32000)
+        mic[13120:28320] = ref[800:] * 0.3
+        for frame in range(0, len(mic), 320):
+            observer.microphone(
+                7, START - 200_000_000 + round(frame * 1e9 / RATE), mic[frame : frame + 320]
+            )
+        self.assertEqual(probe.result['status'], 'observed')
+        self.assertEqual(probe.result['render_clock_resets'], 5)
+        self.assertEqual(probe.result['max_render_clock_step_ms'], 90)
+        self.assertAlmostEqual(probe.result['matched_window_delay_ms'], 120, delta=1)
 
     def test_invalid_samples_and_missing_search_coverage_are_explicit(self):
         observer = PlaybackEvidence()
