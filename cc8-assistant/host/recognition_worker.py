@@ -110,7 +110,10 @@ class RecognitionWorker:
     def discard(self):
         while True:
             try:
-                self.queue.get_nowait()
+                old = self.queue.get_nowait()
+                if len(old) > 6:
+                    self.hooks.diagnostics().gate(old[6], 'stale')
+                    self.hooks.diagnostics().finish(old[6], 'cancelled')
             except queue.Empty:
                 break
 

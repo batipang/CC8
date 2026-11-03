@@ -277,6 +277,87 @@ class CaptureDiagnosticsTests(unittest.TestCase):
                 )
                 self.assertEqual(row['capture']['frames'], 2)
 
+    def test_abandoned_partial_capture_finishes_on_each_lifecycle_reset(self):
+        for reset in ('reset_transport', 'reset_session', 'reset_voice_activity'):
+            with self.subTest(reset=reset):
+                b, frame, _ = self.endpoint()
+                endpoint = b.capture.endpoint
+                endpoint.consume(frame)
+                key = endpoint.voice_trace
+                getattr(endpoint, reset)()
+                getattr(endpoint, reset)()
+                row = next(r for r in b.diagnostics.report()['requests'] if r['request_id'] == key)
+                self.assertEqual(row['outcome'], 'cancelled')
+                self.assertEqual(row['gate'], 'stale')
+                self.assertIsNone(row['generation'])
+                self.assertNotIn('utterance_end', row['stages'])
+                self.assertIsNone(endpoint.voice_trace)
+                self.assertTrue(b.recognition.queue.empty())
+
+    def test_reset_does_not_finish_trace_already_handed_to_recognition(self):
+        for reset in ('reset_transport', 'reset_session', 'reset_voice_activity'):
+            with self.subTest(reset=reset):
+                b, frame, _ = self.endpoint()
+                endpoint = b.capture.endpoint
+                endpoint.consume(frame)
+                endpoint.consume(replace(frame, nanos=frame.nanos + 10_000_000))
+                job = b.recognition.queue.get_nowait()
+                getattr(endpoint, reset)()
+                row = next(
+                    r for r in b.diagnostics.report()['requests'] if r['request_id'] == job[6]
+                )
+                self.assertIsNone(row['outcome'])
+                self.assertNotIn('gate', row)
+                self.assertIn('utterance_end', row['stages'])
+                self.assertIsNone(endpoint.voice_trace)
+
+    def test_fast_stop_finishes_only_partial_capture_without_erasing_completed_tasks(self):
+        b, frame, _ = self.endpoint()
+        endpoint = b.capture.endpoint
+        done = b.diagnostics.begin('text', b.session.generation)
+        b.diagnostics.finish(done, 'completed')
+        endpoint.consume(frame)
+        partial = endpoint.voice_trace
+        endpoint.apply_fast_stop('停一下', frame.nanos + 10_000_000)
+        rows = {r['request_id']: r for r in b.diagnostics.report()['requests']}
+        self.assertEqual(rows[partial]['outcome'], 'cancelled')
+        self.assertEqual(rows[partial]['gate'], 'stale')
+        self.assertEqual(rows[done]['outcome'], 'completed')
+        self.assertIsNone(endpoint.voice_trace)
+        self.assertTrue(b.recognition.queue.empty())
+
+    def test_home_stop_cancels_partial_and_releases_capture_without_enqueuing_asr(self):
+        b, frame, _ = self.endpoint()
+        b.capture.endpoint.consume(frame)
+        key = b.capture.endpoint.voice_trace
+        b.session.stop()
+        row = next(r for r in b.diagnostics.report()['requests'] if r['request_id'] == key)
+        self.assertEqual(row['outcome'], 'cancelled')
+        self.assertEqual(row['gate'], 'stale')
+        self.assertFalse(b.session.active)
+        self.assertTrue(b.recognition.queue.empty())
+        self.assertIsNone(b.capture.endpoint.capture_evidence)
+        self.assertIsNone(b.capture.endpoint.voice_trace)
+
+    def test_fast_stop_finishes_discarded_queue_without_touching_inflight_trace(self):
+        b, _, _ = self.endpoint()
+        inflight = b.diagnostics.begin('voice')
+        queued = []
+        for _ in range(2):
+            key = b.diagnostics.begin('voice')
+            queued.append(key)
+            b.recognition.queue.put(
+                (b.session.generation, np.zeros(FRAME), False, [], None, None, key)
+            )
+        b.recognition.discard()
+        rows = {r['request_id']: r for r in b.diagnostics.report()['requests']}
+        self.assertIsNone(rows[inflight]['outcome'])
+        self.assertNotIn('gate', rows[inflight])
+        for key in queued:
+            self.assertEqual(rows[key]['outcome'], 'cancelled')
+            self.assertEqual(rows[key]['gate'], 'stale')
+        self.assertTrue(b.recognition.queue.empty())
+
     def test_real_recognition_worker_exports_only_its_gate_classification(self):
         cases = [
             ('', None, 'empty'),

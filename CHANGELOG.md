@@ -1,5 +1,19 @@
 # Changelog
 
+## p0-partial-capture-lifecycle-20261103.1 — source candidate
+
+Backend 0.14.12; original assistant APK 0.9.3/code38 and protocol2 unchanged.
+
+- Cancel endpoint-owned partial voice traces on Home/stop, transport/session
+  reset and fast stop; hand ownership to recognition only after queue admission.
+- Finish discarded queued recognition traces without touching in-flight ASR or
+  completed work. Keep strict pending-task checks in maintenance tooling.
+- Pass installer23 / host660 (4 private opt-in skips) / tooling100 / Java15
+  and pinned quality checks; five old-code regressions give nine assertion failures.
+- Retain the failed 0.14.11 preflight: an abandoned trace from controlled C03
+  blocked maintenance before any service or source change. Running stays 0.14.10.
+
+
 ## p0-weak-near-admission-20261103.1 — source candidate
 
 Backend 0.14.11; original assistant APK 0.9.3/code38 and protocol2 unchanged.
