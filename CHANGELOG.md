@@ -1,5 +1,19 @@
 # Changelog
 
+## p0-dot-receipts-20261103.1 — source candidate
+
+Backend 0.14.6; assistant APK 0.9.3 / code38; protocol2.
+
+- Validate and admit exact-turn final receipts on the app-server receive path,
+  independently of a yielded clause's synthesis or playback. Keep task completion
+  when TTS fails or narration is stopped after the receipt.
+- Share bounded final-text/phase validation with the speech consumer; reject
+  changed answers, failed/malformed terminal events, stale turns and late tools.
+- Unsubscribe before failure finalization and serialize task receipt admission
+  against session cancellation, without adding provider threads or task retries.
+
+Not deployed: the version-bound 0.14.5 observation remains running unchanged.
+
 ## Unreleased — version-bound observation tool
 
 - Add optional `observe --expect-backend` validation on every health poll;

@@ -19,7 +19,13 @@ from minimax_client import Cancelled
 from web_search import SpeechClauses, now, public_url
 from vision import jpeg_dimensions
 from runtime_env import command_path, runtime_environment
-from operation_failure import OperationFailure
+from dot_receipt import (
+    DotError as DotError,
+    DotApprovalRequired as DotApprovalRequired,
+    FinalAnswer,
+    NoFinalAnswer,
+    ReceiptWatch,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -39,16 +45,6 @@ def answer_sources(answer):
         if len(items) >= 6:
             break
     return items
-
-
-class DotError(OperationFailure):
-    def __init__(self, message, *, kind='provider_or_runtime'):
-        super().__init__(message, stage='brain', kind=kind)
-
-
-class DotApprovalRequired(DotError):
-    def __init__(self, message):
-        super().__init__(message, kind='approval_declined')
 
 
 class EventQueue(queue.Queue):
@@ -123,6 +119,28 @@ class CodexRpc:
         self.failed = False
         self.initialized = False
         self.approval_seen = threading.Event()
+        self.notification_lock = threading.RLock()
+        self.listeners = []
+
+    def listen(self, listener):
+        with self.notification_lock:
+            self.listeners.append(listener)
+
+        def remove():
+            with self.notification_lock:
+                if listener in self.listeners:
+                    self.listeners.remove(listener)
+
+        return remove
+
+    def _receive(self, message):
+        # Linearize receipt admission before a speech consumer can see this
+        # event. No Queue mutex is held across owner callbacks. Unsubscribe
+        # waits for an in-flight admission, so generator cleanup cannot drop it.
+        with self.notification_lock:
+            for listener in tuple(self.listeners):
+                listener(message)
+            self.events.put_nowait(message)
 
     def start(self):
         if self.process is not None:
@@ -284,7 +302,7 @@ class CodexRpc:
                         )
                     )
                     if relevant:
-                        self.events.put_nowait(message)
+                        self._receive(message)
         except (ValueError, OSError, queue.Full, DotError) as error:
             self.failure_reason = (
                 str(error) if isinstance(error, DotError) else type(error).__name__
@@ -322,6 +340,7 @@ class Turn:
     ident: str | None = None
     ident_ready: threading.Event = field(default_factory=threading.Event)
     interrupt_sent: bool = False
+    receipt_completed: threading.Event = field(default_factory=threading.Event)
     lock: object = field(default_factory=threading.Lock)
 
 
@@ -348,7 +367,7 @@ class DotBrain:
 
     def _interrupt(self, turn):
         with turn.lock:
-            if not turn.ident or turn.interrupt_sent:
+            if not turn.ident or turn.interrupt_sent or turn.receipt_completed.is_set():
                 return
             turn.interrupt_sent = True
         try:
@@ -423,7 +442,12 @@ class DotBrain:
             return {'ok': False, 'error': 'invalid_request'}
         if not turn.ident_ready.wait(20):
             return {'ok': False, 'error': 'turn_not_ready'}
-        current = lambda: not turn.stopped.is_set() and self.current is turn and is_current()
+        current = lambda: (
+            not turn.stopped.is_set()
+            and not turn.receipt_completed.is_set()
+            and self.current is turn
+            and is_current()
+        )
         if (
             not current()
             or not turn.ident
@@ -444,11 +468,8 @@ class DotBrain:
         handoff = self.handoff
         self.current = turn
         start = time.monotonic()
-        messages = []
         completed = False
-        phases = {}
-        stream_id = None
-        stream_text = ''
+        watch = None
         speech = SpeechClauses()
         said = 0
         limited = False
@@ -473,6 +494,29 @@ class DotBrain:
             'read_only': False,
             'client_tools': True,
         }
+
+        def check_receipt():
+            if watch:
+                try:
+                    watch.check()
+                except NoFinalAnswer:
+                    if self.rpc.approval_seen.is_set():
+                        raise DotApprovalRequired('Codex task needs desktop approval') from None
+                    raise
+
+        def publish_answer(answer):
+            turn.receipt_completed.set()
+            self.last_metrics.setdefault('receipt_ms', round((time.monotonic() - start) * 1000))
+            if on_web:
+                on_web(
+                    'dot_result',
+                    {
+                        'text': answer[:10000],
+                        'truncated': len(answer) > 10000,
+                        'handoff_source_title': handoff.source_title if handoff else '',
+                    },
+                )
+
         try:
             if on_web:
                 on_web('clear', {})
@@ -501,6 +545,13 @@ class DotBrain:
                     }
                 )
                 self.last_metrics['image_input'] = True
+            if callable(getattr(self.rpc, 'listen', None)):
+                watch = ReceiptWatch(
+                    self.rpc,
+                    turn.thread_id,
+                    lambda: self.current is turn and not turn.stopped.is_set() and is_current(),
+                    publish_answer,
+                )
             result = self.rpc.request(
                 'turn/start',
                 {
@@ -519,6 +570,10 @@ class DotBrain:
             if turn.stopped.is_set() or not is_current():
                 self._interrupt(turn)
                 raise Cancelled('Turn cancelled')
+            state = FinalAnswer(turn.thread_id, turn.ident)
+            if watch:
+                watch.bind(turn.ident)
+                check_receipt()
             if on_web:
                 on_web('progress', {'message': 'Dot 正在分析 · 说“停一下”可打断'})
             deadline = time.monotonic() + 600
@@ -526,6 +581,7 @@ class DotBrain:
                 if turn.stopped.is_set() or not is_current():
                     self._interrupt(turn)
                     raise Cancelled('Turn cancelled')
+                check_receipt()
                 try:
                     event = self.rpc.events.get(timeout=0.1)
                 except queue.Empty:
@@ -536,27 +592,10 @@ class DotBrain:
                 if p.get('threadId') != self.thread_id:
                     continue
                 method = event.get('method')
+                value = state.feed(event)
                 if method == 'item/agentMessage/delta':
-                    if p.get('turnId') != turn.ident:
+                    if value is None:
                         continue
-                    ident = p.get('itemId')
-                    value = p.get('delta')
-                    # Only explicitly final-answer items may reach the speaker.
-                    # Older servers without phase metadata retain the completion fallback.
-                    if (
-                        not isinstance(ident, str)
-                        or not ident
-                        or not isinstance(value, str)
-                        or phases.get(ident) != 'final_answer'
-                    ):
-                        continue
-                    if stream_id is None:
-                        stream_id = ident
-                    if ident != stream_id:
-                        continue
-                    stream_text += value
-                    if len(stream_text) > 64000:
-                        raise DotError('Codex answer exceeds size limit')
                     for piece in speakable(speech.feed(value)):
                         if not is_current() or turn.stopped.is_set():
                             raise Cancelled('Turn cancelled')
@@ -569,7 +608,6 @@ class DotBrain:
                         continue
                     item = p.get('item') or {}
                     if method == 'item/started' and item.get('type') == 'agentMessage':
-                        phases[item.get('id')] = item.get('phase')
                         continue
                     if (
                         item.get('type')
@@ -623,13 +661,6 @@ class DotBrain:
                         self.last_metrics['tool_calls'] = self.last_metrics.get('tool_calls', 0) + 1
                         if on_web:
                             on_web('progress', {'message': 'Dot 正在执行任务 · 可说停一下取消'})
-                    if item.get('type') == 'agentMessage':
-                        value = item.get('text') or ''
-                        if not isinstance(value, str) or len(value) > 64000:
-                            raise DotError('Codex answer exceeds size limit')
-                        if item.get('phase') is None and item.get('id') in phases:
-                            item = {**item, 'phase': phases[item['id']]}
-                        messages.append(item)
                 elif event.get('method') == 'turn/completed':
                     value = p.get('turn') or {}
                     if value.get('id') != turn.ident:
@@ -645,36 +676,21 @@ class DotBrain:
                 raise DotError('Codex turn timed out', kind='timeout')
             if turn.stopped.is_set() or not is_current():
                 raise Cancelled('Turn cancelled')
-            finals = [m for m in messages if m.get('phase') == 'final_answer']
-            # Completion fallback is only for servers with no phase metadata.
-            # A completed turn with commentary alone is not a final answer.
-            phase_aware = any(p is not None for p in phases.values()) or any(
-                m.get('phase') is not None for m in messages
-            )
-            candidates = finals if phase_aware else messages
-            chosen = candidates[-1] if candidates else {}
-            raw_answer = chosen.get('text', '')
-            answer = raw_answer.strip()
-            if not answer:
+            try:
+                raw_answer, answer = state.answer()
+            except NoFinalAnswer:
                 if self.rpc.approval_seen.is_set():
-                    raise DotApprovalRequired('Codex task needs desktop approval')
-                raise DotError('Codex returned no final answer')
-            if stream_id is not None:
-                if chosen.get('id') != stream_id or not raw_answer.startswith(stream_text):
-                    raise DotError('Final answer changed after streaming')
-                pieces = speech.feed(raw_answer[len(stream_text) :], final=True)
+                    raise DotApprovalRequired('Codex task needs desktop approval') from None
+                raise
+            if state.stream_id is not None:
+                pieces = speech.feed(raw_answer[len(state.stream_text) :], final=True)
             else:
                 pieces = speech.feed(answer, final=True)
-            # Validate the authoritative answer before closing the task receipt.
-            if on_web:
-                on_web(
-                    'dot_result',
-                    {
-                        'text': answer[:10000],
-                        'truncated': len(answer) > 10000,
-                        'handoff_source_title': handoff.source_title if handoff else '',
-                    },
-                )
+            if watch:
+                check_receipt()
+            else:
+                # Compatibility for injected/non-observable RPC queues only.
+                publish_answer(answer)
             if self.last_metrics.get('web_search_calls') and on_web:
                 sources = answer_sources(answer)
                 if sources:
@@ -689,6 +705,8 @@ class DotBrain:
                 elapsed_ms=round((time.monotonic() - start) * 1000),
             )
         finally:
+            if watch:
+                watch.close()
             if not completed and turn.ident:
                 self._interrupt(turn)
             turn.ident_ready.set()
