@@ -1,6 +1,6 @@
 # 大黄蜂统一待办：功能与工程质量
 
-更新：2026-11-04。原排期基线为 Android 0.8.6 / 后台 0.11.0；当前诊断部署为后台0.14.17 / 原签名APK0.9.13（code48），冻结源码1ab67a0；签名、数据和配置保留，部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)；P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)；复选框仍按完整验收标准关闭。
+更新：2026-11-04。原排期基线为 Android 0.8.6 / 后台 0.11.0；当前诊断部署为后台0.14.18 / 原签名APK0.9.13（code48），冻结源码de4cfae；签名、数据和配置保留，部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)；P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)；复选框仍按完整验收标准关闭。
 
 依据：[竞品复盘](COMPETITOR_REVIEW_2026-11-01.md)、[当前架构](ARCHITECTURE.md)、[实机与回归记录](VALIDATION.md)。本次已合并 [ToFix](ToFix.md) 的 20 个工程条目；这是功能与工程质量的唯一详细清单；[ROADMAP](ROADMAP.md)保留完成情况和阶段概览。
 
@@ -29,7 +29,7 @@
 ## P0：稳定地听、说、运行
 
 - [ ] **P0-01 — 建立语音与运行基线、诊断报告**
-  - 播放声学证据（2026-11-04，0.14.18软件候选）：`verify-device --capture --playback-evidence`在既有有界前台收音中播放固定公开短句，以同设备时钟的原始MIC／本代RENDER做200ms窗口相关，导出数字匹配/歧义/缺测原因；取消、断线、超时清理缓存，测试音频不送ASR／Dot，结束隔离lookahead旧音频。默认只计划、旧后台在开麦前拒绝；数字与IPC回归不计现场扬声器、首个可听采样或真人30轮延迟验收。现场仍为0.14.17，独立72小时观察保留，见 [自动设备检查](AUTOMATED_DEVICE_CHECKS.md#播放的声学证据)。
+  - 播放声学证据（2026-11-04，0.14.18已部署）：`verify-device --capture --playback-evidence`在既有有界前台收音中播放固定公开短句，以同设备时钟的原始MIC／本代RENDER做200ms窗口相关，导出数字匹配/歧义/缺测原因；取消、断线、超时清理缓存，测试音频不送ASR／Dot，结束隔离lookahead旧音频。默认只计划、旧后台在开麦前拒绝；数字与IPC回归不计现场扬声器、首个可听采样或真人30轮延迟验收。实机首轮前五项通过、声学项因render_clock_gap失败并自动停采；0.14.19软件候选按稳定时段重建参考，不放宽匹配门槛。旧72小时窗口已保存为未完成，现场0.14.18限时诊断不计72小时，见 [自动设备检查](AUTOMATED_DEVICE_CHECKS.md#播放的声学证据)。
   - 生命周期修复（2026-11-03）：自动部署预检发现C03测试遗留的未成句trace仍pending；0.14.11没有单独部署；后续0.14.12已部署（22.713秒），在关麦/传输/会话重置及快速停止时取消Endpoint仍持有的partial，成句成功入队后交给识别器；丢弃排队识别也结束其记录，不取消在途ASR或已完成任务。严格pending任务维护门控保留；旧C03记录在特定升级前单独核实归属并保留原证据，不提供通用忽略开关，见 [部分收音生命周期](PARTIAL_CAPTURE_LIFECYCLE.md)。
   - 现场历史（2026-11-03）：0.14.10／e82c1cb曾部署并保留原APK/配置/模型；新增capture/gate现已捕捉到额外准入的低证据形态。旧0.14.8观察取消保留，新版仅做有界诊断观察，不计最终72小时，见 [当前部署](CURRENT_DEPLOYMENT.md)。
   - 收音观察（2026-11-03）：0.14.10源码候选为每句增加固定数字声学摘要和门控分类，关联原request ID；包含帧数/数字电平/参考相关性/暂停请求状态，不保留PCM或正文，不改变声学决策。旧后台兼容、新字段严格校验与不可变；候选未部署，见 [门控观察](VOICE_GATE_OBSERVATIONS.md)。

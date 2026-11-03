@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-playback-acoustic-evidence-20261104.1",
+  "release_id": "p0-playback-evidence-clock-segments-20261104.1",
   "backend": {
-    "version": "0.14.18"
+    "version": "0.14.19"
   },
   "assistant": {
     "version": "0.9.13",
@@ -22,7 +22,7 @@
   "known_deployed_pair": {
     "assistant_version": "0.9.13",
     "assistant_version_code": 48,
-    "backend_version": "0.14.17",
+    "backend_version": "0.14.18",
     "protocol": 2
   }
 }
