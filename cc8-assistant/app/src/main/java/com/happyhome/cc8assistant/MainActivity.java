@@ -35,6 +35,9 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   private ImageView stateIcon;
   private long workspaceRevision = -1;
   private JSONArray tasksData = new JSONArray(), remindersData = new JSONArray();
+  // RAM-only notice: a lost connection cannot undo tool effects or prove failure.
+  // Keep this separate from authoritative task receipts and never replay work.
+  private boolean taskResultUnconfirmed;
   private String lastStateMessage = "系统待命";
   private VoiceSession session;
   private DotChatsDialog dotChats;
@@ -591,8 +594,9 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     taskSteps.task(latest);
     dotText.setText(
         latest == null
-            ? (linked ? "当前任务 · 暂无任务" : "当前任务 · 等待连接")
+            ? (taskResultUnconfirmed ? "上次执行 · 结果待核对" : linked ? "当前任务 · 暂无任务" : "当前任务 · 等待连接")
             : "当前任务 · " + latest.optString("title"));
+    dotText.setTextColor(latest == null && taskResultUnconfirmed ? AMBER : INK);
     taskAction.setText("查看任务  ›");
     JSONObject reminder = remindersData.optJSONObject(0);
     reminderText.setText(
@@ -657,6 +661,34 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   }
 
   private void showTasks() {
+    if (taskResultUnconfirmed) showUnconfirmedTaskNotice();
+    else showTaskList();
+  }
+
+  private boolean hasRunningTask(JSONArray tasks) {
+    for (int i = 0; i < tasks.length(); i++) {
+      JSONObject task = tasks.optJSONObject(i);
+      if (task != null && "running".equals(task.optString("status"))) return true;
+    }
+    return false;
+  }
+
+  private void showUnconfirmedTaskNotice() {
+    new AlertDialog.Builder(this)
+        .setTitle("上次执行结果未确认")
+        .setMessage("连接中断前有未结束的任务，部分步骤可能已经执行。请先在电脑端核对结果，再决定是否重新交办。重连不会自动重做任务；关闭提示也不会撤销已执行的操作。")
+        .setPositiveButton(
+            "知道了",
+            (d, n) -> {
+              taskResultUnconfirmed = false;
+              renderWorkspace();
+            })
+        .setNeutralButton("查看当前任务", (d, n) -> showTaskList())
+        .setNegativeButton("关闭", null)
+        .show();
+  }
+
+  private void showTaskList() {
     if (linked) session.workspaceGet();
     if (tasksData.length() == 0) {
       new AlertDialog.Builder(this)
@@ -1247,6 +1279,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
           linked = connected;
           workspaceRevision = -1;
           if (!connected) {
+            taskResultUnconfirmed |= hasRunningTask(tasksData);
             dotChats.close();
             savedTasks.close();
             tasksData = new JSONArray();
@@ -1544,6 +1577,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     Wire.put(ui, "caption_clip_bounds", captionScroll.getClipBounds() != null);
     Wire.put(ui, "source_count", webSources.length());
     Wire.put(ui, "workspace_revision", workspaceRevision);
+    Wire.put(ui, "task_result_unconfirmed", taskResultUnconfirmed);
     Wire.put(ui, "task_count", tasksData.length());
     Wire.put(ui, "reminder_count", remindersData.length());
     Wire.put(ui, "halo_status_overlap", overlaps(companion, stateText));
