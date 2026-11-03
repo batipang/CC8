@@ -63,6 +63,11 @@ class ActivityCheck {
   }
  }
  static class Session {int requests;long routeEpoch;boolean currentRoute(long route){return route==routeEpoch;}String transportName(){return "usb";}void workspaceGet(){requests++;}}
+ static class Toast {
+  static final int LENGTH_LONG=1;static int shows;
+  static Toast makeText(Object owner,String message,int duration){return new Toast();}
+  void show(){shows++;}
+ }
  static class Dialog {void close(){}void open(){throw new AssertionError("Unrequested saved-results action");}}
  static class Companion {void setTransport(String value){}}
  static class Steps {void task(JSONObject value){}}
@@ -80,7 +85,7 @@ class ActivityCheck {
  void traceAuto(String value){}void screen(boolean value){}void refresh(){}void maybeAutoVoice(){}
  Object icon(int id,int color,int size){return new Object();}
  String dateLabel(String value){return value;}
- void inputTask(){taskActions++;}void showReminders(){taskActions++;}void showTaskDetail(JSONObject task){taskActions++;}
+ void inputTask(){taskActions++;}void showReminders(){taskActions++;}void showTaskDetail(JSONObject task){taskActions++;}void showTaskDetail(JSONObject task,long route){taskActions++;}
  static JSONObject task(String status){return new JSONObject("id","same-id","generation",1,"status",status,"title","公开测试任务");}
  void snapshot(long revision,JSONObject... tasks){workspace(new JSONObject("revision",revision,"tasks",new JSONArray((Object[])tasks),"reminders",new JSONArray()));}
  static void yes(boolean value,String message){if(!value)throw new AssertionError(message);}
@@ -154,6 +159,8 @@ class InterruptedTaskNoticeTests(unittest.TestCase):
             'private boolean hasRunningTask(',
             'private void showUnconfirmedTaskNotice(',
             'private void showTaskList(',
+            'private boolean requireWorkspaceRoute(',
+            'private void workspaceNotSent(',
         )
         methods = [method(source, signature) for signature in callbacks]
         methods.extend(

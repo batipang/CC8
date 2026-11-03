@@ -1,5 +1,19 @@
 # Changelog
 
+## p0-workspace-action-ownership-20261103.1 — client source candidate
+
+Assistant APK0.9.11/code46; backend candidate0.14.16 and protocol2 unchanged.
+
+- Bind task/reminder lists, forms and save/delete confirmations to the route
+  that supplied their data. Reject old dialogs with fixed verification guidance.
+- Check ownership atomically at the send boundary; a failed workspace enqueue
+  must not retry through the audio transport fallback onto another activation.
+- Bind saved-result responses and chained requests; an old button must not
+  close a newer pending request. Preserve current explicit operations/receipts.
+- Compile actual UI/send methods and the complete saved-results dialog: 18
+  targeted cases, 16 old-code assertion failures and zero fixture errors.
+  Production stays unchanged; see [workspace actions](docs/WORKSPACE_ACTION_OWNERSHIP.md).
+
 ## p0-workspace-route-ownership-20261103.1 — client source candidate
 
 Assistant APK0.9.10/code45; backend candidate0.14.16 and protocol2 unchanged.

@@ -19,6 +19,7 @@ final class SavedTasksDialog {
   private final VoiceSession session;
   private final Handler handler = new Handler(Looper.getMainLooper());
   private String pending = "", action = "";
+  private long pendingRoute = -1;
   private AlertDialog progress;
   private Runnable timeout;
 
@@ -28,37 +29,43 @@ final class SavedTasksDialog {
   }
 
   void open() {
-    request("list", null);
+    request("list", null, session.connectedRoute());
   }
 
-  void save(String id) {
+  void save(String id, long route) {
+    if (!available(route)) return;
     new AlertDialog.Builder(activity)
         .setTitle("保存这条任务结果？")
         .setMessage("在这台 Mac 保存任务标题、结束状态、最近五个步骤及最多 1600 字结果摘录。重启后仍可查看，可在“已保存结果”中删除；不保存录音或全部聊天。")
-        .setPositiveButton("保存", (d, n) -> request("save", id))
+        .setPositiveButton("保存", (d, n) -> request("save", id, route))
         .setNegativeButton("取消", null)
         .show();
   }
 
   void close() {
     pending = "";
+    pendingRoute = -1;
     if (timeout != null) handler.removeCallbacks(timeout);
     timeout = null;
     if (progress != null) progress.dismiss();
     progress = null;
   }
 
-  private void request(String nextAction, String id) {
+  private boolean available(long route) {
+    if (route >= 0 && session.currentRoute(route) && session.isConnected()) return true;
+    toast("连接已变化，请重新打开已保存结果或任务详情并核对结果");
+    return false;
+  }
+
+  private void request(String nextAction, String id, long route) {
+    if (!available(route)) return;
     close();
-    if (!session.isConnected()) {
-      toast("请先连接 Mac");
-      return;
-    }
     if (!session.supportsSavedTaskResults()) {
       toast("当前后台尚未确认支持保存结果，请完成连接或更新后台");
       return;
     }
     pending = UUID.randomUUID().toString().replace("-", "");
+    pendingRoute = route;
     action = nextAction;
     String requestId = pending;
     progress =
@@ -76,26 +83,34 @@ final class SavedTasksDialog {
           toast("保存记录状态未确认，请刷新查看");
         };
     handler.postDelayed(timeout, 15000);
-    session.savedTaskRequest(requestId, nextAction, id);
+    if (!session.savedTaskRequest(requestId, nextAction, id, route)) {
+      close();
+      toast("连接已变化或请求未能提交，请重新打开并核对结果");
+    }
   }
 
   void accept(JSONObject data) {
     if (pending.isEmpty() || !pending.equals(data.optString("request_id"))) return;
+    if (!session.currentRoute(pendingRoute)) {
+      close();
+      return;
+    }
+    final long route = pendingRoute;
     String completedAction = action;
     close();
     if (!data.optBoolean("ok")) {
       toast(data.optString("message", "保存记录状态未确认，请刷新查看"));
       return;
     }
-    if ("list".equals(completedAction)) showList(data.optJSONArray("items"));
-    else if ("get".equals(completedAction)) showDetail(data.optJSONObject("item"));
+    if ("list".equals(completedAction)) showList(data.optJSONArray("items"), route);
+    else if ("get".equals(completedAction)) showDetail(data.optJSONObject("item"), route);
     else if ("delete".equals(completedAction)) {
       toast(data.optBoolean("deleted") ? "已删除保存记录，原任务不变" : "这条记录已不在列表中");
-      open();
+      request("list", null, route);
     } else toast("结果已保存在 Mac，可在“已保存结果”中查看");
   }
 
-  private void showList(JSONArray items) {
+  private void showList(JSONArray items, long route) {
     if (items == null || items.length() == 0) {
       new AlertDialog.Builder(activity)
           .setTitle("已保存结果")
@@ -116,13 +131,13 @@ final class SavedTasksDialog {
             labels,
             (d, n) -> {
               JSONObject item = items.optJSONObject(n);
-              if (item != null) request("get", item.optString("id"));
+              if (item != null) request("get", item.optString("id"), route);
             })
         .setPositiveButton("关闭", null)
         .show();
   }
 
-  private void showDetail(JSONObject item) {
+  private void showDetail(JSONObject item, long route) {
     if (item == null) {
       toast("未找到保存记录，请刷新");
       return;
@@ -171,7 +186,7 @@ final class SavedTasksDialog {
                     .setTitle("删除这条保存记录？")
                     .setMessage("仅删除 Mac 上的这份结果快照，不撤销已执行操作，也不删除结果文件或桌面聊天。")
                     .setPositiveButton(
-                        "删除", (confirm, which) -> request("delete", item.optString("id")))
+                        "删除", (confirm, which) -> request("delete", item.optString("id"), route))
                     .setNegativeButton("取消", null)
                     .show())
         .show();
