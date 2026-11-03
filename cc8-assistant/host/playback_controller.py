@@ -60,6 +60,7 @@ class PlaybackController:
         self.pause_state = None
         self.pause_serial = 0
         self.pause_token = 0
+        self.pause_trace = None
         self.publication_lock = threading.RLock()
         self.device_can_pause = False
         self.device_can_report_playout = False
@@ -80,12 +81,15 @@ class PlaybackController:
     def clear_cancelled_pause(self, was_playing):
         self.pause_state = None
         self.pause_token = 0
+        self.pause_trace = None
         self.hooks.cancel_timeline_pause()
         if was_playing:
             self.last_audio_end = time.monotonic()
 
     def clear_transport_pause(self):
         self.pause_state = None
+        self.pause_token = 0
+        self.pause_trace = None
         self.set_playout_capability(False)
 
     def notify(self):
@@ -106,6 +110,7 @@ class PlaybackController:
         self.spoken.clear()
         self.pause_state = None
         self.pause_token = 0
+        self.pause_trace = None
         self.last_spoken = ''
         self.previous_spoken = ''
         self.previous_spoken_until = 0
@@ -146,17 +151,22 @@ class PlaybackController:
                         self.playing = False
                         self.last_audio_end = time.monotonic()
                     self.done.notify_all()
-        elif (
-            name in ('playback_paused', 'playback_resumed')
-            and int(event.get('token', -1)) == self.pause_token
-            and int(event.get('generation', -1)) == self.hooks.generation()
-        ):
-            if name == 'playback_paused':
-                self.hooks.diagnostics().mark(self.hooks.trace(), 'pause_ack')
-                self.hooks.pause_timeline(int(event['nanos']))
-            else:
-                self.hooks.diagnostics().mark(self.hooks.trace(), 'resume_ack')
-                self.hooks.resume_timeline(int(event['nanos']))
+        elif name in ('playback_paused', 'playback_resumed'):
+            with self.hooks.lock:
+                if (
+                    not self.pause_token
+                    or int(event.get('token', -1)) != self.pause_token
+                    or int(event.get('generation', -1)) != self.hooks.generation()
+                ):
+                    return
+                # Endpoint ownership ends at queue handoff. ACKs still belong
+                # to the trace captured when this pause token was allocated.
+                if name == 'playback_paused':
+                    self.hooks.diagnostics().mark(self.pause_trace, 'pause_ack')
+                    self.hooks.pause_timeline(int(event['nanos']))
+                else:
+                    self.hooks.diagnostics().mark(self.pause_trace, 'resume_ack')
+                    self.hooks.resume_timeline(int(event['nanos']))
         elif name == 'playback_error':
             generation = int(event.get('generation', self.hooks.generation()))
             with self.hooks.lock:
@@ -189,13 +199,16 @@ class PlaybackController:
             self.pause_serial += 1
             token = self.pause_serial
             self.pause_token = token
+            trace = self.hooks.trace()
+            generation = self.hooks.generation()
+            self.pause_trace = trace
             self.pause_state = {
                 'token': token,
-                'generation': self.hooks.generation(),
+                'generation': generation,
                 'started': time.monotonic(),
             }
-        self.hooks.diagnostics().mark(self.hooks.trace(), 'pause_request')
-        self.hooks.event('playback_pause', token=token)
+        self.hooks.diagnostics().mark(trace, 'pause_request')
+        self.hooks.event('playback_pause', generation=generation, token=token)
         self.hooks.metric('barge_in_pauses', increment=True)
         self.hooks.log('barge_in_tentative_pause', token=token, **self.hooks.echo_metrics())
         return token
