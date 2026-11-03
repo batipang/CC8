@@ -118,6 +118,14 @@ final class VoiceSession {
     return route == routeEpoch;
   }
 
+  long connectedRoute() {
+    synchronized (routeLock) {
+      return foreground && activeLink != null && activeLink.ready && !activeLink.closed
+          ? routeEpoch
+          : -1;
+    }
+  }
+
   private long routeFor(Link source) {
     synchronized (routeLock) {
       return foreground && source == activeLink ? routeEpoch : -1;
@@ -752,25 +760,45 @@ final class VoiceSession {
     send(j);
   }
 
-  void savedTaskRequest(String requestId, String action, String id) {
-    if (!foreground || !isConnected()) return;
+  boolean savedTaskRequest(String requestId, String action, String id, long route) {
     JSONObject j = Wire.event("saved_task_request");
     Wire.put(j, "request_id", requestId);
     Wire.put(j, "action", action);
     if (id != null) Wire.put(j, "id", id);
-    send(j);
+    return sendWorkspace(j, route);
   }
 
-  void reminderAction(JSONObject args) {
+  boolean reminderAction(JSONObject args, long route) {
     JSONObject j = Wire.event("reminder_action");
     Wire.put(j, "arguments", args);
-    send(j);
+    return sendWorkspace(j, route);
   }
 
-  void cancelTask(String id) {
+  boolean cancelTask(String id, long route) {
     JSONObject j = Wire.event("task_cancel");
     Wire.put(j, "id", id);
-    send(j);
+    return sendWorkspace(j, route);
+  }
+
+  private boolean sendWorkspace(JSONObject j, long route) {
+    synchronized (routeLock) {
+      Link destination = activeLink;
+      if (!foreground
+          || route < 0
+          || route != routeEpoch
+          || destination == null
+          || destination.closed
+          || !destination.ready) return false;
+      try {
+        // A dialog authorizes one enqueue on its own activation. Do not use
+        // sendPacket's audio fallback to forward this write to another route.
+        destination.event(j);
+        return true;
+      } catch (IOException error) {
+        destination.close();
+        return false;
+      }
+    }
   }
 
   private void sendPacket(

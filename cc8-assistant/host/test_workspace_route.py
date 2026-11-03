@@ -37,11 +37,6 @@ SESSION_INTERFACES = r"""
  static class Lan{void cancelPending(){}void release(){}void acquire(){}void configure(JSONObject data){}}
  static class Auth{void reset(){}String challenge(){return "public-test-challenge";}}
  static class Feedback{void reset(){}}
- static class Toast{
-  static final int LENGTH_LONG=1;static int shows;
-  static Toast makeText(Object owner,String message,int duration){return new Toast();}
-  void show(){shows++;}
- }
  static class BuildConfig{static final int CC8_PROTOCOL=2;}
  static class Link{
   boolean closed,ready;int ticket;String kind;

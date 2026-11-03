@@ -695,6 +695,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   }
 
   private void showTaskList() {
+    final long route = workspaceRoute;
     if (linked) session.workspaceGet();
     if (tasksData.length() == 0) {
       new AlertDialog.Builder(this)
@@ -719,7 +720,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
             names,
             (d, n) -> {
               if (n == 0) savedTasks.open();
-              else showTaskDetail(tasks.optJSONObject(n - 1));
+              else showTaskDetail(tasks.optJSONObject(n - 1), route);
             })
         .setNeutralButton("提醒", (d, n) -> showReminders())
         .setPositiveButton("文字指令", (d, n) -> inputTask())
@@ -727,7 +728,18 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
         .show();
   }
 
-  private void showTaskDetail(JSONObject task) {
+  private boolean requireWorkspaceRoute(long route) {
+    if (linked && workspaceRoute == route && session.currentRoute(route)) return true;
+    workspaceNotSent();
+    return false;
+  }
+
+  private void workspaceNotSent() {
+    Toast.makeText(this, "连接已变化或请求未能提交，请重新打开任务或提醒并核对结果", Toast.LENGTH_LONG).show();
+  }
+
+  private void showTaskDetail(JSONObject task, long route) {
+    if (!requireWorkspaceRoute(route)) return;
     StringBuilder body = new StringBuilder(task.optString("stage"));
     JSONArray steps = task.optJSONArray("steps");
     if (steps != null)
@@ -751,13 +763,18 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
             .setView(scroll)
             .setNegativeButton("关闭", null);
     if ("running".equals(task.optString("status")) && linked)
-      dialog.setPositiveButton("停止任务", (d, n) -> session.cancelTask(task.optString("id")));
+      dialog.setPositiveButton(
+          "停止任务",
+          (d, n) -> {
+            if (!session.cancelTask(task.optString("id"), route)) workspaceNotSent();
+          });
     else if (linked)
-      dialog.setPositiveButton("保存结果", (d, n) -> savedTasks.save(task.optString("id")));
+      dialog.setPositiveButton("保存结果", (d, n) -> savedTasks.save(task.optString("id"), route));
     dialog.show();
   }
 
   private void showReminders() {
+    final long route = workspaceRoute;
     if (linked) session.workspaceGet();
     final JSONArray items = remindersData;
     String[] names = new String[items.length()];
@@ -772,10 +789,11 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     }
     AlertDialog.Builder dialog =
         new AlertDialog.Builder(this).setTitle("提醒 · 北京时间").setNegativeButton("关闭", null);
-    if (names.length > 0) dialog.setItems(names, (d, n) -> reminderOptions(items.optJSONObject(n)));
+    if (names.length > 0)
+      dialog.setItems(names, (d, n) -> reminderOptions(items.optJSONObject(n), route));
     else
       dialog.setMessage(linked ? "暂无提醒。Mac 服务运行、CC8 前台连接时可到时播报；离线期间不会开启设备或麦克风。" : "连接 Mac 后可管理提醒。");
-    if (linked) dialog.setPositiveButton("添加提醒", (d, n) -> editReminder(null));
+    if (linked) dialog.setPositiveButton("添加提醒", (d, n) -> editReminder(null, route));
     dialog.show();
   }
 
@@ -785,18 +803,16 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
         : "weekdays".equals(value) ? "工作日" : "weekly".equals(value) ? "每周" : "仅一次";
   }
 
-  private void reminderOptions(JSONObject item) {
+  private void reminderOptions(JSONObject item, long route) {
+    if (!requireWorkspaceRoute(route)) return;
     new AlertDialog.Builder(this)
         .setTitle(item.optString("title"))
         .setItems(
             new String[] {"修改提醒", "稍后 10 分钟", "取消提醒"},
             (d, n) -> {
-              if (!linked) {
-                Toast.makeText(this, "请先连接 Mac", Toast.LENGTH_SHORT).show();
-                return;
-              }
+              if (!requireWorkspaceRoute(route)) return;
               if (n == 0) {
-                editReminder(item);
+                editReminder(item, route);
                 return;
               }
               JSONObject args = Wire.event("unused");
@@ -804,7 +820,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
               Wire.put(args, "action", n == 1 ? "update" : "cancel");
               Wire.put(args, "id", item.optString("id"));
               if (n == 1) Wire.put(args, "due", formatDue(System.currentTimeMillis() + 600000));
-              session.reminderAction(args);
+              if (!session.reminderAction(args, route)) workspaceNotSent();
             })
         .setNegativeButton("关闭", null)
         .show();
@@ -817,7 +833,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     return f.format(new java.util.Date(millis)) + "+08:00";
   }
 
-  private void editReminder(JSONObject item) {
+  private void editReminder(JSONObject item, long route) {
+    if (!requireWorkspaceRoute(route)) return;
     LinearLayout form = new LinearLayout(this);
     form.setOrientation(LinearLayout.VERTICAL);
     form.setPadding(dp(24), dp(16), dp(24), dp(8));
@@ -904,17 +921,17 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
                         Toast.makeText(this, "请选择将来的时间", Toast.LENGTH_LONG).show();
                         return;
                       }
-                      if (!linked) {
-                        Toast.makeText(this, "Mac 尚未连接，未保存", Toast.LENGTH_LONG).show();
-                        return;
-                      }
+                      if (!requireWorkspaceRoute(route)) return;
                       JSONObject args = new JSONObject();
                       Wire.put(args, "action", item == null ? "create" : "update");
                       if (item != null) Wire.put(args, "id", item.optString("id"));
                       Wire.put(args, "title", value);
                       Wire.put(args, "due", formatDue(date.getTimeInMillis()));
                       Wire.put(args, "repeat", keys[repeat.getSelectedItemPosition()]);
-                      session.reminderAction(args);
+                      if (!session.reminderAction(args, route)) {
+                        workspaceNotSent();
+                        return;
+                      }
                       dialog.dismiss();
                     }));
     dialog.show();
