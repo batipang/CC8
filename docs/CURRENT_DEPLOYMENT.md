@@ -121,3 +121,5 @@ Android不保证允许versionCode降级，因此不把旧code33 APK当作可直�
 ## 后续code42候选的恢复准备
 
 原0.14.12功能的metadata-only恢复源码`21b4934`已构建原签名APK0.9.8/code43，SHA256为`a9c9f90d0b7335c32aee1dbd27b27680852714e3d5949b6ece2e1fc745e69d3f`，assemble/lint通过。该包尚未安装；用于后续code42候选失败时的前向覆盖，保留已安装的code41当前基线和全部历史报告。工具启动等待新增两项回归，未修复源码出现两处子用例断言失败、零fixture error；修复后installer23 / host666（4项private skip）/ tooling100 / Java15与质量检查通过。
+
+PR70首轮macOS CI另暴露Endpoint测试夹具竞争：QuietWorker只抑制回答线程，识别线程仍会抢走测试拟自行discard的队列。未重跑原失败提交；夹具现在仅在构造期间关闭两种worker启动，实际Endpoint/队列方法照常运行，真实识别worker集成测试在其独立作用域仍启动线程。新增无后台消费者的不变量在旧夹具稳定复现一处断言失败，修复后installer23 / host667（4项private skip）/ tooling100 / Java15与质量检查通过。该修复只改变测试隔离，不改变设备软件。
