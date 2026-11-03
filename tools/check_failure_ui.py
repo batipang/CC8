@@ -314,6 +314,9 @@ def run(runtime, receipt_path, limit, output, *, shared_staging=False, http_fixt
     digest = hashlib.sha256(private_bytes(apk, 128 * 1024**2)).hexdigest()
     require(digest == receipt['apk_sha256'], 'qa_apk_changed')
     device = Device()
+    # Verify the ignored local installer bundle before fixture generation or
+    # any attempted installation, including its tracked Java source identity.
+    device.access.helper_artifact()
     metadata = apk_metadata(apk, device.access.AAPT)
     require(
         metadata['version_code'] == receipt['version_code']
@@ -322,7 +325,8 @@ def run(runtime, receipt_path, limit, output, *, shared_staging=False, http_fixt
     )
     require(not device.access.package_paths(device.transport, PACKAGE), 'qa_package_already_exists')
     require(not device.shell('pm list packages ' + PACKAGE).strip(), 'qa_absence_unconfirmed')
-    baseline = LiveService(runtime, device.original).sample()
+    service = LiveService(runtime, device.original)
+    baseline = service.sample()
     require(baseline is not None, 'production_not_idle_ready')
     fixtures = generate(http_fixture=http_fixture, cases=CASES[:limit])
     rows = []
@@ -337,6 +341,7 @@ def run(runtime, receipt_path, limit, output, *, shared_staging=False, http_fixt
     sources = source_identity(http_fixture)
     corpus = corpus_identity(fixtures)
     failure = None
+    owner_rechecks = []
 
     def save():
         output.write(
@@ -349,6 +354,7 @@ def run(runtime, receipt_path, limit, output, *, shared_staging=False, http_fixt
                 'automation_sha256': sources,
                 'fixture_sha256': corpus,
                 'phase': phase,
+                'owner_rechecks': list(owner_rechecks),
                 'failure': failure,
                 'hierarchy_diagnostic': device.hierarchy_diagnostic,
                 'started_at': started_at,
@@ -379,8 +385,20 @@ def run(runtime, receipt_path, limit, output, *, shared_staging=False, http_fixt
             }
         )
 
+    def recheck_owner(stage):
+        nonlocal phase
+        phase = stage
+        save()
+        # Fixture generation, signer inspection and installation may each take
+        # seconds. Never take the UI from an owner who resumed using the device,
+        # or silently retarget a replacement production backend.
+        require(service.sample() == baseline, 'production_state_changed')
+        owner_rechecks.append(stage)
+        save()
+
     save()
     try:
+        recheck_owner('owner_before_signer')
         # Cross-package signer comparison is intentional: the fresh QA package
         # must use the already-installed assistant's verified original signer.
         import tempfile
@@ -389,6 +407,7 @@ def run(runtime, receipt_path, limit, output, *, shared_staging=False, http_fixt
             device.access.signature_preflight(
                 device.transport, 'com.happyhome.cc8assistant', apk, Path(temporary)
             )
+        recheck_owner('owner_before_install')
         touched = True
         phase = 'install_qa'
         save()
@@ -398,6 +417,7 @@ def run(runtime, receipt_path, limit, output, *, shared_staging=False, http_fixt
             'qa_install_unconfirmed',
         )
         require(owned_package(device, digest), 'qa_install_unconfirmed')
+        recheck_owner('owner_before_ui')
         phase = 'open_qa'
         ui_touched = True
         save()
