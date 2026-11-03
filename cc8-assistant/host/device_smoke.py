@@ -48,6 +48,33 @@ def require(condition, reason):
         raise CheckFailure(reason)
 
 
+def classify_voice_records(rows):
+    """A VAD trace exists before admission; never equate it with a dialogue."""
+    rejected_gates = ('empty', 'echo_text', 'echo_render', 'weak_near', 'wake_closed')
+    groups = {name: [] for name in ('admitted', 'rejected', 'pending', 'invalid')}
+    for row in rows:
+        stages = row.get('stages', {})
+        require(isinstance(stages, dict), 'diagnostics_unavailable')
+        gate, outcome, generation = row.get('gate'), row.get('outcome'), row.get('generation')
+        if (
+            gate == 'accepted'
+            or type(generation) is int
+            or 'brain_start' in stages
+            or row.get('task_outcome') is not None
+        ):
+            category = 'admitted'
+        elif generation is not None or row.get('error') is not None:
+            category = 'invalid'
+        elif outcome is None and gate in (None, *rejected_gates):
+            category = 'pending'
+        elif outcome == 'rejected' and gate in rejected_gates:
+            category = 'rejected'
+        else:
+            category = 'invalid'
+        groups[category].append(row)
+    return groups
+
+
 def objects(text, marker):
     # dumpsys also contains captions and OEM details. Return only the requested
     # JSON object in memory; the report builder never copies these objects.
@@ -438,10 +465,21 @@ class SmokeRun:
                 for r in p['requests']
                 if r.get('request_id') not in ids and r.get('origin') == 'voice'
             ]
+            groups = classify_voice_records(rows)
+            admitted, rejected = groups['admitted'], groups['rejected']
             # Keep only fixed stage counts, never request IDs, transcripts,
             # provider text or audio. A completed task is not a played answer.
             self.acoustic_evidence = {
                 'new_voice_requests': len(rows),
+                'admitted_voice_requests': len(admitted),
+                'rejected_voice_candidates': len(rejected),
+                'pending_voice_candidates': len(groups['pending']),
+                'unclassified_terminal_candidates': len(groups['invalid']),
+                'rejected_pause_count': sum('pause_ack' in r.get('stages', {}) for r in rejected),
+                'unresumed_rejected_pauses': sum(
+                    'pause_ack' in r.get('stages', {}) and 'resume_ack' not in r['stages']
+                    for r in rejected
+                ),
                 'completed_requests': sum(r.get('outcome') == 'completed' for r in rows),
                 'cancelled_requests': sum(r.get('outcome') == 'cancelled' for r in rows),
                 'completed_tasks': sum(r.get('task_outcome') == 'completed' for r in rows),
@@ -454,6 +492,8 @@ class SmokeRun:
                         'playout_ack',
                         'playback_done',
                         'pause_request',
+                        'pause_ack',
+                        'resume_ack',
                     )
                 },
                 'post_playback_quiet_seconds': (self.acoustic_evidence or {}).get(
@@ -461,22 +501,27 @@ class SmokeRun:
                 ),
             }
             self.checkpoint(self.report('running'))
-            require(len(rows) <= 1, 'unexpected_extra_voice_request')
+            require(len(admitted) <= 1, 'unexpected_extra_voice_request')
+            require(not groups['invalid'], 'synthetic_voice_candidate_not_rejected')
             require(
-                all(r.get('outcome') in (None, 'completed') for r in rows),
+                all(
+                    r.get('outcome') in (None, 'completed') and r.get('error') is None
+                    for r in admitted
+                ),
                 'synthetic_voice_request_not_completed',
             )
             return any(
                 r.get('outcome') == 'completed'
                 and {'wake_detected', 'asr_end', 'brain_start', 'playback_done'}
                 <= set(r.get('stages', {}))
-                for r in rows
+                for r in admitted
             )
 
         self.wait(received, 120, 'synthetic_acoustic_chain_not_confirmed')
         # An immediate cleanup could hide a post-answer echo turn. Keep one
-        # bounded observation window; any extra voice request is a failure,
-        # without claiming whether its source was echo or a person in the room.
+        # bounded observation window. An extra admitted dialogue fails, while
+        # a transient candidate must resolve and a rejected pause must resume.
+        # Counts remain visible; success never implies pause-free playback.
         quiet_started = self.clock()
         while self.clock() - quiet_started < 20:
             self.sleep(min(0.5, 20 - (self.clock() - quiet_started)))
@@ -485,6 +530,14 @@ class SmokeRun:
                 self.clock() - quiet_started, 3
             )
             self.checkpoint(self.report('running'))
+        require(
+            self.acoustic_evidence['pending_voice_candidates'] == 0,
+            'unresolved_voice_candidate',
+        )
+        require(
+            self.acoustic_evidence['unresumed_rejected_pauses'] == 0,
+            'rejected_pause_not_resumed',
+        )
         d, ui = self.device.status()
         require(
             ui.get('screen_sleeping') is False and d.get('foreground') is True,

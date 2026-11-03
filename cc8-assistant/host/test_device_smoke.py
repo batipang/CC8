@@ -568,6 +568,109 @@ class DeviceAutomationTests(unittest.TestCase):
         self.assertEqual(evidence['stage_counts']['asr_end'], 1)
         device.speak_probe.assert_called_once_with()
 
+    @staticmethod
+    def rejected_candidate(**changes):
+        return {
+            'request_id': 'PRIVATE_REJECTED_CANDIDATE',
+            'origin': 'voice',
+            'generation': None,
+            'outcome': 'rejected',
+            'gate': 'echo_text',
+            'stages': {
+                'voice_detected': 0,
+                'pause_ack': 49.2,
+                'asr_end': 1559.3,
+                'resume_ack': 1580.8,
+            },
+            **changes,
+        }
+
+    def test_rejected_echo_record_is_reported_without_becoming_a_second_dialogue(self):
+        first = self.acoustic_row()
+        rejected = self.rejected_candidate()
+        run, device, _, now = self.acoustic_fixture(lambda _: [first, rejected])
+        try:
+            run.acoustic_probe()
+        except CheckFailure as error:
+            self.fail(f'A rejected, resumed candidate is not an admitted dialogue: {error}')
+        evidence = run.report('passed')['acoustic_evidence']
+        self.assertEqual(evidence['new_voice_requests'], 2)
+        self.assertEqual(evidence['admitted_voice_requests'], 1)
+        self.assertEqual(evidence['rejected_voice_candidates'], 1)
+        self.assertEqual(evidence['rejected_pause_count'], 1)
+        self.assertEqual(evidence['unresumed_rejected_pauses'], 0)
+        self.assertGreaterEqual(now[0], 20)
+        self.assertNotIn('PRIVATE', json.dumps(evidence))
+        device.speak_probe.assert_called_once_with()
+
+    def test_pending_candidate_can_be_rejected_during_observation(self):
+        first = self.acoustic_row()
+        pending = self.rejected_candidate(outcome=None, gate=None, stages={'voice_detected': 0})
+        rejected = self.rejected_candidate()
+        run, device, _, now = self.acoustic_fixture(
+            lambda seconds: [first, pending if seconds < 1 else rejected]
+        )
+        try:
+            run.acoustic_probe()
+        except CheckFailure as error:
+            self.fail(
+                f'Candidate classification must resolve before being counted as dialogue: {error}'
+            )
+        self.assertGreaterEqual(now[0], 20)
+        self.assertEqual(run.report('passed')['acoustic_evidence']['pending_voice_candidates'], 0)
+        device.speak_probe.assert_called_once_with()
+
+    def test_unresolved_candidate_cannot_pass_the_end_of_the_quiet_window(self):
+        first = self.acoustic_row()
+        pending = self.rejected_candidate(outcome=None, gate=None, stages={'voice_detected': 0})
+        run, device, _, now = self.acoustic_fixture(lambda _: [first, pending])
+        with self.assertRaisesRegex(CheckFailure, 'unresolved_voice_candidate'):
+            run.acoustic_probe()
+        self.assertGreaterEqual(now[0], 20)
+        device.speak_probe.assert_called_once_with()
+
+    def test_rejected_acknowledged_pause_requires_a_resume_receipt(self):
+        first = self.acoustic_row()
+        rejected = self.rejected_candidate(stages={'pause_ack': 49.2, 'asr_end': 1559.3})
+        run, device, _, now = self.acoustic_fixture(lambda _: [first, rejected])
+        with self.assertRaisesRegex(CheckFailure, 'rejected_pause_not_resumed'):
+            run.acoustic_probe()
+        self.assertGreaterEqual(now[0], 20)
+        device.speak_probe.assert_called_once_with()
+
+    def test_rejected_label_cannot_hide_an_extra_admitted_generation_or_task(self):
+        for marker in (
+            {'generation': 7},
+            {'task_outcome': 'completed'},
+            {'gate': 'accepted'},
+            {'stages': {'brain_start': 1}},
+        ):
+            run, device, _, _ = self.acoustic_fixture(
+                lambda _: [self.acoustic_row(), self.rejected_candidate(**marker)]
+            )
+            with (
+                self.subTest(marker=marker),
+                self.assertRaisesRegex(CheckFailure, 'unexpected_extra_voice_request'),
+            ):
+                run.acoustic_probe()
+            device.speak_probe.assert_called_once_with()
+
+    def test_unknown_or_cancelled_candidate_cannot_be_silently_ignored(self):
+        for changes in (
+            {'gate': 'stale', 'outcome': 'cancelled'},
+            {'gate': 'unknown'},
+            {'generation': True},
+        ):
+            run, device, _, _ = self.acoustic_fixture(
+                lambda _: [self.acoustic_row(), self.rejected_candidate(**changes)]
+            )
+            with (
+                self.subTest(changes=changes),
+                self.assertRaisesRegex(CheckFailure, 'synthetic_voice_candidate_not_rejected'),
+            ):
+                run.acoustic_probe()
+            device.speak_probe.assert_called_once_with()
+
     def test_acoustic_observation_rejects_capture_loss_or_runtime_replacement(self):
         for changed in ('microphone_active', 'connected', 'runtime_instance'):
             with self.subTest(changed=changed):
