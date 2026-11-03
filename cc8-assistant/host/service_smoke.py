@@ -383,8 +383,10 @@ class SupervisorRecoveryRun(RecoveryRun):
 
     def crash(self, previous):
         self.fault_previous = dict(previous)
-        self.fault_at = time.time()
         self.service.crash_supervisor(previous)
+        # Revalidation itself can cross a ready-write tick. Timestamp after the
+        # signal so an old supervisor's last write cannot satisfy recovery.
+        self.fault_at = time.time()
 
     def recovered(self, current, previous):
         return current['supervisor_pid'] != previous['supervisor_pid'] and (

@@ -24,7 +24,7 @@ Backend0.14.17; APK0.9.13/code48 and protocol2 unchanged. Deployed backend remai
 - Recognize service.py's existing surviving-backend adoption only with parent1,
   fresh private ready metadata and the matching launchd-owned supervisor.
 - Re-sample when a replacement appears between process snapshots; still reject
-  duplicates. Pass 20 targeted checks, including minimal-PATH plan execution.
+  duplicates. Pass 21 targeted checks, including minimal-PATH plan execution.
 - Preserve the initial real-device checker failure and separately confirmed
   recovery; do not repeat the fault merely to obtain a green combined report.
 

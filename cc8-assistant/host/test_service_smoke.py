@@ -488,6 +488,7 @@ class RecoveryTests(unittest.TestCase):
         run = SupervisorRecoveryRun(service, 1)
         with self.assertRaises(CheckFailure):
             run.sample()
+
         run.fault_sent = True
         run.fault_at = 100
         run.fault_previous = {'pid': 20, 'instance': 'a'}
@@ -509,6 +510,20 @@ class RecoveryTests(unittest.TestCase):
         }
         with self.assertRaises(CheckFailure):
             run.sample()
+
+    def test_post_fault_ready_boundary_is_taken_after_the_verified_signal(self):
+        events = []
+        service = SimpleNamespace(crash_supervisor=lambda previous: events.append('signal'))
+        run = SupervisorRecoveryRun(service, 1)
+
+        def timestamp():
+            events.append('timestamp')
+            return 100
+
+        with patch('service_smoke.time.time', side_effect=timestamp):
+            run.crash({'pid': 20, 'instance': 'a'})
+        self.assertEqual(events, ['signal', 'timestamp'])
+        self.assertEqual(run.fault_at, 100)
 
     def test_real_minimal_path_plan_never_queries_or_creates_runtime(self):
         root = Path(__file__).resolve().parents[2]
