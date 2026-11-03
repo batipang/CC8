@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-paused-tail-drain-20261103.2",
+  "release_id": "p0-confirmed-playback-pause-20261103.1",
   "backend": {
-    "version": "0.14.13"
+    "version": "0.14.14"
   },
   "assistant": {
     "version": "0.9.7",
@@ -20,9 +20,9 @@
     "device_max": 2
   },
   "known_deployed_pair": {
-    "assistant_version": "0.9.6",
-    "assistant_version_code": 41,
-    "backend_version": "0.14.12",
+    "assistant_version": "0.9.7",
+    "assistant_version_code": 42,
+    "backend_version": "0.14.13",
     "protocol": 2
   }
 }

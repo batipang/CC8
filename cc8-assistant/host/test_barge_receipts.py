@@ -6,17 +6,20 @@ import threading
 import unittest
 
 import test_capture_evidence as fixture
+from test_pause_confirmation import Span
 
 
 class BargeReceiptTests(unittest.TestCase):
     def paused_endpoint(self):
         b, frame, _ = fixture.CaptureDiagnosticsTests().endpoint()
         b.playback.device_can_pause = True
-        b.capture.endpoint.consume(frame)
+        b.capture.endpoint.vad = Span(12)
+        for index in range(12):
+            b.capture.endpoint.consume(replace(frame, nanos=frame.nanos + index * 10_000_000))
         key = b.capture.endpoint.voice_trace
         token = b.playback.pause_token
         generation = b.session.generation
-        b.capture.endpoint.consume(replace(frame, nanos=frame.nanos + 10_000_000))
+        b.capture.endpoint.consume(replace(frame, nanos=frame.nanos + 120_000_000))
         b.recognition.queue.get_nowait()
         self.assertIsNone(b.capture.endpoint.voice_trace)
         return b, frame, key, token, generation
@@ -38,7 +41,7 @@ class BargeReceiptTests(unittest.TestCase):
 
     def test_late_ack_does_not_attach_to_a_new_partial_or_new_owner(self):
         b, frame, key, token, generation = self.paused_endpoint()
-        b.capture.endpoint.consume(replace(frame, nanos=frame.nanos + 20_000_000))
+        b.capture.endpoint.consume(replace(frame, nanos=frame.nanos + 130_000_000))
         newer = b.capture.endpoint.voice_trace
         self.assertNotEqual(key, newer)
         b.playback.device_event(

@@ -1,5 +1,19 @@
 # Changelog
 
+## p0-confirmed-playback-pause-20261103.1 — backend source candidate
+
+Backend0.14.14, retained original-signature APK0.9.7/code42, protocol2 unchanged.
+
+- Require twelve confirmed near frames within the current utterance before the
+  first tentative playback pause. Reset on capture lifecycles; preserve ASR
+  admission, acoustic thresholds, endpointing and independent streaming stop.
+- Pre-register new synthetic-voice paired controls and keep the previously seen
+  voice samples as development data, including their existing failures.
+- Record the successful0.14.13/code42 deployment, three exercised resume cases
+  and one unexercised late case. Q13 completed with real padding but still had
+  a rejected short candidate pause; do not claim false-pause acceptance.
+
+
 ## p0-paused-tail-drain-20261103.2 — source candidate
 
 Backend 0.14.13 / assistant APK0.9.7/code42; audio code unchanged from PR69.

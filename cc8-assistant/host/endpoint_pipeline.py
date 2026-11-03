@@ -48,6 +48,9 @@ class EndpointHooks:
     claim_wake: Callable[[], bool]
 
 
+PAUSE_CREDIBLE_FRAMES = 12
+
+
 class EndpointPipeline:
     def __init__(self, hooks: EndpointHooks, fast_stop=None):
         self.hooks = hooks
@@ -56,6 +59,7 @@ class EndpointPipeline:
         self.reference_capture = ReferenceCapture()
         self.near_speech = NearSpeechDetector()
         self.voice_trace = None
+        self.pause_confirmed_frames = 0
         self.live_turn = 0
         self.turn_reference = []
         self.turn_local_wake = False
@@ -69,6 +73,7 @@ class EndpointPipeline:
         self.ignore_vad_until_ns = 0
 
     def cancel_partial_trace(self):
+        self.pause_confirmed_frames = 0
         # Only the endpoint-owned, unfinished capture belongs here. After
         # handoff, recognition owns its trace and decides its terminal outcome.
         if self.voice_trace is not None:
@@ -172,9 +177,17 @@ class EndpointPipeline:
             self.turn_local_wake = True
         if claimed_wake and self.voice_trace is not None:
             self.hooks.diagnostics().mark(self.voice_trace, 'wake_detected')
+        if self.vad.talking and credible:
+            # Short echo bursts can pass the detector briefly. Confirm within
+            # this utterance before pausing; recognition and fast stop are
+            # independent, and acoustic thresholds remain the detector's own.
+            self.pause_confirmed_frames = min(
+                PAUSE_CREDIBLE_FRAMES, self.pause_confirmed_frames + 1
+            )
         if (
             self.vad.talking
             and credible
+            and self.pause_confirmed_frames >= PAUSE_CREDIBLE_FRAMES
             and self.hooks.playing()
             and self.hooks.awake()
             and (not self.hooks.paused())
