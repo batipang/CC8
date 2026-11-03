@@ -10,7 +10,7 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import requests
 
@@ -365,6 +365,134 @@ class HTTPBudgetTLS(unittest.TestCase):
         finally:
             server.close()
 
+    def test_stalled_dns_times_out_before_the_os_lookup_finishes(self):
+        original = socket.getaddrinfo
+        for operation in ('transcribe', 'post_json', 'events'):
+            with self.subTest(operation=operation):
+                release, finished = threading.Event(), threading.Event()
+                server = DripServer(self.context, 'immediate', b'{"value":1}')
+                timer = threading.Timer(1.5, release.set)
+
+                def stalled(*args, **kwargs):
+                    try:
+                        release.wait(3)
+                        return original(*args, **kwargs)
+                    finally:
+                        finished.set()
+
+                client = self.client(server)
+                client.timeout = (0.15, 0.15)
+                timer.start()
+                try:
+                    with patch('socket.getaddrinfo', side_effect=stalled):
+                        began = time.monotonic()
+                        with self.assertRaises(MiniMaxError) as failure:
+                            if operation == 'transcribe':
+                                client.transcribe(b'public-fixture')
+                            elif operation == 'events':
+                                list(client.events('/v1/test', {}))
+                            else:
+                                client.post_json('/v1/test', {})
+                        elapsed = time.monotonic() - began
+                        self.assertEqual(failure.exception.kind, 'timeout')
+                        self.assertLess(elapsed, 0.9)
+                        self.assertFalse(release.is_set())
+                        self.assertFalse(server.headers_received.is_set())
+                        self.assertEqual(client.slots, set())
+                        release.set()
+                        self.assertTrue(finished.wait(2))
+                finally:
+                    release.set()
+                    timer.cancel()
+                    timer.join(2)
+                    server.close()
+        self.assert_normal_verified_tls_asr_json_and_sse()
+
+    def test_cancellation_returns_while_dns_is_still_blocked(self):
+        original = socket.getaddrinfo
+        entered, release, finished = (threading.Event() for _ in range(3))
+        server = DripServer(self.context, 'immediate', b'{"value":1}')
+        client = self.client(server)
+        client.timeout = (2, 2)
+        outcomes = []
+
+        def stalled(*args, **kwargs):
+            entered.set()
+            try:
+                release.wait(4)
+                return original(*args, **kwargs)
+            finally:
+                finished.set()
+
+        def request():
+            try:
+                client.post_json('/v1/test', {})
+            except Exception as error:
+                outcomes.append(type(error))
+
+        worker = threading.Thread(target=request, daemon=True)
+        try:
+            with patch('socket.getaddrinfo', side_effect=stalled):
+                try:
+                    worker.start()
+                    self.assertTrue(entered.wait(2))
+                    client.cancel()
+                    worker.join(0.6)
+                    self.assertFalse(worker.is_alive())
+                    self.assertFalse(release.is_set())
+                    self.assertEqual(outcomes, [Cancelled])
+                    self.assertEqual(client.slots, set())
+                    self.assertFalse(server.headers_received.is_set())
+                finally:
+                    release.set()
+                    self.assertTrue(finished.wait(2))
+                    worker.join(3)
+        finally:
+            server.close()
+        self.assert_normal_verified_tls_asr_json_and_sse()
+
+    def test_proxy_dns_uses_the_same_deadline_before_any_connect(self):
+        original = socket.getaddrinfo
+        release, finished = threading.Event(), threading.Event()
+        server = DripServer(self.context, 'immediate', b'{"value":1}')
+        proxy = ConnectProxy(server.port)
+        client = self.client(server)
+        factory = client.factory
+
+        def session():
+            value = factory()
+            value.proxies = {'https': f'http://localhost:{proxy.port}'}
+            return value
+
+        def stalled(*args, **kwargs):
+            try:
+                release.wait(3)
+                return original(*args, **kwargs)
+            finally:
+                finished.set()
+
+        client.factory = session
+        timer = threading.Timer(1.5, release.set)
+        timer.start()
+        try:
+            with patch('socket.getaddrinfo', side_effect=stalled):
+                try:
+                    began = time.monotonic()
+                    with self.assertRaises(MiniMaxError) as failure:
+                        client.post_json('/v1/test', {})
+                    self.assertEqual(failure.exception.kind, 'timeout')
+                    self.assertLess(time.monotonic() - began, 0.9)
+                    self.assertFalse(proxy.tunnelled.is_set())
+                    self.assertFalse(server.headers_received.is_set())
+                finally:
+                    release.set()
+                    self.assertTrue(finished.wait(2))
+        finally:
+            timer.cancel()
+            timer.join(2)
+            proxy.close()
+            server.close()
+
     def test_successful_connect_tunnel_preserves_verified_tls_and_json(self):
         server = DripServer(self.context, 'immediate', b'{"value":1}')
         proxy = ConnectProxy(server.port)
@@ -480,6 +608,18 @@ class BudgetUnitTests(unittest.TestCase):
         with self.assertRaises(OSError):
             first.wrap(c)
         c.shutdown.assert_called_once_with(socket.SHUT_RDWR)
+
+    def test_timeout_classification_uses_only_bounded_structured_proxy_causes(self):
+        from urllib3.exceptions import MaxRetryError, ProxyError
+
+        slot = RequestSlot(budget=IOBudget(1))
+        ordinary = requests.exceptions.ProxyError(
+            MaxRetryError(None, '/', ProxyError('timeout in untrusted text', OSError('timeout')))
+        )
+        self.assertEqual(Transport.network_kind(ordinary, slot), 'transport_or_io')
+        cyclic = requests.ConnectionError()
+        cyclic.args = (cyclic,)
+        self.assertEqual(Transport.network_kind(cyclic, slot), 'transport_or_io')
 
     def test_repeated_cancel_does_not_create_unbounded_closer_threads(self):
         response = Mock()

@@ -2,19 +2,22 @@
 
 Socket reads include buffered HTTP headers, chunk framing and body reads, so a
 responsive drip cannot evade the budget. Time spent playing audio or consuming
-an already-yielded event is not charged. DNS resolution is still owned by the
-OS; it cannot be interrupted here, and is charged when connect returns.
+an already-yielded event is not charged. DNS waiting is bounded too; the OS
+lookup can finish in a bounded daemon worker without reviving its caller.
 """
 
 from contextlib import contextmanager
 import math
 import socket
+import sys
 import threading
 import time
 import weakref
 
 from requests.adapters import HTTPAdapter
 from urllib3.util.ssltransport import SSLTransport
+from urllib3.exceptions import ConnectTimeoutError, NameResolutionError, NewConnectionError
+import dns_budget
 
 
 class IOBudget:
@@ -158,6 +161,27 @@ class BudgetAdapter(HTTPAdapter):
         budget = self.budget
 
         class Connection(original.ConnectionCls):
+            def _new_conn(self):
+                # Keep urllib3's error categories, original hostname for TLS
+                # verification/SNI and audit event. Only its socket creation
+                # changes; no resolver monkey patch or cross-request pool edit.
+                try:
+                    peer = dns_budget.connect(
+                        (self._dns_host, self.port),
+                        self.timeout,
+                        budget,
+                        source_address=self.source_address,
+                        socket_options=self.socket_options,
+                    )
+                except socket.gaierror as error:
+                    raise NameResolutionError(self.host, self, error) from error
+                except TimeoutError as error:
+                    raise ConnectTimeoutError(self, 'Connection deadline exhausted') from error
+                except OSError as error:
+                    raise NewConnectionError(self, 'Could not establish connection') from error
+                sys.audit('http.client.connect', self, self.host, self.port)
+                return peer
+
             def connect(self):
                 with budget.io(nested=True) as left:
                     self.timeout = limited_timeout(self.timeout, left)

@@ -1,5 +1,17 @@
 # Changelog
 
+## p0-dns-deadline-20261103.1 — source candidate
+
+Backend 0.14.9; original assistant APK 0.9.3/code38 and protocol2 unchanged.
+
+- Bound MiniMax DNS wait and all returned TCP address attempts by the connection
+  deadline, including ordinary CONNECT proxy host lookup and local bind names.
+- Cancel the caller without waiting for the OS resolver. Limit outstanding OS
+  lookups to four daemon workers with no queue, cache, callback or automatic retry.
+- Keep TLS hostname verification, per-request pools and structured timeout errors,
+  including wrapped proxy timeouts. Late DNS results cannot create a connection.
+- The running 0.14.8 installation and its independent observation stay unchanged.
+
 ## p0-candidate-20261103.2 — deployed backend candidate
 
 Backend 0.14.8, source bb7767b; original assistant APK 0.9.3/code38 retained.

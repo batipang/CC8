@@ -13,7 +13,7 @@ import time
 from urllib.parse import urlparse
 import numpy as np
 import requests
-from urllib3.exceptions import ReadTimeoutError
+from urllib3.exceptions import ReadTimeoutError, ConnectTimeoutError, MaxRetryError, ProxyError
 from web_search import now, wants_web, normalize, parse_plan, SpeechClauses
 from configuration import load_config
 from operation_failure import ClassifiedFailure
@@ -249,14 +249,24 @@ class Transport:
 
     @staticmethod
     def network_kind(error, slot):
-        # Requests wraps streaming urllib3 read timeouts as ConnectionError.
-        return (
-            'timeout'
-            if slot.budget.expired
-            or isinstance(error, (TimeoutError, requests.Timeout))
-            or (error.args and isinstance(error.args[0], ReadTimeoutError))
-            else 'transport_or_io'
-        )
+        # Requests may wrap timeouts in ConnectionError, or twice again for
+        # CONNECT proxy DNS. Follow only known structured wrappers, never text.
+        if slot.budget.expired:
+            return 'timeout'
+        for _ in range(8):
+            if isinstance(
+                error, (TimeoutError, requests.Timeout, ReadTimeoutError, ConnectTimeoutError)
+            ):
+                return 'timeout'
+            if isinstance(error, MaxRetryError):
+                error = error.reason
+            elif isinstance(error, ProxyError):
+                error = error.original_error
+            elif isinstance(error, requests.RequestException) and error.args:
+                error = error.args[0]
+            else:
+                break
+        return 'transport_or_io'
 
     def transcribe(self, wav, is_current=lambda: True):
         """Bounded in-memory WAV upload, only for explicitly selected cloud ASR."""
