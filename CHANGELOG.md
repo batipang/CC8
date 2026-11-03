@@ -14,6 +14,9 @@ Backend0.14.15; original APK0.9.7/code42 and protocol2 unchanged.
   content-free and add no retries or provider/configuration changes.
 - Add verified loopback TLS controls for all three HTTP paths. Real MiniMax
   faults/device UI remain separate; deployed backend0.14.13 and its observer stay.
+- Separately complete one real normal TTS-to-ASR-in-memory compatibility probe
+  and one JSON search with the unchanged owner configuration/voice. Save no audio
+  or transcript, play nothing and leave the deployed instance/observer untouched.
 
 
 ## p0-pause-candidate-withdrawn-20261103.1 — default backend restored
