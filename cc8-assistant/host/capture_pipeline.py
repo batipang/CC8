@@ -60,6 +60,7 @@ class CapturePipeline:
     def end_probe(self, probe=None, status='cancelled'):
         if self.probe is not None and (probe is None or self.probe is probe):
             self.evidence.cancel(status, self.probe)
+            self.probe.render_clock.cancel()
             # Lookahead still contains measurement audio. It must not become
             # a fresh conversation after the owner releases the test lease.
             # Do not mutate the ingress-owned deque from an IPC thread. A
@@ -68,6 +69,19 @@ class CapturePipeline:
             self.measuring = False
             self.probe = None
             self.endpoint.reset_voice_activity()
+
+    def begin_render_clock(self, generation, playback_id):
+        probe = self.probe
+        return bool(
+            probe is not None
+            and probe.generation == generation
+            and probe.render_clock.begin(generation, playback_id)
+        )
+
+    def complete_render_clock(self, generation, playback_id, value, expected_frames):
+        probe = self.probe
+        if probe is not None and probe.generation == generation:
+            probe.render_clock.accept(generation, playback_id, value, expected_frames)
 
     def reset_transport(self, kind):
         self.end_probe(status='transport_changed')

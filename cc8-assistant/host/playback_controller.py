@@ -46,6 +46,10 @@ class PlaybackHooks:
     cancel_timeline_pause: Callable[[], None]
     pause_timeline: Callable[[int], None]
     resume_timeline: Callable[[int], None]
+    begin_clock_report: Callable[[int, int], bool] = lambda generation, playback_id: False
+    complete_clock_report: Callable[[int, object, object, int | None], None] = (
+        lambda generation, playback_id, value, frames: None
+    )
 
 
 class PlaybackController:
@@ -64,6 +68,8 @@ class PlaybackController:
         self.publication_lock = threading.RLock()
         self.device_can_pause = False
         self.device_can_report_playout = False
+        self.device_can_report_completion = False
+        self.device_can_report_clock = False
         self.playout_probe = PlayoutReceipt()
         self.pause_cooldown = 0
         self.playback_serial = 0
@@ -91,6 +97,7 @@ class PlaybackController:
         self.pause_token = 0
         self.pause_trace = None
         self.set_playout_capability(False)
+        self.set_completion_capability(False)
 
     def notify(self):
         with self.done:
@@ -104,6 +111,25 @@ class PlaybackController:
             self.device_can_report_playout = enabled
             if not enabled:
                 self.playout_probe.clear()
+                self.device_can_report_clock = False
+
+    def set_clock_report_capability(self, enabled):
+        with self.publication_lock:
+            self.device_can_report_clock = bool(
+                enabled and self.device_can_report_playout and self.device_can_report_completion
+            )
+
+    def set_completion_capability(self, enabled):
+        with self.publication_lock:
+            self.device_can_report_completion = bool(enabled)
+            if not enabled:
+                self.device_can_report_clock = False
+
+    def matches_completion(self, event):
+        ident = event.get('playback_id')
+        if ident is None:
+            return not self.device_can_report_completion
+        return type(ident) is int and ident > 0 and ident == self.playback_serial
 
     def reset_session(self):
         self.playout_probe.clear()
@@ -144,8 +170,19 @@ class PlaybackController:
             # renderer may immediately publish the next clause of this turn.
             # Order is publication -> completion, never completion -> session.
             with self.publication_lock:
+                if generation == self.hooks.generation() and not self.matches_completion(event):
+                    return
                 with self.done:
                     if generation == self.hooks.generation():
+                        clock_id = event.get('playback_id')
+                        clock_frames = (
+                            self.playout_probe.expected_frames(generation, clock_id)
+                            if type(clock_id) is int
+                            else None
+                        )
+                        self.hooks.complete_clock_report(
+                            generation, clock_id, event.get('render_clock'), clock_frames
+                        )
                         self.hooks.diagnostics().mark(generation, 'playback_done')
                         self.completed = {generation}
                         self.playing = False
@@ -172,6 +209,11 @@ class PlaybackController:
             with self.hooks.lock:
                 if generation != self.hooks.generation():
                     return
+                with self.publication_lock:
+                    if not self.matches_completion(event) or (
+                        self.device_can_report_completion and not self.playing
+                    ):
+                        return
                 self.hooks.diagnostics().failure(generation, 'playback', RuntimeError())
                 self.hooks.log(
                     'device_playback_error', error_type=str(event.get('error_type', 'Unknown'))[:50]
@@ -328,6 +370,9 @@ class PlaybackController:
                 request_playout = self.device_can_report_playout
                 if request_playout:
                     self.playout_probe.begin(generation, playback_id)
+                request_clock = self.device_can_report_clock and self.hooks.begin_clock_report(
+                    generation, playback_id
+                )
             # Output is locally active before any begin notification can fail.
             started = True
             self.output_event(
@@ -339,6 +384,7 @@ class PlaybackController:
                 streaming=True,
                 playback_id=playback_id,
                 playout_receipt_version=1 if request_playout else 0,
+                report_audio_clock=request_clock,
                 timings=timing.rows() if timing else [],
             )
             if timing:

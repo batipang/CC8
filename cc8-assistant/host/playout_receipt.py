@@ -61,3 +61,7 @@ class PlayoutReceipt:
                 return False
             self.received = True
             return True
+
+    def expected_frames(self, generation: int, playback_id: int) -> int | None:
+        with self.lock:
+            return self.maximum if self.identity == (generation, playback_id) else None

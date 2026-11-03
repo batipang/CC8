@@ -277,6 +277,13 @@ class SessionController:
         self.hooks.playback().set_playout_capability(
             type(j.get('playout_receipt_version')) is int and j['playout_receipt_version'] == 1
         )
+        self.hooks.playback().set_completion_capability(
+            type(j.get('playback_done_id_version')) is int and j['playback_done_id_version'] == 1
+        )
+        self.hooks.playback().set_clock_report_capability(
+            type(j.get('render_clock_report_version')) is int
+            and j['render_clock_report_version'] == 1
+        )
         if self.active and not j.get('capture_active', False):
             self.hooks.stop()
         if 'wake_mode' in j and bool(j['wake_mode']) != self.wake:

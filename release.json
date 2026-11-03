@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "p0-playback-evidence-clock-segments-20261104.1",
+  "release_id": "p0-render-clock-provenance-20261104.1",
   "backend": {
-    "version": "0.14.19"
+    "version": "0.14.20"
   },
   "assistant": {
-    "version": "0.9.13",
-    "version_code": 48,
+    "version": "0.9.14",
+    "version_code": 49,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {
