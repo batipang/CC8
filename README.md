@@ -12,7 +12,7 @@
 
 ## 文档
 
-[当前部署：后台0.14.12／保留原APK0.9.3，以及自动验收范围](docs/CURRENT_DEPLOYMENT.md)。[原P0软件交接](docs/P0_SOFTWARE_HANDOFF.md)保留历史快照。
+[当前部署：后台0.14.12／原签名恢复APK0.9.6，以及自动验收范围](docs/CURRENT_DEPLOYMENT.md)。[原P0软件交接](docs/P0_SOFTWARE_HANDOFF.md)保留历史快照。
 
 - [从准备设备到安装 APK 的完整步骤](docs/APK_INSTALL.md)
 - [构建、签名与测试](docs/DEVELOPMENT.md)

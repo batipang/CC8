@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -213,10 +214,6 @@ class CaptureDiagnosticsTests(unittest.TestCase):
         self.assertEqual(result.stdout, 'lightweight\n')
 
     def endpoint(self):
-        class QuietWorker(Bridge):
-            def work(self):
-                pass
-
         class Boundaries:
             talking = False
 
@@ -227,7 +224,13 @@ class CaptureDiagnosticsTests(unittest.TestCase):
                 self.talking = not self.talking
                 return self.talking, None if self.talking else pcm.copy(), -30
 
-        b = QuietWorker(None, None)
+        # Endpoint/queue assertions own both queues. Overriding Bridge.work
+        # only quiets the response worker, not the independently started ASR.
+        with (
+            patch('recognition_worker.RecognitionWorker.start'),
+            patch('response_worker.ResponseWorker.start'),
+        ):
+            b = Bridge(None, None)
         b.session.connection = Sink()
         b.session.active = True
         b.session.wake = False
@@ -246,6 +249,11 @@ class CaptureDiagnosticsTests(unittest.TestCase):
         raw, cleaned, reference = np.full(FRAME, 0.1), np.full(FRAME, 0.01), np.full(FRAME, 0.2)
         frame = CleanFrame(1_000_000_000, raw, reference, cleaned, cleaned)
         return b, frame, Boundaries
+
+    def test_endpoint_fixture_has_no_background_queue_consumers(self):
+        b, _, _ = self.endpoint()
+        self.assertIsNone(b.recognition.worker)
+        self.assertIsNone(b.response.worker)
 
     def test_actual_endpoint_binds_capture_to_its_queued_trace_without_changing_pcm(self):
         b, frame, _ = self.endpoint()

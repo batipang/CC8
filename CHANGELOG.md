@@ -1,5 +1,20 @@
 # Changelog
 
+## p0-paused-tail-drain-20261103.2 — source candidate
+
+Backend 0.14.13 / assistant APK0.9.7/code42; audio code unchanged from PR69.
+
+- Wait for the explicitly opened owned Activity, retaining the existing USB
+  target check, shell deadline and requested auto-voice flag.
+- Preserve the first code40 deployment failure and successful code41 rollback:
+  it stopped at complete pair readiness, before any audio fix validation. The
+  script omitted the exact failure code; cold UI controls did not reproduce it.
+- Isolate Endpoint/queue fixtures from both background workers after macOS CI
+  exposed an unintended ASR consumer; retain the failed run and add an explicit
+  no-consumer invariant. Real worker integration tests still start their workers.
+- Running is the restored 0.14.12 / APK0.9.6/code41, not this candidate.
+
+
 ## p0-paused-tail-drain-20261103.1 — source candidate
 
 Backend 0.14.13 / assistant APK 0.9.5/code40, protocol2 unchanged.
