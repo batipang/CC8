@@ -23,6 +23,12 @@ class DeviceAutomationTests(unittest.TestCase):
                 device.transport = 'owned-usb'
                 device.access = Mock()
                 device.access.target.return_value = device.transport
+                device.status = Mock(
+                    return_value=(
+                        {'test_capture_limit_supported': True, 'microphone_active': False},
+                        {},
+                    )
+                )
                 device.open(capture)
                 device.access.target.assert_called_once_with()
                 args = device.access.shell.call_args
@@ -31,9 +37,10 @@ class DeviceAutomationTests(unittest.TestCase):
                 self.assertIn(
                     'am start -W --activity-clear-top -n com.happyhome.cc8assistant/', args.args[1]
                 )
-                self.assertTrue(
-                    args.args[1].endswith(' --ez auto_start_voice ' + str(capture).lower())
-                )
+                expected = ' --ez auto_start_voice ' + str(capture).lower()
+                if capture:
+                    expected += ' --el test_capture_limit_ms 180000'
+                self.assertTrue(args.args[1].endswith(expected))
 
     def test_open_refuses_a_changed_usb_target_before_launching_activity(self):
         device = Device.__new__(Device)
@@ -78,6 +85,7 @@ class DeviceAutomationTests(unittest.TestCase):
                 'microphone_active': False,
                 'vision_active': False,
                 'transport': 'usb',
+                'test_capture_limit_supported': True,
             },
             {'camera_open': False, 'wake_checked': True},
         )
@@ -142,6 +150,75 @@ class DeviceAutomationTests(unittest.TestCase):
                 with self.assertRaises(SystemExit), patch('device_smoke.Device') as device:
                     main(['--runtime-root', '/unused', *flags])
                 device.assert_not_called()
+
+    def test_capture_refuses_legacy_device_before_any_open_or_playback(self):
+        run, device, _, _ = self.fixture(capture=True)
+        device.status.return_value[0].pop('test_capture_limit_supported')
+        run.playback = Mock()
+        result = run.run()
+        self.assertEqual(result['state'], 'failed')
+        self.assertEqual(result['checks'][0]['reason'], 'device_test_capture_limit_unsupported')
+        device.open.assert_not_called()
+        run.playback.assert_not_called()
+
+    def test_direct_capture_open_requires_supported_bounded_integer_limit(self):
+        for invalid in (0, -1, 999, 1500001, True, 1.5, '1000', None):
+            with self.subTest(limit=invalid):
+                device = Device.__new__(Device)
+                device.shell = Mock()
+                device.status = Mock(return_value=({'test_capture_limit_supported': True}, {}))
+                with self.assertRaisesRegex(CheckFailure, 'invalid_test_capture_limit'):
+                    device.open(True, capture_limit_ms=invalid)
+                device.shell.assert_not_called()
+        device = Device.__new__(Device)
+        device.shell = Mock()
+        device.status = Mock(return_value=({}, {}))
+        with self.assertRaisesRegex(CheckFailure, 'device_test_capture_limit_unsupported'):
+            device.open(True)
+        device.shell.assert_not_called()
+        device.status.return_value = (
+            {'test_capture_limit_supported': True, 'microphone_active': True},
+            {},
+        )
+        with self.assertRaisesRegex(CheckFailure, 'device_microphone_already_active'):
+            device.open(True)
+        device.shell.assert_not_called()
+
+    def test_capture_limit_is_long_enough_for_actual_standby_but_does_not_extend_on_reconnect(self):
+        for standby, limit in ((False, 180000), (True, 1200000)):
+            with self.subTest(standby=standby):
+                run, device, health, _ = self.fixture(capture=True, standby=standby)
+                health.update(microphone_active=True, local_wake_ready=True)
+                device.status.return_value[0]['microphone_active'] = True
+                device.status.return_value[0].update(
+                    test_capture_limit_ms=limit, test_capture_remaining_ms=limit - 7000
+                )
+                run.start_capture()
+                device.open.assert_called_once_with(True, capture_limit_ms=limit)
+                # Ordinary health/route observation never requests a new lease.
+                run.health()
+                self.assertEqual(device.open.call_count, 1)
+
+    def test_claimed_support_does_not_replace_actual_active_limit_receipt(self):
+        for limit, remaining in (
+            (None, None),
+            (180000.0, 1000),
+            (1000, 900),
+            (180000, 0),
+            (180000, 180001),
+            (180000, True),
+            (180000, 10.5),
+        ):
+            with self.subTest(limit=limit, remaining=remaining):
+                run, device, health, _ = self.fixture(capture=True)
+                health.update(microphone_active=True, local_wake_ready=True)
+                device.status.return_value[0].update(
+                    microphone_active=True,
+                    test_capture_limit_ms=limit,
+                    test_capture_remaining_ms=remaining,
+                )
+                with self.assertRaisesRegex(CheckFailure, 'device_test_capture_limit_not_active'):
+                    run.start_capture()
 
     def test_preflight_transport_errors_are_redacted_by_cli(self):
         import device_smoke

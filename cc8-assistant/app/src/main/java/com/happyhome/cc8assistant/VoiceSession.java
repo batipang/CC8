@@ -76,6 +76,7 @@ final class VoiceSession {
   private volatile Socket socket;
   private volatile DataOutputStream output;
   private volatile AudioRecord recorder;
+  private volatile CaptureWindow captureWindow;
   private volatile Player player;
   private volatile long lastPlaybackSpeechFrames;
   private volatile int lastPlaybackPaddingFrames;
@@ -965,6 +966,12 @@ final class VoiceSession {
       "MissingPermission") // Only MainActivity's authorized foreground opening or Start action may
   // call; checked again here.
   void startMicrophone() {
+    startMicrophone(0);
+  }
+
+  @SuppressLint("MissingPermission")
+  void startMicrophone(long testLimitMs) {
+    final CaptureWindow window = new CaptureWindow(testLimitMs, SystemClock.elapsedRealtime());
     // mine 固定本次录音 epoch，旧线程 finally 只能清理自己，不能关闭后来新开的录音。
     if (!foreground || recording || !isConnected()) return;
     cancelVision();
@@ -981,6 +988,7 @@ final class VoiceSession {
     synchronized (this) {
       if (!foreground || recording || !isConnected()) return;
       recording = true;
+      captureWindow = window;
       mine = ++epoch;
       micFrames = 0;
       renderFrames = 0;
@@ -994,8 +1002,13 @@ final class VoiceSession {
               synchronized (captureResourceLock) {
                 if (!recording || !foreground || epoch != mine) return;
                 AudioRecord record = null;
+                Thread timeout = null;
                 long sequence = 0, origin = 0, last = System.nanoTime();
                 try {
+                  // The bound lives in this AudioRecord worker, independent of
+                  // the Mac runner and the UI event queue. Expiry follows the
+                  // same epoch-owned finally path as any other capture end.
+                  if (!window.allows(SystemClock.elapsedRealtime())) return;
                   int min =
                       AudioRecord.getMinBufferSize(
                           16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
@@ -1010,11 +1023,43 @@ final class VoiceSession {
                   if (record.getState() != AudioRecord.STATE_INITIALIZED)
                     throw new IOException("麦克风初始化失败");
                   synchronized (VoiceSession.this) {
-                    if (!recording || !foreground || epoch != mine) return;
+                    if (!recording
+                        || !foreground
+                        || epoch != mine
+                        || !window.allows(SystemClock.elapsedRealtime())) return;
                     recorder = record;
                     record.startRecording();
                     if (record.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING)
                       throw new IOException("麦克风无法开始");
+                  }
+                  if (window.limitMs > 0) {
+                    final AudioRecord ownedRecord = record;
+                    timeout =
+                        new Thread(
+                            () -> {
+                              try {
+                                while (recording
+                                    && epoch == mine
+                                    && window.allows(SystemClock.elapsedRealtime())) {
+                                  Thread.sleep(
+                                      Math.min(
+                                          1000, window.remaining(SystemClock.elapsedRealtime())));
+                                }
+                                // Stop only this worker's hardware, never a replacement
+                                // recording. This also unblocks a stalled native read.
+                                if (recording
+                                    && epoch == mine
+                                    && !window.allows(SystemClock.elapsedRealtime()))
+                                  ownedRecord.stop();
+                              } catch (InterruptedException interrupted) {
+                                Thread.currentThread().interrupt();
+                              } catch (RuntimeException alreadyReleased) {
+                                // The epoch owner may already have closed this record.
+                              }
+                            },
+                            "cc8-test-capture-timeout");
+                    timeout.setDaemon(true);
+                    timeout.start();
                   }
                   JSONObject began = Wire.event("session_start");
                   Wire.put(began, "epoch", mine);
@@ -1026,11 +1071,17 @@ final class VoiceSession {
                     send(began);
                   }
                   short[] chunk = new short[320];
-                  while (recording && foreground && epoch == mine) {
+                  while (recording
+                      && foreground
+                      && epoch == mine
+                      && window.allows(SystemClock.elapsedRealtime())) {
                     int count = record.read(chunk, 0, chunk.length);
                     if (count < 0) throw new IOException("录音读取错误 " + count);
                     if (count == 0) continue;
-                    if (!recording || !foreground || epoch != mine) break;
+                    if (!recording
+                        || !foreground
+                        || epoch != mine
+                        || !window.allows(SystemClock.elapsedRealtime())) break;
                     long now = System.nanoTime();
                     double power = 0;
                     for (int i = 0; i < count; i++) power += (double) chunk[i] * chunk[i];
@@ -1052,9 +1103,13 @@ final class VoiceSession {
                     micFrames += count;
                   }
                 } catch (Exception error) {
-                  if (recording && foreground && epoch == mine)
+                  if (recording
+                      && foreground
+                      && epoch == mine
+                      && window.allows(SystemClock.elapsedRealtime()))
                     listener.state("error", "录音已停止：" + error.getMessage());
                 } finally {
+                  if (timeout != null) timeout.interrupt();
                   if (record != null) {
                     try {
                       record.stop();
@@ -1069,7 +1124,10 @@ final class VoiceSession {
                   synchronized (VoiceSession.this) {
                     if (recorder == record) recorder = null;
                     owned = epoch == mine;
-                    if (owned) recording = false;
+                    if (owned) {
+                      recording = false;
+                      captureWindow = null;
+                    }
                   }
                   if (owned) {
                     listener.microphone(false);
@@ -1091,6 +1149,7 @@ final class VoiceSession {
     synchronized (this) {
       stoppedEpoch = epoch++;
       recording = false;
+      captureWindow = null;
       r = recorder;
       recorder = null;
     }
@@ -1152,6 +1211,13 @@ final class VoiceSession {
     Wire.put(j, "wifi_paired", lan.paired());
     Wire.put(j, "wifi_error", wifiError);
     Wire.put(j, "microphone_active", recording);
+    CaptureWindow window = captureWindow;
+    Wire.put(j, "test_capture_limit_supported", true);
+    Wire.put(j, "test_capture_limit_ms", recording && window != null ? window.limitMs : 0);
+    Wire.put(
+        j,
+        "test_capture_remaining_ms",
+        recording && window != null ? window.remaining(SystemClock.elapsedRealtime()) : 0);
     Wire.put(j, "announcement_active", announcement);
     Wire.put(j, "vision_active", isVisual());
     Wire.put(j, "mic_frames", micFrames);
