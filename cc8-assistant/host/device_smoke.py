@@ -177,6 +177,7 @@ class SmokeRun:
         self.source_sha256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
         self.speech_source_sha256 = hashlib.sha256(Path(voice_source).read_bytes()).hexdigest()
         self.expected_apk = expected_apk
+        self.acoustic_evidence = None
 
     def health(self):
         value = self.request({'operation': 'health'})
@@ -216,6 +217,7 @@ class SmokeRun:
             'human_accuracy_asserted': False,
             'acoustic_latency_asserted': False,
             'full_p0_acceptance': False,
+            'acoustic_evidence': self.acoustic_evidence,
         }
 
     def check(self, name, action):
@@ -392,21 +394,69 @@ class SmokeRun:
         self.device.speak_probe()
 
         def received():
+            health = self.health()
+            require(
+                health.get('connected') is True and health.get('microphone_active') is True,
+                'acoustic_capture_or_connection_lost',
+            )
             p = self.request({'operation': 'diagnostics'})
+            require(
+                isinstance(p.get('requests'), list)
+                and all(isinstance(r, dict) for r in p['requests']),
+                'diagnostics_unavailable',
+            )
             rows = [
                 r
-                for r in p.get('requests', [])
-                if r.get('request_id') not in ids
-                and r.get('origin') == 'voice'
-                and r.get('outcome') == 'completed'
+                for r in p['requests']
+                if r.get('request_id') not in ids and r.get('origin') == 'voice'
             ]
+            # Keep only fixed stage counts, never request IDs, transcripts,
+            # provider text or audio. A completed task is not a played answer.
+            self.acoustic_evidence = {
+                'new_voice_requests': len(rows),
+                'completed_requests': sum(r.get('outcome') == 'completed' for r in rows),
+                'cancelled_requests': sum(r.get('outcome') == 'cancelled' for r in rows),
+                'completed_tasks': sum(r.get('task_outcome') == 'completed' for r in rows),
+                'stage_counts': {
+                    stage: sum(stage in r.get('stages', {}) for r in rows)
+                    for stage in (
+                        'wake_detected',
+                        'asr_end',
+                        'brain_start',
+                        'playout_ack',
+                        'playback_done',
+                        'pause_request',
+                    )
+                },
+                'post_playback_quiet_seconds': (self.acoustic_evidence or {}).get(
+                    'post_playback_quiet_seconds', 0
+                ),
+            }
+            self.checkpoint(self.report('running'))
+            require(len(rows) <= 1, 'unexpected_extra_voice_request')
+            require(
+                all(r.get('outcome') in (None, 'completed') for r in rows),
+                'synthetic_voice_request_not_completed',
+            )
             return any(
-                {'wake_detected', 'asr_end', 'brain_start', 'playback_done'}
+                r.get('outcome') == 'completed'
+                and {'wake_detected', 'asr_end', 'brain_start', 'playback_done'}
                 <= set(r.get('stages', {}))
                 for r in rows
             )
 
         self.wait(received, 120, 'synthetic_acoustic_chain_not_confirmed')
+        # An immediate cleanup could hide a post-answer echo turn. Keep one
+        # bounded observation window; any extra voice request is a failure,
+        # without claiming whether its source was echo or a person in the room.
+        quiet_started = self.clock()
+        while self.clock() - quiet_started < 20:
+            self.sleep(min(0.5, 20 - (self.clock() - quiet_started)))
+            require(received(), 'synthetic_acoustic_chain_not_confirmed')
+            self.acoustic_evidence['post_playback_quiet_seconds'] = round(
+                self.clock() - quiet_started, 3
+            )
+            self.checkpoint(self.report('running'))
         d, ui = self.device.status()
         require(
             ui.get('screen_sleeping') is False and d.get('foreground') is True,

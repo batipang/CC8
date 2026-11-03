@@ -1,5 +1,17 @@
 # Changelog
 
+## Automatic acoustic checks — evidence and post-playback observation
+
+- Preserve fixed content-free stage counts when an acoustic check fails; do
+  not confuse a completed Dot task with a completed spoken answer.
+- Observe 20 seconds after playback and fail on an extra voice request,
+  cancellation, capture loss or a changed backend. Never replay the stimulus.
+- Add five offline regressions: seven old-code assertion failures, zero fixture
+  errors; 29 targeted and 729 host tests pass after the change.
+- Record the actual two passed / one failed standby rounds and split active
+  backend-fault/follow-up evidence without relabelling failed reports.
+- Keep deployed backend0.14.16 / APKcode46 and all audio settings unchanged.
+
 ## p0-workspace-action-ownership-20261103.1 — deployed diagnostic pair
 
 Backend0.14.16 / original-signature APK0.9.11/code46, frozen source867ff19.
