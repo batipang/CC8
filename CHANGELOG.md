@@ -1,5 +1,19 @@
 # Changelog
 
+## Automatic failure UI — optional verified loopback TLS fixture
+
+- Add explicit `verify-failure-ui --http-fixture loopback_tls`: 30 ASR/TTS cases
+  use real certificate-verified HTTPS, request budgets and controller failure
+  handling, with one counted server request per case. Keep 18 Dot cases mocked
+  and recovery UI-only; generate only the selected cases before UI replay.
+- Use ephemeral loopback ports/certificates and fixed invalid credentials;
+  disable proxy inheritance, remote POST targets and redirects. Keep production
+  endpoint validation, credentials, configuration and runtime unchanged.
+- Bind the I/O mode and wire count into corpus identity and include the fixture
+  source hash. Keep default fake mode and standard-library dry plans offline.
+- Pass seven new regressions, including trust rejection and cleanup. New-mode
+  physical QA remains pending; do not inherit the earlier fake-I/O device pass.
+
 ## Automatic acoustic checks — candidates and admitted dialogue
 
 - Distinguish VAD diagnostic records from admitted dialogue. Require the fresh

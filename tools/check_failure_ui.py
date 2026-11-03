@@ -62,11 +62,11 @@ def private_json(path):
     return value
 
 
-def source_identity():
-    return {
-        name: hashlib.sha256(safe_source(ROOT, 'tools/' + name)).hexdigest()
-        for name in ('check_failure_ui.py', 'qa_faults.py', 'qa_variant.py', 'qa_ui.py')
-    }
+def source_identity(http_fixture='fake'):
+    names = ['check_failure_ui.py', 'qa_faults.py', 'qa_variant.py', 'qa_ui.py']
+    if http_fixture == 'loopback_tls':
+        names.append('qa_http.py')
+    return {name: hashlib.sha256(safe_source(ROOT, 'tools/' + name)).hexdigest() for name in names}
 
 
 def corpus_identity(fixtures):
@@ -75,6 +75,8 @@ def corpus_identity(fixtures):
         # Include fixed labels, expectations and actual framed protocol bytes.
         digest.update(fixture['case'].ident.encode())
         digest.update(fixture['expected_message'].encode())
+        digest.update(fixture.get('http_fixture', 'fake').encode())
+        digest.update(str(fixture.get('wire_requests', 0)).encode())
         for packet in [*fixture['error'], fixture['stale_error'], *fixture['recovery']]:
             digest.update(packet.encode())
     return digest.hexdigest()
@@ -289,7 +291,8 @@ def restore(runtime, device, baseline):
     raise RuntimeError('production_restore_timeout')
 
 
-def run(runtime, receipt_path, limit, output, *, shared_staging=False):
+def run(runtime, receipt_path, limit, output, *, shared_staging=False, http_fixture='fake'):
+    require(http_fixture in ('fake', 'loopback_tls'), 'unknown_qa_http_fixture')
     from service_smoke import LiveService
     from protocol import decode_event
 
@@ -321,7 +324,7 @@ def run(runtime, receipt_path, limit, output, *, shared_staging=False):
     require(not device.shell('pm list packages ' + PACKAGE).strip(), 'qa_absence_unconfirmed')
     baseline = LiveService(runtime, device.original).sample()
     require(baseline is not None, 'production_not_idle_ready')
-    fixtures = generate()[:limit]
+    fixtures = generate(http_fixture=http_fixture, cases=CASES[:limit])
     rows = []
     link = None
     touched = False
@@ -331,7 +334,7 @@ def run(runtime, receipt_path, limit, output, *, shared_staging=False):
     phase = 'signer_preflight'
     began = time.monotonic()
     started_at = datetime.now(timezone.utc).isoformat()
-    sources = source_identity()
+    sources = source_identity(http_fixture)
     corpus = corpus_identity(fixtures)
     failure = None
 
@@ -361,6 +364,10 @@ def run(runtime, receipt_path, limit, output, *, shared_staging=False):
                 'camera_used': False,
                 'capture_permissions_absent': True,
                 'real_provider_requested': False,
+                'provider_http_fixture': http_fixture,
+                'generated_wire_requests': sum(f.get('wire_requests', 0) for f in fixtures),
+                'dot_provider_is_fixture': True,
+                'provider_calls_before_ui_replay': True,
                 'audio_playback_asserted': False,
                 'physical_usb_handover_tested': False,
                 'production_apk_changed': False,
@@ -493,6 +500,12 @@ def main(argv=None):
     parser.add_argument('--limit', type=int, default=len(CASES))
     parser.add_argument('--execute', action='store_true')
     parser.add_argument(
+        '--http-fixture',
+        choices=('fake', 'loopback_tls'),
+        default='fake',
+        help='Fixed provider I/O: offline fake or certificate-verified loopback TLS',
+    )
+    parser.add_argument(
         '--shared-staging',
         action='store_true',
         help='Explicit existing shared-directory installer compatibility route; see docs/APK_INSTALL.md',
@@ -508,6 +521,7 @@ def main(argv=None):
                     'microphone_used': False,
                     'camera_used': False,
                     'real_provider_requested': False,
+                    'provider_http_fixture': args.http_fixture,
                     'production_apk_changed': False,
                 }
             )
@@ -551,6 +565,7 @@ def main(argv=None):
                         args.limit,
                         output,
                         shared_staging=args.shared_staging,
+                        http_fixture=args.http_fixture,
                     )
                 except BaseException:
                     if private_json(output.path).get('state') == 'preparing':

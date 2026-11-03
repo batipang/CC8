@@ -1,10 +1,12 @@
-"""Generate fixed UI-fault transcripts using real controllers and fake provider I/O.
+"""Generate UI-fault transcripts using real controllers and isolated provider I/O.
 
-No device, microphone, key, model, DNS, or network is accessed. Recovery is UI
-only: synthesis/playback is intentionally bypassed and is never scored as audio.
+Default I/O is fake and offline. Explicit loopback TLS uses a verified temporary
+certificate and fixed failures, never owner credentials or remote providers.
+Recovery is UI-only: synthesis/playback is bypassed and never scored as audio.
 """
 
 from dataclasses import dataclass, replace
+from contextlib import ExitStack
 import io
 import json
 from pathlib import Path
@@ -35,7 +37,19 @@ CASES = tuple(
 )
 
 
-def generate():
+def generate(*, http_fixture='fake', cases=CASES):
+    if http_fixture not in ('fake', 'loopback_tls'):
+        raise ValueError('Unknown QA HTTP fixture')
+    if (
+        not isinstance(cases, tuple)
+        or not 1 <= len(cases) <= len(CASES)
+        or any(
+            not isinstance(case, Case) or type(case.repeat) is not int or case not in CASES
+            for case in cases
+        )
+        or len(set(cases)) != len(cases)
+    ):
+        raise ValueError('Unknown QA case selection')
     import numpy as np
     import requests
 
@@ -106,15 +120,33 @@ def generate():
             self.last_metrics = {'completed': True}
             yield '自动测试恢复检查已完成。'
 
-    with tempfile.TemporaryDirectory(prefix='cc8-ui-fault-fixtures-') as temporary:
+    with ExitStack() as stack:
+        temporary = stack.enter_context(
+            tempfile.TemporaryDirectory(prefix='cc8-ui-fault-fixtures-')
+        )
         folder = Path(temporary)
         defaults = folder / 'cc8-assistant/host/voice-config.json'
         defaults.parent.mkdir(parents=True)
         defaults.write_text('{"schema_version":1,"asr":"minimax"}')
         config = load_config(root=folder, environ={})
+        tls = None
+        factory = FaultSession
+        if http_fixture == 'loopback_tls':
+            from tools.qa_http import LoopbackHTTP
+
+            def requested():
+                state.http_calls += 1
+
+            tls = stack.enter_context(LoopbackHTTP(lambda: state.case, requested))
+            factory = tls.session_factory
         transport = Transport(
-            key='qa-not-a-real-credential', session_factory=FaultSession, config=config
+            key='qa-not-a-real-credential', session_factory=factory, config=config
         )
+        if tls is not None:
+            # Change this isolated test instance only. The real constructor's
+            # official-endpoint allowlist and all owner configuration stay intact.
+            transport.base = tls.base
+            transport.timeout = (0.8, 0.8)
         recognizer = MandarinRecognizer(engine='minimax', recognizer=transport, config=config)
         voice = MiniMaxVoice(transport=transport, config=config)
 
@@ -162,7 +194,7 @@ def generate():
             np.sin(np.arange(16000, dtype=np.float32) * 2 * np.pi * 440 / 16000) * 0.08
         ).astype(np.float32)
         rows = []
-        for case in CASES:
+        for case in cases:
             state.case = case
             state.recovery = False
             state.http_calls = state.brain_calls = 0
@@ -205,6 +237,9 @@ def generate():
             expected_brain = 0 if case.stage == 'asr' else 1
             if (state.http_calls, state.brain_calls) != (expected_http, expected_brain):
                 raise AssertionError('Unexpected provider request/retry')
+            wire_requests = tls.count(case.ident) if tls is not None else 0
+            if tls is not None and wire_requests != expected_http:
+                raise AssertionError('QA TLS request did not reach its fixed local endpoint')
             expected_task = (
                 'completed' if case.stage == 'tts' else 'failed' if case.stage == 'brain' else None
             )
@@ -233,6 +268,8 @@ def generate():
                     'expected_task': expected_task,
                     'expected_message': feedback(case.stage, case.kind).message,
                     'provider_requests': expected_http + expected_brain,
+                    'http_fixture': http_fixture,
+                    'wire_requests': wire_requests,
                 }
             )
         transport.cancel()

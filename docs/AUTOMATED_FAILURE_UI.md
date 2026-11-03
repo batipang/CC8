@@ -26,6 +26,11 @@ python tools/qa_variant.py --output /absolute/private/new-qa-build
 .toolchains/cc8/dev-venv/bin/python cc8 verify-failure-ui \
   --runtime-root /absolute/live/workspace \
   --qa-receipt /absolute/private/new-qa-build/qa-build.json --execute
+# ASR/TTS固定故障改用真实本地HTTPS，仍不访问真实提供方
+.toolchains/cc8/dev-venv/bin/python cc8 verify-failure-ui \
+  --runtime-root /absolute/live/workspace \
+  --qa-receipt /absolute/private/new-qa-build/qa-build.json \
+  --http-fixture loopback_tls --execute
 ```
 
 首次调试可显式加 `--limit 1`，不会把部分轮次计为完整48项。当前固件拒绝默认受保护目录写入；需要既有 [APK 安装兼容路线](APK_INSTALL.md) 时显式添加 `--shared-staging`。它仍存在共享暂存文件被其他有存储权限应用替换的风险，哈希不能消除此竞态；脚本不会自动选择或回退到该模式。
@@ -33,6 +38,10 @@ python tools/qa_variant.py --output /absolute/private/new-qa-build
 ## 自动判定
 
 `tools/qa_faults.py` 用实际 Bridge、ASR/Response worker、MiniMax Transport 和任务回执路径生成48项：ASR五类、Dot六类、TTS五类，各重复三次。提供方I/O为固定假对象，Dot不启动子进程，Transport显式使用无效测试凭证，不读取用户服务密钥、不访问网络。ASR输入仅固定数字正弦；这是错误路径，不是语音识别准确率测试。恢复步骤明确跳过合成/播放，只验证界面恢复。
+
+显式`--http-fixture loopback_tls`改为在127.0.0.1临时端口运行有界TLS故障服务器：ASR15项、TTS15项通过实际requests、累计I/O预算、证书校验和生产控制器，分别注入超时、连接关闭、HTTP429/402/401。每项须同时核对一次实际服务端请求、正确阶段/类别、任务回执及无自动重试；仅生成选定的`--limit`用例。使用临时自签名证书和固定无效凭证，关闭代理环境、拒绝非本地ASR/TTS POST与重定向，不修改生产端点白名单或用户配置。正常恢复仍为UI专用路径，Dot18项仍为隔离模拟，不把这项选择说成真实云端故障或完整语音验收。
+
+TLS模式仍在安装QA/操作屏幕之前生成协议包，再由相同实体QA界面重放。报告明确`provider_calls_before_ui_replay=true`、固定I/O模式和实际请求数，协议语料摘要绑定该模式及计数；执行工具额外绑定qa_http.py摘要。默认fake模式保持完全离线，计划模式即使选择TLS也只需标准库且不启动进程/网络。七项新回归覆盖完整矩阵、选定用例、非法输入、证书不受信任及实际fixture客户端遇到不同证书时拒绝、端点/重定向隔离及准备失败清理；尚未做新模式实机QA，不沿用此前48项重放的通过状态。
 
 每项检查：
 
