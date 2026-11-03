@@ -13,6 +13,7 @@ from diagnostics import (
     summarize_requests,
     summarize_dot_contexts,
 )
+from capture_evidence import validate as validate_capture, DECISIONS
 from operation_failure import STAGES as ERROR_STAGES
 
 ERRORS = frozenset(
@@ -40,6 +41,8 @@ ROW_FIELDS = frozenset(
         'task_outcome',
         'dot_rpc_reused',
         'dot_context_reused',
+        'capture',
+        'gate',
     )
 )
 
@@ -113,6 +116,14 @@ def receipt(value):
         if not enum(value['task_outcome'], OUTCOMES - {'rejected'}):
             raise ValueError('Invalid diagnostic task outcome')
         result['task_outcome'] = value['task_outcome']
+    if 'capture' in value:
+        if value['origin'] != 'voice':
+            raise ValueError('Capture evidence requires voice origin')
+        result['capture'] = validate_capture(value['capture'])
+    if 'gate' in value:
+        if value['origin'] != 'voice' or not enum(value['gate'], DECISIONS):
+            raise ValueError('Invalid gate receipt')
+        result['gate'] = value['gate']
     for stage, field in DOT_CONTEXT_FIELDS.items():
         if stage in clean_stages or field in value:
             if stage not in clean_stages or type(value.get(field)) is not bool:
@@ -176,6 +187,8 @@ class DiagnosticRun:
                     'error',
                     'dot_rpc_reused',
                     'dot_context_reused',
+                    'capture',
+                    'gate',
                 ):
                     if old.get(field) is not None and row.get(field) != old[field]:
                         raise ValueError('Conflicting diagnostic result')

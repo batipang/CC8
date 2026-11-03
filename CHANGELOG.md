@@ -1,5 +1,17 @@
 # Changelog
 
+## p0-voice-gate-evidence-20261103.1 — source candidate
+
+Backend 0.14.10; original assistant APK 0.9.3/code38 and protocol2 unchanged.
+
+- Add bounded per-utterance numeric capture observations and fixed ASR gate
+  decisions to content-free diagnostics and the strict run collector.
+- Preserve terminal outcomes and reject conflicting evidence, invalid counts
+  or arbitrary content. Keep lightweight collection independent of audio imports.
+- Record three completed 0.14.8 standby checks and the stopped continuous-query
+  runs separately; the unintended admitted turn remains unresolved.
+- Do not change acoustic/recognition thresholds or replace the live installation.
+
 ## p0-dns-deadline-20261103.1 — source candidate
 
 Backend 0.14.9; original assistant APK 0.9.3/code38 and protocol2 unchanged.

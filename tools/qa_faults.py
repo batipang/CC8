@@ -170,8 +170,15 @@ def generate():
             b.submit_text('自动故障测试 ' + case.ident)
             job = b.response.queue.get_nowait()
             if case.stage == 'asr':
-                trace = b.diagnostics.ensure(job.generation, 'text')
+                # The UI owner is text-only, but this virtual recognizer job
+                # has a voice diagnostic trace. No microphone is opened.
+                trace = b.diagnostics.begin('voice')
                 run_one(b.recognition, (job.generation, audio, False, [], None, None, trace))
+                observed = next(
+                    r for r in b.diagnostics.report()['requests'] if r['request_id'] == trace
+                )
+                if observed.get('gate') != 'error' or observed.get('outcome') != 'failed':
+                    raise AssertionError('Fixture recognizer trace was not a classified failure')
                 b.finish_text_response(job.generation)
             else:
                 run_one(b.response, job)
