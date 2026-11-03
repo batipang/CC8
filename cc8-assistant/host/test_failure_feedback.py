@@ -194,7 +194,7 @@ class FailureFeedbackTests(unittest.TestCase):
         rpc.sequence = 0
         rpc.pending = {}
         sent = []
-        rpc._send = sent.append
+        rpc._send = lambda value, **_: sent.append(value)
         with self.assertRaises(DotError) as caught:
             rpc.request('readOnlyFixture', {}, timeout=0.001)
         self.assertEqual(caught.exception.kind, 'timeout')

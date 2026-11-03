@@ -19,6 +19,7 @@ from minimax_client import Cancelled
 from web_search import SpeechClauses, now, public_url
 from vision import jpeg_dimensions
 from runtime_env import command_path, runtime_environment
+from rpc_pipe import RpcPipeWriter, deadline_after
 from dot_receipt import (
     DotError as DotError,
     DotApprovalRequired as DotApprovalRequired,
@@ -112,6 +113,7 @@ class CodexRpc:
         self.popen = popen
         self.process = None
         self.lock = threading.Lock()
+        self.writer = RpcPipeWriter()
         self.pending = {}
         self.sequence = 0
         self.tool_handler = None
@@ -179,36 +181,41 @@ class CodexRpc:
         self.notify('initialized', {})
         self.initialized = True
 
-    def _send(self, value):
+    def _send(self, value, *, deadline=None):
+        if deadline is None:
+            deadline = deadline_after(15)
         wire = (json.dumps(value, ensure_ascii=False) + '\n').encode()
         if len(wire) > self.MAX_LINE:
             raise DotError('Codex request exceeds size limit')
-        with self.lock:
-            if not self.process or self.failed:
-                raise DotError('Codex is disconnected', kind='transport_or_io')
-            try:
-                offset = 0
-                while offset < len(wire):
-                    count = self.process.stdin.write(wire[offset:])
-                    if not count:
-                        raise OSError('Closed Codex input')
-                    offset += count
-            except (OSError, ValueError):
-                raise DotError('Codex request could not be sent', kind='transport_or_io') from None
+        process = self.process
+        if process is None or self.failed:
+            raise DotError('Codex is disconnected', kind='transport_or_io')
+        try:
+            self.writer.send(
+                process.stdin, wire, deadline, lambda: self.process is process and not self.failed
+            )
+        except DotError:
+            if self.writer.unusable:
+                self._disconnect()
+            raise
 
     def notify(self, method, params):
         self._send({'method': method, 'params': params})
 
     def request(self, method, params, timeout=15):
+        deadline = deadline_after(timeout)
         with self.lock:
             self.sequence += 1
             ident = self.sequence
             waiter = queue.Queue(maxsize=1)
             self.pending[ident] = waiter
         try:
-            self._send({'id': ident, 'method': method, 'params': params})
+            self._send({'id': ident, 'method': method, 'params': params}, deadline=deadline)
             try:
-                result = waiter.get(timeout=timeout)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise queue.Empty
+                result = waiter.get(timeout=remaining)
             except queue.Empty:
                 raise DotError('Codex request timed out', kind='timeout') from None
             if isinstance(result, Exception):
@@ -308,14 +315,17 @@ class CodexRpc:
                 str(error) if isinstance(error, DotError) else type(error).__name__
             )
         finally:
-            self.failed = True
-            with self.lock:
-                waiters = list(self.pending.values())
-            for waiter in waiters:
-                try:
-                    waiter.put_nowait(DotError('Codex disconnected', kind='transport_or_io'))
-                except queue.Full:
-                    pass
+            self._disconnect()
+
+    def _disconnect(self):
+        self.failed = True
+        with self.lock:
+            waiters = list(self.pending.values())
+        for waiter in waiters:
+            try:
+                waiter.put_nowait(DotError('Codex disconnected', kind='transport_or_io'))
+            except queue.Full:
+                pass
 
     def close(self):
         p = self.process
