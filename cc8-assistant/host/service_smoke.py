@@ -5,9 +5,11 @@ from datetime import datetime, timezone
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import plistlib
+import re
 import shlex
 import signal
 import stat
@@ -49,6 +51,7 @@ class LiveService:
         self.socket = self.private / 'announce.sock'
         self.release = load_release(root)
         label = 'com.happyhome.cc8.' + hashlib.sha256(str(root).encode()).hexdigest()[:12]
+        self.label = label
         self.plist = Path.home() / 'Library/LaunchAgents' / (label + '.plist')
 
     def read_private(self, path):
@@ -71,6 +74,19 @@ class LiveService:
             check=True,
         )
         return process_rows(result.stdout, self.root, os.getuid())
+
+    def launchd_pid(self):
+        result = subprocess.run(
+            ['/bin/launchctl', 'print', f'gui/{os.getuid()}/{self.label}'],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
+        require(len(result.stdout) <= 65536, 'invalid_launchd_receipt')
+        pids = re.findall(r'^\s*pid = ([1-9][0-9]*)\s*$', result.stdout, re.MULTILINE)
+        require(len(pids) == 1, 'launchd_pid_missing_or_ambiguous')
+        return int(pids[0])
 
     def sample(self):
         enabled = json.loads(self.read_private(self.private / 'service-enabled.json'))
@@ -123,8 +139,20 @@ class LiveService:
             return None
         pid, parent = processes['bridge'][0]
         supervisor_pid = processes['supervisor'][0][0]
-        require(parent == supervisor_pid, 'backend_not_supervisor_child')
         supervisor = json.loads(self.read_private(self.private / 'supervisor.json'))
+        if parent != supervisor_pid:
+            # service.py deliberately adopts a surviving backend after launchd
+            # replaces a crashed supervisor. Never accept an arbitrary parent,
+            # stale ready file or a supervisor outside this exact LaunchAgent.
+            updated = supervisor.get('updated_at')
+            require(
+                parent == 1
+                and type(updated) in (int, float)
+                and math.isfinite(updated)
+                and 0 <= time.time() - updated <= 6
+                and self.launchd_pid() == supervisor_pid,
+                'backend_not_supervisor_child',
+            )
         ready = (
             all(
                 health.get(k) is True
@@ -158,13 +186,81 @@ class LiveService:
         require(
             not processes['unexpected']
             and len(processes['supervisor']) == 1
-            and processes['bridge'] == [(previous['pid'], processes['supervisor'][0][0])],
+            and len(processes['bridge']) == 1
+            and processes['bridge'][0][0] == previous['pid'],
             'process_changed_before_fault',
         )
         os.kill(previous['pid'], signal.SIGKILL)
 
+    def supervisor_sample(self, *, ready_after=None, previous=None):
+        try:
+            snapshot = self.sample()
+        except CheckFailure as error:
+            if (
+                str(error) != 'backend_not_supervisor_child'
+                or ready_after is None
+                or previous is None
+            ):
+                raise
+            # A throttled launchd replacement can exist before its first ready
+            # write. Wait only for the exact surviving backend from our fault;
+            # this is not a successful sample and never authorizes a signal.
+            processes = self.processes()
+            require(
+                not processes['unexpected']
+                and len(processes['supervisor']) == 1
+                and processes['bridge'] == [(previous['pid'], 1)]
+                and rpc(self.socket, {'operation': 'health'}).get('runtime_instance')
+                == previous['instance'],
+                'unexpected_adoption_target',
+            )
+            return None
+        if snapshot is None:
+            return None
+        processes = self.processes()
+        require(
+            not processes['unexpected']
+            and len(processes['supervisor']) == 1
+            and len(processes['bridge']) == 1
+            and processes['bridge'][0][0] == snapshot['pid'],
+            'process_changed_during_sample',
+        )
+        supervisor_pid = processes['supervisor'][0][0]
+        require(self.launchd_pid() == supervisor_pid, 'launchd_supervisor_mismatch')
+        if ready_after is not None:
+            state = json.loads(self.read_private(self.private / 'supervisor.json'))
+            updated = state.get('updated_at')
+            if (
+                type(updated) not in (int, float)
+                or not math.isfinite(updated)
+                or updated <= ready_after
+                or state.get('phase') != 'ready'
+                or state.get('pid') != snapshot['pid']
+            ):
+                return None
+        return {
+            **snapshot,
+            'supervisor_pid': supervisor_pid,
+            'adopted_bridge': processes['bridge'][0][1] == 1,
+        }
+
+    def crash_supervisor(self, previous):
+        require(self.supervisor_sample() == previous, 'runtime_changed_before_fault')
+        os.kill(previous['supervisor_pid'], signal.SIGKILL)
+
 
 class RecoveryRun:
+    fault = 'owned_backend_sigkill'
+
+    def sample(self):
+        return self.service.sample()
+
+    def crash(self, previous):
+        self.service.crash(previous)
+
+    def recovered(self, current, previous):
+        return current['instance'] != previous['instance'] and current['pid'] != previous['pid']
+
     def __init__(
         self,
         service,
@@ -189,6 +285,7 @@ class RecoveryRun:
             'schema': 1,
             'state': state,
             'requested_cycles': self.cycles,
+            'fault': self.fault,
             'automation_source_sha256': self.source_hash,
             'elapsed_seconds': round(self.clock() - self.started, 3),
             'checks': list(self.rows),
@@ -204,14 +301,8 @@ class RecoveryRun:
     def wait_ready(self, previous=None):
         deadline = self.clock() + 90
         while True:
-            current = self.service.sample()
-            if current and (
-                previous is None
-                or (
-                    current['instance'] != previous['instance']
-                    and current['pid'] != previous['pid']
-                )
-            ):
+            current = self.sample()
+            if current and (previous is None or self.recovered(current, previous)):
                 return current
             require(self.clock() < deadline, 'service_recovery_timeout')
             self.sleep(min(1, max(0, deadline - self.clock())))
@@ -221,21 +312,23 @@ class RecoveryRun:
         previous = None
         try:
             # Preflight must be ready now; never wait for or start an idle service.
-            previous = self.service.sample()
+            previous = self.sample()
             require(previous is not None, 'preflight_service_not_ready')
             for index in range(self.cycles):
                 row = {'cycle': index + 1, 'state': 'running'}
                 self.rows.append(row)
                 self.checkpoint(self.report('running'))
                 began = self.clock()
-                self.service.crash(previous)
+                self.crash(previous)
                 self.fault_sent = True
                 self.recovery_verified = False
                 current = self.wait_ready(previous)
                 self.sleep(3)
-                stable = self.service.sample()
+                stable = self.sample()
                 require(stable == current, 'recovered_service_not_stable')
                 row.update(state='passed', recovery_seconds=round(self.clock() - began, 3))
+                if self.fault == 'owned_supervisor_sigkill':
+                    row['backend_reused'] = current['pid'] == previous['pid']
                 previous = current
                 self.recovery_verified = True
                 self.checkpoint(self.report('running'))
@@ -263,10 +356,48 @@ class RecoveryRun:
         return self.report(state)
 
 
+class SupervisorRecoveryRun(RecoveryRun):
+    fault = 'owned_supervisor_sigkill'
+
+    def sample(self):
+        try:
+            if self.fault_sent:
+                return self.service.supervisor_sample(
+                    ready_after=self.fault_at, previous=self.fault_previous
+                )
+            return self.service.supervisor_sample()
+        except CheckFailure as error:
+            if self.fault_sent and str(error) == 'supervisor_missing_or_ambiguous':
+                processes = self.service.processes()
+                require(
+                    not processes['unexpected']
+                    and len(processes['supervisor']) <= 1
+                    and len(processes['bridge']) <= 1,
+                    'unexpected_recovery_processes',
+                )
+                # launchd may already have spawned the replacement between the
+                # two ps snapshots. Re-sample every gate on the next poll; do
+                # not mistake that allowed transition for a duplicate service.
+                return None
+            raise
+
+    def crash(self, previous):
+        self.fault_previous = dict(previous)
+        self.fault_at = time.time()
+        self.service.crash_supervisor(previous)
+
+    def recovered(self, current, previous):
+        return current['supervisor_pid'] != previous['supervisor_pid'] and (
+            (current['pid'] == previous['pid'] and current['instance'] == previous['instance'])
+            or super().recovered(current, previous)
+        )
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--runtime-root', type=Path, required=True)
     parser.add_argument('--cycles', type=int, default=10, choices=range(1, 11))
+    parser.add_argument('--fault', choices=('backend', 'supervisor'), default='backend')
     parser.add_argument('--execute', action='store_true')
     args = parser.parse_args(argv)
     if not args.execute:
@@ -275,7 +406,7 @@ def main(argv=None):
                 {
                     'execute': False,
                     'cycles': args.cycles,
-                    'fault': 'owned_backend_sigkill',
+                    'fault': 'owned_' + args.fault + '_sigkill',
                     'starts_capture': False,
                     'opens_ui': False,
                     'full_p0_acceptance': False,
@@ -326,7 +457,8 @@ def main(argv=None):
                         }
                     )
 
-                result = RecoveryRun(service, args.cycles, checkpoint=save).run()
+                runner = SupervisorRecoveryRun if args.fault == 'supervisor' else RecoveryRun
+                result = runner(service, args.cycles, checkpoint=save).run()
                 print(
                     json.dumps(
                         {

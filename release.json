@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-bounded-test-capture-20261103.1",
+  "release_id": "p0-supervisor-log-recovery-20261104.1",
   "backend": {
-    "version": "0.14.16"
+    "version": "0.14.17"
   },
   "assistant": {
     "version": "0.9.13",
@@ -20,8 +20,8 @@
     "device_max": 2
   },
   "known_deployed_pair": {
-    "assistant_version": "0.9.11",
-    "assistant_version_code": 46,
+    "assistant_version": "0.9.13",
+    "assistant_version_code": 48,
     "backend_version": "0.14.16",
     "protocol": 2
   }

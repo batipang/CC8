@@ -1,6 +1,7 @@
 """Fault verification gates are exercised without touching launchd or devices."""
 
 import json
+import os
 from pathlib import Path
 import plistlib
 import signal
@@ -12,7 +13,7 @@ from unittest.mock import patch
 from types import SimpleNamespace
 
 from device_smoke import CheckFailure
-from service_smoke import LiveService, RecoveryRun, process_rows
+from service_smoke import LiveService, RecoveryRun, SupervisorRecoveryRun, process_rows
 
 
 class Clock:
@@ -331,6 +332,184 @@ class RecoveryTests(unittest.TestCase):
                 service.read_private(link)
             self.assertEqual(service.read_private(target), b'{}')
 
+    def test_adopted_backend_needs_fresh_ready_and_exact_launchd_supervisor(self):
+        for kind in ('valid', 'stale', 'future', 'boolean', 'nonfinite', 'other_agent', 'foreign'):
+            service, _, _, _, processes, _, supervisor, _, _, request = self.live_fixture()
+            processes['bridge'] = [(20, 99 if kind == 'foreign' else 1)]
+            supervisor['updated_at'] = {
+                'stale': 90,
+                'future': 101,
+                'boolean': True,
+                'nonfinite': float('nan'),
+            }.get(kind, 99)
+            with (
+                self.subTest(kind=kind),
+                patch('service_smoke.rpc', side_effect=request),
+                patch('service_smoke.time.time', return_value=100),
+                patch.object(
+                    service, 'launchd_pid', return_value=11 if kind == 'other_agent' else 10
+                ),
+                patch('service_smoke.os.kill') as kill,
+            ):
+                if kind == 'valid':
+                    self.assertEqual(service.sample()['pid'], 20)
+                else:
+                    with self.assertRaises(CheckFailure):
+                        service.sample()
+                kill.assert_not_called()
+
+    def test_launchd_pid_requires_one_bounded_receipt_for_exact_agent(self):
+        service = LiveService.__new__(LiveService)
+        service.label = 'owned.agent'
+        for text in ('pid = 20\n', 'pid = 0\n', 'pid = 20\n pid = 21\n', 'x' * 65537):
+            with (
+                self.subTest(receipt_length=len(text)),
+                patch(
+                    'service_smoke.subprocess.run', return_value=SimpleNamespace(stdout=text)
+                ) as run,
+            ):
+                if text == 'pid = 20\n':
+                    self.assertEqual(service.launchd_pid(), 20)
+                else:
+                    with self.assertRaises(CheckFailure):
+                        service.launchd_pid()
+                self.assertEqual(run.call_args.args[0][-1], f'gui/{os.getuid()}/owned.agent')
+
+    def test_supervisor_sample_waits_for_a_post_fault_ready_write(self):
+        service, _, _, _, _, _, supervisor, _, _, request = self.live_fixture()
+        supervisor['updated_at'] = 99
+        with (
+            patch('service_smoke.rpc', side_effect=request),
+            patch.object(service, 'launchd_pid', return_value=10),
+        ):
+            self.assertIsNone(service.supervisor_sample(ready_after=100))
+            supervisor['updated_at'] = 101
+            snapshot = service.supervisor_sample(ready_after=100)
+            self.assertEqual(snapshot['supervisor_pid'], 10)
+            self.assertFalse(snapshot['adopted_bridge'])
+
+    def test_supervisor_signal_revalidates_snapshot_and_never_targets_bridge(self):
+        service = LiveService.__new__(LiveService)
+        snapshot = {'pid': 20, 'instance': 'a', 'mic_frames': 0, 'supervisor_pid': 10}
+        for changed in (False, True):
+            actual = {**snapshot, 'supervisor_pid': 11} if changed else snapshot
+            with (
+                self.subTest(changed=changed),
+                patch.object(service, 'supervisor_sample', return_value=actual),
+                patch('service_smoke.os.kill') as kill,
+            ):
+                if changed:
+                    with self.assertRaises(CheckFailure):
+                        service.crash_supervisor(snapshot)
+                    kill.assert_not_called()
+                else:
+                    service.crash_supervisor(snapshot)
+                    kill.assert_called_once_with(10, signal.SIGKILL)
+
+    def test_only_exact_surviving_backend_may_wait_for_delayed_adoption_ready(self):
+        for kind in ('same', 'other_pid', 'other_instance', 'other_parent', 'duplicate'):
+            service, health, _, _, processes, _, supervisor, _, _, request = self.live_fixture()
+            processes['bridge'] = [
+                (21 if kind == 'other_pid' else 20, 99 if kind == 'other_parent' else 1)
+            ]
+            supervisor['updated_at'] = 80
+            if kind == 'other_instance':
+                health['runtime_instance'] = 'other'
+            if kind == 'duplicate':
+                processes['supervisor'].append((11, 1))
+            with (
+                self.subTest(kind=kind),
+                patch('service_smoke.rpc', side_effect=request),
+                patch('service_smoke.time.time', return_value=100),
+                patch('service_smoke.os.kill') as kill,
+            ):
+                if kind == 'same':
+                    self.assertIsNone(
+                        service.supervisor_sample(
+                            ready_after=90, previous={'pid': 20, 'instance': 'fixture'}
+                        )
+                    )
+                else:
+                    with self.assertRaises(CheckFailure):
+                        service.supervisor_sample(
+                            ready_after=90, previous={'pid': 20, 'instance': 'fixture'}
+                        )
+                kill.assert_not_called()
+
+    def test_supervisor_recovery_requires_new_supervisor_and_consistent_bridge(self):
+        for mode in ('adopt', 'replace', 'same_supervisor', 'changed_instance_only'):
+            clock = Clock()
+            sample = {
+                'pid': 20,
+                'instance': 'a',
+                'mic_frames': 0,
+                'supervisor_pid': 10,
+                'adopted_bridge': False,
+            }
+            signals, ready_after = [], []
+
+            def snapshot(**kwargs):
+                if kwargs:
+                    ready_after.append(kwargs['ready_after'])
+                return dict(sample)
+
+            def crash(previous):
+                signals.append(dict(previous))
+                if mode != 'same_supervisor':
+                    sample['supervisor_pid'] = 11
+                if mode == 'replace':
+                    sample.update(pid=21, instance='b')
+                elif mode == 'changed_instance_only':
+                    sample['instance'] = 'b'
+                else:
+                    sample['adopted_bridge'] = True
+
+            service = SimpleNamespace(supervisor_sample=snapshot, crash_supervisor=crash)
+            with self.subTest(mode=mode), patch('service_smoke.time.time', return_value=100):
+                result = SupervisorRecoveryRun(service, 1, clock=clock, sleep=clock.sleep).run()
+                self.assertEqual(len(signals), 1)
+                self.assertTrue(ready_after and all(t == 100 for t in ready_after))
+                if mode in ('adopt', 'replace'):
+                    self.assertEqual(result['state'], 'passed')
+                    self.assertEqual(result['checks'][0]['backend_reused'], mode == 'adopt')
+                else:
+                    self.assertEqual(result['state'], 'recovery_unconfirmed')
+                self.assertEqual(result['fault'], 'owned_supervisor_sigkill')
+                self.assertNotIn('supervisor_pid', json.dumps(result))
+
+    def test_missing_supervisor_is_transient_only_after_our_fault(self):
+        def missing(**kwargs):
+            raise CheckFailure('supervisor_missing_or_ambiguous')
+
+        service = SimpleNamespace(
+            supervisor_sample=missing,
+            processes=lambda: {'bridge': [(20, 1)], 'supervisor': [], 'unexpected': []},
+        )
+        run = SupervisorRecoveryRun(service, 1)
+        with self.assertRaises(CheckFailure):
+            run.sample()
+        run.fault_sent = True
+        run.fault_at = 100
+        run.fault_previous = {'pid': 20, 'instance': 'a'}
+        self.assertIsNone(run.sample())
+        service.processes = lambda: {
+            'bridge': [(20, 1)],
+            'supervisor': [(11, 1)],
+            'unexpected': [],
+        }
+        try:
+            transition = run.sample()
+        except CheckFailure as error:
+            self.fail(f'A single replacement between snapshots must be re-sampled: {error}')
+        self.assertIsNone(transition)
+        service.processes = lambda: {
+            'bridge': [(20, 1)],
+            'supervisor': [(10, 1), (11, 1)],
+            'unexpected': [],
+        }
+        with self.assertRaises(CheckFailure):
+            run.sample()
+
     def test_real_minimal_path_plan_never_queries_or_creates_runtime(self):
         root = Path(__file__).resolve().parents[2]
         with tempfile.TemporaryDirectory() as folder:
@@ -350,6 +529,33 @@ class RecoveryTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertFalse(json.loads(result.stdout)['execute'])
+            self.assertFalse(target.exists())
+
+    def test_supervisor_minimal_path_plan_has_no_runtime_side_effects(self):
+        root = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder) / 'absent'
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(root / 'cc8'),
+                    'verify-service',
+                    '--runtime-root',
+                    str(target),
+                    '--fault',
+                    'supervisor',
+                    '--cycles',
+                    '1',
+                ],
+                env={'PATH': '/usr/bin:/bin'},
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            plan = json.loads(result.stdout)
+            self.assertFalse(plan['execute'])
+            self.assertEqual(plan['fault'], 'owned_supervisor_sigkill')
             self.assertFalse(target.exists())
 
 

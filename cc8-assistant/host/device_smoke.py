@@ -292,7 +292,9 @@ class SmokeRun:
         self.device.open(False)
         self.wait(self.inactive, 20, 'maintenance_capture_state_invalid')
         self.sleep(2)
-        require(self.inactive(), 'maintenance_open_started_capture')
+        health = self.health()
+        require(health.get('connected') is True, 'maintenance_connection_lost')
+        require(health.get('microphone_active') is False, 'maintenance_open_started_capture')
         d, ui = self.device.status()
         require(
             d.get('foreground') is True and d.get('microphone_active') is False,
