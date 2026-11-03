@@ -1,5 +1,19 @@
 # Changelog
 
+## Automatic acoustic checks — candidates and admitted dialogue
+
+- Distinguish VAD diagnostic records from admitted dialogue. Require the fresh
+  question to complete playback and retain the 20-second observation; an extra
+  admitted generation, brain start, accepted gate or task still fails at once.
+- Count rejected and pending candidates separately. Do not ignore unknown or
+  cancelled terminal records; unresolved candidates and unresumed acknowledged
+  pauses cannot pass the final observation boundary.
+- Keep raw record counts and actual pause/resume receipts visible. A completed
+  answer is not evidence of pause-free playback; retain the original failed
+  standby report and missing post-playback window without replay or relabelling.
+- Test-tool change only: no runtime, model, audio threshold, APK or user-setting
+  modification. New-mode physical validation remains separate.
+
 ## p0-supervisor-log-recovery-20261104.1 — deployed diagnostic pair
 
 Backend0.14.17, frozen source1ab67a0; original-signature APK0.9.13/code48 and
