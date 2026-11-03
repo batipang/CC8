@@ -10,6 +10,7 @@ import math
 import threading
 import numpy as np
 from dsp import RATE
+from render_clock_report import RenderClockReceipt
 
 PROBE_TEXT = '这是扬声器和麦克风的声学检查。请保持安静，检查结束后恢复正常。'
 WINDOW = 3200  # 200 ms, long enough to reject most accidental short matches.
@@ -25,6 +26,7 @@ class Probe:
     epoch: int
     done: threading.Event = field(default_factory=threading.Event)
     result: dict | None = None
+    render_clock: RenderClockReceipt = field(default_factory=RenderClockReceipt)
 
 
 class PlaybackEvidence:

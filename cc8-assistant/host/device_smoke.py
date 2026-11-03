@@ -205,6 +205,7 @@ class SmokeRun:
         standby=False,
         acoustic=False,
         playback_evidence=False,
+        clock_evidence=False,
         clock=time.monotonic,
         sleep=time.sleep,
         checkpoint=lambda value: None,
@@ -213,6 +214,7 @@ class SmokeRun:
         self.device, self.request = device, request
         self.capture, self.standby, self.acoustic = capture, standby, acoustic
         self.playback_evidence = playback_evidence
+        self.clock_evidence = clock_evidence
         self.playback_probe_evidence = None
         self.clock, self.sleep, self.checkpoint = clock, sleep, checkpoint
         self.started = clock()
@@ -297,6 +299,10 @@ class SmokeRun:
         require(
             not self.playback_evidence or h.get('playback_evidence_supported') is True,
             'backend_playback_evidence_unsupported',
+        )
+        require(
+            not self.clock_evidence or h.get('render_clock_evidence_supported') is True,
+            'device_render_clock_evidence_unsupported',
         )
         require(h.get('connected') is True and h.get('transport') == 'usb', 'usb_not_ready')
         require(h.get('microphone_active') is False, 'owner_microphone_already_active')
@@ -430,6 +436,11 @@ class SmokeRun:
         self.playback_probe_evidence = evidence
         require(result.get('status') == 'completed', 'playback_probe_not_completed')
         require(evidence.get('status') == 'observed', 'playback_not_acoustically_corroborated')
+        require(
+            not self.clock_evidence
+            or evidence.get('render_clock_evidence', {}).get('status') == 'observed',
+            'render_clock_provenance_unconfirmed',
+        )
 
     def home(self):
         self.device.home()
@@ -652,11 +663,18 @@ def main(argv=None):
         action='store_true',
         help='Corroborate a fixed speaker phrase using already active bounded capture',
     )
+    parser.add_argument(
+        '--clock-evidence',
+        action='store_true',
+        help='Also require opt-in presentation-clock provenance from a supporting APK',
+    )
     args = parser.parse_args(argv)
     if args.standby and not args.capture or args.acoustic and not args.standby:
         parser.error('--standby requires --capture; --acoustic requires --standby')
     if args.playback_evidence and not args.capture:
         parser.error('--playback-evidence requires --capture')
+    if args.clock_evidence and not args.playback_evidence:
+        parser.error('--clock-evidence requires --playback-evidence')
     plan = {
         'checks': list(CHECKS[:4])
         + (
@@ -669,6 +687,7 @@ def main(argv=None):
         'execute': args.execute,
         'capture': args.capture,
         'playback_evidence': args.playback_evidence,
+        'clock_evidence': args.clock_evidence,
         'full_p0_acceptance': False,
     }
     if not args.execute:
@@ -735,6 +754,7 @@ def main(argv=None):
                     standby=args.standby,
                     acoustic=args.acoustic,
                     playback_evidence=args.playback_evidence,
+                    clock_evidence=args.clock_evidence,
                     checkpoint=save,
                     expected_apk=(manifest.assistant.version, manifest.assistant.version_code),
                 )

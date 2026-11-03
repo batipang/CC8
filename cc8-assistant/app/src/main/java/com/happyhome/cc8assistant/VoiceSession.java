@@ -314,6 +314,8 @@ final class VoiceSession {
       JSONObject hello = Wire.event("device_ready");
       Wire.put(hello, "supports_playback_pause", true);
       Wire.put(hello, "playout_receipt_version", 1);
+      Wire.put(hello, "render_clock_report_version", 1);
+      Wire.put(hello, "playback_done_id_version", 1);
       Wire.put(hello, "desktop_camera_version", 1);
       Wire.put(hello, "desktop_camera_challenge", desktopCameraAuth.challenge());
       Wire.put(hello, "protocol", BuildConfig.CC8_PROTOCOL);
@@ -711,7 +713,8 @@ final class VoiceSession {
                 j.optString("role", "assistant"),
                 j.optInt("playback_id"),
                 timings(j.optJSONArray("timings"), j.optString("text").length()),
-                PlayoutProbe.requested(j.opt("playout_receipt_version")));
+                PlayoutProbe.requested(j.opt("playout_receipt_version")),
+                Boolean.TRUE.equals(j.opt("report_audio_clock")));
         player = next;
         next.start();
       } else if ("play_end".equals(event)) {
@@ -1349,6 +1352,7 @@ final class VoiceSession {
     // 播放头决定字幕、嘴型和完成回执；队列中已有数据不能被当成已经发声。
     final int generation, playbackId;
     final boolean reportPlayout;
+    final RenderClockStats clockStats;
     final PlayoutProbe playout = new PlayoutProbe();
     final String text, mood, role;
     volatile CaptionTimeline timings;
@@ -1364,7 +1368,15 @@ final class VoiceSession {
     int configuredBufferFrames;
     final PlaybackDrain drain = new PlaybackDrain();
 
-    Player(int g, String t, String m, String role, int id, CaptionTimeline line, boolean report) {
+    Player(
+        int g,
+        String t,
+        String m,
+        String role,
+        int id,
+        CaptionTimeline line,
+        boolean report,
+        boolean reportClock) {
       super("cc8-speaker");
       generation = g;
       text = t;
@@ -1373,6 +1385,10 @@ final class VoiceSession {
       playbackId = id;
       timings = line;
       reportPlayout = report;
+      clockStats =
+          report && reportClock && recording
+              ? new RenderClockStats(SystemClock.elapsedRealtime())
+              : null;
     }
 
     void offer(byte[] pcm) throws IOException {
@@ -1493,6 +1509,13 @@ final class VoiceSession {
       boolean valid = t.getTimestamp(stamp);
       long speakerTime =
           PlaybackClock.estimate(now, written, head, valid, stamp.framePosition, stamp.nanoTime);
+      if (clockStats != null)
+        clockStats.observe(
+            SystemClock.elapsedRealtime(),
+            written,
+            count,
+            speakerTime,
+            PlaybackClock.source(now, written, valid, stamp.framePosition, stamp.nanoTime));
       double power = 0;
       short[] accepted = new short[count];
       System.arraycopy(samples, offset, accepted, 0, count);
@@ -1532,6 +1555,23 @@ final class VoiceSession {
       Wire.put(ack, "accepted_frames", seen.accepted);
       Wire.put(ack, "nanos", seen.nanos);
       send(ack);
+    }
+
+    private JSONObject clockReport() {
+      JSONObject result = new JSONObject(), sources = new JSONObject();
+      Wire.put(result, "version", 1);
+      Wire.put(result, "complete", clockStats.complete());
+      Wire.put(result, "expired", clockStats.expired);
+      Wire.put(result, "invalid", clockStats.invalid);
+      Wire.put(result, "observations", clockStats.observations);
+      Wire.put(result, "frames", clockStats.frames);
+      Wire.put(result, "source_changes", clockStats.sourceChanges);
+      Wire.put(result, "clock_steps", clockStats.clockSteps);
+      Wire.put(result, "max_step_nanos", clockStats.maxStepNanos);
+      for (int i = 0; i < RenderClockStats.SOURCES.length; i++)
+        Wire.put(sources, RenderClockStats.SOURCES[i], clockStats.counts[i]);
+      Wire.put(result, "source_counts", sources);
+      return result;
     }
 
     public long now() {
@@ -1622,7 +1662,11 @@ final class VoiceSession {
           JSONObject done = Wire.event("play_done");
           Wire.put(done, "generation", generation);
           Wire.put(done, "role", role);
+          Wire.put(done, "playback_id", playbackId);
           Wire.put(done, "played_frames", t.getPlaybackHeadPosition() & 0xffffffffL);
+          if (clockStats != null) {
+            Wire.put(done, "render_clock", clockReport());
+          }
           send(done);
           if (recording) listener.state("listening", "我在听");
         }
@@ -1634,6 +1678,7 @@ final class VoiceSession {
           JSONObject failure = Wire.event("playback_error");
           Wire.put(failure, "error_type", error.getClass().getSimpleName());
           Wire.put(failure, "generation", generation);
+          Wire.put(failure, "playback_id", playbackId);
           send(failure);
         }
       } finally {

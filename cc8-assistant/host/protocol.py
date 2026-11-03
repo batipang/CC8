@@ -135,9 +135,13 @@ def validate_device_event(value: object) -> JsonObject:
         'nanos': 64,
         'desktop_camera_version': 32,
         'playout_receipt_version': 32,
+        'render_clock_report_version': 32,
+        'playback_done_id_version': 32,
     }
     if name == 'playout_progress':
         integers.update(playback_id=32, first_signal_frame=64, played_frames=64, accepted_frames=64)
+    if name in ('play_done', 'playback_error'):
+        integers['playback_id'] = 32
     if name in ('playback_paused', 'playback_resumed'):
         integers['token'] = 32
     for key, bits in integers.items():

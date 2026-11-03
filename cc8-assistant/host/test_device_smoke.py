@@ -284,6 +284,32 @@ class DeviceAutomationTests(unittest.TestCase):
         device.open.assert_not_called()
         device.home.assert_not_called()
 
+    def test_clock_requirement_refuses_old_apk_before_capture(self):
+        run, device, health, _ = self.fixture(
+            capture=True, playback_evidence=True, clock_evidence=True
+        )
+        health['playback_evidence_supported'] = True
+        result = run.run()
+        self.assertEqual(result['state'], 'failed')
+        self.assertEqual(result['checks'][0]['reason'], 'device_render_clock_evidence_unsupported')
+        device.open.assert_not_called()
+        device.home.assert_not_called()
+
+    def test_clock_requirement_does_not_treat_missing_evidence_as_zero(self):
+        run, _, health, _ = self.fixture(clock_evidence=True)
+        health['microphone_active'] = True
+        request = run.request
+        evidence = {'status': 'observed', 'render_clock_evidence': {'status': 'missing'}}
+        run.request = lambda p: (
+            {'status': 'completed', 'evidence': evidence}
+            if p == {'operation': 'playback_probe'}
+            else request(p)
+        )
+        with self.assertRaisesRegex(CheckFailure, 'render_clock_provenance_unconfirmed'):
+            run.playback_probe()
+        evidence['render_clock_evidence']['status'] = 'observed'
+        run.playback_probe()
+
     def test_playback_probe_keeps_failed_numeric_evidence(self):
         run, device, health, _ = self.fixture(capture=True, playback_evidence=True)
         health['microphone_active'] = True

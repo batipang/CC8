@@ -147,6 +147,12 @@ def build_components(
             cancel_timeline_pause=lambda: host.capture.echo.cancel_pause(),
             pause_timeline=lambda nanos: host.capture.echo.pause_at(nanos),
             resume_timeline=lambda nanos: host.capture.echo.resume_at(nanos),
+            begin_clock_report=lambda generation, playback_id: host.capture.begin_render_clock(
+                generation, playback_id
+            ),
+            complete_clock_report=lambda generation, playback_id, value, frames: (
+                host.capture.complete_render_clock(generation, playback_id, value, frames)
+            ),
         )
     )
     capture = CapturePipeline(

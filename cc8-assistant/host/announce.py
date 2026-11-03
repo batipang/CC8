@@ -200,7 +200,13 @@ class AnnouncementServer:
                 # samples waiting for a reference that can no longer arrive.
                 if job.done.is_set() and job.result != 'completed':
                     self.bridge.cancel_playback_probe(job, probe)
-            return {'status': job.result, 'evidence': probe.result}
+            return {
+                'status': job.result,
+                'evidence': {
+                    **probe.result,
+                    'render_clock_evidence': probe.render_clock.snapshot(final=True),
+                },
+            }
         finally:
             if not job.done.is_set() or not probe.done.is_set():
                 self.bridge.cancel_playback_probe(job, probe)
