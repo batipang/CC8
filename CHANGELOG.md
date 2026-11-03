@@ -1,9 +1,9 @@
 # Changelog
 
-## p0-supervisor-log-recovery-20261104.1 — backend source candidate
+## p0-supervisor-log-recovery-20261104.1 — deployed diagnostic pair
 
-Backend0.14.17; APK0.9.13/code48 and protocol2 unchanged. Deployed backend remains
-0.14.16 until separately verified maintenance.
+Backend0.14.17, frozen source1ab67a0; original-signature APK0.9.13/code48 and
+protocol2 retained. PR81 and main each pass all eight CI checks.
 
 - Keep optional log write/flush failures out of transport activation, device
   handshake and workers after a supervisor's stdout pipe loses its reader.
@@ -15,6 +15,17 @@ Backend0.14.17; APK0.9.13/code48 and protocol2 unchanged. Deployed backend remai
   to capture, but independent device/backend checks showed both microphones off.
 - Restore the original backend safely in 12.736 seconds before further work;
   stop the incomplete observer/diagnostic collectors and retain their reports.
+- Deploy the tested backend in 23.483 seconds after a separate 6.877-second
+  preflight, preserving APK, configuration, models and native dependencies.
+- Pass one actual supervisor fault/adoption check in 7.747 seconds, followed by
+  four no-capture checks covering the original UI-reopen/reconnect failure,
+  announcement/caption receipts and logical Wi-Fi/USB handover.
+- Preserve the first new-version standby failure: eight checks pass, including
+  a real 908.424-second idle; acoustic counting stops on an extra raw voice
+  record. Independent numeric receipts show one completed admitted answer and
+  one rejected/resumed echo candidate, not a second admitted dialogue. Keep the
+  actual pause and missing 20-second observation visible; no rerun or green
+  relabelling, and remaining standby rounds stay unstarted.
 
 ## Automatic supervisor recovery — explicit fault and adoption checks
 
