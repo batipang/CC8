@@ -1,5 +1,7 @@
 # 局域网 TLS 并发读写回归
 
+此处保留源码验证阶段；后台0.14.16已随867ff19部署并完成实机逻辑Wi-Fi接管/USB优先检查，见 [当前部署](CURRENT_DEPLOYMENT.md)。它不替代物理拔插或完整长时验收。
+
 后台0.14.16源码候选，协议2、APK0.9.7/code42不变；实际部署仍见
 [CURRENT_DEPLOYMENT](CURRENT_DEPLOYMENT.md)。本项不更新运行设备。
 
