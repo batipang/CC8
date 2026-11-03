@@ -30,6 +30,8 @@ native 调用不进入 session 回调；reset 按 session guard → wake native 
 - [sherpa-onnx 2.0.1 KeywordSpotter 接口](https://github.com/k2-fsa/sherpa-onnx/blob/v2.0.1/sherpa-onnx/python/sherpa_onnx/keyword_spotter.py)：独立 stream / 额外关键词接口。
 - 英文官方归档 README 的 model card 标为 Apache-2.0；中文模型许可经[上游问题 #3802](https://github.com/k2-fsa/sherpa-onnx/issues/3802)维护者 2026-10-26 确认 Apache-2.0。这里只记录本轮使用的模型来源，不改变本仓库其他资产的许可范围。
 
+最新隔离候选的反例、固定模型/依赖与后续门槛见 [WAKE_RESEARCH](WAKE_RESEARCH.md)。这些实验均未替换运行KWS，不能用整句编码器输出或开发集通过代替唤醒验收。
+
 ## 软件验证与尚未完成的验收
 
 本机全套：installer 16、host 402（4 项明确依赖私人音频跳过）、tooling 51、Java 15 checks；Ruff / Java formatting / strict mypy 六模块通过。新增 native 适配和动态控制模块尚未声称 strict 全覆盖。模型准备的离线回归覆盖固定缓存、两个归档、链接/穿越/错误根目录、下载大小与校验拒绝；测试不访问网络。
