@@ -1,5 +1,21 @@
 # Changelog
 
+## p0-minimax-business-failures-20261103.1 — backend source candidate
+
+Backend0.14.15; original APK0.9.7/code42 and protocol2 unchanged.
+
+- Classify explicitly documented MiniMax business failures independently of
+  HTTP200, preserving HTTP/explicit-kind precedence and generic unknown cases.
+- Reject malformed status envelopes and non-integer codes before releasing ASR
+  text, JSON or stream events; preserve optional status compatibility and require
+  explicit integer-zero status for search results.
+- Verify no task dispatch after ASR failure, completed receipts surviving late
+  TTS quota errors, and recovery only on the next explicit request. Keep failures
+  content-free and add no retries or provider/configuration changes.
+- Add verified loopback TLS controls for all three HTTP paths. Real MiniMax
+  faults/device UI remain separate; deployed backend0.14.13 and its observer stay.
+
+
 ## p0-pause-candidate-withdrawn-20261103.1 — default backend restored
 
 Backend0.14.13 / original APK0.9.7/code42, protocol2 unchanged.

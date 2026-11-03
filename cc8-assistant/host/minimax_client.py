@@ -27,11 +27,41 @@ class Cancelled(RuntimeError):
     pass
 
 
+# MiniMax's documented business status is independent of the HTTP status.
+# Keep ambiguous/model/parameter codes generic; never infer from status_msg.
+# https://platform.minimax.cn/docs/api-reference/errorcode (2026-11-03)
+API_ERROR_KINDS = {
+    **dict.fromkeys((1001, 2066), 'timeout'),
+    **dict.fromkeys((1002, 1041, 1045, 2045, 2046, 2047), 'rate_limit'),
+    **dict.fromkeys((1004, 2042, 2049, 2057, 2061, 2068), 'credential_or_permission'),
+    **dict.fromkeys((1008, 2053, 2056, 2067), 'quota'),
+}
+
+
 class MiniMaxError(ClassifiedFailure):
     def __init__(self, message, code=None, http_status=None, *, kind='provider_or_runtime'):
+        code = code if type(code) is int and 0 <= code <= 2**31 - 1 else None
+        if kind == 'provider_or_runtime':
+            kind = API_ERROR_KINDS.get(code, kind)
         super().__init__(message, kind=kind)
         self.code = code
         self.http_status = http_status
+
+
+def check_api_result(data, *, require_status=False):
+    """Validate status before releasing transcripts, model text or PCM events."""
+    if not isinstance(data, dict):
+        raise MiniMaxError('Invalid MiniMax response')
+    base = data.get('base_resp', {})
+    if not isinstance(base, dict) or (require_status and 'status_code' not in base):
+        raise MiniMaxError('Invalid MiniMax status')
+    code = base.get('status_code', 0)
+    # bool/float zero and absent status are different. The latter is allowed
+    # for compatible endpoints and partial stream events, except search.
+    if type(code) is not int or not 0 <= code <= 2**31 - 1:
+        raise MiniMaxError('Invalid MiniMax status code')
+    if code != 0 or data.get('error'):
+        raise MiniMaxError('MiniMax API request failed', code=code)
 
 
 def subscription_key(config=None):
@@ -291,9 +321,7 @@ class Transport:
                     'MiniMax ASR HTTP request failed', http_status=response.status_code
                 )
             data = response_json(response, is_current, slot, 512 * 1024)
-            code = (data.get('base_resp') or {}).get('status_code', 0)
-            if code or data.get('error'):
-                raise MiniMaxError('MiniMax ASR API request failed', code=code)
+            check_api_result(data)
             text = data.get('text')
             if not isinstance(text, str) or len(text) > 10000:
                 raise MiniMaxError('Invalid MiniMax ASR transcript')
@@ -331,9 +359,7 @@ class Transport:
             if response.status_code != 200:
                 raise MiniMaxError('MiniMax HTTP request failed', http_status=response.status_code)
             data = response_json(response, is_current, slot, 2 * 1024 * 1024)
-            code = (data.get('base_resp') or {}).get('status_code', 0)
-            if code != 0 or data.get('error'):
-                raise MiniMaxError('MiniMax API request failed', code=code)
+            check_api_result(data)
             return data
         except (requests.RequestException, TimeoutError) as error:
             if slot.stopped.is_set() or not is_current():
@@ -370,9 +396,8 @@ class Transport:
             response.encoding = 'utf-8'
             if 'text/event-stream' not in response.headers.get('Content-Type', '').lower():
                 data = response_json(response, is_current, slot, 2 * 1024 * 1024)
-                base = data.get('base_resp') or {}
-                code = base.get('status_code')
-                raise MiniMaxError('Expected MiniMax streaming response', code=code)
+                check_api_result(data)
+                raise MiniMaxError('Expected MiniMax streaming response')
             for event in sse_events(
                 bounded_lines(
                     response.iter_content(chunk_size=8192),
@@ -380,13 +405,7 @@ class Transport:
                 )
             ):
                 slot.check(is_current)
-                base = event.get('base_resp') or {}
-                if not isinstance(base, dict):
-                    raise MiniMaxError('Invalid MiniMax stream status')
-                if base.get('status_code', 0) != 0:
-                    raise MiniMaxError('MiniMax API request failed', code=base['status_code'])
-                if event.get('error'):
-                    raise MiniMaxError('MiniMax streaming error')
+                check_api_result(event)
                 yield event
         except (requests.RequestException, TimeoutError) as error:
             if slot.stopped.is_set() or not is_current():
@@ -502,8 +521,7 @@ class MiniMaxBrain:
                     return
                 data = self.transport.post_json('/v1/coding_plan/search', {'q': query}, is_current)
                 # A successful search must carry an explicit provider status.
-                if (data.get('base_resp') or {}).get('status_code') != 0:
-                    raise MiniMaxError('Invalid search status')
+                check_api_result(data, require_status=True)
                 items = normalize(data)
                 retrieved = now()
                 if not is_current():

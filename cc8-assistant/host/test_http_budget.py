@@ -296,6 +296,46 @@ class HTTPBudgetTLS(unittest.TestCase):
     def test_normal_verified_tls_asr_json_and_sse_still_complete_once(self):
         self.assert_normal_verified_tls_asr_json_and_sse()
 
+    def test_http_200_business_failures_cross_verified_tls_without_retry_or_content_leak(self):
+        from diagnostics import error_kind
+
+        secret = 'PRIVATE-business-status-body'
+        for code, wanted in (
+            (1001, 'timeout'),
+            (1002, 'rate_limit'),
+            (1004, 'credential_or_permission'),
+            (1008, 'quota'),
+        ):
+            for operation in ('transcribe', 'post_json', 'events'):
+                for repeat in range(3):
+                    with self.subTest(code=code, operation=operation, repeat=repeat):
+                        data = {
+                            'base_resp': {'status_code': code, 'status_msg': secret},
+                            'text': secret,
+                        }
+                        wire = json.dumps(data).encode()
+                        if operation == 'events':
+                            wire = b'data: ' + wire + b'\n\n'
+                        server = DripServer(self.context, 'immediate', wire)
+                        try:
+                            client = self.client(server)
+                            client.timeout = (2, 2)
+                            with self.assertRaises(MiniMaxError) as caught:
+                                if operation == 'transcribe':
+                                    client.transcribe(b'public-fixture')
+                                elif operation == 'post_json':
+                                    client.post_json('/fixture', {})
+                                else:
+                                    list(client.events('/fixture', {}))
+                            self.assertEqual(error_kind(caught.exception), wanted)
+                            self.assertEqual(caught.exception.code, code)
+                            self.assertNotIn(secret, str(caught.exception))
+                            self.assertEqual(client.slots, set())
+                            self.assertTrue(server.headers_received.is_set())
+                        finally:
+                            server.close()
+        self.assert_normal_verified_tls_asr_json_and_sse()
+
     def assert_cancel_interrupts_read(self, mode):
         server = DripServer(self.context, mode, b'{"value":1}')
         client = self.client(server)
