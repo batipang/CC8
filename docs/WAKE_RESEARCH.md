@@ -2,6 +2,8 @@
 
 本批没有找到可替换运行英文KWS的方案，P0-03继续开放。设备仍为后台0.14.5／APK0.9.3，0.14.6是已合入、未部署的任务回执修复；本批不修改运行模型、阈值、依赖或采集状态。
 
+后续源码0.14.7补齐Dot分段时钟，0.14.8加入初始连接准备，均已合入但未部署。下面追加的Mac原生识别实验安装了独立系统英文语言资源，没有替换当前助手的KWS、MiniMax ASR/TTS或Dot；本页原来的“未改变依赖”只描述前一批隔离模型实验。
+
 ## 输入与判定口径
 
 标准V2为15条名字正例、10条普通或近音负例，沿用 [自动检查](AUTOMATED_DEVICE_CHECKS.md) 的六种production流条件。逐一核对25个样本ID、布尔标签及必填64位PCM摘要，全部相同；原版与BPE变体的语料及实际native二进制摘要也一致。没有删除失败样本、修改预期或将新原生库装入后台。
@@ -44,3 +46,28 @@ BPE变体只增加同一`▁BUMBLEBEE`拼写的合法分词，不添加近音别
 先用冻结的声学输出研究专用关键词判定与近音竞争，阈值和路径选择须使用训练/校准分区，再验证保留的全部失败样本与独立说话人。不得仅按已见开发分数放宽拼写、前缀或标签。需要额外检查连续流边界、普通话背景、自播报回声、资源/时延和模型许可；未完成前不接入等待唤醒路径。
 
 同时尝试按官方Dataset Viewer查询公开LibriSpeech真人朗读片段；部分请求超时，少数查询返回0。尚未下载音频或形成完整真人基线，不能把这些响应当作语料不存在，也不能用合成/整句编码器观察关闭真人或实机验收。[数据集说明](https://huggingface.co/datasets/openslr/librispeech_asr)、[查询说明](https://huggingface.co/docs/dataset-viewer/search)。
+
+## 冻结CTC输出的同段近音竞争
+
+只读复用33份已校验的32维概率缓存。先用规范`BUMBLEBEE`路径选择13～120帧的片段，再在同一片段计算七种拼写的完整CTC前向概率：BUMBLEBEE、HUMBLEBEE、BUBBLEBEE、FUMBLEBEE、RUMBLEBEE、MUMBLEBEE、BUMBLEBY。不将另一位置的竞争词得分拿来比较，也不改音频、标签或模型。
+
+规范路径相对逐帧自由最优路径的诊断分数，在标准25条上暂时分开：正例最低约−1.2063、负例最高约−2.2318；但额外近音输入已出现重叠，不能据此选择阈值。改看同段目标与最强竞争词的原始log概率差，标准正例仅6/15大于零，负例0/10；正例最低−7.2176、负例最高−0.9075，单一差值门槛也无法保留全部正例并排除全部负例。没有选择部署阈值。
+
+报告尾标识`7d6c7204`／`28f58c43`，各33条。编码器和选段仍使用整句未来上下文，结果不是流式检测或唤醒延迟。拼写/音素输出不构成合成音发音的人工真值；原有近音负例和漏检样本全部保留。
+
+## Mac原生文件识别对照
+
+本机macOS27.2（26B123）、SDK中的Swift6.4.2，先只读检查：旧SFSpeechRecognizer授权状态为notDetermined，未调用请求授权；新SpeechTranscriber可用，已安装zh_CN／zh_TW，英文资源尚未安装。新API的处理范围及可用性以[官方SpeechTranscriber说明](https://developer.apple.com/documentation/speech/speechtranscriber)为准；[苹果权限说明](https://developer.apple.com/documentation/speech/asking-permission-to-use-speech-recognition)区分了旧服务与本地SpeechAnalyzer模块。这不代表旧识别接口已经获得授权。
+
+固定使用`.transcription`与AVAudioFile，只处理前述标准25条公开合成输入，每条分别无提示／提示Bumblebee与大黄蜂。每次生成PCM后与既有摘要逐一核对；没有用户录音、麦克风、设备操作或生产配置变化。
+
+| 文件识别引擎 | 无提示正例命中 / 负例误触发 | 名字提示正例命中 / 负例误触发 |
+| --- | --- | --- |
+| 已有zh_CN原生资源 | 0/15、0/10 | 0/15、0/10 |
+| 新安装en_US原生资源 | 6/15、0/10 | 6/15、0/10 |
+
+表中命中同时用原有生产名字正则复核，得到相同数量，没有放宽拼写或重新标注。英语模型仍将部分Karen输入识别为Gumblebee／Dumblebee，Tingting混说和旧默认名字也漏检。两批各50次文件调用，总轮次23.837／23.127秒，含合成、进程和报告I/O，不能换算为流式实时性能。名字提示没有补齐本组漏检，因此两种配置均不采用。
+
+英文资源通过[AssetInventory安装接口](https://developer.apple.com/documentation/speech/assetinventory/assetinstallationrequest(supporting:))取得；该接口会自动为调用客户端保留语言项。实验检测到新增en_US保留项后，在相同安装客户端路径执行[release](https://developer.apple.com/documentation/speech/assetinventory/release(reservedlocale:))，确认该客户端从en_US回到原空列表，原zh_CN／zh_TW资源仍在。另一可执行文件的保护检查返回3、没有执行释放，随后使用原客户端正确完成；不把不同应用的保留列表混为全局状态。没有显式删除系统共享资源，新增英文资产由系统管理。
+
+苹果资源没有这批外部权重同样的逐文件固定哈希，故记录为不透明系统资产；报告保留OS build、已安装语言、Swift源码/可执行文件摘要和安装/清理回执，不声称跨系统版本精确复现。私有报告尾标识`a22b6f9f`／`306e2655`，整体验证`research-verification-20261103-v2.json`。当前仍没有可部署的英文替代方案；后续优先补独立、发音可核对的真人参考，不能在已见合成输入上不断接受近音拼写。
