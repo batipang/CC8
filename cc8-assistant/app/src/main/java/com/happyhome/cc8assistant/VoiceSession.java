@@ -9,6 +9,7 @@ import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.media.*;
 import android.os.SystemClock;
+import android.os.Build;
 import java.io.*;
 import java.net.*;
 import java.util.concurrent.*;
@@ -76,6 +77,8 @@ final class VoiceSession {
   private volatile DataOutputStream output;
   private volatile AudioRecord recorder;
   private volatile Player player;
+  private volatile long lastPlaybackSpeechFrames;
+  private volatile int lastPlaybackPaddingFrames;
   private volatile float inputLevel = 0;
   private volatile CaptionProgress lastCaption = CaptionProgress.empty();
   private volatile boolean textSession;
@@ -1102,6 +1105,12 @@ final class VoiceSession {
     Wire.put(j, "mic_frames", micFrames);
     Wire.put(j, "render_frames", renderFrames);
     Wire.put(j, "playback_head", playbackHead());
+    Player playingNow = player;
+    Wire.put(j, "playback_speech_frames", playingNow == null ? 0 : playingNow.written);
+    Wire.put(
+        j, "playback_padding_frames", playingNow == null ? 0 : playingNow.drain.paddingFrames());
+    Wire.put(j, "last_playback_speech_frames", lastPlaybackSpeechFrames);
+    Wire.put(j, "last_playback_padding_frames", lastPlaybackPaddingFrames);
     Wire.put(j, "playback_paused", player != null && player.paused);
     Wire.put(j, "phase", phase);
     Wire.put(j, "raw_audio_saved", false);
@@ -1218,7 +1227,7 @@ final class VoiceSession {
     send(result);
   }
 
-  private final class Player extends Thread implements PcmPump.Sink {
+  private final class Player extends Thread implements PlaybackDrain.Sink {
     // 播放头决定字幕、嘴型和完成回执；队列中已有数据不能被当成已经发声。
     final int generation, playbackId;
     final boolean reportPlayout;
@@ -1233,6 +1242,9 @@ final class VoiceSession {
     volatile int pauseToken;
     volatile AudioTrack track;
     volatile long written = 0;
+    volatile long resumeCount = 0;
+    int configuredBufferFrames;
+    final PlaybackDrain drain = new PlaybackDrain();
 
     Player(int g, String t, String m, String role, int id, CaptionTimeline line, boolean report) {
       super("cc8-speaker");
@@ -1295,6 +1307,7 @@ final class VoiceSession {
           t.play();
         } catch (IllegalStateException ignored) {
         }
+      resumeCount++;
       JSONObject ack = Wire.event("playback_resumed");
       Wire.put(ack, "generation", generation);
       Wire.put(ack, "token", token);
@@ -1403,6 +1416,30 @@ final class VoiceSession {
       send(ack);
     }
 
+    public long now() {
+      return SystemClock.elapsedRealtime();
+    }
+
+    public long head() {
+      return track.getPlaybackHeadPosition() & 0xffffffffL;
+    }
+
+    public int bufferFrames() {
+      return Build.VERSION.SDK_INT >= 23 ? track.getBufferSizeInFrames() : configuredBufferFrames;
+    }
+
+    public long resumeSerial() {
+      return resumeCount;
+    }
+
+    public void probe() {
+      reportPlayout(track);
+    }
+
+    public void waitTick(long milliseconds) throws InterruptedException {
+      Thread.sleep(milliseconds);
+    }
+
     @Override
     public void run() {
       AudioTrack t = null;
@@ -1410,6 +1447,7 @@ final class VoiceSession {
         int min =
             AudioTrack.getMinBufferSize(
                 16000, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
+        configuredBufferFrames = Math.max(min * 2, 3200) / 2;
         t =
             new AudioTrack(
                 AudioManager.STREAM_MUSIC,
@@ -1448,19 +1486,7 @@ final class VoiceSession {
           }
           if (!PcmPump.writeAll(Wire.samples(bytes), this)) break;
         }
-        long deadline = SystemClock.elapsedRealtime() + 3000;
-        while (allowed()
-            && (t.getPlaybackHeadPosition() & 0xffffffffL) < written
-            && SystemClock.elapsedRealtime() < deadline) {
-          long before = SystemClock.elapsedRealtime();
-          waitIfPaused();
-          deadline += SystemClock.elapsedRealtime() - before;
-          reportPlayout(t);
-          Thread.sleep(10);
-        }
-        if (allowed()) reportPlayout(t);
-        if (allowed() && (t.getPlaybackHeadPosition() & 0xffffffffL) < written)
-          throw new IOException("播放排空超时");
+        if (!drain.drain(written, this)) return;
         if (allowed()) {
           synchronized (VoiceSession.this) {
             if (player == this)
@@ -1502,7 +1528,11 @@ final class VoiceSession {
           t.release();
         }
         synchronized (VoiceSession.this) {
-          if (player == this) player = null;
+          if (player == this) {
+            lastPlaybackSpeechFrames = written;
+            lastPlaybackPaddingFrames = drain.paddingFrames();
+            player = null;
+          }
         }
       }
     }

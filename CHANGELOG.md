@@ -1,5 +1,34 @@
 # Changelog
 
+## p0-paused-tail-drain-20261103.1 — source candidate
+
+Backend 0.14.13 / assistant APK 0.9.5/code40, protocol2 unchanged.
+
+- Prime a resumed, fully-written short AudioTrack tail with bounded post-speech
+  silence; preserve speech/reference/caption counts and require the real speech
+  endpoint before play_done. Keep timeout, cancellation and write failures.
+- Bind pause ACKs to their initiating trace after queue handoff and send pause
+  with the original generation so a newer owner cannot be paused by a late event.
+- Preserve 0.14.12 live results: 30 scripted questions executed, 29 playback
+  completions, one retained failure; no extra admitted requests. Two successful
+  resume controls and one late-tail failure remain distinct from software checks.
+- Pass installer23 / host664 (4 private opt-in skips) / tooling100 / Java15,
+  pinned quality checks and original-signature Android assemble/lint.
+- Prepare a metadata-only code41 recovery of the existing 0.14.12 features.
+- Original 0.14.12 / APK0.9.3 stays deployed until separate guarded validation.
+
+
+## p0-diagnostic-deployment-20261103.2 — deployed diagnostic backend
+
+Backend 0.14.12/source 0f2fbc7, original APK 0.9.3/code38 retained.
+
+- Deploy the low-evidence admission and partial-trace lifecycle fixes in
+  22.713 seconds, preserving the package, profile, voice, models and environment.
+- Preserve the failed 0.14.11 preflight and its exact old controlled-test partial
+  record. Verify its ownership for this migration only, with 12 guard checks.
+- Keep new-instance maintenance strict and finish with capture/camera off.
+
+
 ## p0-partial-capture-lifecycle-20261103.1 — source candidate
 
 Backend 0.14.12; original assistant APK 0.9.3/code38 and protocol2 unchanged.
