@@ -16,6 +16,34 @@ from device_smoke import CheckFailure, Device, SmokeRun, main, objects, rpc
 
 
 class DeviceAutomationTests(unittest.TestCase):
+    def test_explicit_open_waits_for_owned_activity_and_keeps_shell_deadline(self):
+        for capture in (False, True):
+            with self.subTest(capture=capture):
+                device = Device.__new__(Device)
+                device.transport = 'owned-usb'
+                device.access = Mock()
+                device.access.target.return_value = device.transport
+                device.open(capture)
+                device.access.target.assert_called_once_with()
+                args = device.access.shell.call_args
+                self.assertEqual(args.kwargs, {'timeout': 15})
+                self.assertEqual(args.args[0], device.transport)
+                self.assertIn(
+                    'am start -W --activity-clear-top -n com.happyhome.cc8assistant/', args.args[1]
+                )
+                self.assertTrue(
+                    args.args[1].endswith(' --ez auto_start_voice ' + str(capture).lower())
+                )
+
+    def test_open_refuses_a_changed_usb_target_before_launching_activity(self):
+        device = Device.__new__(Device)
+        device.transport = 'owned-usb'
+        device.access = Mock()
+        device.access.target.return_value = 'different-usb'
+        with self.assertRaisesRegex(CheckFailure, 'usb_target_changed'):
+            device.open(False)
+        device.access.shell.assert_not_called()
+
     def test_missing_speech_probe_voice_aborts_before_ui_or_capture(self):
         run, device, health, now = self.fixture(capture=True, standby=True, acoustic=True)
         device.prepare_speech_probe.side_effect = ValueError('unavailable_voice')

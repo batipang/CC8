@@ -117,7 +117,7 @@ class Device:
 
     def open(self, capture=False):
         self.shell(
-            'input keyevent 224; am start --activity-clear-top -n '
+            'input keyevent 224; am start -W --activity-clear-top -n '
             + COMPONENT
             + ' --ez auto_start_voice '
             + ('true' if capture else 'false')
