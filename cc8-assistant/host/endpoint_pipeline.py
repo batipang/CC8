@@ -68,7 +68,16 @@ class EndpointPipeline:
         self.last_fast_stop_ns = 0
         self.ignore_vad_until_ns = 0
 
+    def cancel_partial_trace(self):
+        # Only the endpoint-owned, unfinished capture belongs here. After
+        # handoff, recognition owns its trace and decides its terminal outcome.
+        if self.voice_trace is not None:
+            self.hooks.diagnostics().gate(self.voice_trace, 'stale')
+            self.hooks.diagnostics().finish(self.voice_trace, 'cancelled')
+            self.voice_trace = None
+
     def reset_transport(self):
+        self.cancel_partial_trace()
         self.vad.reset()
         self.reference_capture.reset()
         self.near_speech.reset()
@@ -76,6 +85,7 @@ class EndpointPipeline:
         self.capture_evidence = None
 
     def reset_session(self):
+        self.cancel_partial_trace()
         self.vad = VoiceDetector()
         self.turn_reference = []
         self.turn_local_wake = False
@@ -91,6 +101,7 @@ class EndpointPipeline:
             self.fast_stop.reset()
 
     def reset_voice_activity(self):
+        self.cancel_partial_trace()
         self.vad.reset()
         self.reference_capture.reset()
         self.capture_evidence = None
@@ -139,6 +150,7 @@ class EndpointPipeline:
             self.hooks.claim_wake() if began or self.vad.talking or utterance is not None else False
         )
         if began:
+            self.cancel_partial_trace()
             self.capture_evidence = CaptureEvidence()
             self.turn_local_wake = claimed_wake
             self.voice_trace = self.hooks.diagnostics().begin('voice')
@@ -215,13 +227,16 @@ class EndpointPipeline:
                 self.hooks.diagnostics().gate(self.voice_trace, 'wake_closed')
                 self.hooks.diagnostics().finish(self.voice_trace, 'rejected')
                 self.hooks.metric('local_wake_utterances_withheld', increment=True)
+                self.voice_trace = None
                 return
             self.hooks.enqueue(job)
+            self.voice_trace = None
 
     def apply_fast_stop(self, keyword, stamp):
         start = time.perf_counter()
         self.last_fast_stop_ns = stamp
         self.ignore_vad_until_ns = stamp + 160_000_000
+        self.cancel_partial_trace()
         self.hooks.cancel_session('streaming_stop_keyword')
         self.vad.reset()
         self.capture_evidence = None
