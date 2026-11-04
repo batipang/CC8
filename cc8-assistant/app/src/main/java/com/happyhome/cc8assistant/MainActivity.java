@@ -54,6 +54,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   private TextView progressText;
   private ProgressBar captionProgress;
   private int captionId, lastCaptionLine = -1;
+  private boolean captionPlaceholder;
   private TextView linkText,
       stateText,
       privacyText,
@@ -129,6 +130,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
             captionText.progress(0, false);
             captionProgress.setVisibility(View.INVISIBLE);
             progressText.setVisibility(View.INVISIBLE);
+            if (!playbackActive && captionId == 0 && captionPlaceholder)
+              session.noteTestStopVisuals(cp);
           }
           handler.postDelayed(this, 33);
         }
@@ -1370,6 +1373,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   }
 
   private void applyCaption(String text, String emotion) {
+    captionPlaceholder = text.isEmpty();
     final String value =
         text.isEmpty() ? (active ? "说大黄蜂唤醒我。\n也可以点击看一看。" : "麦克风已关闭。\n点击开始语音即可对话。") : text;
     if (!value.equals(captionText.getText().toString())) {

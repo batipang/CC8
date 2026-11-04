@@ -1283,6 +1283,22 @@ final class VoiceSession {
     }
   }
 
+  void noteTestStopVisuals(CaptionProgress frame) {
+    CaptureWindow window = captureWindow;
+    if (window == null
+        || window.limitMs == 0
+        || frame.id != 0
+        || frame.level != 0
+        || frame.playing
+        || frame.paused) return;
+    long appliedNanos = System.nanoTime();
+    synchronized (routeLock) {
+      if (foreground && recording && captureWindow == window && player == null)
+        window.observeStopVisuals(
+            routeEpoch, minimumGeneration, appliedNanos, SystemClock.elapsedRealtime());
+    }
+  }
+
   static final class PlaybackPresentation {
     final String text, mood, phase, message;
 
@@ -1345,6 +1361,7 @@ final class VoiceSession {
     }
     Wire.put(j, "test_interruption_transcript_supported", true);
     Wire.put(j, "test_playback_stop_supported", true);
+    Wire.put(j, "test_stop_visual_timing_supported", true);
     if (recording && window != null) {
       CaptureWindow.StopEvidence stop =
           window.stopEvidence(routeEpoch, SystemClock.elapsedRealtime());
@@ -1355,6 +1372,13 @@ final class VoiceSession {
         Wire.put(receipt, "cancel_generation", stop.cancelGeneration);
         Wire.put(receipt, "nanos", stop.nanos);
         Wire.put(j, "test_playback_stop", receipt);
+        long visualNanos = stop.visualNanos;
+        if (visualNanos > 0) {
+          JSONObject visuals = new JSONObject();
+          Wire.put(visuals, "cancel_generation", stop.cancelGeneration);
+          Wire.put(visuals, "nanos", visualNanos);
+          Wire.put(j, "test_stop_visual_timing", visuals);
+        }
       }
       CaptureWindow.TranscriptEvidence evidence =
           window.transcriptEvidence(routeEpoch, SystemClock.elapsedRealtime());

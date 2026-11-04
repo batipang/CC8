@@ -118,6 +118,11 @@ class VoiceSession {
   int generation=5,playbackId=7;
   long cancelAppliedNanos=1000;
  }
+ static class CaptionProgress {
+  int id;
+  float level;
+  boolean playing,paused;
+ }
  static class Listener {
   final List<Boolean> microphones=new CopyOnWriteArrayList<>();
   final AtomicInteger errors=new AtomicInteger();
@@ -227,6 +232,22 @@ public final class CaptureCheck {
     s.cancelForTest(6,2);
     yes(s.player==null&&s.captureWindow.stopEvidence(2,105).nanos==1000,
         "active route cancel did not record applied player stop");
+    CaptureWindow.StopEvidence stop=s.captureWindow.stopEvidence(2,105);
+    s.captureWindow.observeStopVisuals(1,6,1050,105);
+    s.captureWindow.observeStopVisuals(2,5,1050,105);
+    s.captureWindow.observeStopVisuals(2,6,999,105);
+    yes(stop.visualNanos==0,"stale route, generation or inverted clock acknowledged visuals");
+    VoiceSession.CaptionProgress frame=new VoiceSession.CaptionProgress();
+    s.minimumGeneration=6;
+    frame.id=7;
+    s.noteTestStopVisuals(frame);
+    yes(stop.visualNanos==0,"old visual frame acknowledged stop");
+    frame.id=0;
+    s.noteTestStopVisuals(frame);
+    long applied=stop.visualNanos;
+    yes(applied>=stop.nanos,"cleared UI was not recorded");
+    s.captureWindow.observeStopVisuals(2,6,applied+1,106);
+    yes(stop.visualNanos==applied,"later UI update rewrote first stop witness");
     return;
    }
    if("clock_math".equals(test)){
@@ -384,6 +405,7 @@ class CaptureWindowTests(unittest.TestCase):
                 'private void rejectCapture(Object captureId, long route)',
                 'boolean captureRejectionCurrent(int stoppedEpoch)',
                 'private void cancelPlaybackForCommand(int cancelGeneration, long route)',
+                'void noteTestStopVisuals(CaptionProgress frame)',
             )
         )
         (path / 'CaptureCheck.java').write_text(HARDWARE.replace('METHODS', methods))
