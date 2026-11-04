@@ -1291,10 +1291,11 @@ final class VoiceSession {
         || frame.level != 0
         || frame.playing
         || frame.paused) return;
+    long appliedNanos = System.nanoTime();
     synchronized (routeLock) {
       if (foreground && recording && captureWindow == window && player == null)
         window.observeStopVisuals(
-            routeEpoch, minimumGeneration, System.nanoTime(), SystemClock.elapsedRealtime());
+            routeEpoch, minimumGeneration, appliedNanos, SystemClock.elapsedRealtime());
     }
   }
 
