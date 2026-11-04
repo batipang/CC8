@@ -149,6 +149,7 @@ def build_components(
             metric=host.record_metric,
             diagnostics=lambda: host.diagnostics,
             trace=lambda: host.capture.endpoint.voice_trace,
+            onset=lambda: host.capture.endpoint.voice_onset_ns,
             echo_metrics=lambda: dict(
                 input_dbfs=host.metrics.get('input_dbfs'),
                 residual_dbfs=host.metrics.get('output_dbfs'),

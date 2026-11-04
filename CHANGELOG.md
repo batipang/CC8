@@ -1,5 +1,10 @@
 # Changelog
 
+## Backend 0.14.64 — report captured voice onset to device pause
+
+- Pair the first frame of the contiguous voiced run with the same applied
+  pause receipt. Keep the existing detector-trigger metric separate.
+
 ## Backend 0.14.63 — measure false pauses during self-playback
 
 - Expose pause and resume counters to the owner-only runtime check.

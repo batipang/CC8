@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import unittest
 
 from audit_device_suite import audit
+from diagnostics import VAD_ONSET_PAUSE
 from device_smoke import (
     ACOUSTIC_RESPONSE_METRIC,
     BARGE_DEVICE_METRIC,
@@ -224,6 +225,19 @@ class AuditDeviceSuiteTests(unittest.TestCase):
                 STOP_VISUAL_METRIC: {'samples': 15, 'p50': 33, 'p95': 33},
             },
         )
+        first = data['phases'][0]['report']['barge_evidence']
+        first[VAD_ONSET_PAUSE] = 260
+        self.assertEqual(
+            audit(data)['latencies_ms'][VAD_ONSET_PAUSE],
+            {
+                'samples': 1,
+                'p50': 260,
+                'p95': 260,
+            },
+        )
+        first[VAD_ONSET_PAUSE] = 100
+        self.assertEqual(audit(data)['reason'], 'suite_synthetic_barge_evidence_incomplete')
+        del first[VAD_ONSET_PAUSE]
         timing = data['phases'][2]['report']['barge_evidence']['response_playout_timing']
         timing['confirmed_playback_done_ms'] = 0
         reviewed = audit(data)

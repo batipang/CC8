@@ -8,12 +8,14 @@ import numpy as np
 
 import test_capture_evidence as fixture
 from diagnostic_run import DiagnosticRun, receipt
+from diagnostics import VAD_ONSET_PAUSE
+from dsp import VoiceDetector
 from protocol import EVENT, Packet
 from test_pause_preservation import Span
 
 
 class BargeReceiptTests(unittest.TestCase):
-    def paused_endpoint(self, *, version=None):
+    def paused_endpoint(self, *, version=None, gap_ns=0):
         b, frame, _ = fixture.CaptureDiagnosticsTests().endpoint()
         ready = dict(capture_active=True, supports_playback_pause=True)
         if version is not None:
@@ -23,11 +25,12 @@ class BargeReceiptTests(unittest.TestCase):
         credible = iter([False] * 4 + [True] * 9)
         b.capture.endpoint.near_speech.feed = lambda *_: (True, next(credible, True))
         for index in range(12):
-            b.capture.endpoint.consume(replace(frame, nanos=frame.nanos + index * 10_000_000))
+            gap = gap_ns if index >= 2 else 0
+            b.capture.endpoint.consume(replace(frame, nanos=frame.nanos + index * 10_000_000 + gap))
         key = b.capture.endpoint.voice_trace
         token = b.capture.endpoint.turn_pause_token
         generation = b.session.generation
-        b.capture.endpoint.consume(replace(frame, nanos=frame.nanos + 120_000_000))
+        b.capture.endpoint.consume(replace(frame, nanos=frame.nanos + 120_000_000 + gap_ns))
         b.recognition.queue.get_nowait()
         self.assertIsNone(b.capture.endpoint.voice_trace)
         return b, frame, key, token, generation
@@ -68,6 +71,13 @@ class BargeReceiptTests(unittest.TestCase):
                 row = next(r for r in report['requests'] if r['request_id'] == key)
                 self.assertIn('pause_ack', row['stages'])
                 self.assertEqual(row.get('device_pause_from_trigger_ms'), expected)
+                expected_onset = expected + 40 if expected is not None else None
+                self.assertEqual(row.get(VAD_ONSET_PAUSE), expected_onset)
+                onset_stats = report['summary']['latencies'][VAD_ONSET_PAUSE]
+                self.assertEqual(
+                    onset_stats['samples'], int(expected is not None and gate == 'accepted')
+                )
+                self.assertIsNone(b.capture.endpoint.voice_onset_ns)
                 latency = report['summary']['latencies']['device_pause_from_trigger_ms']
                 self.assertEqual(
                     latency['samples'], int(expected is not None and gate == 'accepted')
@@ -82,6 +92,53 @@ class BargeReceiptTests(unittest.TestCase):
                         receipt(dict(row, device_pause_from_trigger_ms=True))
                     with self.assertRaises(ValueError):
                         receipt(dict(row, stages={'pause_request': 1}))
+                    with self.assertRaises(ValueError):
+                        run.ingest(
+                            dict(before, requests=[{**row, VAD_ONSET_PAUSE: expected_onset + 1}])
+                        )
+                    for value in (False, expected - 1):
+                        with self.assertRaises(ValueError):
+                            receipt({**row, VAD_ONSET_PAUSE: value})
+
+    def test_actual_vad_preserves_voiced_preroll_before_pause_trigger(self):
+        bridge, frame, _ = fixture.CaptureDiagnosticsTests().endpoint()
+        bridge.playback.set_pause_capability(True, applied_receipt=True)
+        endpoint = bridge.capture.endpoint
+        endpoint.vad = VoiceDetector()
+        credible = iter([False] * 19 + [True])
+        endpoint.near_speech.feed = lambda *_: (True, next(credible))
+        for index in range(20):
+            endpoint.consume(replace(frame, nanos=frame.nanos + index * 10_000_000))
+            if index < 13:
+                self.assertIsNone(endpoint.voice_trace)
+        key = endpoint.voice_trace
+        generation = bridge.generation
+        bridge.on_event(
+            dict(
+                event='playback_paused',
+                generation=generation,
+                token=endpoint.turn_pause_token,
+                nanos=frame.nanos + 230_000_000,
+            )
+        )
+        row = next(r for r in bridge.diagnostics.report()['requests'] if r['request_id'] == key)
+        self.assertEqual(row['device_pause_from_trigger_ms'], 40)
+        self.assertEqual(row[VAD_ONSET_PAUSE], 230)
+
+    def test_capture_clock_gap_keeps_trigger_metric_but_excludes_onset(self):
+        gap = 30_000_000
+        b, frame, key, token, generation = self.paused_endpoint(version=1, gap_ns=gap)
+        b.on_event(
+            dict(
+                event='playback_paused',
+                generation=generation,
+                token=token,
+                nanos=frame.nanos + 40_000_000 + gap + 12_000_000,
+            )
+        )
+        row = next(r for r in b.diagnostics.report()['requests'] if r['request_id'] == key)
+        self.assertEqual(row['device_pause_from_trigger_ms'], 12)
+        self.assertNotIn(VAD_ONSET_PAUSE, row)
 
     def test_ack_after_queue_handoff_enriches_only_the_original_rejected_trace(self):
         b, _, key, token, generation = self.paused_endpoint()

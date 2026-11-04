@@ -24,6 +24,7 @@ class PauseHooks:
     metric: MetricSink
     diagnostics: Callable[[], TraceBook]
     trace: Callable[[], str | None]
+    onset: Callable[[], int | None]
     echo_metrics: Callable[[], dict[str, JsonValue]]
     utterance_paused: Callable[[int], bool]
     cancel_timeline_pause: Callable[[], None]
@@ -36,6 +37,7 @@ class PauseReceipt:
     generation: int
     trace: str | None
     trigger_nanos: int | None = None
+    onset_nanos: int | None = None
     pause_nanos: int | None = None
     resume_requested: bool = False
 
@@ -106,7 +108,9 @@ class PlaybackPause:
                     if older >= token:
                         break
                     self.pause_receipts.pop(older)
-                self.hooks.diagnostics().pause_ack(receipt.trace, receipt.trigger_nanos, nanos)
+                self.hooks.diagnostics().pause_ack(
+                    receipt.trace, receipt.trigger_nanos, nanos, onset_nanos=receipt.onset_nanos
+                )
                 self.hooks.pause_timeline(nanos)
             else:
                 if receipt.pause_nanos is None or not receipt.resume_requested:
@@ -137,6 +141,7 @@ class PlaybackPause:
                 generation,
                 trace,
                 trigger_nanos if self.device_can_confirm_pause else None,
+                self.hooks.onset() if self.device_can_confirm_pause else None,
             )
             self.pause_state = {
                 'token': token,
