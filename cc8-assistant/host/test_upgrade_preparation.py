@@ -1,6 +1,7 @@
 """Offline versions/configuration workflows never deploy or replace a live profile."""
 
 from contextlib import redirect_stdout, redirect_stderr
+import hashlib
 import io
 import json
 import os
@@ -75,6 +76,173 @@ class UpgradeTests(unittest.TestCase):
             self.assertTrue(result['apk_checked'])
             self.assertFalse(result['installed_signer_checked'])
             self.assertFalse(result['ready_for_installation'])
+
+    def transition_fixture(self, folder):
+        base, candidate, recovery = (Path(folder) / x for x in ('base', 'candidate', 'recovery'))
+
+        def git(root, *args):
+            return subprocess.check_output(
+                [
+                    'git',
+                    '-C',
+                    str(root),
+                    '-c',
+                    'user.name=Fixture',
+                    '-c',
+                    'user.email=fixture@example.test',
+                    '-c',
+                    'commit.gpgSign=false',
+                    *args,
+                ],
+                text=True,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            ).strip()
+
+        base.mkdir()
+        git(base, 'init', '-q')
+        (base / '.gitignore').write_text('artifacts/\n')
+        manifest = json.loads((ROOT / 'release.json').read_bytes())
+        initial_code = manifest['assistant']['version_code']
+        (base / 'release.json').write_text(json.dumps(manifest))
+        git(base, 'add', '.')
+        git(base, 'commit', '-qm', 'fixed baseline')
+        git(base, 'worktree', 'add', '--detach', str(candidate))
+        git(base, 'worktree', 'add', '--detach', str(recovery))
+        paths = []
+        for i, root in enumerate((base, candidate, recovery)):
+            data = json.loads((root / 'release.json').read_bytes())
+            if i:
+                data['assistant'].update(version=f'9.0.{i}', version_code=initial_code + i)
+                data['release_id'] = f'fixture-{i}'
+                if i == 1:
+                    data['backend']['version'] = '9.0.1'
+                (root / 'release.json').write_text(json.dumps(data))
+                git(root, 'commit', '-qam', 'fixed build')
+            (root / 'artifacts').mkdir()
+            apk = root / 'artifacts' / f'cc8-assistant-{data["assistant"]["version"]}.apk'
+            apk.write_bytes(f'fixture bytes {i}'.encode())
+            paths.append(apk)
+            apk.with_suffix('.apk.build.json').write_text(
+                json.dumps(
+                    {
+                        'schema_version': 1,
+                        'component': 'assistant',
+                        'version': data['assistant']['version'],
+                        'version_code': initial_code + i,
+                        'source_commit': git(root, 'rev-parse', 'HEAD'),
+                        'source_dirty': False,
+                        'manifest_sha256': hashlib.sha256(
+                            (root / 'release.json').read_bytes()
+                        ).hexdigest(),
+                        'apk_sha256': hashlib.sha256(apk.read_bytes()).hexdigest(),
+                    }
+                )
+            )
+
+        def checked(component, apk, root):
+            version = upgrade.load_release(root).assistant
+            return {
+                'component': component,
+                'version': version.version,
+                'version_code': version.version_code,
+                'package': version.package,
+                'signer_sha256': ['a' * 64],
+                'sha256': hashlib.sha256(apk.read_bytes()).hexdigest(),
+            }
+
+        return (base, candidate, recovery), paths, checked, git
+
+    def test_transition_cli_binds_three_stages_without_claiming_live_install_readiness(self):
+        with tempfile.TemporaryDirectory() as folder:
+            roots, apks, checked, _ = self.transition_fixture(folder)
+            output = Path(folder) / 'transition.json'
+            with patch('tools.release.check_apk', side_effect=checked) as probe:
+                code, _, err = self.invoke(
+                    [
+                        'verify-transition',
+                        '--from-root',
+                        str(roots[0]),
+                        '--to-root',
+                        str(roots[1]),
+                        '--recovery-root',
+                        str(roots[2]),
+                        '--baseline-apk',
+                        str(apks[0]),
+                        '--baseline-sha256',
+                        hashlib.sha256(apks[0].read_bytes()).hexdigest(),
+                        '--output',
+                        str(output),
+                    ]
+                )
+            self.assertEqual(code, 0, err)
+            self.assertEqual(probe.call_count, 3)
+            report = json.loads(output.read_text())
+            self.assertTrue(report['verified_against_pinned_baseline'])
+            self.assertFalse(report['installed_signer_checked'])
+            self.assertFalse(report['ready_for_installation'])
+            self.assertEqual(list(report['stages']), ['baseline', 'candidate', 'recovery'])
+            self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+
+    def test_transition_rejects_wrong_baseline_signer_or_stale_build_receipt(self):
+        with tempfile.TemporaryDirectory() as folder:
+            roots, apks, checked, _ = self.transition_fixture(folder)
+            pin = hashlib.sha256(apks[0].read_bytes()).hexdigest()
+            with patch('tools.release.check_apk', side_effect=checked):
+                with self.assertRaisesRegex(ValueError, 'recorded installed artifact'):
+                    upgrade.verify_assistant_transition(*roots, apks[0], 'b' * 64)
+
+            def wrong_signer(component, apk, root):
+                item = checked(component, apk, root)
+                if root == roots[2].resolve():
+                    item['signer_sha256'] = ['b' * 64]
+                return item
+
+            with patch('tools.release.check_apk', side_effect=wrong_signer):
+                with self.assertRaisesRegex(RuntimeError, 'Signing certificate mismatch'):
+                    upgrade.verify_assistant_transition(*roots, apks[0], pin)
+            apks[1].write_bytes(b'new bytes with stale receipt')
+            with patch('tools.release.check_apk', side_effect=checked):
+                with self.assertRaisesRegex(ValueError, 'build receipt'):
+                    upgrade.verify_assistant_transition(*roots, apks[0], pin)
+
+    def test_transition_rechecks_baseline_if_it_changes_while_other_apks_are_verified(self):
+        with tempfile.TemporaryDirectory() as folder:
+            roots, apks, checked, _ = self.transition_fixture(folder)
+            pin = hashlib.sha256(apks[0].read_bytes()).hexdigest()
+
+            def changed(component, apk, root):
+                if apk == apks[2].resolve():
+                    apks[0].write_bytes(b'different baseline after signature check')
+                return checked(component, apk, root)
+
+            with patch('tools.release.check_apk', side_effect=changed):
+                with self.assertRaisesRegex(ValueError, 'APK changed'):
+                    upgrade.verify_assistant_transition(*roots, apks[0], pin)
+
+    def test_transition_rejects_dirty_changed_or_lower_version_recovery_before_apk_tools(self):
+        with tempfile.TemporaryDirectory() as folder:
+            roots, apks, _, git = self.transition_fixture(folder)
+            pin = hashlib.sha256(apks[0].read_bytes()).hexdigest()
+            recovery = roots[2]
+            extra = recovery / 'unexpected-code'
+            extra.write_text('changed code')
+            with patch('tools.release.check_apk') as probe:
+                with self.assertRaisesRegex(ValueError, 'clean'):
+                    upgrade.verify_assistant_transition(*roots, apks[0], pin)
+                git(recovery, 'add', extra.name)
+                git(recovery, 'commit', '-qm', 'unrelated code')
+                with self.assertRaisesRegex(ValueError, 'only release.json'):
+                    upgrade.verify_assistant_transition(*roots, apks[0], pin)
+                git(recovery, 'revert', '--no-edit', 'HEAD')
+                path = recovery / 'release.json'
+                value = json.loads(path.read_bytes())
+                value['assistant']['version_code'] -= 1
+                path.write_text(json.dumps(value))
+                git(recovery, 'commit', '-qam', 'invalid recovery code')
+                with self.assertRaisesRegex(ValueError, 'increase versionCode'):
+                    upgrade.verify_assistant_transition(*roots, apks[0], pin)
+                probe.assert_not_called()
 
     def test_backup_stage_roundtrip_keeps_original_bytes_and_key_references(self):
         with tempfile.TemporaryDirectory() as folder:

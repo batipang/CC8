@@ -1,7 +1,7 @@
 """Offline upgrade planning and explicit non-secret settings backup; never deploy."""
 
 import argparse
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime
 import hashlib
 import hmac
@@ -75,6 +75,99 @@ def plan(before_root, after_root, assistant_apk=None):
         value['assistant_apk'] = check_apk('assistant', Path(assistant_apk), root=Path(after_root))
         value['apk_checked'] = True
     return value
+
+
+def verify_assistant_transition(baseline_root, candidate_root, recovery_root, baseline_apk, pin):
+    """Bind the two source builds to a previously verified baseline APK."""
+    from tools.apk_signing import require_same_signers
+    from tools.release import check_apk, check_build_receipt, digest, git_state
+
+    if not re.fullmatch('[a-f0-9]{64}', pin):
+        raise ValueError('Expected a pinned baseline APK SHA-256')
+    roots = tuple(Path(root).resolve() for root in (baseline_root, candidate_root, recovery_root))
+    if len(set(roots)) != 3:
+        raise ValueError('Expected separate baseline, candidate and recovery workspaces')
+    for root in roots:
+        top = subprocess.check_output(
+            ['git', '-C', str(root), 'rev-parse', '--show-toplevel'],
+            text=True,
+            timeout=10,
+        ).strip()
+        if Path(top).resolve() != root:
+            raise ValueError('Expected a Git workspace root')
+    states = [git_state(root) for root in roots]
+    if any(dirty or not re.fullmatch('[a-f0-9]{40}', commit) for commit, dirty in states):
+        raise ValueError('Expected three clean, pinned source workspaces')
+    versions = [load_release(root) for root in roots]
+    before, candidate, recovery = versions
+    if (
+        not before.assistant.version_code
+        < candidate.assistant.version_code
+        < recovery.assistant.version_code
+    ):
+        raise ValueError('Upgrade and recovery APKs must increase versionCode')
+    if not all(
+        host.compatible(device.protocol_version) for host in versions for device in versions
+    ):
+        raise ValueError('A transition crosses an incompatible host/device protocol')
+    if replace(recovery, release_id=before.release_id, assistant=before.assistant) != before:
+        raise ValueError('Recovery must retain baseline runtime and protocol metadata')
+    changed = subprocess.check_output(
+        [
+            'git',
+            '-C',
+            str(roots[2]),
+            'diff',
+            '--no-ext-diff',
+            '--name-only',
+            states[0][0],
+            states[2][0],
+            '--',
+        ],
+        text=True,
+        timeout=15,
+    ).splitlines()
+    if changed != ['release.json']:
+        raise ValueError('Recovery source may change only release.json')
+
+    apks = [Path(baseline_apk)]
+    baseline = check_apk('assistant', apks[0], root=roots[0])
+    if not hmac.compare_digest(baseline['sha256'], pin):
+        raise ValueError('Baseline APK does not match the recorded installed artifact')
+    signers = frozenset(baseline['signer_sha256'])
+    artifacts = [baseline]
+    for root, release, (commit, dirty) in zip(roots[1:], versions[1:], states[1:]):
+        apk = root / 'artifacts' / f'cc8-assistant-{release.assistant.version}.apk'
+        apks.append(apk)
+        artifact = check_apk('assistant', apk, root=root)
+        require_same_signers(frozenset(artifact['signer_sha256']), signers)
+        check_build_receipt('assistant', apk, artifact, root, commit, dirty)
+        artifacts.append(artifact)
+    if [git_state(root) for root in roots] != states:
+        raise ValueError('A source workspace changed during verification')
+
+    if any(digest(apk) != item['sha256'] for apk, item in zip(apks, artifacts)):
+        raise ValueError('An APK changed during transition verification')
+
+    return {
+        'schema_version': 1,
+        'kind': 'cc8_assistant_transition_artifacts',
+        'verified_against_pinned_baseline': True,
+        'stages': {
+            name: {
+                'source_commit': state[0],
+                'backend_version': version.backend_version,
+                'protocol': version.protocol_version,
+                'apk': artifact,
+            }
+            for name, state, version, artifact in zip(
+                ('baseline', 'candidate', 'recovery'), states, versions, artifacts
+            )
+        },
+        'installed_signer_checked': False,
+        'ready_for_installation': False,
+        'device_acceptance': 'not_asserted',
+    }
 
 
 def backup(profile, source_root=ROOT):
@@ -184,6 +277,16 @@ def main(argv=None):
     planned.add_argument('--to-root', type=Path, default=ROOT)
     planned.add_argument('--assistant-apk', type=Path)
     planned.add_argument('--output', type=Path)
+    transition = commands.add_parser(
+        'verify-transition',
+        help='Check signed upgrade and higher-version recovery artifacts without device access',
+    )
+    transition.add_argument('--from-root', type=Path, required=True)
+    transition.add_argument('--to-root', type=Path, required=True)
+    transition.add_argument('--recovery-root', type=Path, required=True)
+    transition.add_argument('--baseline-apk', type=Path, required=True)
+    transition.add_argument('--baseline-sha256', required=True)
+    transition.add_argument('--output', type=Path)
     saved = commands.add_parser(
         'backup', help='Explicitly save only one non-secret settings profile'
     )
@@ -210,6 +313,14 @@ def main(argv=None):
             return 0
         if args.action == 'backup':
             value = backup(args.profile, args.source_root)
+        elif args.action == 'verify-transition':
+            value = verify_assistant_transition(
+                args.from_root,
+                args.to_root,
+                args.recovery_root,
+                args.baseline_apk,
+                args.baseline_sha256,
+            )
         elif args.action == 'stage-restore':
             value = verify_backup(args.backup)
         else:

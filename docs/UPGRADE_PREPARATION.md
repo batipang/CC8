@@ -14,6 +14,20 @@
 
 结果固定 ready_for_installation=false、installed_signer_checked=false、device_acceptance=not_asserted。协议任一方向不兼容时写报告并退出 2；退出 0 只表示声明检查完成。原签名/实际已装版本、服务所有权、配对/资源和物理切换仍须在正式部署流程核对，不能由一份 JSON 自动批准升级。Android 降级仍有平台限制，工具不会卸载、清数据或强制降级。
 
+## 校验升级和恢复包
+
+`verify-transition` 比较三个干净的 Git 工作区。基线 APK 的 SHA-256 必须与已核实的安装记录一致。工具校验三个 APK 的包名、版本和 Android 27 签名，要求签名证书一致、升级和恢复的 versionCode 逐步增加。它还核对两份新包的构建回执、双向协议兼容，以及恢复源码相对基线只改 `release.json`。
+
+```sh
+./cc8 upgrade verify-transition --from-root /absolute/running-source \
+  --to-root /absolute/candidate-source --recovery-root /absolute/recovery-source \
+  --baseline-apk /absolute/verified-baseline.apk --baseline-sha256 <installed-apk-sha256>
+```
+
+候选与恢复包从各自工作区的 `artifacts` 读取。输出为私有报告。命令只检查本地文件，无需签名钥匙、ADB 或运行中的设备。安装前仍须独立核实当时设备上实际包的版本、摘要和证书。
+
+本次使用原签名完成后台 0.14.33／APK 0.9.18 code53 候选与后台 0.14.20／APK 0.9.19 code54 恢复包的编译、静态检查和离线校验。恢复包保留现用功能源码，版本号高于 code53，满足恢复覆盖的版本顺序。现场仍运行 0.14.20／code49，升级和恢复均未执行。
+
 ## 显式备份与校验
 
 ```sh

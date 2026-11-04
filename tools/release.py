@@ -78,6 +78,26 @@ def check_apk(component, apk, root=ROOT):
     }
 
 
+def check_build_receipt(component, apk, artifact, root, commit, dirty):
+    with apk.with_suffix('.apk.build.json').open('rb') as source:
+        receipt_raw = source.read(16385)
+    if len(receipt_raw) > 16384:
+        raise ValueError('Oversized build receipt')
+    receipt = json.loads(receipt_raw)
+    expected = {
+        'schema_version': 1,
+        'component': component,
+        'version': artifact['version'],
+        'version_code': artifact['version_code'],
+        'source_commit': commit,
+        'source_dirty': dirty,
+        'manifest_sha256': digest(root / 'release.json'),
+        'apk_sha256': artifact['sha256'],
+    }
+    if json.dumps(receipt, sort_keys=True) != json.dumps(expected, sort_keys=True):
+        raise ValueError('APK build receipt does not match this source revision; rebuild the APK')
+
+
 def create_record(root=ROOT, *, allow_dirty=False, tag=None):
     release = load_release(root)
     commit, dirty = git_state(root)
@@ -109,25 +129,7 @@ def create_record(root=ROOT, *, allow_dirty=False, tag=None):
         info = getattr(release, name)
         apk = root / 'artifacts' / f'cc8-{name}-{info.version}.apk'
         item = check_apk(name, apk, root)
-        with apk.with_suffix('.apk.build.json').open('rb') as source:
-            receipt_raw = source.read(16385)
-        if len(receipt_raw) > 16384:
-            raise ValueError('Oversized build receipt')
-        receipt = json.loads(receipt_raw)
-        expected = {
-            'schema_version': 1,
-            'component': name,
-            'version': info.version,
-            'version_code': info.version_code,
-            'source_commit': commit,
-            'source_dirty': dirty,
-            'manifest_sha256': digest(root / 'release.json'),
-            'apk_sha256': item['sha256'],
-        }
-        if json.dumps(receipt, sort_keys=True) != json.dumps(expected, sort_keys=True):
-            raise ValueError(
-                'APK build receipt does not match this source revision; rebuild both APKs'
-            )
+        check_build_receipt(name, apk, item, root, commit, dirty)
         components.append(item)
     if git_state(root) != (commit, dirty):
         raise ValueError('Source changed while recording the release')
