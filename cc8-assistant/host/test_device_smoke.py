@@ -19,6 +19,8 @@ from device_smoke import (
     ACTIVE_HANDOVER_CHECK,
     ALL_ROUTE_LOSS_CHECK,
     ALL_ROUTE_LOSS_REQUEST,
+    ASR_STOP_CHECK,
+    ASR_STOP_QUERY,
     AWAKE_DIALOGUE_CHECK,
     BARGE_ANNOUNCEMENT,
     BARGE_CHECK,
@@ -50,7 +52,7 @@ from device_smoke import (
     summarize_capture_clock,
     valid_leading_evidence,
 )
-from diagnostics import VAD_ONSET_PAUSE
+from diagnostics import ASR_STOP_STAGE, VAD_ONSET_PAUSE
 from qa_speech import CORPUS_SHA256 as QA_CORPUS_SHA256
 from qa_speech import ALL_QUESTIONS, SCENARIO_DIGESTS, SCENARIO_QUESTIONS
 
@@ -112,11 +114,13 @@ class DeviceAutomationTests(unittest.TestCase):
             self.assertEqual(command.call_args.args[0][-1], BARGE_QUERY)
             device.speak_probe(stop=True)
             self.assertEqual(command.call_args.args[0][-1], STOP_QUERY)
+            device.speak_probe(stop=True, asr_stop=True)
+            self.assertEqual(command.call_args.args[0][-1], ASR_STOP_QUERY)
             device.speak_probe(question=QA_LATENCY_QUESTIONS[-1])
             self.assertEqual(command.call_args.args[0][-1], '大黄蜂，六加五等于几？')
             with self.assertRaisesRegex(CheckFailure, 'unknown_synthetic_probe'):
                 device.speak_probe(question='任意内容')
-            self.assertEqual(command.call_count, 4)
+            self.assertEqual(command.call_count, 5)
         with (
             patch('device_smoke.resolve_voice', side_effect=ValueError),
             patch('device_smoke.subprocess.run') as command,
@@ -2404,6 +2408,192 @@ class DeviceAutomationTests(unittest.TestCase):
                     device.speak_probe.assert_not_called()
                 else:
                     device.speak_probe.assert_called_once_with(stop=True)
+
+    def test_asr_stop_plan_is_separate_and_needs_no_device(self):
+        output = io.StringIO()
+        with patch('device_smoke.Device') as device, redirect_stdout(output):
+            self.assertEqual(
+                main(
+                    [
+                        '--runtime-root',
+                        '/unused',
+                        '--capture',
+                        '--synthetic-stop',
+                        '--stop-route',
+                        'asr',
+                    ]
+                ),
+                0,
+            )
+            device.assert_not_called()
+        plan = json.loads(output.getvalue())
+        self.assertEqual(plan['stop_route'], 'asr')
+        self.assertEqual(plan['checks'][-4:-2], [BARGE_PRIME_CHECK, ASR_STOP_CHECK])
+        self.assertEqual(plan['minimum_apk_code'], 71)
+        self.assertFalse(plan['execute'])
+
+    def test_asr_stop_rejects_old_backend_or_wrong_provider_before_device_access(self):
+        from dataclasses import replace
+        from release_info import RELEASE
+
+        for release, engine in (
+            (replace(RELEASE, backend_version='0.14.65'), 'minimax'),
+            (RELEASE, 'sensevoice'),
+        ):
+            health = dict(
+                bridge_version=release.backend_version,
+                protocol_version=release.protocol_version,
+                release_id=release.release_id,
+                runtime_instance='test',
+                asr_engine=engine,
+            )
+            with (
+                self.subTest(version=release.backend_version, engine=engine),
+                patch('device_smoke.load_release', return_value=release),
+                patch('device_smoke.rpc', return_value=health),
+                patch('device_smoke.Device') as device,
+                patch('device_smoke.private_directory') as output,
+                redirect_stderr(io.StringIO()),
+                self.assertRaises(SystemExit) as stopped,
+            ):
+                main(
+                    [
+                        '--runtime-root',
+                        str(Path.cwd()),
+                        '--capture',
+                        '--synthetic-stop',
+                        '--stop-route',
+                        'asr',
+                        '--execute',
+                    ]
+                )
+            self.assertEqual(stopped.exception.code, 2)
+            device.assert_not_called()
+            output.assert_not_called()
+
+    def test_asr_stop_needs_its_trace_and_device_receipts_without_dot_or_local_hit(self):
+        for case, error in (
+            ('valid', None),
+            ('render_asr', None),
+            ('local', 'fast_stop_count_unexpected'),
+            ('dot', 'asr_stop_reached_dot'),
+            ('extra_voice', 'asr_stop_unexpected_voice'),
+            ('missing_marker', 'asr_stop_not_confirmed'),
+            ('reversed_marker', 'asr_stop_not_confirmed'),
+            ('wrong_generation', 'asr_stop_not_confirmed'),
+            ('wrong_receipt', 'interruption_device_stop_not_confirmed'),
+            ('missing_visual', 'asr_stop_visual_timing_unconfirmed'),
+        ):
+            with self.subTest(case=case), patch('device_smoke.ThreadPoolExecutor') as executor:
+                run, device, health, now = self.fixture(
+                    capture=True, synthetic_stop=True, stop_route='asr'
+                )
+                health.update(
+                    microphone_active=True,
+                    waiting_for_wake=False,
+                    fast_stop_ready=True,
+                    fast_stop_timing_supported=True,
+                    fast_stop_count=12,
+                    voice_asr_attempts=5,
+                    asr_engine='minimax',
+                )
+                status, _ = device.status.return_value
+                status.update(
+                    microphone_active=True,
+                    test_capture_limit_ms=run.capture_limit_ms,
+                    test_capture_remaining_ms=210000,
+                    test_playback_stop_supported=True,
+                    playback_paused=False,
+                )
+                announcement = dict(
+                    request_id='old',
+                    origin='announcement',
+                    generation=20,
+                    outcome=None,
+                    stages={'playout_ack': 0},
+                )
+                rows = []
+
+                def submit(_request, payload):
+                    self.assertEqual(payload, {'text': BARGE_ANNOUNCEMENT})
+                    rows.append(announcement)
+                    health['playing'] = True
+                    status.update(announcement_active=True, phase='speaking')
+                    reply = Mock()
+                    reply.result.return_value = {'status': 'interrupted'}
+                    return reply
+
+                def stimulus(*, stop, asr_stop):
+                    self.assertTrue(stop and asr_stop)
+                    announcement['outcome'] = 'cancelled'
+                    health.update(
+                        playing=False,
+                        fast_stop_count=12 + int(case == 'local'),
+                        voice_asr_attempts=6 + int(case == 'render_asr'),
+                    )
+                    stages = {'asr_start': 100, 'asr_end': 400}
+                    if case != 'missing_marker':
+                        stages[ASR_STOP_STAGE] = 399 if case == 'reversed_marker' else 401
+                    if case == 'dot':
+                        stages['brain_start'] = 405
+                    rows.append(
+                        dict(
+                            request_id='stop',
+                            origin='voice',
+                            generation=22 if case == 'wrong_generation' else 21,
+                            outcome='completed',
+                            gate='accepted',
+                            stages=stages,
+                        )
+                    )
+                    if case == 'extra_voice':
+                        rows.append(
+                            dict(
+                                request_id='extra',
+                                origin='voice',
+                                gate='echo_text',
+                                outcome='rejected',
+                                stages={'asr_start': 402},
+                            )
+                        )
+                    status.update(
+                        announcement_active=False,
+                        test_playback_stop=dict(
+                            generation=20,
+                            playback_id=42,
+                            cancel_generation=22 if case == 'wrong_receipt' else 21,
+                            nanos=1000000000,
+                        ),
+                    )
+                    if case != 'missing_visual':
+                        status['test_stop_visual_timing'] = dict(
+                            cancel_generation=21, nanos=1010000000
+                        )
+
+                def request(payload):
+                    if payload == {'operation': 'health'}:
+                        return dict(health)
+                    self.assertEqual(payload, {'operation': 'diagnostics'})
+                    return {'requests': rows}
+
+                run.request = request
+                device.speak_probe.side_effect = stimulus
+                executor.return_value.__enter__.return_value.submit.side_effect = submit
+                if error:
+                    with self.assertRaisesRegex(CheckFailure, error):
+                        run.interruption_probe()
+                else:
+                    run.interruption_probe()
+                    evidence = run.report('passed')['barge_evidence']
+                    self.assertTrue(evidence['asr_stop_completed'])
+                    self.assertEqual(evidence['fast_stop_detections'], 0)
+                    self.assertEqual(
+                        evidence['stop_cloud_asr_attempts'], 1 + int(case == 'render_asr')
+                    )
+                    self.assertEqual(evidence[STOP_VISUAL_METRIC], 10)
+                    self.assertNotIn(FAST_STOP_DEVICE_METRIC, evidence)
+                    self.assertEqual(now[0], 20)
+                device.speak_probe.assert_called_once_with(stop=True, asr_stop=True)
 
     def test_self_playback_plan_and_capability_gate(self):
         output = io.StringIO()

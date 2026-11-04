@@ -22,6 +22,7 @@ from private_output import PrivateOutput, private_directory
 from release_info import load_release
 from mac_voice import resolve_voice, __file__ as voice_source
 from diagnostics import (
+    ASR_STOP_STAGE,
     INTERVALS,
     MAX_CONFIRMED_PLAYBACK_CLAUSES,
     MAX_DEVICE_PAUSE_MS,
@@ -50,6 +51,7 @@ BARGE_ANNOUNCEMENT = (
 )
 BARGE_QUERY = '换个问题，三加五等于几？'
 STOP_QUERY = '停一下'
+ASR_STOP_QUERY = '大黄蜂，别说了。'
 ACOUSTIC_QUESTION = QA_LATENCY_QUESTIONS[0]
 WAKE_SELF_TEXT = {
     'zh': '大黄蜂正在播报。现在只检查设备自己的声音。',
@@ -84,6 +86,7 @@ AWAKE_DIALOGUE_CHECK = 'synthetic_awake_dialogue'
 BARGE_PRIME_CHECK = 'synthetic_awake_prerequisite_for_interruption'
 BARGE_CHECK = 'synthetic_acoustic_interruption'
 STOP_CHECK = 'synthetic_acoustic_stop'
+ASR_STOP_CHECK = 'synthetic_acoustic_asr_stop'
 ACTIVE_HANDOVER_CHECK = 'active_capture_logical_handover'
 ALL_ROUTE_LOSS_CHECK = 'capture_stops_during_all_route_loss'
 ALL_ROUTE_LOSS_REQUEST = {'operation': 'transport_all_test'}
@@ -93,6 +96,7 @@ STANDBY_SECONDS = 900
 PAIRED_PLAYOUT_MIN_BACKEND = '0.14.50'
 RESPONSE_ACOUSTIC_MIN_BACKEND = '0.14.57'
 EXTENDED_VOICE_MIN_BACKEND = '0.14.60'
+ASR_STOP_MIN_BACKEND = '0.14.66'
 ROUTED_LATENCY_MIN_BACKEND = '0.14.62'
 STOP_RECEIPT_MIN_APK_CODE = 69
 STOP_VISUAL_MIN_APK_CODE = 71
@@ -454,14 +458,16 @@ class Device:
     def prepare_speech_probe(self):
         return resolve_voice('Tingting')
 
-    def speak_probe(self, *, interruption=False, stop=False, question=ACOUSTIC_QUESTION):
+    def speak_probe(
+        self, *, interruption=False, stop=False, asr_stop=False, question=ACOUSTIC_QUESTION
+    ):
         require(question in ALL_QUESTIONS, 'unknown_synthetic_probe')
         voice = self.prepare_speech_probe()
         phrase = ACOUSTIC_WAKE + '，' + question
         if interruption:
             phrase = BARGE_QUERY
         if stop:
-            phrase = STOP_QUERY
+            phrase = ASR_STOP_QUERY if asr_stop else STOP_QUERY
         subprocess.run(
             [
                 '/usr/bin/say',
@@ -500,6 +506,7 @@ class SmokeRun:
         response_acoustic_evidence=False,
         synthetic_barge=False,
         synthetic_stop=False,
+        stop_route='local',
         wake_self_playback=False,
         echo_soak=False,
         background=None,
@@ -524,6 +531,7 @@ class SmokeRun:
         self.response_acoustic_evidence = response_acoustic_evidence
         self.synthetic_barge = synthetic_barge
         self.synthetic_stop = synthetic_stop
+        self.asr_stop = synthetic_stop and stop_route == 'asr'
         self.interruption_enabled = synthetic_barge or synthetic_stop
         self.wake_self_playback = wake_self_playback
         self.echo_soak = echo_soak
@@ -704,7 +712,9 @@ class SmokeRun:
                 'device_playback_stop_evidence_unsupported',
             )
         if self.synthetic_stop:
-            if self.expected_apk is not None and self.expected_apk[1] >= STOP_VISUAL_MIN_APK_CODE:
+            if self.asr_stop or (
+                self.expected_apk is not None and self.expected_apk[1] >= STOP_VISUAL_MIN_APK_CODE
+            ):
                 require(
                     device.get('test_stop_visual_timing_supported') is True,
                     'device_stop_visual_timing_unsupported',
@@ -714,6 +724,10 @@ class SmokeRun:
                 and h.get('fast_stop_timing_supported') is True
                 and type(h.get('fast_stop_count')) is int,
                 'backend_fast_stop_evidence_unsupported',
+            )
+            require(
+                not self.asr_stop or h.get('asr_engine') == 'minimax',
+                'minimax_stop_asr_not_configured',
             )
         require(
             not self.capture_clock_required
@@ -1770,6 +1784,7 @@ class SmokeRun:
         }
         self.barge_evidence = evidence
         stop_only = self.synthetic_stop
+        local_stop = stop_only and not self.asr_stop
         if stop_only:
             require(stop_supported, 'device_playback_stop_evidence_unsupported')
             before_stop = health.get('fast_stop_count')
@@ -1794,7 +1809,7 @@ class SmokeRun:
             partial = [
                 row
                 for row in voices
-                if stop_only
+                if local_stop
                 and evidence['stimulus_played']
                 and row.get('gate') == 'stale'
                 and row.get('outcome') == 'cancelled'
@@ -1860,18 +1875,48 @@ class SmokeRun:
                 require(
                     health.get('fast_stop_ready') is True
                     and type(current_stop) is int
-                    and 0 <= current_stop - before_stop <= int(evidence['stimulus_played']),
+                    and 0
+                    <= current_stop - before_stop
+                    <= int(local_stop and evidence['stimulus_played']),
                     'fast_stop_count_unexpected',
                 )
                 evidence['fast_stop_detections'] = current_stop - before_stop
                 current_asr = health.get('voice_asr_attempts')
                 if type(current_asr) is int:
                     evidence['stop_cloud_asr_attempts'] = current_asr - before_asr
-                require(
-                    type(current_asr) is int and current_asr == before_asr,
-                    'fast_stop_reached_cloud_asr',
-                )
-                require(not admitted and len(partial) <= 1, 'fast_stop_unexpected_voice_turn')
+                if local_stop:
+                    require(
+                        type(current_asr) is int and current_asr == before_asr,
+                        'fast_stop_reached_cloud_asr',
+                    )
+                    require(not admitted and len(partial) <= 1, 'fast_stop_unexpected_voice_turn')
+                else:
+                    require(
+                        health.get('asr_engine') == 'minimax'
+                        and type(current_asr) is int
+                        and 0 <= current_asr - before_asr <= 2 * int(evidence['stimulus_played']),
+                        'asr_stop_unexpected_asr_count',
+                    )
+                    require(
+                        not any('asr_start' in row.get('stages', {}) for row in groups['rejected']),
+                        'asr_stop_unexpected_voice',
+                    )
+                    stages = replacement.get('stages', {})
+                    require(
+                        'brain_start' not in stages and replacement.get('task_outcome') is None,
+                        'asr_stop_reached_dot',
+                    )
+                    times = [stages.get(key) for key in ('asr_start', 'asr_end', ASR_STOP_STAGE)]
+                    evidence['asr_stop_completed'] = (
+                        replacement.get('gate') == 'accepted'
+                        and replacement.get('outcome') == 'completed'
+                        and replacement.get('error') is None
+                        and type(old_generation) is int
+                        and type(new_generation) is int
+                        and new_generation == old_generation + 1
+                        and all(type(value) in (int, float) and isfinite(value) for value in times)
+                        and 0 <= times[0] <= times[1] <= times[2]
+                    )
             return health, announcement, replacement
 
         def started():
@@ -1908,11 +1953,20 @@ class SmokeRun:
                 announcement.get('outcome') in (None, 'cancelled'),
                 'interruption_announcement_not_cancelled',
             )
-            if stop_only:
+            if local_stop:
                 return (
                     evidence['announcement_cancelled']
                     and evidence['fast_stop_detections'] == 1
                     and health.get('playing') is False
+                )
+            if self.asr_stop:
+                return (
+                    replacement
+                    if evidence['announcement_cancelled']
+                    and evidence['asr_stop_completed']
+                    and evidence['stop_cloud_asr_attempts'] in (1, 2)
+                    and health.get('playing') is False
+                    else None
                 )
             require(
                 replacement.get('outcome') in (None, 'completed') and not replacement.get('error'),
@@ -1931,18 +1985,25 @@ class SmokeRun:
             reply = pool.submit(self.request, {'text': BARGE_ANNOUNCEMENT})
             self.wait(started, 25, 'interruption_playout_not_observed')
             evidence['announcement_started'] = True
-            if stop_only:
+            if self.asr_stop:
+                self.device.speak_probe(stop=True, asr_stop=True)
+            elif stop_only:
                 self.device.speak_probe(stop=True)
             else:
                 self.device.speak_probe(interruption=True)
             evidence['stimulus_played'] = True
             self.checkpoint(self.report('running'))
             remaining = min(
-                12 if stop_only else 75, deadline - self.clock() - POST_DIALOGUE_SECONDS - 5
+                12 if local_stop else 30 if self.asr_stop else 75,
+                deadline - self.clock() - POST_DIALOGUE_SECONDS - 5,
             )
             require(remaining > 0, 'interruption_capture_budget_insufficient')
             failure = (
-                'fast_stop_not_confirmed' if stop_only else 'interruption_replacement_not_confirmed'
+                'asr_stop_not_confirmed'
+                if self.asr_stop
+                else 'fast_stop_not_confirmed'
+                if local_stop
+                else 'interruption_replacement_not_confirmed'
             )
             replacement = self.wait(completed, remaining, failure)
             require(
@@ -1954,9 +2015,14 @@ class SmokeRun:
             'interruption_pause_timing_missing',
         )
         quiet_started = self.clock()
+        stop_asr_attempts = evidence.get('stop_cloud_asr_attempts')
         while self.clock() - quiet_started < POST_DIALOGUE_SECONDS:
             self.sleep(min(0.5, POST_DIALOGUE_SECONDS - (self.clock() - quiet_started)))
             require(completed(), failure)
+            require(
+                not self.asr_stop or evidence.get('stop_cloud_asr_attempts') == stop_asr_attempts,
+                'asr_stop_unexpected_asr_count',
+            )
             evidence['post_playback_quiet_seconds'] = round(self.clock() - quiet_started, 3)
         require(not evidence['pending_voice_candidates'], 'interruption_unresolved_voice')
         d, ui = self.device.status()
@@ -1987,7 +2053,7 @@ class SmokeRun:
             )
             evidence['device_stop_applied'] = valid_stop
             require_evidence(valid_stop, 'interruption_device_stop_not_confirmed')
-            if stop_only:
+            if local_stop:
                 timing = active_health().get('fast_stop_observation')
                 require_evidence(
                     isinstance(timing, dict)
@@ -2004,23 +2070,27 @@ class SmokeRun:
                     'fast_stop_device_timing_out_of_range',
                 )
                 evidence[FAST_STOP_DEVICE_METRIC] = round(elapsed_ns / 1e6, 3)
-                if d.get('test_stop_visual_timing_supported') is True or (
+            if stop_only and (
+                self.asr_stop
+                or d.get('test_stop_visual_timing_supported') is True
+                or (
                     self.expected_apk is not None
                     and self.expected_apk[1] >= STOP_VISUAL_MIN_APK_CODE
-                ):
-                    visuals = d.get('test_stop_visual_timing')
-                    require_evidence(
-                        isinstance(visuals, dict)
-                        and set(visuals) == {'cancel_generation', 'nanos'}
-                        and type(visuals['cancel_generation']) is int
-                        and visuals['cancel_generation'] == cancel_generation
-                        and type(visuals['nanos']) is int
-                        and 0 <= visuals['nanos'] - stop['nanos'] <= MAX_STOP_VISUAL_MS * 1000000,
-                        'fast_stop_visual_timing_unconfirmed',
-                    )
-                    evidence[STOP_VISUAL_METRIC] = round(
-                        (visuals['nanos'] - stop['nanos']) / 1e6, 3
-                    )
+                )
+            ):
+                visuals = d.get('test_stop_visual_timing')
+                require_evidence(
+                    isinstance(visuals, dict)
+                    and set(visuals) == {'cancel_generation', 'nanos'}
+                    and type(visuals['cancel_generation']) is int
+                    and visuals['cancel_generation'] == cancel_generation
+                    and type(visuals['nanos']) is int
+                    and 0 <= visuals['nanos'] - stop['nanos'] <= MAX_STOP_VISUAL_MS * 1000000,
+                    'asr_stop_visual_timing_unconfirmed'
+                    if self.asr_stop
+                    else 'fast_stop_visual_timing_unconfirmed',
+                )
+                evidence[STOP_VISUAL_METRIC] = round((visuals['nanos'] - stop['nanos']) / 1e6, 3)
         require(
             ui.get('screen_sleeping') is False
             and d.get('playback_paused') is False
@@ -2102,7 +2172,11 @@ class SmokeRun:
                     self.check(ECHO_SOAK_CHECK, self.self_playback_soak)
                 if self.interruption_enabled:
                     self.check(
-                        STOP_CHECK if self.synthetic_stop else BARGE_CHECK,
+                        ASR_STOP_CHECK
+                        if self.asr_stop
+                        else STOP_CHECK
+                        if self.synthetic_stop
+                        else BARGE_CHECK,
                         self.interruption_probe,
                     )
                 self.check(CHECKS[5], self.home)
@@ -2128,7 +2202,7 @@ class SmokeRun:
         return self.report(state)
 
 
-def planned_checks(options):
+def planned_checks(options, *, stop_route='local'):
     if 'latency_sample' in options:
         return [*CHECKS[:2], CHECKS[4], AWAKE_DIALOGUE_CHECK, *CHECKS[5:7]]
     interruption = {'synthetic_barge', 'synthetic_stop'} & options
@@ -2148,7 +2222,13 @@ def planned_checks(options):
                 else []
             )
             + ([ECHO_SOAK_CHECK] if 'echo_soak' in options else [])
-            + ([STOP_CHECK if 'synthetic_stop' in options else BARGE_CHECK] if interruption else [])
+            + (
+                [ASR_STOP_CHECK if stop_route == 'asr' else STOP_CHECK]
+                if 'synthetic_stop' in options
+                else [BARGE_CHECK]
+                if interruption
+                else []
+            )
             + list(CHECKS[5:7])
             + ([ALL_ROUTE_LOSS_CHECK] if 'all_route_loss' in options else [])
             if 'capture' in options
@@ -2537,6 +2617,12 @@ def main(argv=None):
         help='Verify a fixed local stop word and device stop without a new voice request',
     )
     parser.add_argument(
+        '--stop-route',
+        choices=('local', 'asr'),
+        default='local',
+        help='With --synthetic-stop, verify the local keyword or the MiniMax utterance route',
+    )
+    parser.add_argument(
         '--wake-self-playback',
         action='store_true',
         help='Check that fixed Chinese and English CC8 announcements cannot wake the local detector',
@@ -2589,6 +2675,10 @@ def main(argv=None):
         or args.interruption_suite
         or args.self_playback_soak
     )
+    asr_stop = args.stop_route == 'asr'
+    if asr_stop and not args.synthetic_stop:
+        parser.error('--stop-route asr requires --synthetic-stop')
+    bound_runtime = batch or asr_stop
     background_receipt = None
     if any((args.background_scenario, args.background_wav, args.background_sha256)):
         background_receipt = {'kind': args.background_scenario, 'sha256': args.background_sha256}
@@ -2685,7 +2775,7 @@ def main(argv=None):
                 plan['minimum_apk_code'] = STOP_RECEIPT_MIN_APK_CODE
         else:
             plan = {
-                'checks': planned_checks(options),
+                'checks': planned_checks(options, stop_route=args.stop_route),
                 'execute': False,
                 **{
                     key: getattr(args, key)
@@ -2695,6 +2785,12 @@ def main(argv=None):
                 'full_p0_acceptance': False,
                 'response_acoustic_evidence': args.response_acoustic_evidence,
             }
+            if asr_stop:
+                plan.update(
+                    stop_route='asr',
+                    minimum_backend_version=ASR_STOP_MIN_BACKEND,
+                    minimum_apk_code=STOP_VISUAL_MIN_APK_CODE,
+                )
         print(json.dumps(plan, ensure_ascii=False, indent=2))
         return 0
     try:
@@ -2720,11 +2816,20 @@ def main(argv=None):
             'runtime_source_version_mismatch',
         )
         instance = health.get('runtime_instance')
+        if asr_stop:
+            require(
+                tuple(map(int, manifest.backend_version.split('.')))
+                >= tuple(map(int, ASR_STOP_MIN_BACKEND.split('.')))
+                and manifest.assistant.version_code >= STOP_VISUAL_MIN_APK_CODE
+                and health.get('asr_engine') == 'minimax',
+                'runtime_asr_stop_evidence_unsupported',
+            )
         if batch:
             if tuple(map(int, manifest.backend_version.split('.'))) < tuple(
                 map(int, minimum_batch_backend.split('.'))
             ):
                 parser.exit(2, f'固定设备验收批次需要后台 {minimum_batch_backend} 或更新版本。\n')
+        if bound_runtime:
             require(
                 isinstance(instance, str)
                 and bool(instance)
@@ -2755,7 +2860,7 @@ def main(argv=None):
             elif payload == {'operation': 'playback_probe'}:
                 timeout = 25
             result = rpc(socket_path, payload, timeout)
-            if batch and payload == {'operation': 'health'}:
+            if bound_runtime and payload == {'operation': 'health'}:
                 if not (
                     result.get('runtime_instance') == instance
                     and result.get('release_id') == manifest.release_id
@@ -2783,7 +2888,7 @@ def main(argv=None):
                 'unsafe_test_lock',
             )
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            if batch:
+            if bound_runtime:
                 request({'operation': 'health'})
             name = (
                 ('device-suite-' if batch else 'device-')
@@ -2799,7 +2904,7 @@ def main(argv=None):
                             **value,
                             'backend_version': health.get('bridge_version'),
                             'protocol_version': health.get('protocol_version'),
-                            **({'release_id': manifest.release_id} if batch else {}),
+                            **({'release_id': manifest.release_id} if bound_runtime else {}),
                         }
                     )
 
@@ -2824,6 +2929,7 @@ def main(argv=None):
                         qa_question=qa_question,
                         latency_scenario=args.latency_scenario,
                         background=background,
+                        stop_route=args.stop_route,
                         response_acoustic_evidence=(
                             args.response_acoustic_evidence
                             or 'response_acoustic_evidence' in enabled

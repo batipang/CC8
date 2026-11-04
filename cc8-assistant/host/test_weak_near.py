@@ -8,6 +8,7 @@ import unittest
 import numpy as np
 
 from bridge import Bridge
+from diagnostics import ASR_STOP_STAGE
 from test_barge_in import Sink
 
 
@@ -148,6 +149,9 @@ class WeakNearTests(unittest.TestCase):
                 self.assertEqual(len(replies), int(not stop))
                 if stop:
                     self.assertEqual(row['outcome'], 'completed')
+                    self.assertGreaterEqual(row['stages'][ASR_STOP_STAGE], row['stages']['asr_end'])
+                else:
+                    self.assertNotIn(ASR_STOP_STAGE, row['stages'])
 
     def test_asr_stop_matching_playback_needs_confirmed_near_speech(self):
         for count, gate in ((2, 'echo_text'), (30, 'accepted')):

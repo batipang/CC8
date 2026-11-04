@@ -13,7 +13,7 @@ import time
 from unicodedata import category
 from typing import Callable, ContextManager, Mapping, Pattern, Protocol
 import numpy as np
-from diagnostics import TraceBook
+from diagnostics import ASR_STOP_STAGE, TraceBook
 from dsp import RATE, resembles_playback
 from reply_types import Reply
 from session_ports import EventSink, MetricSink
@@ -334,6 +334,7 @@ class RecognitionWorker:
                         references=len(available),
                     )
                     if command:
+                        self.hooks.diagnostics().mark(trace_id, ASR_STOP_STAGE)
                         self.hooks.diagnostics().finish(trace_id, 'completed')
                         self.hooks.status('listening', '已停止播报，我在听')
                         continue
