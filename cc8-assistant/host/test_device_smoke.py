@@ -114,6 +114,7 @@ class DeviceAutomationTests(unittest.TestCase):
                 'vision_active': False,
                 'transport': 'usb',
                 'test_capture_limit_supported': True,
+                'mic_frames': 100,
             },
             {'camera_open': False, 'wake_checked': True, 'screen_sleeping': False},
         )
@@ -511,6 +512,40 @@ class DeviceAutomationTests(unittest.TestCase):
                 run.health()
                 self.assertEqual(device.open.call_count, 1)
 
+    def test_failed_start_records_independent_microphone_states_before_cleanup(self):
+        for device_active in (True, False):
+            with self.subTest(device_active=device_active):
+                run, device, _, _ = self.fixture(capture=True)
+                device.status.return_value[0].update(
+                    microphone_active=device_active,
+                    phase='calibrating' if device_active else 'error',
+                    mic_frames=0,
+                )
+                with self.assertRaisesRegex(CheckFailure, 'capture_not_started'):
+                    run.start_capture()
+                result = run.report('failed')['capture_start_failure']
+                self.assertEqual(
+                    result,
+                    {
+                        'host_microphone_active': False,
+                        'device_microphone_active': device_active,
+                        'device_phase': 'calibrating' if device_active else 'error',
+                    },
+                )
+                device.open.assert_called_once_with(True, capture_limit_ms=180000)
+                device.home.assert_not_called()
+
+    def test_failure_evidence_unavailable_does_not_replace_the_original_failure(self):
+        run, device, _, _ = self.fixture(capture=True)
+        device.status.side_effect = OSError('PRIVATE_DEVICE_OUTPUT')
+        with self.assertRaisesRegex(CheckFailure, 'capture_not_started'):
+            run.start_capture()
+        result = run.report('failed')['capture_start_failure']
+        self.assertEqual(result['host_microphone_active'], False)
+        self.assertIsNone(result['device_microphone_active'])
+        self.assertIsNone(result['device_phase'])
+        self.assertNotIn('PRIVATE', json.dumps(result))
+
     def test_claimed_support_does_not_replace_actual_active_limit_receipt(self):
         for limit, remaining in (
             (None, None),
@@ -861,6 +896,31 @@ class DeviceAutomationTests(unittest.TestCase):
         run.sleep = advancing_frames
         with self.assertRaisesRegex(CheckFailure, 'frames_increasing'):
             run.home()
+
+    def test_home_refuses_to_confirm_if_only_host_stopped_or_device_keeps_producing_frames(self):
+        for defect in ('device_still_active', 'device_frames_increasing'):
+            with self.subTest(defect=defect):
+                run, device, _, now = self.fixture()
+                d, _ = device.status.return_value
+                d['microphone_active'] = defect == 'device_still_active'
+                sleep = run.sleep
+
+                def advance(seconds):
+                    sleep(seconds)
+                    d['mic_frames'] += 160
+
+                if defect == 'device_frames_increasing':
+                    run.sleep = advance
+                with self.assertRaisesRegex(
+                    CheckFailure,
+                    'home_did_not_stop_capture'
+                    if defect == 'device_still_active'
+                    else 'home_microphone_frames_increasing',
+                ):
+                    run.home()
+                self.assertEqual(now[0], 15 if defect == 'device_still_active' else 2)
+                device.home.assert_called_once()
+                device.open.assert_not_called()
 
     def test_disabled_capture_plan_never_opens_recording(self):
         run, device, _, _ = self.fixture()
