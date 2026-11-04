@@ -232,6 +232,9 @@ def score_rows(data, corpus):
         if cells > MAX_EDIT_CELLS:
             rejected()
         annotated = len(observed)
+        known_failure = row['outcome'] != 'recognized'
+        critical_annotated = bool(fields) and annotated == len(fields)
+        intent_annotated = 'intent_correct' in row
         correct = sum(
             normalized_field(value) in {normalized_field(option) for option in fields[name]}
             for name, value in observed.items()
@@ -250,11 +253,11 @@ def score_rows(data, corpus):
             'fields_annotated': annotated,
             'field_names_annotated': sorted(observed),
             'fields_correct': correct,
-            'critical_sample_annotated': bool(fields) and annotated == len(fields),
-            'critical_sample_exact': bool(fields)
-            and annotated == len(fields)
-            and correct == len(fields),
-            'intent_annotated': 'intent_correct' in row,
+            'critical_sample_annotated': critical_annotated,
+            'critical_sample_scored': bool(fields) and (critical_annotated or known_failure),
+            'critical_sample_exact': critical_annotated and correct == len(fields),
+            'intent_annotated': intent_annotated,
+            'intent_scored': intent_annotated or known_failure,
             'intent_correct': row.get('intent_correct', False),
         }
     return labels, rows
@@ -282,20 +285,20 @@ def aggregate(rows, planned):
         'fields_annotated',
         'fields_correct',
         'critical_sample_annotated',
+        'critical_sample_scored',
         'critical_sample_exact',
         'intent_annotated',
+        'intent_scored',
         'intent_correct',
     ):
         result[field] = sum(row[field] for row in rows)
     result['critical_sample_exact_rate'] = (
-        result['critical_sample_exact'] / result['critical_sample_annotated']
-        if result['critical_sample_annotated']
+        result['critical_sample_exact'] / result['critical_sample_scored']
+        if result['critical_sample_scored']
         else None
     )
     result['intent_accuracy'] = (
-        result['intent_correct'] / result['intent_annotated']
-        if result['intent_annotated']
-        else None
+        result['intent_correct'] / result['intent_scored'] if result['intent_scored'] else None
     )
     return result
 
@@ -367,7 +370,8 @@ def evaluate(corpus_data, candidate_data, baseline_data=None):
         if set(baseline) != set(candidate):
             raise ValueError('A/B comparison requires identical sample and scenario coverage')
         if any(
-            (baseline[key]['field_names_annotated'], baseline[key]['intent_annotated'])
+            baseline[key]['outcome'] == candidate[key]['outcome'] == 'recognized'
+            and (baseline[key]['field_names_annotated'], baseline[key]['intent_annotated'])
             != (candidate[key]['field_names_annotated'], candidate[key]['intent_annotated'])
             for key in candidate
         ):
@@ -381,10 +385,20 @@ def evaluate(corpus_data, candidate_data, baseline_data=None):
             for metric in ('chinese_han_cer', 'english_wer'):
                 a, b = after[metric]['rate'], before[metric]['rate']
                 delta[metric + '_delta'] = a - b if a is not None and b is not None else None
-            a, b = after['critical_sample_exact_rate'], before['critical_sample_exact_rate']
-            delta['critical_sample_exact_rate_delta'] = (
-                a - b if a is not None and b is not None else None
-            )
+            pairs = [
+                (baseline[key], row)
+                for key, row in candidate.items()
+                if all(
+                    row[field] == after[field] for field in ('partition', 'condition', 'distance')
+                )
+            ]
+            for metric, scored, correct in (
+                ('critical_sample_exact_rate', 'critical_sample_scored', 'critical_sample_exact'),
+                ('intent_accuracy', 'intent_scored', 'intent_correct'),
+            ):
+                changes = [a[correct] - b[correct] for b, a in pairs if b[scored] and a[scored]]
+                delta[metric + '_paired_cases'] = len(changes)
+                delta[metric + '_delta'] = sum(changes) / len(changes) if changes else None
             deltas.append(delta)
         result['comparison'] = {
             'paired_cases': len(candidate),
