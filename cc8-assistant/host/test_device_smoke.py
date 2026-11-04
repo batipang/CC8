@@ -29,6 +29,7 @@ from device_smoke import (
     MULTI_CLAUSE_TEXT,
     P0_DEVICE_PHASES,
     POST_DIALOGUE_SECONDS,
+    QA_ENDPOINT_METRIC,
     QA_LATENCY_PHASES,
     QA_PLAYOUT_METRIC,
     QA_STAGE_METRICS,
@@ -362,6 +363,8 @@ class DeviceAutomationTests(unittest.TestCase):
                 self.assertEqual(options, set(QA_LATENCY_PHASES[0][1]))
                 index = len(runs) + 1
                 stages = dict.fromkeys(QA_STAGE_METRICS, 100)
+                if index % 2:
+                    stages[QA_ENDPOINT_METRIC] = 800
                 if index == fail_at:
                     stages.pop(QA_STAGE_METRICS[0])
                 report = {
@@ -389,6 +392,10 @@ class DeviceAutomationTests(unittest.TestCase):
             self.assertEqual(result['scope'], 'synthetic_qa_latency')
             self.assertEqual(len(runs), fail_at or 30)
             stats = result['latencies_ms'][QA_PLAYOUT_METRIC]
+            self.assertEqual(
+                result['latencies_ms'][QA_ENDPOINT_METRIC],
+                {'samples': 2 if fail_at else 15, 'p50': 800, 'p95': 800},
+            )
             if fail_at:
                 self.assertEqual(result['state'], 'failed')
                 self.assertEqual(result['phases'][3]['reason'], 'suite_qa_stage_timing_incomplete')
