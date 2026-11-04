@@ -1,5 +1,11 @@
 # Changelog
 
+## Assistant 0.9.28 — keep paused playback visuals in sync
+
+- Derive mouth, waveform and caption progress from one playback head sample.
+  Freeze the caption and close the mouth when AudioTrack applies a pause.
+  Late timing updates take effect when playback resumes.
+
 ## Backend 0.14.45 — verify microphone stop across a complete test outage
 
 - Add an owner-only test command that closes both assistant transports and

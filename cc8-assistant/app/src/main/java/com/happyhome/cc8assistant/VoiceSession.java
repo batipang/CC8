@@ -1229,16 +1229,6 @@ final class VoiceSession {
     return recording ? inputLevel : 0;
   }
 
-  float mouthLevel() {
-    Player p = player;
-    return p == null ? 0 : p.level();
-  }
-
-  String mood() {
-    Player p = player;
-    return p == null ? "attentive" : p.mood;
-  }
-
   long playbackHead() {
     Player p = player;
     AudioTrack t = p == null ? null : p.track;
@@ -1304,7 +1294,10 @@ final class VoiceSession {
         j, "playback_padding_frames", playingNow == null ? 0 : playingNow.drain.paddingFrames());
     Wire.put(j, "last_playback_speech_frames", lastPlaybackSpeechFrames);
     Wire.put(j, "last_playback_padding_frames", lastPlaybackPaddingFrames);
-    Wire.put(j, "playback_paused", playingNow != null && playingNow.confirmedPaused);
+    Wire.put(
+        j,
+        "playback_paused",
+        playingNow != null && !playingNow.stopped && playingNow.frozenCaption != null);
     Wire.put(j, "phase", phase);
     Wire.put(j, "raw_audio_saved", false);
     return j;
@@ -1313,14 +1306,10 @@ final class VoiceSession {
   static final class CaptionProgress {
     final int id;
     final String text;
-    final float position;
+    final String mood;
+    final float position, level;
     final boolean timed, playing, paused;
     final long elapsedMs, totalMs;
-
-    CaptionProgress(
-        int id, String text, float position, boolean timed, boolean playing, boolean paused) {
-      this(id, text, position, timed, playing, paused, 0, 0);
-    }
 
     CaptionProgress(
         int id,
@@ -1330,7 +1319,9 @@ final class VoiceSession {
         boolean playing,
         boolean paused,
         long elapsed,
-        long total) {
+        long total,
+        float level,
+        String mood) {
       this.id = id;
       this.text = text;
       this.position = position;
@@ -1339,32 +1330,20 @@ final class VoiceSession {
       this.paused = paused;
       this.elapsedMs = elapsed;
       this.totalMs = total;
+      this.level = level;
+      this.mood = mood;
     }
 
     static CaptionProgress empty() {
-      return new CaptionProgress(0, "", 0, false, false, false);
+      return new CaptionProgress(0, "", 0, false, false, false, 0, 0, 0, "attentive");
     }
   }
 
-  CaptionProgress captionProgress() {
+  CaptionProgress playbackFrame() {
     Player p = player;
     if (p == null) return lastCaption;
-    AudioTrack t = p.track;
-    long head = 0;
-    try {
-      if (t != null) head = t.getPlaybackHeadPosition() & 0xffffffffL;
-    } catch (IllegalStateException ignored) {
-    }
-    CaptionTimeline line = p.timings;
-    return new CaptionProgress(
-        p.playbackId,
-        p.text,
-        line.position(head),
-        line.rows.length > 0,
-        true,
-        p.paused,
-        head / 16,
-        p.ended && p.queue.isEmpty() ? p.written / 16 : 0);
+    CaptionProgress frame = p.visualFrame();
+    return player == p ? frame : lastCaption;
   }
 
   private static CaptionTimeline timings(JSONArray values, int length) {
@@ -1432,7 +1411,8 @@ final class VoiceSession {
     long writeNanos;
     final ArrayBlockingQueue<byte[]> queue = new ArrayBlockingQueue<>(64);
     final ConcurrentLinkedQueue<Envelope> envelopes = new ConcurrentLinkedQueue<>();
-    volatile boolean ended, stopped, paused, confirmedPaused;
+    volatile boolean ended, stopped, paused;
+    volatile CaptionProgress frozenCaption;
     volatile int pauseToken;
     volatile AudioTrack track;
     volatile long written = 0;
@@ -1474,7 +1454,7 @@ final class VoiceSession {
 
     void cancel() {
       stopped = true;
-      confirmedPaused = false;
+      frozenCaption = null;
       queue.clear();
       AudioTrack t = track;
       if (t != null)
@@ -1505,7 +1485,7 @@ final class VoiceSession {
       t.pause();
       long nanos = System.nanoTime();
       if (!allowed()) return;
-      confirmedPaused = true;
+      frozenCaption = sampleFrame(t, true);
       phase = "listening";
       listener.state("listening", "听到你说话，正在听…");
       pauseReceipt("playback_paused", token, nanos);
@@ -1535,8 +1515,8 @@ final class VoiceSession {
         }
         long nanos = System.nanoTime();
         if (!allowed()) return;
-        confirmedPaused = false;
         paused = false;
+        frozenCaption = null;
         resumeCount++;
         pauseReceipt("playback_resumed", token, nanos);
         phase = "speaking";
@@ -1578,21 +1558,48 @@ final class VoiceSession {
       }
     }
 
-    float level() {
+    CaptionProgress visualFrame() {
+      CaptionProgress frozen = frozenCaption;
+      if (stopped) return CaptionProgress.empty();
+      if (frozen != null) return frozen;
+      CaptionProgress live = sampleFrame(track, false);
+      // A pause can land during the hardware read. Keep one coherent frame
+      // without waiting for the transport lock on the UI thread.
+      frozen = frozenCaption;
+      return stopped ? CaptionProgress.empty() : frozen != null ? frozen : live;
+    }
+
+    private CaptionProgress sampleFrame(AudioTrack t, boolean freeze) {
+      long head = 0;
+      float level = 0;
       try {
-        if (paused) return 0;
-        AudioTrack t = track;
-        if (t == null || stopped || t.getPlayState() != AudioTrack.PLAYSTATE_PLAYING) return 0;
-        long head = t.getPlaybackHeadPosition() & 0xffffffffL;
-        Envelope e = envelopes.peek();
-        while (e != null && head >= e.end) {
-          envelopes.poll();
-          e = envelopes.peek();
+        if (t != null) {
+          head = t.getPlaybackHeadPosition() & 0xffffffffL;
+          if (!freeze && t.getPlayState() == AudioTrack.PLAYSTATE_PLAYING) level = levelAt(head);
         }
-        return e != null && head >= e.start ? e.value : 0;
       } catch (IllegalStateException ignored) {
-        return 0;
       }
+      CaptionTimeline line = timings;
+      return new CaptionProgress(
+          playbackId,
+          text,
+          line.position(head),
+          line.rows.length > 0,
+          true,
+          freeze,
+          head / 16,
+          ended && queue.isEmpty() ? written / 16 : 0,
+          level,
+          mood);
+    }
+
+    private float levelAt(long head) {
+      Envelope e = envelopes.peek();
+      while (e != null && head >= e.end) {
+        envelopes.poll();
+        e = envelopes.peek();
+      }
+      return e != null && head >= e.start ? e.value : 0;
     }
 
     public boolean allowed() {
@@ -1769,7 +1776,9 @@ final class VoiceSession {
                       false,
                       false,
                       written / 16,
-                      written / 16);
+                      written / 16,
+                      0,
+                      mood);
           }
           JSONObject done = Wire.event("play_done");
           Wire.put(done, "generation", generation);
@@ -1789,7 +1798,7 @@ final class VoiceSession {
       } finally {
         synchronized (routeLock) {
           track = null;
-          confirmedPaused = false;
+          frozenCaption = null;
         }
         if (t != null) {
           try {
