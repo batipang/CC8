@@ -25,6 +25,7 @@ DOT_CONTEXT_FIELDS = {
     'dot_rpc_ready': 'dot_rpc_reused',
     'dot_context_ready': 'dot_context_reused',
 }
+ROUTE_COMPLETION_STAGES = {'web': 'web_route_completed', 'tool': 'tool_route_completed'}
 STAGES = (
     frozenset(
         (
@@ -49,6 +50,7 @@ STAGES = (
         )
     )
     | DOT_STAGES
+    | frozenset(ROUTE_COMPLETION_STAGES.values())
 )
 ORIGINS = frozenset(('voice', 'text', 'vision', 'announcement'))
 SCENARIOS = frozenset(('qa', 'web', 'tool', 'vision', 'announcement'))

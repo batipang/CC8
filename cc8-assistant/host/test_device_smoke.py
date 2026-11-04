@@ -568,7 +568,7 @@ class DeviceAutomationTests(unittest.TestCase):
                 plan = json.loads(output.getvalue())
                 self.assertTrue(plan['response_acoustic_evidence'])
                 self.assertEqual(plan['latency_scenario'], scenario)
-                self.assertEqual(plan['minimum_backend_version'], '0.14.61')
+                self.assertEqual(plan['minimum_backend_version'], '0.14.62')
                 self.assertEqual(plan['qa_corpus_sha256'], SCENARIO_DIGESTS[scenario])
                 self.assertEqual(len(plan['phases']), 30)
 
@@ -604,7 +604,10 @@ class DeviceAutomationTests(unittest.TestCase):
                         'post_playback_quiet_seconds': 20,
                         'recognized_stimulus_matches': True,
                         'qa_stage_latencies_ms': stages,
-                        'latency_scenario': scenario if index != fail_at else 'qa',
+                        'latency_scenario': 'qa'
+                        if index == fail_at and scenario == 'web'
+                        else scenario,
+                        'latency_route_completed': index != fail_at,
                         'response_playout_timing': {
                             'status': 'observed',
                             QA_PLAYOUT_METRIC: 100 * index,
@@ -647,7 +650,9 @@ class DeviceAutomationTests(unittest.TestCase):
                 self.assertEqual(
                     result['phases'][3]['reason'],
                     'suite_latency_scenario_unconfirmed'
-                    if scenario != 'qa'
+                    if scenario == 'web'
+                    else 'suite_latency_route_incomplete'
+                    if scenario == 'tool'
                     else 'suite_qa_' + ('acoustic' if acoustic else 'stage') + '_timing_incomplete',
                 )
                 self.assertTrue(all(phase['state'] == 'not_run' for phase in result['phases'][4:]))
@@ -2665,6 +2670,10 @@ class DeviceAutomationTests(unittest.TestCase):
                     confirmed_playout_ack=50,
                     confirmed_playback_done=60,
                 )
+                if scenario == 'web':
+                    row['stages']['web_route_completed'] = 27
+                if scenario == 'tool':
+                    row['stages']['tool_route_completed'] = 27
                 run, device, _, _ = self.acoustic_fixture(lambda _: [row], awake=True)
                 run.latency_sample = True
                 run.latency_scenario = expected
@@ -2682,6 +2691,10 @@ class DeviceAutomationTests(unittest.TestCase):
                     dict(zip(QA_STAGE_METRICS, (5, 20, 3))) if scenario == expected else {},
                 )
                 self.assertEqual(result['acoustic_evidence']['latency_scenario'], scenario)
+                self.assertEqual(
+                    result['acoustic_evidence']['latency_route_completed'],
+                    expected in ('web', 'tool'),
+                )
                 run.handover.assert_not_called()
                 run.playback.assert_not_called()
                 device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)

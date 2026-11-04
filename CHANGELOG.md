@@ -1,5 +1,10 @@
 # Changelog
 
+## Backend 0.14.62 — confirm routed operations before counting latency
+
+- Record bounded web and terminal completion timestamps for the current request.
+  Routed latency batches exclude answers without a matching completion.
+
 ## Backend 0.14.61 — separate web and local tool latency samples
 
 - Add fixed public web lookups and read-only local calculations to the
