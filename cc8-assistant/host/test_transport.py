@@ -17,7 +17,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from transport import Pairing, TransportHub, Channel, signature, private_ipv4
-from protocol import Packet, receive, decode_event, SPEAKER, RENDER, EVENT
+from protocol import Packet, receive, decode_event, SPEAKER, RENDER, EVENT, MIC
 from bridge import Bridge, usb_target
 from tools.java_toolchain import java_bin
 
@@ -581,6 +581,44 @@ class RebindIdempotenceTests(unittest.TestCase):
                         time.sleep(0.01)
                     self.assertEqual(calibrate.call_count, 2)
                     self.assertEqual(b.session.epoch, 8)
+
+    def test_stopped_capture_is_not_recreated_by_late_rebind(self):
+        for stop in ('manual', 'all_routes_lost', 'peer_idle', 'stop_before_start'):
+            with self.subTest(stop=stop):
+                b = Bridge(None, None)
+                b.session.connection = FakeChannel('usb')
+                b.save_status = lambda: None
+                calibrated = threading.Event()
+                with (
+                    patch('bridge.WebRtcEchoCanceller'),
+                    patch.object(b, 'calibrate', side_effect=lambda _: calibrated.set()),
+                ):
+                    if stop != 'stop_before_start':
+                        b.on_event({'event': 'session_start', 'epoch': 7})
+                        self.assertTrue(calibrated.wait(1))
+                    if stop == 'all_routes_lost':
+                        b.change_transport(None)
+                    elif stop == 'peer_idle':
+                        b.on_event({'event': 'device_ready', 'capture_active': False})
+                    else:
+                        b.on_event({'event': 'session_stop', 'epoch': 7})
+                    b.change_transport(FakeChannel('wifi'))
+                    b.on_event({'event': 'device_ready', 'capture_active': True})
+                    stopped_generation = b.generation
+                    calibrated.clear()
+                    for _ in range(2):
+                        b.on_event({'event': 'session_rebind', 'capture_active': True, 'epoch': 7})
+                    b.on_packet(Packet(MIC, 7, data=b'\0\0'))
+                    self.assertFalse(b.session.active)
+                    self.assertEqual(b.generation, stopped_generation)
+                    self.assertFalse(calibrated.is_set())
+                    self.assertIsNone(b.capture.echo.aec)
+                    self.assertEqual(b.metrics['mic_frames'], 0)
+
+                    b.on_event({'event': 'session_start', 'epoch': 9})
+                    self.assertTrue(calibrated.wait(1))
+                    self.assertTrue(b.session.active)
+                    self.assertEqual(b.session.epoch, 9)
 
     def test_duplicate_rebind_during_calibration_starts_only_one_calibration(self):
         b = Bridge(None, None)
