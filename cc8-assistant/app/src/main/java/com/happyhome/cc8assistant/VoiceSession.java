@@ -26,6 +26,8 @@ final class VoiceSession {
 
     void caption(String text, String mood);
 
+    void playbackPresentation(PlaybackPresentation update);
+
     void microphone(boolean active);
 
     void playback(boolean active);
@@ -78,6 +80,7 @@ final class VoiceSession {
   private volatile AudioRecord recorder;
   private volatile CaptureWindow captureWindow;
   private volatile Player player;
+  private volatile PlaybackPresentation playbackPresentation;
   private volatile long lastPlaybackSpeechFrames;
   private volatile int lastPlaybackPaddingFrames;
   private volatile float inputLevel = 0;
@@ -1221,8 +1224,36 @@ final class VoiceSession {
   private synchronized void cancelPlayback() {
     Player p = player;
     player = null;
+    playbackPresentation = null;
     lastCaption = CaptionProgress.empty();
     if (p != null) p.cancel();
+  }
+
+  static final class PlaybackPresentation {
+    final String text, mood, phase, message;
+
+    PlaybackPresentation(String text, String mood, String phase, String message) {
+      this.text = text;
+      this.mood = mood;
+      this.phase = phase;
+      this.message = message;
+    }
+  }
+
+  boolean currentPlaybackPresentation(PlaybackPresentation update) {
+    return foreground && playbackPresentation == update;
+  }
+
+  private void publishPlayback(Player owner, String text, String nextPhase, String message) {
+    PlaybackPresentation update;
+    synchronized (this) {
+      if (!foreground || player != owner) return;
+      phase = nextPhase;
+      update = new PlaybackPresentation(text, owner.mood, nextPhase, message);
+      playbackPresentation = update;
+    }
+    // Do not hold the session lock while handing off to the main thread.
+    listener.playbackPresentation(update);
   }
 
   float microphoneLevel() {
@@ -1486,8 +1517,7 @@ final class VoiceSession {
       long nanos = System.nanoTime();
       if (!allowed()) return;
       frozenCaption = sampleFrame(t, true);
-      phase = "listening";
-      listener.state("listening", "听到你说话，正在听…");
+      publishPlayback(this, text, "listening", "听到你说话，正在听…");
       pauseReceipt("playback_paused", token, nanos);
     }
 
@@ -1519,9 +1549,7 @@ final class VoiceSession {
         frozenCaption = null;
         resumeCount++;
         pauseReceipt("playback_resumed", token, nanos);
-        phase = "speaking";
-        listener.caption(text, mood);
-        listener.state("speaking", "继续播报 · 你可以开口打断");
+        publishPlayback(this, text, "speaking", "继续播报 · 你可以开口打断");
         synchronized (this) {
           notifyAll();
         }
@@ -1543,7 +1571,7 @@ final class VoiceSession {
       synchronized (routeLock) {
         if (stopped || !foreground) return;
         cancel();
-        listener.state("error", "播放已停止：" + error.getMessage());
+        publishPlayback(this, null, "error", "播放已停止：" + error.getMessage());
         JSONObject failure = Wire.event("playback_error");
         Wire.put(failure, "error_type", error.getClass().getSimpleName());
         Wire.put(failure, "generation", generation);
@@ -1743,14 +1771,19 @@ final class VoiceSession {
         if (!startTrack(t)) return;
         waitIfPaused();
         if (!allowed()) return;
-        listener.caption(text, mood);
-        listener.state(
-            "calibration".equals(role) ? "calibrating" : "speaking",
-            "calibration".equals(role)
-                ? "首次校准：请安静听完这段声音"
-                : "announcement".equals(role) && !recording
-                    ? "正在播报 · 点击打断可停止"
-                    : visual && !recording ? "正在看图回答 · 点击停止看图可打断" : "正在回答 · 你可以开口打断");
+        synchronized (routeLock) {
+          // Pause/resume may already have published the newest state.
+          if (!paused && resumeCount == 0)
+            publishPlayback(
+                this,
+                text,
+                "calibration".equals(role) ? "calibrating" : "speaking",
+                "calibration".equals(role)
+                    ? "首次校准：请安静听完这段声音"
+                    : "announcement".equals(role) && !recording
+                        ? "正在播报 · 点击打断可停止"
+                        : visual && !recording ? "正在看图回答 · 点击停止看图可打断" : "正在回答 · 你可以开口打断");
+        }
         long sequence = 0;
         while (allowed()) {
           waitIfPaused();
@@ -1789,7 +1822,7 @@ final class VoiceSession {
             Wire.put(done, "render_clock", clockReport());
           }
           send(done);
-          if (recording) listener.state("listening", "我在听");
+          if (recording) publishPlayback(this, text, "listening", "我在听");
         }
       } catch (InterruptedException error) {
         Thread.currentThread().interrupt();

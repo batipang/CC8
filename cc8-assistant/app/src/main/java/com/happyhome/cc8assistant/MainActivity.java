@@ -1345,29 +1345,41 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   public void state(String next, String message) {
-    runOnUiThread(
-        () -> {
-          phase = next;
-          lastStateMessage = message;
-          refresh();
-        });
+    runOnUiThread(() -> applyState(next, message));
+  }
+
+  private void applyState(String next, String message) {
+    phase = next;
+    lastStateMessage = message;
+    refresh();
   }
 
   @Override
   public void caption(String text, String emotion) {
+    runOnUiThread(() -> applyCaption(text, emotion));
+  }
+
+  @Override
+  public void playbackPresentation(VoiceSession.PlaybackPresentation update) {
     runOnUiThread(
         () -> {
-          final String value =
-              text.isEmpty() ? (active ? "说大黄蜂唤醒我。\n也可以点击看一看。" : "麦克风已关闭。\n点击开始语音即可对话。") : text;
-          if (!value.equals(captionText.getText().toString())) {
-            captionText.setText(value);
-            captionText.progress(0, false);
-            captionScroll.scrollTo(0, 0);
-            captionId = 0;
-            lastCaptionLine = -1;
-          }
-          mood = emotion;
+          if (!foreground || !session.currentPlaybackPresentation(update)) return;
+          if (update.text != null) applyCaption(update.text, update.mood);
+          applyState(update.phase, update.message);
         });
+  }
+
+  private void applyCaption(String text, String emotion) {
+    final String value =
+        text.isEmpty() ? (active ? "说大黄蜂唤醒我。\n也可以点击看一看。" : "麦克风已关闭。\n点击开始语音即可对话。") : text;
+    if (!value.equals(captionText.getText().toString())) {
+      captionText.setText(value);
+      captionText.progress(0, false);
+      captionScroll.scrollTo(0, 0);
+      captionId = 0;
+      lastCaptionLine = -1;
+    }
+    mood = emotion;
   }
 
   @Override

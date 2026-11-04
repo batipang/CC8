@@ -1,5 +1,11 @@
 # Changelog
 
+## Assistant 0.9.30 — discard obsolete playback UI updates
+
+- Check playback ownership both when publishing a caption or state and when
+  the main thread displays it. Cancel, replacement and a newer pause/resume
+  update invalidate callbacks still queued.
+
 ## Assistant 0.9.28 — keep paused playback visuals in sync
 
 - Derive mouth, waveform and caption progress from one playback head sample.
