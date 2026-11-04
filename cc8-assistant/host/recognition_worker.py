@@ -90,11 +90,21 @@ def wake_payload(text, wake_pattern):
     return tail.lstrip(WAKE_PREFIX_SEPARATORS)
 
 
-def stop_request(text, wake_pattern):
-    if re.sub(r'\W', '', text) in STOP_COMMANDS:
-        return True
+def stop_command(text, wake_pattern):
+    command = re.sub(r'\W', '', text)
+    if command in STOP_COMMANDS:
+        return command
     payload = wake_payload(text, wake_pattern)
-    return payload is not None and re.sub(r'\W', '', payload) in STOP_COMMANDS
+    command = re.sub(r'\W', '', payload) if payload is not None else ''
+    return command if command in STOP_COMMANDS else ''
+
+
+def stop_matches_reference(command, references):
+    for reference in references:
+        clean = re.sub(r'\W', '', reference)
+        if clean == command or (len(command) > 1 and command in clean):
+            return True
+    return False
 
 
 class RecognitionWorker:
@@ -175,7 +185,7 @@ class RecognitionWorker:
                     rejected = True
                     self.hooks.status('listening', '我在听')
                     continue
-                protected_stop = stop_request(text, self.hooks.wake_pattern)
+                command = stop_command(text, self.hooks.wake_pattern)
                 risky = (
                     evidence['echo_risk']
                     if evidence is not None
@@ -261,14 +271,23 @@ class RecognitionWorker:
                 with self.hooks.lock:
                     if not self.hooks.valid(generation) or not self.hooks.wake_allowed():
                         continue
-                    if (
+                    weak_capture = (
                         risky
                         and captured is not None
                         and captured['echo_risk']
-                        and not captured['local_wake']
-                        and not protected_stop
                         and captured['credible_frames'] < MIN_ECHO_RISK_CREDIBLE_FRAMES
-                    ):
+                    )
+                    if weak_capture and command and stop_matches_reference(command, available):
+                        # A decoded stop normally bypasses short-text echo checks.
+                        # A matching playback quote needs confirmed near speech.
+                        decision = 'echo_text'
+                        rejected = True
+                        self.hooks.set_metric_field('last_voice_gate', 'rejected', True)
+                        self.hooks.metric('echo_transcripts_rejected', increment=True)
+                        if not self.hooks.playing():
+                            self.hooks.status('listening', '我在听')
+                        continue
+                    if weak_capture and not captured['local_wake'] and not command:
                         # ASR can turn a brief residual/noise burst into unrelated
                         # fluent text. Require 50 ms of the existing near detector's
                         # confirmed output before committing a new risky request.
@@ -314,7 +333,7 @@ class RecognitionWorker:
                         echo_risk=risky,
                         references=len(available),
                     )
-                    if re.sub(r'\W', '', text) in STOP_COMMANDS:
+                    if command:
                         self.hooks.diagnostics().finish(trace_id, 'completed')
                         self.hooks.status('listening', '已停止播报，我在听')
                         continue
