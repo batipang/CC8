@@ -6,13 +6,12 @@ read audio files. The companion APK never starts capture from a host command.
 
 from __future__ import annotations
 from pathlib import Path
-import re
 import signal as signal
 import subprocess as subprocess
 import threading as threading
 import time
 
-from protocol import EVENT, decode_event, validate_device_event
+from protocol import EVENT, decode_event
 from transport import Pairing, TransportHub
 from dsp import WebRtcEchoCanceller
 from fast_stop import FastStopDetector
@@ -20,7 +19,7 @@ from local_wake import WakeDetector
 from brain_router import BrainRouter
 from announce import AnnouncementServer
 from calibration_controller import STARTUP_GREETING as STARTUP_GREETING
-from composition import build_components, build_session
+from composition import build_components, build_device_events, build_session
 from assistant_identity import WAKE_WORD as WAKE_WORD, WAKE_PATTERN as WAKE_PATTERN
 from app_runtime import BackendDependencies, run_backend as run_app
 from minimax_client import MiniMaxBrain
@@ -112,6 +111,7 @@ class Bridge:
         self.wake = components.wake
         self.chats = components.chats
         self.saved_tasks = components.saved_tasks
+        self.device_events = build_device_events(self)
         self.recognition.start()
         self.response.start()
 
@@ -241,96 +241,7 @@ class Bridge:
         return self.session.stop()
 
     def on_event(self, j):
-        validate_device_event(j)
-        event = j.get('event')
-        if event in (
-            'camera_image_begin',
-            'camera_image_chunk',
-            'camera_image_end',
-            'camera_error',
-        ):
-            self.visual.feed(j)
-        elif event == 'vision_request':
-            nonce = j.get('nonce')
-            if isinstance(nonce, str) and re.fullmatch('[a-f0-9]{32}', nonce):
-                self.begin_visual(
-                    '请描述当前摄像头画面中的主要事物，说明你能确定的内容；看不清时请说明。',
-                    'button',
-                    nonce,
-                )
-        elif event == 'vision_cancel':
-            if self.visual.matches_cancel(j):
-                self.cancel('vision_cancel')
-                self.status('listening' if self.session.active else 'idle', '已停止看图')
-        elif event == 'device_ready':
-            self.session.ready(j)
-            self.chats.publish(ok=True)
-        elif event == 'dot_chat_request':
-            self.chats.request(j)
-        elif event == 'dot_chat_cancel':
-            self.chats.cancel(j['request_id'])
-        elif event == 'saved_task_request':
-            self.saved_tasks.request(j)
-        elif event == 'workspace_get':
-            self.publish_workspace()
-        elif event == 'text_request':
-            try:
-                self.submit_text(j.get('text'))
-            except (ValueError, RuntimeError):
-                self.event(
-                    'workspace_result',
-                    ok=False,
-                    message='文字指令未提交，请连接 Mac 并等待校准结束',
-                )
-        elif event == 'reminder_action':
-            try:
-                self.reminder_action(j.get('arguments'))
-                self.event('workspace_result', ok=True, message='提醒已更新')
-            except (ValueError, OSError):
-                self.event(
-                    'workspace_result', ok=False, message='提醒未保存，请检查时间、内容及 Mac 存储'
-                )
-        elif event == 'task_cancel':
-            task = next(
-                (
-                    t
-                    for t in self.workspace.snapshot()['tasks']
-                    if t['id'] == j.get('id') and t['status'] == 'running'
-                ),
-                None,
-            )
-            if task and task['generation'] == self.session.generation:
-                self.cancel('task_button')
-                self.status(
-                    'listening' if self.session.active else 'idle',
-                    '已停止任务等待；已执行的操作不会撤销',
-                )
-        elif event == 'session_rebind' and j.get('capture_active'):
-            self.session.rebind(j)
-        elif event == 'device_control_result':
-            self.device.receive(j)
-        elif event == 'screen_touch':
-            self.touch_activity()
-        elif event == 'settings':
-            self.session.settings(j)
-        elif event == 'session_start':
-            self.session.start_capture(j)
-        elif event == 'session_stop':
-            # A stopped worker can finish after a new foreground capture starts.
-            self.session.stop_capture(j)
-        elif event == 'interrupt':
-            self.session.interrupt(j)
-        elif event in (
-            'play_done',
-            'playback_paused',
-            'playback_resumed',
-            'playback_error',
-            'playout_progress',
-        ):
-            self.playback.device_event(j)
-        elif event == 'capture_gap':
-            self.capture.note_read_gap(j.get('epoch'), j.get('sequence'))
-            self.log('capture_read_gap', milliseconds=j.get('milliseconds'))
+        return self.device_events.on_event(j)
 
     def on_packet(self, p):
         if p.kind == EVENT:

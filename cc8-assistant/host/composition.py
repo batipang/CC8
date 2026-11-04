@@ -26,6 +26,7 @@ from wake_controller import WakeController, WakeHooks, Detector as WakeDetectorP
 from announcement_controller import AnnouncementController, AnnouncementHooks
 from reminder_scheduler import ReminderScheduler, ReminderHooks
 from device_controller import DeviceController, DeviceControlHooks
+from device_event_router import DeviceEventRouter
 from chat_controller import ChatController, ChatHooks
 from saved_tasks import SavedTasks
 from saved_task_controller import SavedTaskController, SavedTaskHooks
@@ -432,6 +433,28 @@ def build_components(
         wake,
         chats,
         saved_tasks,
+    )
+
+
+def build_device_events(host: Bridge) -> DeviceEventRouter:
+    return DeviceEventRouter(
+        session=host.session,
+        capture=host.capture,
+        chats=host.chats,
+        device=host.device,
+        playback=host.playback,
+        saved_tasks=host.saved_tasks,
+        visual=host.visual,
+        workspace=host.workspace,
+        begin_visual=lambda text, origin, nonce: host.begin_visual(text, origin, nonce),
+        cancel=lambda reason: host.cancel(reason),
+        status=lambda phase, message: host.status(phase, message),
+        event=lambda name, **fields: host.event(name, **fields),
+        publish_workspace=lambda: host.publish_workspace(),
+        submit_text=lambda text: host.submit_text(text),
+        reminder_action=lambda args: host.reminder_action(args),
+        touch_activity=lambda: host.touch_activity(),
+        log=lambda name, **fields: host.log(name, **fields),
     )
 
 
