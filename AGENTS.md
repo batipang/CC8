@@ -26,4 +26,6 @@ Code quality (user request 2026-11-01): use docs/TODO.md as the single backlog f
 
 Development checks: install requirements-dev.txt in a separate dev venv; run python tools/test_all.py and python tools/quality.py check with JDK 21+. Format only via the pinned tools, keep pure formatting commits in .git-blame-ignore-revs, and do not use the voice-runtime environment or device capture just to validate tooling. Optional private-audio replay requires explicit --with-private-audio; missing core dependencies must fail, not skip the suite.
 
+Before each commit, review the exact staged diff and its affected callers for regressions, state ownership, failure paths and private data handling. Fix actionable findings and rerun the relevant checks before committing. Tests and formatters supplement this review.
+
 CI checks: main requires the GitHub Actions Required checks gate, including for admins; merge through a passing, up-to-date PR. Do not bypass a failing check. Pin Actions to full commit SHAs and retain read-only default permissions, redacted secret scanning, narrow reviewed exceptions and separate dependency inventories. Runtime dependency lock changes do not authorize silently upgrading or restarting the deployed assistant; validate deployment separately.

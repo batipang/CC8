@@ -181,9 +181,25 @@ class RecognitionWorker:
                     continue
                 clean = re.sub('\\W', '', text)
                 if not clean or clean in ['谢谢观看', '感谢观看', '字幕由Amaraorg社区提供']:
-                    decision = 'empty'
-                    rejected = True
-                    self.hooks.status('listening', '我在听')
+                    captured = (
+                        self.hooks.diagnostics().capture_record(trace_id) if not clean else None
+                    )
+                    with self.hooks.lock:
+                        if not self.hooks.valid(generation) or not self.hooks.wake_allowed():
+                            continue
+                        decision = 'empty'
+                        rejected = True
+                        if not self.hooks.playing():
+                            ask_again = (
+                                captured is not None
+                                and not captured['echo_risk']
+                                and captured['credible_frames'] >= MIN_ECHO_RISK_CREDIBLE_FRAMES
+                                and self.hooks.awake()
+                                and not (self.hooks.echo_running() or self.hooks.echo_failed())
+                            )
+                            self.hooks.status(
+                                'listening', '刚才没听清，请再说一遍' if ask_again else '我在听'
+                            )
                     continue
                 command = stop_command(text, self.hooks.wake_pattern)
                 risky = (
