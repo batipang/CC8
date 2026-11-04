@@ -52,14 +52,30 @@ def run(args, *, query_fn=query, clock=time.monotonic, wall_clock=time.time, sle
     state = 'running'
     with PrivateOutput(args.output if args.output is not None else default_output()) as output:
 
-        def save():
-            result = book.report()
+        def save(*, terminal=False):
+            nonlocal state
+            elapsed = max(0, clock() - started)
+            wall_elapsed = wall_clock() - wall_started
+            result = book.report(end=(elapsed, wall_elapsed) if terminal else None)
+            if terminal and state == 'running':
+                complete = result['successful_polls'] and not any(
+                    result[key]
+                    for key in (
+                        'errors',
+                        'resource_coverage_incomplete_polls',
+                        'poll_gaps',
+                        'wall_clock_discontinuities',
+                        'uptime_discontinuities',
+                        'unhealthy_polls',
+                    )
+                )
+                state = 'completed' if complete else 'partial'
             result['observation'] = {
                 'state': state,
                 'requested_seconds': args.seconds,
                 'interval_seconds': args.interval,
-                'elapsed_seconds': round(max(0, clock() - started), 3),
-                'wall_elapsed_seconds': round(wall_clock() - wall_started, 3),
+                'elapsed_seconds': round(elapsed, 3),
+                'wall_elapsed_seconds': round(wall_elapsed, 3),
                 'checkpoint_seconds': 300,
                 'expected_backend_version': expected_backend,
             }
@@ -94,30 +110,13 @@ def run(args, *, query_fn=query, clock=time.monotonic, wall_clock=time.time, sle
                     save()
                     checkpoint = clock() + 300
                 sleep(min(args.interval, max(0, deadline - clock())))
-            report = book.report()
-            state = (
-                'completed'
-                if report['successful_polls']
-                and not any(
-                    report[key]
-                    for key in (
-                        'errors',
-                        'resource_coverage_incomplete_polls',
-                        'poll_gaps',
-                        'wall_clock_discontinuities',
-                        'uptime_discontinuities',
-                        'unhealthy_polls',
-                    )
-                )
-                else 'partial'
-            )
         except KeyboardInterrupt:
             state = 'cancelled'
         except Exception:
             state = 'failed'
             raise
         finally:
-            save()
+            save(terminal=True)
         print(output.path)
     return 0 if state == 'completed' else 130 if state == 'cancelled' else 2
 

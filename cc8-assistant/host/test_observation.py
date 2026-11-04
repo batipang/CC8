@@ -248,6 +248,65 @@ class ObservationTests(unittest.TestCase):
                 self.assertGreaterEqual(count[0], 2)
                 self.assertNotIn(SECRET, path.read_text())
 
+    def test_delayed_first_sample_cannot_hide_initial_coverage_gap(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'initial-gap.json'
+            now = [0.0]
+
+            def query(*args, **kwargs):
+                now[0] = 6.0
+                return health()
+
+            with redirect_stdout(io.StringIO()):
+                code = run(
+                    self.args(path),
+                    query_fn=query,
+                    clock=lambda: now[0],
+                    wall_clock=lambda: 1000 + now[0],
+                    sleep=lambda _: None,
+                )
+            result = json.loads(path.read_text())
+            self.assertEqual(result['successful_polls'], 1)
+            self.assertEqual(result['poll_gaps'], 1)
+            self.assertEqual(result['wall_clock_discontinuities'], 0)
+            self.assertEqual(result['observation']['state'], 'partial')
+            self.assertEqual(code, 2)
+
+    def test_final_sleep_records_gap_or_wall_discontinuity_without_another_poll(self):
+        for monotonic_jump, wall_jump, gaps, discontinuities in (
+            (6, 6, 1, 0),
+            (0, 6, 0, 1),
+        ):
+            with (
+                self.subTest(monotonic_jump=monotonic_jump),
+                tempfile.TemporaryDirectory() as folder,
+            ):
+                path = Path(folder) / 'final-gap.json'
+                elapsed, wall = 0.0, 1000.0
+
+                def sleep(seconds):
+                    nonlocal elapsed, wall
+                    elapsed += seconds
+                    wall += seconds
+                    if elapsed >= 0.3:
+                        elapsed += monotonic_jump
+                        wall += wall_jump
+
+                with redirect_stdout(io.StringIO()):
+                    code = run(
+                        self.args(path),
+                        query_fn=lambda *a, **kw: health(),
+                        clock=lambda: elapsed,
+                        wall_clock=lambda: wall,
+                        sleep=sleep,
+                    )
+                result = json.loads(path.read_text())
+                self.assertEqual(result['successful_polls'], 3)
+                self.assertEqual(result['poll_gaps'], gaps)
+                self.assertEqual(result['wall_clock_discontinuities'], discontinuities)
+                self.assertEqual(result['observation']['state'], 'partial')
+                self.assertEqual(code, 2)
+
     def test_cancel_and_invalid_options_do_not_forge_completion(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'cancel.json'
