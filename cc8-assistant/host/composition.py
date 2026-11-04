@@ -52,6 +52,22 @@ class Components:
     saved_tasks: SavedTaskController
 
 
+def voice_busy(host: Bridge) -> bool:
+    return (
+        host.calibration.active
+        or host.calibration.running
+        or host.playback.playing
+        or host.playback.pause_state is not None
+        or host.recognition.busy
+        or not host.recognition.queue.empty()
+        or host.response.busy
+        or not host.response.queue.empty()
+        or host.visual.generation is not None
+        or host.announcements.generation is not None
+        or host.capture.endpoint.vad.talking
+    )
+
+
 def build_components(
     host: Bridge,
     *,
@@ -329,19 +345,7 @@ def build_components(
             generation=lambda: host.session.generation,
             awake=lambda: host.session.awake,
             wake_mode=lambda: host.session.wake,
-            busy=lambda: (
-                host.calibration.active
-                or host.calibration.running
-                or host.playback.playing
-                or host.playback.pause_state is not None
-                or host.recognition.busy
-                or not host.recognition.queue.empty()
-                or host.response.busy
-                or not host.response.queue.empty()
-                or host.visual.generation is not None
-                or host.announcements.generation is not None
-                or host.capture.endpoint.vad.talking
-            ),
+            busy=lambda: voice_busy(host),
             set_awake=lambda value: host.session.set_awake(value),
             touch_activity=lambda: host.touch_activity(),
             cancel=lambda reason: host.cancel(reason),
@@ -470,8 +474,7 @@ def build_session(host: Bridge) -> SessionController:
             announcements=lambda: host.announcements,
             brain=lambda: host.brain,
             speech=lambda: host.speech,
-            response_busy=lambda: host.response.busy,
-            recognition_busy=lambda: host.recognition.busy,
+            voice_busy=lambda: voice_busy(host),
             send=lambda packet: host.send(packet),
             event=lambda name, **fields: host.event(name, **fields),
             status=lambda phase, message: host.status(phase, message),

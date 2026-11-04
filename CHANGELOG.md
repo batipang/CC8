@@ -1,5 +1,11 @@
 # Changelog
 
+## Backend 0.14.48 — preserve wake activity at the standby boundary
+
+- Serialize the standby decision and screen events with local wake and touch.
+- Use the same voice-work checks for standby and the wake window, including
+  speech in progress and queued recognition or replies.
+
 ## Backend 0.14.47 — integrated P0 device-test candidate
 
 - Include the separated device-event and playback-pause owners in one

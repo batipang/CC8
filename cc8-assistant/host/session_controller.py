@@ -45,8 +45,7 @@ class SessionHooks:
     announcements: Callable[[], AnnouncementController]
     brain: Callable[[], object]
     speech: Callable[[], object]
-    response_busy: Callable[[], bool]
-    recognition_busy: Callable[[], bool]
+    voice_busy: Callable[[], bool]
     send: Callable[[Packet], None]
     event: EventSink
     status: Callable[[str, str], None]
@@ -173,28 +172,29 @@ class SessionController:
         )
 
     def touch_activity(self):
-        self.last_interaction = time.monotonic()
-        self.hooks.wake_touch()
-        if self.screen_sleeping:
-            self.screen_sleeping = False
-            self.hooks.event('screen_wake')
+        with self.guard:
+            self.last_interaction = time.monotonic()
+            self.hooks.wake_touch()
+            if self.screen_sleeping:
+                self.screen_sleeping = False
+                self.hooks.event('screen_wake')
 
     def idle_tick(self):
         self.hooks.reminder_tick()
         self.hooks.wake_tick()
-        if (
-            self.active
-            and not self.hooks.calibration().active
-            and not self.hooks.playback().playing
-            and not self.hooks.response_busy()
-            and not self.hooks.recognition_busy()
-            and not self.screen_sleeping
-            and time.monotonic() - self.last_interaction >= 900
-        ):
-            self.set_awake(False)
-            self.screen_sleeping = True
-            self.hooks.event('screen_sleep')
-            self.hooks.log('screen_idle_sleep')
+        # Commit the state and device event under the same guard as a local
+        # wake or touch, so a stale idle decision cannot undo fresh activity.
+        with self.guard:
+            if (
+                self.active
+                and not self.screen_sleeping
+                and time.monotonic() - self.last_interaction >= 900
+                and not self.hooks.voice_busy()
+            ):
+                self.set_awake(False)
+                self.screen_sleeping = True
+                self.hooks.event('screen_sleep')
+                self.hooks.log('screen_idle_sleep')
 
     def submit_text(self, text):
         if (
