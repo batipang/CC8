@@ -27,6 +27,7 @@ from device_smoke import (
     FAST_STOP_DEVICE_METRIC,
     STOP_CHECK,
     STOP_QUERY,
+    STOP_VISUAL_METRIC,
     WAKE_SELF_CHECK,
     WAKE_SELF_TEXT,
     CheckFailure,
@@ -295,7 +296,7 @@ class DeviceAutomationTests(unittest.TestCase):
         self.assertIn(STOP_CHECK, plan['phases'][2]['checks'])
 
     def test_extended_voice_suite_requires_stop_and_room_results(self):
-        for case in ('ok', 'cloud_attempt', 'missing_room'):
+        for case in ('ok', 'cloud_attempt', 'missing_room', 'missing_visuals'):
             with self.subTest(case=case):
                 runs, reports = [], []
 
@@ -307,6 +308,7 @@ class DeviceAutomationTests(unittest.TestCase):
                             dict(name=name, state='passed') for name in planned_checks(options)
                         ],
                         'cleanup_microphone_off_verified': True,
+                        'expected_apk_code': 71,
                         'acoustic_evidence': {
                             'post_playback_quiet_seconds': 20,
                             'recognized_stimulus_matches': True,
@@ -324,6 +326,8 @@ class DeviceAutomationTests(unittest.TestCase):
                             'admitted_voice_requests': 0,
                             'post_playback_quiet_seconds': 20,
                         }
+                        if case != 'missing_visuals':
+                            report['barge_evidence'][STOP_VISUAL_METRIC] = 32
                     if 'response_acoustic_evidence' in options and case != 'missing_room':
                         report['acoustic_evidence']['response_acoustic_timing'] = {
                             'status': 'observed',
@@ -341,14 +345,14 @@ class DeviceAutomationTests(unittest.TestCase):
                     self.assertEqual(len(runs), 7)
                     self.assertIn('response_acoustic_evidence', runs[3])
                 else:
-                    failed = 2 if case == 'cloud_attempt' else 3
+                    failed = 3 if case == 'missing_room' else 2
                     self.assertEqual(len(runs), failed + 1)
                     self.assertEqual(result['state'], 'failed')
                     self.assertEqual(
                         result['phases'][failed]['reason'],
-                        'suite_synthetic_stop_evidence_incomplete'
-                        if case == 'cloud_attempt'
-                        else 'suite_awake_response_acoustic_incomplete',
+                        'suite_awake_response_acoustic_incomplete'
+                        if case == 'missing_room'
+                        else 'suite_synthetic_stop_evidence_incomplete',
                     )
                     self.assertTrue(
                         all(p['state'] == 'not_run' for p in result['phases'][failed + 1 :])
@@ -2048,6 +2052,7 @@ class DeviceAutomationTests(unittest.TestCase):
     def test_synthetic_stop_requires_one_local_hit_and_no_cloud_or_new_turn(self):
         for case, failure in (
             ('ok', None),
+            ('ok_visual', None),
             ('no_hit', 'fast_stop_not_confirmed'),
             ('preexisting_hit', 'fast_stop_count_unexpected'),
             ('double_hit', 'fast_stop_count_unexpected'),
@@ -2058,6 +2063,8 @@ class DeviceAutomationTests(unittest.TestCase):
             ('inverted_clock', 'fast_stop_device_timing_unconfirmed'),
             ('missing_clock', 'fast_stop_device_timing_unconfirmed'),
             ('long_interval', 'fast_stop_device_timing_out_of_range'),
+            ('wrong_visual', 'fast_stop_visual_timing_unconfirmed'),
+            ('missing_visual', 'fast_stop_visual_timing_unconfirmed'),
         ):
             with self.subTest(case=case), patch('device_smoke.ThreadPoolExecutor') as executor:
                 run, device, health, now = self.fixture(capture=True, synthetic_stop=True)
@@ -2077,6 +2084,8 @@ class DeviceAutomationTests(unittest.TestCase):
                     test_playback_stop_supported=True,
                     playback_paused=False,
                 )
+                if case.endswith('_visual'):
+                    device_status['test_stop_visual_timing_supported'] = True
                 announcement = dict(
                     request_id='announcement-private',
                     origin='announcement',
@@ -2119,6 +2128,11 @@ class DeviceAutomationTests(unittest.TestCase):
                             'nanos': 22829374650 if case == 'long_interval' else 1829374650,
                         },
                     )
+                    if case in ('ok_visual', 'wrong_visual'):
+                        device_status['test_stop_visual_timing'] = {
+                            'cancel_generation': 20 if case == 'wrong_visual' else 21,
+                            'nanos': 1861374650,
+                        }
                     rows.append(
                         dict(
                             request_id='partial',
@@ -2154,6 +2168,11 @@ class DeviceAutomationTests(unittest.TestCase):
                     self.assertEqual(now[0], 20)
                     self.assertNotIn('1829374650', json.dumps(evidence))
                     self.assertNotIn('1709374650', json.dumps(evidence))
+                    if case == 'ok_visual':
+                        self.assertEqual(evidence[STOP_VISUAL_METRIC], 32)
+                        self.assertNotIn('1861374650', json.dumps(evidence))
+                    else:
+                        self.assertNotIn(STOP_VISUAL_METRIC, evidence)
                 if case == 'preexisting_hit':
                     device.speak_probe.assert_not_called()
                 else:

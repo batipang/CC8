@@ -32,6 +32,7 @@ final class CaptureWindow {
   static final class StopEvidence {
     final long route, nanos;
     final int generation, playbackId, cancelGeneration;
+    volatile long visualNanos;
 
     StopEvidence(long route, int generation, int playbackId, int cancelGeneration, long nanos) {
       this.route = route;
@@ -102,5 +103,13 @@ final class CaptureWindow {
 
   synchronized StopEvidence stopEvidence(long route, long now) {
     return allows(now) && stop != null && stop.route == route ? stop : null;
+  }
+
+  synchronized void observeStopVisuals(long route, int cancelGeneration, long nanos, long now) {
+    StopEvidence current = stopEvidence(route, now);
+    if (current != null
+        && current.cancelGeneration == cancelGeneration
+        && current.visualNanos == 0
+        && nanos >= current.nanos) current.visualNanos = nanos;
   }
 }
