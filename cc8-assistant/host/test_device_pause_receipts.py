@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 from tools.java_toolchain import require_java
+from test_interrupted_task_notice import method
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / 'cc8-assistant/app/src/main/java/com/happyhome/cc8assistant/VoiceSession.java'
@@ -21,6 +22,17 @@ class DevicePauseReceiptTests(unittest.TestCase):
                 '    void waitIfPaused()', player
             )
         ]
+        frame = method(source, 'static final class CaptionProgress')
+        visual = '\n'.join(
+            method(source, signature)
+            for signature in (
+                'CaptionProgress visualFrame()',
+                'private CaptionProgress sampleFrame(AudioTrack t, boolean freeze)',
+                'private float levelAt(long head)',
+                'private static final class Envelope',
+            )
+        )
+        timeline = SOURCE.with_name('CaptionTimeline.java').read_text().split('\n', 1)[1]
         program = (
             """
 import java.util.*;
@@ -37,8 +49,19 @@ public class PauseFixture {
     }
   }
   static class AudioTrack {
+    static final int PLAYSTATE_PLAYING = 3;
     boolean failPause, failPlay, playing;
-    int pauses, plays;
+    int pauses, plays, headReads, head;
+    Runnable duringRead;
+    int getPlayState() { return playing ? PLAYSTATE_PLAYING : 2; }
+    int getPlaybackHeadPosition() {
+      headReads++;
+      int result = head;
+      Runnable callback = duringRead;
+      duringRead = null;
+      if (callback != null) callback.run();
+      return result;
+    }
     void pause() {
       if (failPause) throw new IllegalStateException("fixture pause");
       playing = false;
@@ -67,7 +90,11 @@ public class PauseFixture {
     final Listener listener = new Listener();
     final String text = "fixture", mood = "neutral";
     final int generation = 2, playbackId = 3;
-    boolean foreground = true, stopped, paused, confirmedPaused;
+    final Queue<Envelope> envelopes = new ArrayDeque<>();
+    boolean foreground = true, ended, stopped, paused;
+    CaptionProgress frozenCaption;
+    CaptionTimeline timings = new CaptionTimeline(new int[][]{{0, 7, 0, 700}}, 7);
+    long written = 700;
     int pauseToken;
     long resumeCount;
     String phase;
@@ -82,25 +109,29 @@ public class PauseFixture {
     }
 """
             + methods
+            + visual
             + """
   }
+"""
+            + frame
+            + """
   static void yes(boolean condition, String reason) {
     if (!condition) throw new AssertionError(reason);
   }
   public static void main(String[] args) {
     Player pending = new Player();
     pending.pauseForVoice(10);
-    yes(pending.paused && !pending.confirmedPaused && pending.events.isEmpty(), "early receipt");
+    yes(pending.paused && pending.frozenCaption == null && pending.events.isEmpty(), "early receipt");
     AudioTrack ready = new AudioTrack();
     yes(pending.startTrack(ready), "track startup failed");
-    yes(!ready.playing && pending.confirmedPaused && pending.events.size() == 1, "pending pause");
+    yes(!ready.playing && pending.frozenCaption != null && pending.events.size() == 1, "pending pause");
     yes(pending.event(0, "playback_paused", 10), "wrong pause identity");
     yes((long)pending.events.get(0).get("nanos") <= pending.listener.listeningNanos, "late timestamp");
     pending.pauseForVoice(10);
     pending.resumeAfterNoise(9);
     yes(pending.events.size() == 1 && ready.pauses == 1, "duplicate or stale control");
     pending.resumeAfterNoise(10);
-    yes(ready.playing && !pending.paused && !pending.confirmedPaused, "resume state");
+    yes(ready.playing && !pending.paused && pending.frozenCaption == null, "resume state");
     yes(pending.event(1, "playback_resumed", 10) && pending.resumeCount == 1, "resume receipt");
 
     Player withdrawn = new Player();
@@ -116,7 +147,7 @@ public class PauseFixture {
     failedPause.startTrack(brokenPause);
     brokenPause.failPause = true;
     failedPause.pauseForVoice(12);
-    yes(failedPause.stopped && !failedPause.confirmedPaused, "failed pause did not stop");
+    yes(failedPause.stopped && failedPause.frozenCaption == null, "failed pause did not stop");
     yes(failedPause.events.size() == 1
         && failedPause.events.get(0).get("event").equals("playback_error"), "false pause receipt");
     failedPause.failPlayback(new IllegalStateException());
@@ -138,9 +169,36 @@ public class PauseFixture {
     AudioTrack neverStarted = new AudioTrack();
     yes(!cancelled.startTrack(neverStarted) && neverStarted.plays == 0
         && cancelled.events.isEmpty(), "cancelled startup");
+
+    Player visual = new Player();
+    AudioTrack displayTrack = new AudioTrack();
+    visual.startTrack(displayTrack);
+    visual.envelopes.add(new Player.Envelope(0, 700, .25f));
+    displayTrack.head = 100;
+    CaptionProgress live = visual.visualFrame();
+    yes(displayTrack.headReads == 1 && live.level == .25f && live.position == 1
+        && !live.paused && live.mood.equals("neutral"), "visuals did not share one live frame");
+    displayTrack.head = 200;
+    displayTrack.duringRead = () -> visual.pauseForVoice(15);
+    CaptionProgress frozen = visual.visualFrame();
+    yes(frozen.paused && frozen.level == 0 && frozen.position == 2 && frozen.elapsedMs == 12,
+        "pause racing the visual sample did not close the mouth and freeze at the applied head");
+    int pausedReads = displayTrack.headReads;
+    displayTrack.head = 300;
+    visual.timings = new CaptionTimeline(new int[][]{{0, 7, 0, 350}}, 7);
+    yes(visual.visualFrame() == frozen && displayTrack.headReads == pausedReads,
+        "late timings or hardware head movement changed paused visuals");
+    visual.resumeAfterNoise(15);
+    CaptionProgress resumed = visual.visualFrame();
+    yes(!resumed.paused && resumed.position == 6 && resumed.level == .25f,
+        "resume did not return to the current hardware frame and timings");
+    visual.pauseForVoice(16);
+    visual.cancel();
+    yes(visual.visualFrame().id == 0 && visual.visualFrame().level == 0, "cancel retained a visual");
   }
 }
 """
+            + timeline
         )
         with tempfile.TemporaryDirectory(prefix='cc8-device-pause-') as folder:
             path = Path(folder) / 'PauseFixture.java'

@@ -96,15 +96,10 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
       new Runnable() {
         public void run() {
           if (!foreground || screenSleeping) return;
-          float level = session.mouthLevel();
-          VoiceSession.CaptionProgress cp = session.captionProgress();
+          VoiceSession.CaptionProgress cp = session.playbackFrame();
+          float level = cp.level;
           companion.update(
-              level,
-              session.microphoneLevel(),
-              level > 0 ? session.mood() : mood,
-              phase,
-              linked,
-              active);
+              level, session.microphoneLevel(), level > 0 ? cp.mood : mood, phase, linked, active);
           waveform.update(level, cp.playing, cp.paused);
           if (cp.id > 0 && cp.text.equals(captionText.getText().toString())) {
             if (captionId != cp.id) {
