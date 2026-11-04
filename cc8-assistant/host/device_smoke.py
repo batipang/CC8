@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import fcntl
 import hashlib
 import json
+from math import isfinite
 import os
 from pathlib import Path
 import re
@@ -58,6 +59,7 @@ CAPTURE_CLOCK_CHECK = 'recording_clock_provenance'
 RENDER_CLOCK_CHECK = 'playback_clock_provenance'
 LEADING_ACOUSTIC_CHECK = 'leading_playback_acoustic_evidence'
 AWAKE_DIALOGUE_CHECK = 'synthetic_awake_dialogue'
+BARGE_PRIME_CHECK = 'synthetic_awake_prerequisite_for_interruption'
 BARGE_CHECK = 'synthetic_acoustic_interruption'
 ACTIVE_HANDOVER_CHECK = 'active_capture_logical_handover'
 ALL_ROUTE_LOSS_CHECK = 'capture_stops_during_all_route_loss'
@@ -96,6 +98,7 @@ P0_DEVICE_PHASES = (
             'leading_acoustic_evidence',
         ),
     ),
+    ('awake_dialogue', ('capture', 'awake_dialogue')),
     ('standby_1', ('capture', 'standby', 'acoustic')),
     ('standby_2', ('capture', 'standby', 'acoustic')),
     ('standby_3', ('capture', 'standby', 'acoustic')),
@@ -1510,7 +1513,7 @@ class SmokeRun:
                 if self.awake_dialogue or self.synthetic_barge:
                     quiet_seconds = 2 if self.synthetic_barge else POST_DIALOGUE_SECONDS
                     self.check(
-                        AWAKE_DIALOGUE_CHECK,
+                        BARGE_PRIME_CHECK if self.synthetic_barge else AWAKE_DIALOGUE_CHECK,
                         lambda: self.acoustic_probe(awake=True, quiet_seconds=quiet_seconds),
                     )
                 if self.synthetic_barge:
@@ -1549,7 +1552,11 @@ def planned_checks(options):
             + ([LEADING_ACOUSTIC_CHECK] if 'leading_acoustic_evidence' in options else [])
             + ([ACTIVE_HANDOVER_CHECK] if 'active_handover' in options else [])
             + ([WAKE_SELF_CHECK] if 'wake_self_playback' in options else [])
-            + ([AWAKE_DIALOGUE_CHECK] if {'awake_dialogue', 'synthetic_barge'} & options else [])
+            + (
+                [BARGE_PRIME_CHECK if 'synthetic_barge' in options else AWAKE_DIALOGUE_CHECK]
+                if {'awake_dialogue', 'synthetic_barge'} & options
+                else []
+            )
             + ([BARGE_CHECK] if 'synthetic_barge' in options else [])
             + list(CHECKS[5:7])
             + ([ALL_ROUTE_LOSS_CHECK] if 'all_route_loss' in options else [])
@@ -1600,6 +1607,19 @@ def run_device_suite(make_run, save):
                 != [(name, 'passed') for name in phase['expected_checks']]
             ):
                 phase.update(state='failed', reason='suite_phase_evidence_incomplete')
+            if phase['state'] == 'passed' and 'awake_dialogue' in options:
+                evidence = result.get('acoustic_evidence')
+                quiet = (
+                    evidence.get('post_playback_quiet_seconds')
+                    if isinstance(evidence, dict)
+                    else None
+                )
+                if (
+                    type(quiet) not in (int, float)
+                    or not isfinite(quiet)
+                    or quiet < POST_DIALOGUE_SECONDS
+                ):
+                    phase.update(state='failed', reason='suite_awake_dialogue_quiet_incomplete')
         if phase['state'] != 'passed':
             suite['state'] = phase['state']
             save(suite)
