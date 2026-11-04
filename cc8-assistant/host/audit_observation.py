@@ -11,6 +11,9 @@ from observation_run import FLAGS, GAUGES, number, trend
 
 DURATION = 72 * 3600
 MAX_BYTES = 8 * 1024**2
+# Uptime is sampled during a bounded 5 s IPC query. The observer timestamps
+# its receipt afterwards; allow another 0.2 s for timestamp rounding.
+MAX_UPTIME_OFFSET_SPAN = 5.2
 NO_CLAIMS = (
     'contains_content',
     'device_capture_started',
@@ -82,6 +85,7 @@ def audit(report, backend):
     tolerance = max(5, 3 * interval)
     segments, successful, errors = set(), [], {}
     last_uptime = {}
+    uptime_offsets = {}
 
     def check_time(elapsed, wall):
         nonlocal previous_elapsed, previous_wall
@@ -112,6 +116,9 @@ def audit(report, backend):
             segments.add(segment)
             counts['uptime_discontinuities'] += uptime < last_uptime.get(segment, 0)
             last_uptime[segment] = uptime
+            offset = uptime - elapsed
+            low, high = uptime_offsets.get(segment, (offset, offset))
+            uptime_offsets[segment] = min(low, offset), max(high, offset)
         counts['unhealthy_polls'] += not all(
             row[flag] for flag in ('recognition_worker', 'response_worker', 'model_ready')
         )
@@ -137,11 +144,16 @@ def audit(report, backend):
     if report.get('polls') != len(rows) or report.get('successful_polls') != len(successful):
         reasons.append('poll_totals_inconsistent')
     reasons.extend(name for name, count in counts.items() if count or report.get(name) != 0)
+    uptime_span = max((high - low for low, high in uptime_offsets.values()), default=0)
+    if uptime_span > MAX_UPTIME_OFFSET_SPAN:
+        reasons.append('uptime_clock_mismatch')
 
     # Retain usable trends only for a single process with complete gauge coverage.
     gauges = (
         {field: trend(successful, field) for field in GAUGES}
-        if segments == {1} and not counts['resource_coverage_incomplete_polls']
+        if segments == {1}
+        and not counts['resource_coverage_incomplete_polls']
+        and uptime_span <= MAX_UPTIME_OFFSET_SPAN
         else {}
     )
     return {
@@ -151,6 +163,7 @@ def audit(report, backend):
         'polls': len(rows),
         'successful_polls': len(successful),
         'elapsed_seconds': end,
+        'uptime_offset_span_seconds': round(uptime_span, 3),
         'errors': errors,
         'counts': counts,
         'reasons': reasons,
