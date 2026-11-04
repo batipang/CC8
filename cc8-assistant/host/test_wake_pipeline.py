@@ -329,6 +329,40 @@ class WakePipelineTests(unittest.TestCase):
         self.assertTrue(b.wake.allowed())
         self.assertIsNone(b.wake.deadline)
 
+    def test_punctuated_wake_only_stays_listening_without_dispatching_a_task(self):
+        for keyword, transcript in (
+            ('Bumblebee', 'Bumblebee.'),
+            ('Bumblebee', '“Bumble bee?”'),
+            ('大黄蜂', '大黄蜂？！'),
+            ('大黄蜂', '「大黃蜂？」'),
+        ):
+            with self.subTest(transcript=transcript):
+                b, _, audio, requests, events, asr, _ = self.session(keyword, transcript)
+                self.frames(b)
+                self.assertTrue(asr.wait(1))
+                deadline = time.monotonic() + 1
+                while time.monotonic() < deadline:
+                    rows = b.diagnostics_report()['requests']
+                    if rows and rows[0]['outcome'] is not None:
+                        break
+                    time.sleep(0.005)
+                self.assertEqual(rows[0].get('gate'), 'wake_only')
+                self.assertEqual(rows[0]['outcome'], 'rejected')
+                self.assertEqual(requests, [])
+                self.assertFalse(any(name == 'transcript' for name, _ in events))
+                self.assertTrue(b.session.awake)
+                self.assertEqual(len(audio), 1)
+
+    def test_wake_prefix_preserves_numbers_and_quotes_in_a_real_question(self):
+        for value in ('-3', '+3', '.5', '“参数”'):
+            with self.subTest(value=value):
+                b, _, _, requests, _, _, answered = self.session(
+                    'Bumblebee', '“Bumblebee”，' + value + '是多少？'
+                )
+                self.frames(b)
+                self.assertTrue(answered.wait(1))
+                self.assertEqual(requests, [value + '是多少？'])
+
     def test_wake_only_does_not_call_brain_and_does_not_strip_later_questions(self):
         b, _, audio, requests, _, asr, _ = self.session('大黄蜂', '大黄蜂')
         self.frames(b)

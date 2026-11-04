@@ -1,5 +1,10 @@
 # Changelog
 
+## Backend 0.14.51 — treat a punctuated wake name as wake-only
+
+- Keep listening when a locally accepted wake name is followed only by
+  punctuation. Preserve numeric signs and decimal points in a real question.
+
 ## Backend 0.14.50 — match response timing to a confirmed clause
 
 - Record the progress and completion timestamps of the same confirmed clause.
