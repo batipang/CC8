@@ -234,6 +234,25 @@ except TimeoutError:
         second.setsockopt.assert_called_once_with(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         second.connect.assert_called_once_with(RECORD[-1])
 
+    def test_connected_socket_hands_the_next_stage_only_the_remaining_timeout(self):
+        elapsed = 0.0
+        peer = Mock()
+
+        def tcp_connect(_address):
+            nonlocal elapsed
+            elapsed += 0.75
+
+        peer.connect.side_effect = tcp_connect
+        with (
+            patch('dns_budget.time') as clock,
+            patch('socket.getaddrinfo', return_value=[RECORD]),
+            patch('socket.socket', return_value=peer),
+        ):
+            clock.monotonic.side_effect = lambda: elapsed
+            self.assertIs(connect(('example.invalid', 443), 1, IOBudget(2)), peer)
+
+        self.assertEqual([call.args[0] for call in peer.settimeout.call_args_list], [1, 0.25])
+
 
 if __name__ == '__main__':
     unittest.main()
