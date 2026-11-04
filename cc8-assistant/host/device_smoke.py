@@ -38,10 +38,22 @@ CHECKS = (
     'synthetic_acoustic_wake_and_response',
     'speaker_microphone_acoustic_evidence',
 )
+CAPTURE_CLOCK_CHECK = 'recording_clock_provenance'
+RENDER_CLOCK_CHECK = 'playback_clock_provenance'
+LEADING_ACOUSTIC_CHECK = 'leading_playback_acoustic_evidence'
 
 
 class CheckFailure(RuntimeError):
     pass
+
+
+class EvidenceFailure(CheckFailure):
+    """An observation is incomplete after its operational prerequisites passed."""
+
+
+def require_evidence(condition, reason):
+    if not condition:
+        raise EvidenceFailure(reason)
 
 
 def require(condition, reason):
@@ -323,17 +335,19 @@ class SmokeRun:
             'capture_clock_evidence': self.capture_clock_evidence,
         }
 
-    def check(self, name, action):
+    def check(self, name, action, *, continue_if_unconfirmed=False):
         began = self.clock()
         row = {'name': name, 'state': 'running'}
         self.checks.append(row)
         self.checkpoint(self.report('running'))
         try:
-            action()
+            result = action()
             row['state'] = 'passed'
+            return result
         except CheckFailure as error:
             row.update(state='failed', reason=str(error))
-            raise
+            if not (continue_if_unconfirmed and isinstance(error, EvidenceFailure)):
+                raise
         except KeyboardInterrupt:
             row['state'] = 'interrupted'
             raise
@@ -461,8 +475,12 @@ class SmokeRun:
             'device_handover_state_invalid',
         )
 
+    @property
+    def capture_limit_ms(self):
+        return 1200000 if self.standby else 180000
+
     def start_capture(self):
-        limit = 1200000 if self.standby else 180000
+        limit = self.capture_limit_ms
         self.device.open(True, capture_limit_ms=limit)
         self.wait(lambda: self.health().get('microphone_active') is True, 15, 'capture_not_started')
         self.wait(lambda: self.health().get('calibrating') is False, 25, 'calibration_not_finished')
@@ -471,6 +489,10 @@ class SmokeRun:
             h.get('microphone_active') is True and h.get('local_wake_ready') is True,
             'wake_capture_not_ready',
         )
+        return self.capture_status()
+
+    def capture_status(self):
+        limit = self.capture_limit_ms
         d, ui = self.device.status()
         require(
             type(d.get('test_capture_limit_ms')) is int
@@ -480,47 +502,67 @@ class SmokeRun:
             'device_test_capture_limit_not_active',
         )
         require(
-            d.get('microphone_active') is True and ui.get('camera_open') is False,
+            d.get('foreground') is True
+            and d.get('microphone_active') is True
+            and d.get('vision_active') is False
+            and ui.get('camera_open') is False,
             'device_capture_state_invalid',
         )
+        return d
 
-        if self.capture_clock_required:
-            self.capture_clock_evidence = summarize_capture_clock(d.get('capture_clock_evidence'))
-            require(
-                self.capture_clock_evidence['status'] == 'observed',
-                'capture_clock_provenance_unconfirmed',
-            )
+    def capture_clock_probe(self, device_status):
+        self.capture_clock_evidence = summarize_capture_clock(
+            device_status.get('capture_clock_evidence')
+        )
+        require_evidence(
+            self.capture_clock_evidence['status'] == 'observed',
+            'capture_clock_provenance_unconfirmed',
+        )
 
-    def playback_probe(self):
+    def require_idle_probe_capture(self):
         h = self.health()
         require(
-            h.get('microphone_active') is True
+            h.get('connected') is True
+            and h.get('transport') == 'usb'
+            and h.get('microphone_active') is True
             and h.get('playing') is False
             and h.get('calibrating') is False,
             'playback_probe_requires_idle_capture',
         )
+        self.capture_status()
+
+    def playback_probe(self):
+        self.require_idle_probe_capture()
         result = self.request({'operation': 'playback_probe'})
         evidence = result.get('evidence')
-        require(isinstance(evidence, dict), 'playback_probe_evidence_missing')
-        # Keep the numeric result even on a failed observation. An absent match
-        # is not proof that the physical speaker was silent.
-        self.playback_probe_evidence = evidence
+        if isinstance(evidence, dict):
+            self.playback_probe_evidence = evidence
+        # Only a completed stimulus with a still healthy capture can leave
+        # optional evidence unconfirmed and allow follow-up checks.
         require(result.get('status') == 'completed', 'playback_probe_not_completed')
-        require(evidence.get('status') == 'observed', 'playback_not_acoustically_corroborated')
-        require(
-            not self.clock_evidence
-            or evidence.get('render_clock_evidence', {}).get('status') == 'observed',
+        self.require_idle_probe_capture()
+        require_evidence(isinstance(evidence, dict), 'playback_probe_evidence_missing')
+        require_evidence(
+            evidence.get('status') == 'observed', 'playback_not_acoustically_corroborated'
+        )
+
+    def render_clock_probe(self):
+        evidence = self.playback_probe_evidence or {}
+        clock = evidence.get('render_clock_evidence')
+        require_evidence(
+            isinstance(clock, dict) and clock.get('status') == 'observed',
             'render_clock_provenance_unconfirmed',
         )
-        require(
-            not self.leading_acoustic_evidence
-            or (
-                type(evidence.get('render_clock_resets')) is int
-                and evidence['render_clock_resets'] == 0
-                and valid_leading_evidence(
-                    evidence.get('leading_acoustic_evidence'),
-                    evidence.get('matched_window_delay_ms'),
-                )
+
+    def leading_acoustic_probe(self):
+        evidence = self.playback_probe_evidence or {}
+        require_evidence(
+            evidence.get('status') == 'observed'
+            and type(evidence.get('render_clock_resets')) is int
+            and evidence['render_clock_resets'] == 0
+            and valid_leading_evidence(
+                evidence.get('leading_acoustic_evidence'),
+                evidence.get('matched_window_delay_ms'),
             ),
             'leading_acoustic_evidence_unconfirmed',
         )
@@ -697,16 +739,33 @@ class SmokeRun:
             self.check(CHECKS[2], self.playback)
             self.check(CHECKS[3], self.handover)
             if self.capture:
-                self.check(CHECKS[4], self.start_capture)
+                device_status = self.check(CHECKS[4], self.start_capture)
+                if self.capture_clock_required:
+                    self.check(
+                        CAPTURE_CLOCK_CHECK,
+                        lambda: self.capture_clock_probe(device_status),
+                        continue_if_unconfirmed=True,
+                    )
                 if self.playback_evidence:
-                    self.check(CHECKS[9], self.playback_probe)
+                    self.check(CHECKS[9], self.playback_probe, continue_if_unconfirmed=True)
+                if self.clock_evidence:
+                    self.check(
+                        RENDER_CLOCK_CHECK, self.render_clock_probe, continue_if_unconfirmed=True
+                    )
+                if self.leading_acoustic_evidence:
+                    self.check(
+                        LEADING_ACOUSTIC_CHECK,
+                        self.leading_acoustic_probe,
+                        continue_if_unconfirmed=True,
+                    )
                 self.check(CHECKS[5], self.home)
                 self.check(CHECKS[6], self.maintenance_open)
             if self.standby:
                 self.check(CHECKS[7], self.idle)
             if self.acoustic:
                 self.check(CHECKS[8], self.acoustic_probe)
-            state = 'passed'
+            if all(row['state'] == 'passed' for row in self.checks):
+                state = 'passed'
         except CheckFailure:
             pass
         except KeyboardInterrupt:
@@ -775,7 +834,12 @@ def main(argv=None):
     plan = {
         'checks': list(CHECKS[:4])
         + (
-            [CHECKS[4]] + ([CHECKS[9]] if args.playback_evidence else []) + list(CHECKS[5:7])
+            [CHECKS[4]]
+            + ([CAPTURE_CLOCK_CHECK] if args.capture_clock_evidence else [])
+            + ([CHECKS[9]] if args.playback_evidence else [])
+            + ([RENDER_CLOCK_CHECK] if args.clock_evidence else [])
+            + ([LEADING_ACOUSTIC_CHECK] if args.leading_acoustic_evidence else [])
+            + list(CHECKS[5:7])
             if args.capture
             else []
         )

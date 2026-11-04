@@ -147,7 +147,8 @@ class DeviceAutomationTests(unittest.TestCase):
             plan = json.loads(result.stdout)
             self.assertFalse(plan['execute'])
             self.assertTrue(plan['capture_clock_evidence'])
-            self.assertEqual(len(plan['checks']), 9)
+            self.assertEqual(len(plan['checks']), 10)
+            self.assertIn('recording_clock_provenance', plan['checks'])
             self.assertFalse(missing.exists())
         with patch('device_smoke.Device') as device, patch('device_smoke.rpc') as query:
             with redirect_stdout(io.StringIO()):
@@ -355,8 +356,9 @@ class DeviceAutomationTests(unittest.TestCase):
             test_capture_remaining_ms=170000,
             capture_clock_evidence=sample,
         )
+        status = run.start_capture()
         with self.assertRaisesRegex(CheckFailure, 'capture_clock_provenance_unconfirmed'):
-            run.start_capture()
+            run.capture_clock_probe(status)
         self.assertEqual(
             run.report('failed')['capture_clock_evidence'],
             {
@@ -365,7 +367,7 @@ class DeviceAutomationTests(unittest.TestCase):
             },
         )
         sample.update(available=2, unavailable=4, min_offset_ns=0, max_offset_ns=10)
-        run.start_capture()
+        run.capture_clock_probe(status)
         self.assertEqual(run.report('passed')['capture_clock_evidence']['status'], 'observed')
 
     def test_clock_requirement_refuses_old_apk_before_capture(self):
@@ -379,9 +381,17 @@ class DeviceAutomationTests(unittest.TestCase):
         device.open.assert_not_called()
         device.home.assert_not_called()
 
+    def arm_fixture_capture(self, run, device, health):
+        health.update(microphone_active=True, local_wake_ready=True)
+        device.status.return_value[0].update(
+            microphone_active=True,
+            test_capture_limit_ms=run.capture_limit_ms,
+            test_capture_remaining_ms=run.capture_limit_ms - 1000,
+        )
+
     def test_clock_requirement_does_not_treat_missing_evidence_as_zero(self):
-        run, _, health, _ = self.fixture(clock_evidence=True)
-        health['microphone_active'] = True
+        run, device, health, _ = self.fixture(clock_evidence=True)
+        self.arm_fixture_capture(run, device, health)
         request = run.request
         evidence = {'status': 'observed', 'render_clock_evidence': {'status': 'missing'}}
         run.request = lambda p: (
@@ -389,10 +399,11 @@ class DeviceAutomationTests(unittest.TestCase):
             if p == {'operation': 'playback_probe'}
             else request(p)
         )
-        with self.assertRaisesRegex(CheckFailure, 'render_clock_provenance_unconfirmed'):
-            run.playback_probe()
-        evidence['render_clock_evidence']['status'] = 'observed'
         run.playback_probe()
+        with self.assertRaisesRegex(CheckFailure, 'render_clock_provenance_unconfirmed'):
+            run.render_clock_probe()
+        evidence['render_clock_evidence']['status'] = 'observed'
+        run.render_clock_probe()
 
     def test_leading_acoustic_requirement_refuses_old_backend_before_any_open(self):
         run, device, health, _ = self.fixture(
@@ -433,8 +444,8 @@ class DeviceAutomationTests(unittest.TestCase):
         self.assertFalse(valid_leading_evidence(leading, 100))
         self.assertFalse(valid_leading_evidence(leading, None))
 
-        run, _, health, _ = self.fixture(leading_acoustic_evidence=True)
-        health['microphone_active'] = True
+        run, device, health, _ = self.fixture(leading_acoustic_evidence=True)
+        self.arm_fixture_capture(run, device, health)
         request = run.request
         evidence = {'status': 'observed', 'matched_window_delay_ms': 120, 'render_clock_resets': 0}
         run.request = lambda payload: (
@@ -442,17 +453,18 @@ class DeviceAutomationTests(unittest.TestCase):
             if payload == {'operation': 'playback_probe'}
             else request(payload)
         )
-        with self.assertRaisesRegex(CheckFailure, 'leading_acoustic_evidence_unconfirmed'):
-            run.playback_probe()
-        evidence['leading_acoustic_evidence'] = leading
         run.playback_probe()
+        with self.assertRaisesRegex(CheckFailure, 'leading_acoustic_evidence_unconfirmed'):
+            run.leading_acoustic_probe()
+        evidence['leading_acoustic_evidence'] = leading
+        run.leading_acoustic_probe()
         self.assertEqual(
             run.report('passed')['playback_probe_evidence']['leading_acoustic_evidence'], leading
         )
 
     def test_playback_probe_keeps_failed_numeric_evidence(self):
         run, device, health, _ = self.fixture(capture=True, playback_evidence=True)
-        health['microphone_active'] = True
+        self.arm_fixture_capture(run, device, health)
         request = run.request
         evidence = {'schema': 1, 'status': 'not_observed', 'correlation': 0.02}
         run.request = lambda p: (
@@ -532,6 +544,126 @@ class DeviceAutomationTests(unittest.TestCase):
             self.assertEqual(device.open.call_args_list[-1].args, (False,))
             self.assertEqual(sum(call.args == (True,) for call in device.open.call_args_list), 1)
             self.assertNotIn('PRIVATE_PROVIDER_BODY', json.dumps(result))
+
+    def evidence_run_fixture(self, probe_payload, *, lose_capture=False, lose_lease=False):
+        run, device, health, now = self.fixture(
+            capture=True,
+            standby=True,
+            acoustic=True,
+            playback_evidence=True,
+            capture_clock_evidence=True,
+            clock_evidence=True,
+            leading_acoustic_evidence=True,
+        )
+        health.update(
+            playback_evidence_supported=True,
+            leading_acoustic_evidence_supported=True,
+            render_clock_evidence_supported=True,
+        )
+        d, ui = device.status.return_value
+        d['capture_clock_evidence_supported'] = True
+        run.playback = Mock()
+        run.handover = Mock()
+        run.acoustic_probe = Mock()
+        probe_calls = []
+        started = [None]
+
+        def open_app(capture, **_):
+            if capture:
+                started[0] = now[0]
+                self.arm_fixture_capture(run, device, health)
+            d['foreground'] = True
+
+        def home():
+            d.update(foreground=False, microphone_active=False)
+            health['microphone_active'] = False
+
+        def status():
+            asleep = bool(
+                health['microphone_active']
+                and started[0] is not None
+                and now[0] - started[0] >= 900
+            )
+            return d, {**ui, 'screen_sleeping': asleep}
+
+        request = run.request
+
+        def rpc(payload):
+            if payload == {'operation': 'playback_probe'}:
+                probe_calls.append(payload)
+                if lose_capture:
+                    d['microphone_active'] = health['microphone_active'] = False
+                if lose_lease:
+                    d['test_capture_limit_ms'] = 0
+                return probe_payload
+            return request(payload)
+
+        device.open.side_effect = open_app
+        device.home.side_effect = home
+        device.status.side_effect = status
+        run.request = rpc
+        return run, device, probe_calls
+
+    def test_unconfirmed_evidence_is_separate_and_does_not_repeat_stimulus_or_skip_standby(self):
+        run, device, probes = self.evidence_run_fixture(
+            {
+                'status': 'completed',
+                'evidence': {
+                    'status': 'not_observed',
+                    'render_clock_evidence': {'status': 'observed'},
+                },
+            }
+        )
+        result = run.run()
+        states = {row['name']: row['state'] for row in result['checks']}
+        self.assertEqual(result['state'], 'failed')
+        self.assertTrue(result['cleanup_microphone_off_verified'])
+        self.assertEqual(states['explicit_open_starts_capture'], 'passed')
+        self.assertEqual(states['recording_clock_provenance'], 'failed')
+        self.assertEqual(states['speaker_microphone_acoustic_evidence'], 'failed')
+        self.assertEqual(states['playback_clock_provenance'], 'passed')
+        self.assertEqual(states['leading_playback_acoustic_evidence'], 'failed')
+        self.assertEqual(states['home_stops_capture'], 'passed')
+        self.assertEqual(states['real_idle_black_screen'], 'passed')
+        self.assertEqual(states['synthetic_acoustic_wake_and_response'], 'passed')
+        self.assertEqual(len(probes), 1)
+        self.assertEqual(sum(c.args == (True,) for c in device.open.call_args_list), 2)
+        run.acoustic_probe.assert_called_once()
+
+    def test_lost_capture_or_incomplete_playback_stops_before_followup_and_cleans_up(self):
+        for payload, lost, reason in (
+            (
+                {'status': 'completed', 'evidence': {'status': 'not_observed'}},
+                True,
+                'playback_probe_requires_idle_capture',
+            ),
+            (
+                {'status': 'timeout', 'evidence': {'status': 'observed'}},
+                False,
+                'playback_probe_not_completed',
+            ),
+        ):
+            with self.subTest(reason=reason):
+                run, device, probes = self.evidence_run_fixture(payload, lose_capture=lost)
+                result = run.run()
+                self.assertEqual(result['state'], 'failed')
+                self.assertTrue(result['cleanup_microphone_off_verified'])
+                self.assertEqual(result['checks'][-1]['reason'], reason)
+                self.assertEqual(len(probes), 1)
+                self.assertEqual(sum(c.args == (True,) for c in device.open.call_args_list), 1)
+                run.acoustic_probe.assert_not_called()
+
+    def test_unbounded_recording_after_probe_blocks_standby_followup(self):
+        run, _, probes = self.evidence_run_fixture(
+            {'status': 'completed', 'evidence': {'status': 'not_observed'}},
+            lose_lease=True,
+        )
+        result = run.run()
+        self.assertEqual(result['state'], 'failed')
+        self.assertEqual(result['checks'][-1]['reason'], 'device_test_capture_limit_not_active')
+        self.assertTrue(result['cleanup_microphone_off_verified'])
+        self.assertEqual(len(probes), 1)
+        run.acoustic_probe.assert_not_called()
 
     def test_failed_cleanup_cannot_be_reported_as_pass(self):
         run, device, _, _ = self.fixture()
