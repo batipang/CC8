@@ -116,6 +116,17 @@ USB 激活失败由尝试激活的通道处理。即使触发路由复查的是 
 
 `acoustic_evidence`仅包含固定数字：本次voice记录总数（保留旧字段名new_voice_requests）、准入/已拒绝/未决/未知终态候选数、拒绝候选的暂停/未恢复数、完成/取消/任务完成数、固定阶段计数与已观察的播后时长。超时或取消也保留部分证据；请求ID、文字与提供方错误原文均不写入该字段。未启用或未进入该检查时为null。
 
+### 收音中的逻辑切换
+
+```bash
+./cc8 verify-device --runtime-root /absolute/live/workspace --capture --active-handover
+./cc8 verify-device --runtime-root /absolute/live/workspace --execute --capture --active-handover
+```
+
+实机模式需要 APK 0.9.26 的限时录音代次回执和后台 0.14.44 的音频计数。校准结束且等待本地唤醒后，脚本按既有方式临时停用 USB 通道 12 秒。Wi‑Fi 接管和 USB 恢复时分别核对设备和 Mac 的路由，要求 Mac 在各路由上继续收到新帧、设备仍使用原录音且截止时间未延长。多余切换、关麦、重新校准、额外播放或新任务均会使该轮失败。
+
+报告只保存路由、帧数增量和切换次数。测试不保存录音代次，不要求用户朗读或拔线，结束走原有停采检查。物理拔插和两路全断仍由各自的测试记录。
+
 ### 双语自播报测试
 
 ```bash

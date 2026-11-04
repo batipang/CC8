@@ -13,6 +13,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from device_smoke import (
+    ACTIVE_HANDOVER_CHECK,
     BARGE_ANNOUNCEMENT,
     BARGE_CHECK,
     BARGE_QUERY,
@@ -174,6 +175,7 @@ class DeviceAutomationTests(unittest.TestCase):
             ['--synthetic-barge'],
             ['--capture', '--standby', '--synthetic-barge'],
             ['--wake-self-playback'],
+            ['--active-handover'],
             ['--capture', '--standby', '--wake-self-playback'],
             ['--capture', '--synthetic-barge', '--wake-self-playback'],
             ['--capture-clock-evidence'],
@@ -755,6 +757,113 @@ class DeviceAutomationTests(unittest.TestCase):
         with self.assertRaisesRegex(CheckFailure, 'handover_started_capture'):
             run.handover()
 
+    def test_active_handover_plan_and_legacy_preflight(self):
+        output = io.StringIO()
+        with patch('device_smoke.Device') as device, redirect_stdout(output):
+            self.assertEqual(
+                main(['--runtime-root', '/unused', '--capture', '--active-handover']), 0
+            )
+            device.assert_not_called()
+        self.assertIn(ACTIVE_HANDOVER_CHECK, json.loads(output.getvalue())['checks'])
+        run, device, health, _ = self.fixture(capture=True, active_handover=True)
+        health.update(local_wake_count=0, voice_asr_attempts=0, render_frames=0)
+        report = run.run()
+        self.assertEqual(report['checks'][-1]['reason'], 'device_test_capture_epoch_unsupported')
+        device.open.assert_not_called()
+
+    def test_active_handover_requires_fresh_frames_and_the_original_capture(self):
+        for case, reason in (
+            ('valid', None),
+            ('no_frames', 'active_handover_no_new_mic_frames'),
+            ('new_epoch', 'active_handover_capture_restarted'),
+            ('extended_deadline', 'active_handover_capture_deadline_changed'),
+            ('mic_off', 'active_handover_capture_changed'),
+            ('recalibrated', 'active_handover_capture_changed'),
+            ('extra_switch', 'active_handover_unexpected_switch_count'),
+            ('old_playback', 'active_handover_unexpected_audio_activity'),
+            ('extra_task', 'active_handover_unexpected_request'),
+        ):
+            with self.subTest(case=case):
+                run, device, health, now = self.fixture(capture=True, active_handover=True)
+                health.update(
+                    microphone_active=True,
+                    local_wake_count=0,
+                    voice_asr_attempts=0,
+                    render_frames=100,
+                    waiting_for_wake=True,
+                )
+                suppressed = False
+                rows = []
+                d, ui = device.status.return_value
+
+                def route():
+                    return (
+                        'wifi'
+                        if suppressed
+                        and (0.5 <= now[0] < 4 or case == 'no_frames' and now[0] >= 0.5)
+                        else 'usb'
+                    )
+
+                def status():
+                    wifi = route() == 'wifi'
+                    return dict(
+                        d,
+                        transport=route(),
+                        microphone_active=True,
+                        test_capture_limit_ms=180000,
+                        test_capture_remaining_ms=120000
+                        - int(now[0] * 1000)
+                        + (3000 if wifi and case == 'extended_deadline' else 0),
+                        test_capture_epoch=2 if wifi and case == 'new_epoch' else 1,
+                    ), ui
+
+                def request(payload):
+                    nonlocal suppressed
+                    if payload == {'operation': 'health'}:
+                        wifi = route() == 'wifi'
+                        return dict(
+                            health,
+                            transport=route(),
+                            mic_frames=100 if case == 'no_frames' else 100 + int(now[0] * 1000),
+                            microphone_active=not (wifi and case == 'mic_off'),
+                            calibrating=wifi and case == 'recalibrated',
+                            render_frames=101 if wifi and case == 'old_playback' else 100,
+                        )
+                    if payload == {'operation': 'transport_status'}:
+                        count = 1 if route() == 'wifi' else int(suppressed) * 2
+                        return dict(
+                            transport=route(),
+                            wifi_ready=True,
+                            usb_ready=route() == 'usb',
+                            usb_test_suppressed=route() == 'wifi',
+                            transport_switches=count + int(suppressed and case == 'extra_switch'),
+                        )
+                    if payload == {'operation': 'diagnostics'}:
+                        return {'requests': rows}
+                    self.assertEqual(payload, {'operation': 'transport_test', 'seconds': 12})
+                    suppressed = True
+                    if case == 'extra_task':
+                        rows.append(
+                            dict(request_id='private-id', origin='text', outcome='completed')
+                        )
+                    return {'ok': True}
+
+                run.request = request
+                device.status.side_effect = status
+                if reason:
+                    with self.assertRaisesRegex(CheckFailure, reason):
+                        run.active_capture_handover()
+                else:
+                    run.active_capture_handover()
+                    evidence = run.report('passed')['active_handover_evidence']
+                    self.assertEqual(
+                        [row['transport'] for row in evidence['routes']], ['wifi', 'usb']
+                    )
+                    self.assertTrue(evidence['no_new_requests'])
+                    self.assertFalse(run.report('passed')['physical_usb_unplug_tested'])
+                    self.assertNotIn('epoch', json.dumps(evidence))
+                device.speak_probe.assert_not_called()
+
     def test_standby_cannot_accept_an_already_black_screen_as_15_minutes(self):
         run, device, health, _ = self.fixture(capture=True, standby=True)
         run.start_capture = Mock()
@@ -1080,7 +1189,7 @@ class DeviceAutomationTests(unittest.TestCase):
         run, device, health, _ = self.fixture(capture=True, wake_self_playback=True)
         health['clause_receipts_supported'] = True
         report = run.run()
-        self.assertEqual(report['checks'][-1]['reason'], 'wake_self_playback_counters_unavailable')
+        self.assertEqual(report['checks'][-1]['reason'], 'audio_counters_unavailable')
         device.open.assert_not_called()
 
     def test_self_playback_both_languages_and_quiet_window(self):
