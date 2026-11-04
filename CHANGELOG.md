@@ -1,5 +1,11 @@
 # Changelog
 
+## Backend 0.14.57 — corroborate synthetic dialogue response in room audio
+
+- Allow a one-shot passive measurement for a fixed local-wake QA question.
+  Correlate the answer's render reference against device microphone audio
+  without pausing the active voice pipeline or saving audio.
+
 ## Backend 0.14.56 — bound proxy CONNECT and origin TLS together
 
 - Keep the original connection deadline through CONNECT headers and the TLS

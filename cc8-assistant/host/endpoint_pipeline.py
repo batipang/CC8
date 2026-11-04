@@ -232,7 +232,9 @@ class EndpointPipeline:
         if utterance is not None:
             self.hooks.diagnostics().mark(self.voice_trace, 'utterance_end')
             self.hooks.add_metric('utterances', 1)
+            input_end_ns = None
             if self.capture_evidence is not None:
+                input_end_ns = self.capture_evidence.last_voiced_end()
                 self.hooks.diagnostics().capture(
                     self.voice_trace,
                     self.capture_evidence.snapshot(
@@ -250,6 +252,7 @@ class EndpointPipeline:
                 'captured_at': self.turn_capture_started,
                 'pause_token': self.turn_pause_token,
                 'local_wake': self.turn_local_wake,
+                'input_end_ns': input_end_ns,
             }
             job = (
                 self.live_turn,

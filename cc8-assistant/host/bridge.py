@@ -227,6 +227,24 @@ class Bridge:
         with self.guard:
             self.capture.end_probe(probe)
 
+    def arm_response_probe(self, case):
+        with self.guard:
+            if (
+                not self.session.active
+                or not self.session.wake
+                or self.session.awake
+                or self.calibration.active
+                or self.response.busy
+                or self.recognition.busy
+                or self.playback.playing
+            ):
+                raise RuntimeError('Response probe requires idle active capture waiting for wake')
+            return {'status': 'armed', 'token': self.capture.arm_response_probe(case)}
+
+    def read_response_probe(self, token):
+        with self.guard:
+            return self.capture.read_response_probe(token)
+
     def cancel_playback_observation(self):
         self.capture.end_probe()
         self.capture.evidence.cancel()

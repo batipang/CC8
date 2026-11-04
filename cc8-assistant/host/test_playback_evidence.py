@@ -337,6 +337,69 @@ class ProbeIntegrationTests(unittest.TestCase):
         self.assertEqual(bridge.diagnostics.report()['requests'][-1]['outcome'], 'failed')
         self.assertTrue(bridge.session.active)
 
+    def test_passive_response_probe_binds_the_fixed_input_on_owner_socket(self):
+        from device_smoke import rpc
+
+        bridge = self.bridge()
+        bridge.session.wake = True
+        bridge.session.awake = False
+        bridge.session.epoch = 7
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'probe.sock'
+            server = AnnouncementServer(bridge, path)
+            server.start()
+            try:
+                arm = {'operation': 'response_probe_arm', 'case': 1}
+                self.assertNotEqual(rpc(path, arm)['status'], 'armed')
+                self.assertFalse(bridge.session.active)
+                bridge.session.active = True
+                result = rpc(path, arm)
+                self.assertEqual(result['status'], 'armed')
+                fetch = {'operation': 'response_probe_result', 'token': result['token']}
+                self.assertEqual(rpc(path, fetch)['status'], 'waiting')
+                self.assertIsNone(bridge.capture.evidence.current)
+                bridge.recognition.hooks.bind_response_probe(
+                    '大黄蜂，一加一等于几？', 101, START - 600_000_000
+                )
+                self.assertFalse(bridge.capture.measuring)
+                self.assertEqual(rpc(path, fetch)['status'], 'observing')
+                reference = public_signal()
+                feed(bridge.capture.evidence, reference, scene(reference))
+                receipt = rpc(path, fetch)
+                self.assertEqual(
+                    set(receipt),
+                    {'status', 'generation', 'last_voiced_to_confirmed_output_block_ms'},
+                )
+                self.assertEqual(receipt['generation'], 101)
+                self.assertEqual(receipt['status'], 'observed')
+                self.assertAlmostEqual(
+                    receipt['last_voiced_to_confirmed_output_block_ms'], 720, delta=1
+                )
+                self.assertEqual(rpc(path, fetch)['status'], 'unavailable')
+                self.assertFalse(bridge.capture.evidence.mic.size)
+            finally:
+                server.close()
+                bridge.capture.clear_response_probe()
+
+    def test_passive_response_probe_rejects_other_input_and_discards_on_epoch_reset(self):
+        bridge = self.bridge()
+        capture = bridge.capture
+        bridge.session.active = True
+        bridge.session.epoch = 7
+        token = capture.arm_response_probe(1)
+        capture.bind_response_probe('二加一等于几？', 101, START)
+        self.assertEqual(capture.read_response_probe(token), {'status': 'unmatched_input'})
+        self.assertIsNone(capture.evidence.current)
+        capture.reset_transport('wifi')
+        self.assertEqual(capture.read_response_probe(token), {'status': 'unavailable'})
+        token = capture.arm_response_probe(1)
+        capture.bind_response_probe('一加一等于几？', 102, START)
+        capture.evidence.microphone(7, START, np.ones(320))
+        self.assertTrue(capture.evidence.mic.size)
+        capture.reset_session()
+        self.assertEqual(capture.read_response_probe(token), {'status': 'unavailable'})
+        self.assertFalse(capture.evidence.mic.size)
+
     def test_server_deadline_and_invalid_shape_never_open_capture(self):
         from announce import Announcement
 
