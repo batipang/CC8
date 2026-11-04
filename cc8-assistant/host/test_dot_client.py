@@ -122,6 +122,41 @@ class DotTests(unittest.TestCase):
         self.assertEqual(sources['items'][0]['url'], 'https://example.com/news')
         self.assertEqual(b.last_metrics['web_search_calls'], 1)
 
+    def test_route_receipts_require_completion_of_the_matching_turn_and_operation(self):
+        command = {'type': 'commandExecution', 'status': 'completed', 'exitCode': 0}
+        for method, turn, item, expected in (
+            ('item/started', 'turn-1', command, None),
+            ('item/completed', 'old-turn', command, None),
+            ('item/completed', 'turn-1', {**command, 'exitCode': 1}, None),
+            ('item/completed', 'turn-1', {**command, 'exitCode': False}, None),
+            ('item/completed', 'turn-1', {**command, 'status': 'declined'}, None),
+            ('item/completed', 'turn-1', command, 'tool'),
+            (
+                'item/completed',
+                'turn-1',
+                {'type': 'webSearch', 'status': 'failed', 'query': '搜索'},
+                None,
+            ),
+            ('item/completed', 'turn-1', {'type': 'webSearch'}, None),
+            ('item/completed', 'turn-1', {'type': 'webSearch', 'query': '搜索'}, 'web'),
+        ):
+            with self.subTest(method=method, turn=turn, item=item):
+                rpc = FakeRpc()
+                rpc.before_ack = lambda: rpc.events.put(
+                    {
+                        'method': method,
+                        'params': {'threadId': 'voice-thread', 'turnId': turn, 'item': item},
+                    }
+                )
+                seen = []
+                list(
+                    DotBrain(rpc).clauses(
+                        '测试', [], on_web=lambda kind, data: seen.append((kind, data))
+                    )
+                )
+                routes = [payload for kind, payload in seen if kind == 'route_completed']
+                self.assertEqual(routes, [{'scenario': expected}] if expected else [])
+
     def test_cancel_before_turn_ack_interrupts_late_turn(self):
         rpc = FakeRpc()
         b = DotBrain(rpc)

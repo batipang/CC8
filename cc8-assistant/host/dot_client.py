@@ -791,7 +791,26 @@ class DotBrain:
                         )
                     if method == 'item/started':
                         continue
-                    if item.get('type') == 'webSearch':
+                    kind = item.get('type')
+                    status = item.get('status')
+                    query = item.get('query')
+                    if (
+                        on_web
+                        and kind == 'webSearch'
+                        and status in (None, 'completed')
+                        and isinstance(query, str)
+                        and query.strip()
+                    ):
+                        on_web('route_completed', {'scenario': 'web'})
+                    if (
+                        on_web
+                        and kind == 'commandExecution'
+                        and status == 'completed'
+                        and type(item.get('exitCode')) is int
+                        and item['exitCode'] == 0
+                    ):
+                        on_web('route_completed', {'scenario': 'tool'})
+                    if kind == 'webSearch':
                         self.last_metrics['web_search_calls'] = (
                             self.last_metrics.get('web_search_calls', 0) + 1
                         )
