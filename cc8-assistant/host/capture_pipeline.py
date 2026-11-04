@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass
 import time
+import uuid
 from typing import Callable
 import numpy as np
 from diagnostics import TraceBook
@@ -12,7 +13,8 @@ from protocol import MIC, RENDER
 from session_ports import EventSink, MetricSink
 from echo_pipeline import EchoPipeline
 from endpoint_pipeline import EndpointPipeline
-from playback_evidence import PlaybackEvidence
+from playback_evidence import PlaybackEvidence, Probe
+from qa_speech import QUESTIONS, normalize_question
 
 
 @dataclass(frozen=True)
@@ -28,6 +30,16 @@ class CaptureHooks:
     save_status: Callable[[], None]
 
 
+@dataclass
+class ResponseAcoustic:
+    token: str
+    epoch: int
+    question: str
+    expires: float
+    status: str = 'waiting'
+    probe: Probe | None = None
+
+
 class CapturePipeline:
     def __init__(self, hooks: CaptureHooks, echo: EchoPipeline, endpoint: EndpointPipeline):
         self.hooks = hooks
@@ -40,12 +52,13 @@ class CapturePipeline:
         self.last_status = 0
         self.evidence = PlaybackEvidence()
         self.probe = None
+        self.response_probe: ResponseAcoustic | None = None
         self.measuring = False
         self.last_received_mic_end = 0
         self.discard_endpoint_before_ns = 0
 
     def begin_probe(self, generation, epoch):
-        if self.probe is not None:
+        if self.probe is not None or self.live_response_probe() is not None:
             raise RuntimeError('Playback measurement already active')
         # Publish suppression before arm/timer creation can yield to ingress.
         self.measuring = True
@@ -57,6 +70,86 @@ class CapturePipeline:
             raise
         self.probe = probe
         return probe
+
+    def live_response_probe(self):
+        owner = self.response_probe
+        if owner is not None and (
+            time.monotonic() >= owner.expires or owner.epoch != self.hooks.epoch()
+        ):
+            self.clear_response_probe()
+            return None
+        return owner
+
+    def arm_response_probe(self, case):
+        if type(case) is not int or not 1 <= case <= len(QUESTIONS):
+            raise ValueError('Invalid public QA case')
+        if (
+            not self.hooks.active()
+            or self.probe is not None
+            or self.live_response_probe() is not None
+        ):
+            raise RuntimeError('Response acoustic test requires idle active capture')
+        token = uuid.uuid4().hex
+        self.response_probe = ResponseAcoustic(
+            token,
+            self.hooks.epoch(),
+            normalize_question(QUESTIONS[case - 1]),
+            time.monotonic() + 120,
+        )
+        return token
+
+    def bind_response_probe(self, text, generation, input_end_ns):
+        owner = self.live_response_probe()
+        if owner is None or owner.status != 'waiting':
+            return
+        if (
+            normalize_question(text) != owner.question
+            or type(input_end_ns) is not int
+            or input_end_ns < 0
+        ):
+            owner.status = 'unmatched_input'
+            return
+        remaining = owner.expires - time.monotonic()
+        if remaining <= 0:
+            owner.status = 'expired'
+            return
+        try:
+            owner.probe = self.evidence.arm(
+                generation, owner.epoch, seconds=min(20, remaining), input_end_ns=input_end_ns
+            )
+        except RuntimeError:
+            owner.status = 'unconfirmed'
+            return
+        owner.status = 'observing'
+
+    def read_response_probe(self, token):
+        owner = self.live_response_probe()
+        if owner is None or token != owner.token:
+            return {'status': 'unavailable'}
+        probe = owner.probe
+        if probe is None:
+            if owner.status != 'waiting':
+                self.clear_response_probe()
+            return {'status': owner.status}
+        if not probe.done.is_set():
+            return {'status': owner.status}
+        leading = probe.result['leading_acoustic_evidence']
+        measured = leading.get('last_voiced_to_confirmed_output_block_ms')
+        self.clear_response_probe()
+        if measured is None:
+            return {'status': 'unconfirmed', 'generation': probe.generation}
+        return {
+            'status': 'observed',
+            'generation': probe.generation,
+            'last_voiced_to_confirmed_output_block_ms': measured,
+        }
+
+    def clear_response_probe(self):
+        if self.response_probe is not None:
+            probe = self.response_probe.probe
+            self.response_probe = None
+            if probe is not None:
+                self.evidence.cancel(probe=probe)
 
     def end_probe(self, probe=None, status='cancelled'):
         if self.probe is not None and (probe is None or self.probe is probe):
@@ -93,6 +186,7 @@ class CapturePipeline:
             probe.render_clock.accept(generation, playback_id, value, expected_frames)
 
     def reset_transport(self, kind):
+        self.clear_response_probe()
         self.end_probe(status='transport_changed')
         self.evidence.cancel('transport_changed')
         self.last_received_mic_end = self.discard_endpoint_before_ns = 0
@@ -104,6 +198,7 @@ class CapturePipeline:
         self.next_read_gap = None
 
     def reset_session(self):
+        self.clear_response_probe()
         self.end_probe(status='session_changed')
         self.evidence.cancel('session_changed')
         self.last_received_mic_end = self.discard_endpoint_before_ns = 0
@@ -114,6 +209,7 @@ class CapturePipeline:
         self.pending_mic.clear()
 
     def close(self):
+        self.clear_response_probe()
         self.end_probe(status='capture_closed')
         self.evidence.cancel('capture_closed')
         self.endpoint.reset_voice_activity()

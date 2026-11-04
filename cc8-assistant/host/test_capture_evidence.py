@@ -310,6 +310,10 @@ class CaptureDiagnosticsTests(unittest.TestCase):
         job = bridge.recognition.queue.get_nowait()
         row = next(r for r in bridge.diagnostics.report()['requests'] if r['request_id'] == job[6])
         self.assertEqual(row['capture']['device_vad_tail_ms'], 800)
+        self.assertEqual(
+            job[4]['input_end_ns'], frame.nanos + VoiceDetector.ONSET_FRAMES * 10_000_000
+        )
+        self.assertNotIn('input_end_ns', json.dumps(row))
         self.assertIn('utterance_end', row['stages'])
 
     def test_transport_session_and_activity_resets_drop_partial_capture_counts(self):

@@ -15,7 +15,6 @@ import stat
 import subprocess
 import sys
 import time
-import unicodedata
 import uuid
 
 from private_output import PrivateOutput, private_directory
@@ -23,6 +22,10 @@ from release_info import load_release
 from mac_voice import resolve_voice, __file__ as voice_source
 from diagnostics import INTERVALS, MAX_CONFIRMED_PLAYBACK_CLAUSES, MAX_DEVICE_PAUSE_MS, percentiles
 from diagnostic_run import receipt
+from qa_speech import CORPUS_SHA256 as QA_CORPUS_SHA256
+from qa_speech import QUESTIONS as QA_LATENCY_QUESTIONS
+from qa_speech import WAKE as ACOUSTIC_WAKE
+from qa_speech import normalize_question
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPONENT = 'com.happyhome.cc8assistant/.MainActivity'
@@ -38,13 +41,7 @@ BARGE_ANNOUNCEMENT = (
     '看见河面映出了云朵和树梢。它把篮子放在大石头上，坐下来听水声，等朋友们一起回家。'
 )
 BARGE_QUERY = '换个问题，三加五等于几？'
-ACOUSTIC_WAKE = '大黄蜂'
-ACOUSTIC_QUESTION = '一加一等于几？'
-QA_LATENCY_QUESTIONS = tuple(
-    f'{left}加{right}等于几？' for left in '一二三四五六' for right in '一二三四五'
-)
-QA_CORPUS_SHA256 = hashlib.sha256('\n'.join(QA_LATENCY_QUESTIONS).encode()).hexdigest()
-QA_DIGITS = str.maketrans('一二三四五六', '123456')
+ACOUSTIC_QUESTION = QA_LATENCY_QUESTIONS[0]
 WAKE_SELF_TEXT = {
     'zh': '大黄蜂正在播报。现在只检查设备自己的声音。',
     'en': 'Bumblebee is speaking. This is a playback check.',
@@ -120,6 +117,7 @@ QA_LATENCY_PHASES = tuple(
 QA_STAGE_METRICS = ('utterance_to_asr_ms', 'brain_first_clause_ms', 'tts_first_pcm_ms')
 QA_ENDPOINT_METRIC = 'device_vad_tail_ms'
 QA_PLAYOUT_METRIC = 'utterance_to_confirmed_playout_ack_ms'
+ACOUSTIC_RESPONSE_METRIC = 'last_voiced_to_confirmed_output_block_ms'
 
 
 class CheckFailure(RuntimeError):
@@ -275,13 +273,6 @@ def objects(text, marker):
     return value
 
 
-def normalize_acoustic_question(text):
-    text = ''.join(unicodedata.normalize('NFKC', text).split()).rstrip('。?!.,，')
-    if text.startswith(ACOUSTIC_WAKE):
-        text = text[len(ACOUSTIC_WAKE) :].lstrip(',，:：')
-    return text.translate(QA_DIGITS).replace('+', '加').replace('=', '等于')
-
-
 def matches_acoustic_question(workspace, generation, question=ACOUSTIC_QUESTION):
     tasks = workspace.get('tasks')
     if (
@@ -303,7 +294,7 @@ def matches_acoustic_question(workspace, generation, question=ACOUSTIC_QUESTION)
     title = matches[0].get('title')
     if not isinstance(title, str) or len(title) > 80:
         return False
-    return normalize_acoustic_question(title) == normalize_acoustic_question(question)
+    return normalize_question(title) == normalize_question(question)
 
 
 def rpc(path, request, timeout=5):
@@ -319,6 +310,13 @@ def rpc(path, request, timeout=5):
         or request == {'operation': 'transport_test', 'seconds': 12}
         or request == ALL_ROUTE_LOSS_REQUEST
         or request == {'operation': 'playback_probe'}
+        or request == {'operation': 'response_probe_arm', 'case': 1}
+        or (
+            request.get('operation') == 'response_probe_result'
+            and set(request) == {'operation', 'token'}
+            and isinstance(request['token'], str)
+            and re.fullmatch('[a-f0-9]{32}', request['token']) is not None
+        )
         or request == {'text': TEST_TEXT}
         or request == {'text': MULTI_CLAUSE_TEXT}
         or request == {'text': BARGE_ANNOUNCEMENT}
@@ -438,6 +436,7 @@ class SmokeRun:
         awake_dialogue=False,
         latency_sample=False,
         qa_question=ACOUSTIC_QUESTION,
+        response_acoustic_evidence=False,
         synthetic_barge=False,
         wake_self_playback=False,
         active_handover=False,
@@ -457,6 +456,7 @@ class SmokeRun:
         self.awake_dialogue = awake_dialogue
         self.latency_sample = latency_sample
         self.qa_question = qa_question
+        self.response_acoustic_evidence = response_acoustic_evidence
         self.synthetic_barge = synthetic_barge
         self.wake_self_playback = wake_self_playback
         self.active_handover = active_handover
@@ -590,6 +590,11 @@ class SmokeRun:
             not self.leading_acoustic_evidence
             or h.get('leading_acoustic_evidence_supported') is True,
             'backend_leading_acoustic_evidence_unsupported',
+        )
+        require(
+            not self.response_acoustic_evidence
+            or h.get('response_acoustic_evidence_supported') is True,
+            'backend_response_acoustic_evidence_unsupported',
         )
         require(
             not self.clock_evidence or h.get('render_clock_evidence_supported') is True,
@@ -1245,6 +1250,16 @@ class SmokeRun:
         available = d['test_capture_remaining_ms'] / 1000
         require(available > 20 + reserve, 'acoustic_probe_capture_budget_insufficient')
         response_deadline = self.clock() + available - reserve
+        probe_token = None
+        if self.response_acoustic_evidence:
+            armed = self.request({'operation': 'response_probe_arm', 'case': 1})
+            probe_token = armed.get('token')
+            require(
+                armed.get('status') == 'armed'
+                and isinstance(probe_token, str)
+                and re.fullmatch('[a-f0-9]{32}', probe_token) is not None,
+                'response_acoustic_probe_not_armed',
+            )
         self.device.speak_probe(question=self.qa_question)
 
         admitted_id = None
@@ -1368,6 +1383,24 @@ class SmokeRun:
             self.acoustic_evidence['unresumed_rejected_pauses'] == 0,
             'rejected_pause_not_resumed',
         )
+        if probe_token is not None:
+            observed = self.request({'operation': 'response_probe_result', 'token': probe_token})
+            self.health()
+            elapsed = observed.get(ACOUSTIC_RESPONSE_METRIC)
+            generation = observed.get('generation')
+            confirmed = (
+                observed.get('status') == 'observed'
+                and type(generation) is int
+                and generation == completed.get('generation')
+                and type(elapsed) in (int, float)
+                and 0 <= elapsed <= 20000
+            )
+            self.acoustic_evidence['response_acoustic_timing'] = (
+                {'status': 'observed', ACOUSTIC_RESPONSE_METRIC: elapsed}
+                if confirmed
+                else {'status': 'unconfirmed'}
+            )
+            require_evidence(confirmed, 'response_acoustic_timing_unconfirmed')
         d, ui = self.device.status()
         require(
             ui.get('screen_sleeping') is False and d.get('foreground') is True,
@@ -1946,9 +1979,16 @@ def main(argv=None):
         action='store_true',
         help='Require corroboration of the leading blocks of the fixed speaker phrase',
     )
+    parser.add_argument(
+        '--response-acoustic-evidence',
+        action='store_true',
+        help='Corroborate the fixed awake answer on the same device microphone clock',
+    )
     args = parser.parse_args(argv)
     options = {key for key in SMOKE_OPTIONS if getattr(args, key)}
     batch = args.p0_device_suite or args.qa_latency_suite
+    if args.response_acoustic_evidence and (batch or not args.awake_dialogue):
+        parser.error('--response-acoustic-evidence requires an individual --awake-dialogue run')
     if batch and options != {'capture'}:
         parser.error('Device batches require --capture and accept no individual check flags')
     if args.standby and not args.capture or args.acoustic and not args.standby:
@@ -2001,6 +2041,7 @@ def main(argv=None):
                     if key not in ('standby', 'acoustic')
                 },
                 'full_p0_acceptance': False,
+                'response_acoustic_evidence': args.response_acoustic_evidence,
             }
         print(json.dumps(plan, ensure_ascii=False, indent=2))
         return 0
@@ -2100,6 +2141,7 @@ def main(argv=None):
                         request,
                         checkpoint=checkpoint,
                         qa_question=qa_question,
+                        response_acoustic_evidence=args.response_acoustic_evidence,
                         expected_apk=(manifest.assistant.version, manifest.assistant.version_code),
                         **dict.fromkeys(enabled, True),
                     )
