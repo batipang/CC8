@@ -1,5 +1,11 @@
 # Changelog
 
+## Assistant 0.9.32 — observe an applied player stop during test capture
+
+- Record a stop for the active route and player only after Android AudioTrack
+  has completed pause and flush. Expose one bounded receipt during the
+  explicitly timed test capture.
+
 ## Backend 0.14.58 — deliver device cancellation after a provider error
 
 - Attempt both provider cancellations and send the invalidated generation to

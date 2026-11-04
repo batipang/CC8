@@ -99,6 +99,7 @@ class VoiceSession {
  volatile String phase="idle";
  volatile AudioRecord recorder;
  volatile CaptureWindow captureWindow;
+ Player player;
  final Listener listener=new Listener();
  final Status statusFeedback=new Status();
  final List<JSONObject> events=new CopyOnWriteArrayList<>();
@@ -108,10 +109,15 @@ class VoiceSession {
  boolean currentRoute(long route){return route==routeEpoch;}
  void rejectForTest(Object id,long route){rejectCapture(id,route);}
  void cancelVision(){visionCancels++;}
- void cancelPlayback(){playbackCancels++;}
+ void cancelPlayback(){playbackCancels++;player=null;}
+ void cancelForTest(int generation,long route){cancelPlaybackForCommand(generation,route);}
  void send(JSONObject event){events.add(event);}
  void sendPacket(int kind,int epoch,long sequence,long frame,long stamp,byte[] data){packets.incrementAndGet();}
  static class Status{void reset(){}}
+ static class Player {
+  int generation=5,playbackId=7;
+  long cancelAppliedNanos=1000;
+ }
  static class Listener {
   final List<Boolean> microphones=new CopyOnWriteArrayList<>();
   final AtomicInteger errors=new AtomicInteger();
@@ -190,6 +196,37 @@ public final class CaptureCheck {
     yes(window.transcriptEvidence(2,1100)==null,"expired capture reported a receipt");
     yes(new CaptureWindow(1000,1100).transcriptEvidence(2,1100)==null,
         "new capture inherited a transcript receipt");
+    return;
+   }
+   if("applied_stop".equals(test)){
+    CaptureWindow normal=new CaptureWindow(0,100);
+    normal.observeStop(1,5,7,6,1000,101);
+    yes(normal.stopEvidence(1,101)==null,"ordinary capture retained a stop");
+    CaptureWindow window=new CaptureWindow(1000,100);
+    window.observeStop(1,5,7,6,0,101);
+    yes(window.stopEvidence(1,101)==null,"unapplied stop retained");
+    window.observeStop(1,5,7,5,1000,102);
+    yes(window.stopEvidence(1,102)==null,"stale cancel retained");
+    window.observeStop(1,5,7,6,1000,103);
+    window.observeStop(1,5,8,6,2000,104);
+    CaptureWindow.StopEvidence proof=window.stopEvidence(1,104);
+    yes(proof.generation==5&&proof.playbackId==7&&proof.cancelGeneration==6&&proof.nanos==1000,
+        "stop identity changed after replay");
+    yes(window.stopEvidence(2,104)==null,"old route stop visible");
+    window.observeStop(2,1,9,2,3000,105);
+    window.observeStop(1,8,7,9,4000,106);
+    yes(window.stopEvidence(2,106).playbackId==9,"old route rewrote receipt");
+    yes(window.stopEvidence(2,1100)==null,"expired capture exposed stop");
+    yes(new CaptureWindow(1000,1100).stopEvidence(2,1100)==null,"new capture inherited stop");
+    clock.set(105);
+    s.recording=true;
+    s.captureWindow=new CaptureWindow(1000,100);
+    s.player=new VoiceSession.Player();
+    s.cancelForTest(6,1);
+    yes(s.player!=null&&s.captureWindow.stopEvidence(2,105)==null,"stale route stopped player");
+    s.cancelForTest(6,2);
+    yes(s.player==null&&s.captureWindow.stopEvidence(2,105).nanos==1000,
+        "active route cancel did not record applied player stop");
     return;
    }
    if("clock_math".equals(test)){
@@ -346,6 +383,7 @@ class CaptureWindowTests(unittest.TestCase):
                 'private boolean stopMicrophone(CaptureWindow expected)',
                 'private void rejectCapture(Object captureId, long route)',
                 'boolean captureRejectionCurrent(int stoppedEpoch)',
+                'private void cancelPlaybackForCommand(int cancelGeneration, long route)',
             )
         )
         (path / 'CaptureCheck.java').write_text(HARDWARE.replace('METHODS', methods))
@@ -423,6 +461,9 @@ class CaptureWindowTests(unittest.TestCase):
 
     def test_bounded_capture_correlates_the_public_interruption_transcript(self):
         self.check_worker('interruption_transcript', BARGE_QUERY)
+
+    def test_applied_playback_stop_is_bound_to_the_capture_route_and_player(self):
+        self.check_worker('applied_stop')
 
     def test_capture_clock_unavailable_does_not_stop_audio(self):
         self.check_worker('timestamp_unavailable')

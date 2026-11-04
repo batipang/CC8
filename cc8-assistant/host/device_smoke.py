@@ -75,6 +75,7 @@ POST_DIALOGUE_SECONDS = 20
 STANDBY_SECONDS = 900
 PAIRED_PLAYOUT_MIN_BACKEND = '0.14.50'
 RESPONSE_ACOUSTIC_MIN_BACKEND = '0.14.57'
+STOP_RECEIPT_MIN_APK_CODE = 69
 SMOKE_OPTIONS = (
     'capture',
     'standby',
@@ -633,6 +634,13 @@ class SmokeRun:
             not self.synthetic_barge
             or device.get('test_interruption_transcript_supported') is True,
             'device_interruption_transcript_unsupported',
+        )
+        require(
+            not self.synthetic_barge
+            or self.expected_apk is None
+            or self.expected_apk[1] < STOP_RECEIPT_MIN_APK_CODE
+            or device.get('test_playback_stop_supported') is True,
+            'device_playback_stop_evidence_unsupported',
         )
         require(
             not self.capture_clock_required
@@ -1536,6 +1544,9 @@ class SmokeRun:
             'interruption_requires_awake_idle_capture',
         )
         device = self.capture_status()
+        stop_supported = (
+            self.expected_apk is not None and self.expected_apk[1] >= STOP_RECEIPT_MIN_APK_CODE
+        ) or device.get('test_playback_stop_supported') is True
         available = device['test_capture_remaining_ms'] / 1000
         require(available >= 120, 'interruption_capture_budget_insufficient')
         deadline = self.clock() + available
@@ -1543,6 +1554,7 @@ class SmokeRun:
         require(all(row.get('outcome') is not None for row in before), 'owner_request_pending')
         baseline = {row['request_id'] for row in before}
         seen = set()
+        announcement_generation = None
         evidence = {
             'announcement_started': False,
             'stimulus_played': False,
@@ -1612,6 +1624,7 @@ class SmokeRun:
             return health, announcement, replacement
 
         def started():
+            nonlocal announcement_generation
             health, announcement, replacement = observe()
             require(not replacement, 'interruption_voice_before_stimulus')
             require(announcement.get('outcome') is None, 'interruption_announcement_ended_early')
@@ -1624,12 +1637,15 @@ class SmokeRun:
                 return False
             d, ui = self.device.status()
             self.capture_status((d, ui))
-            return (
+            ready = (
                 ui.get('screen_sleeping') is False
                 and d.get('announcement_active') is True
                 and d.get('phase') == 'speaking'
                 and d.get('playback_paused') is False
             )
+            if ready:
+                announcement_generation = announcement.get('generation')
+            return ready
 
         def completed():
             _, announcement, replacement = observe()
@@ -1682,6 +1698,17 @@ class SmokeRun:
         )
         evidence['transcript_matches_stimulus'] = transcript['matched']
         require(transcript['matched'], 'interruption_transcript_mismatch')
+        if stop_supported:
+            stop = d.get('test_playback_stop')
+            valid_stop = (
+                isinstance(stop, dict)
+                and set(stop) == {'generation', 'playback_id', 'cancel_generation', 'nanos'}
+                and all(type(value) is int and value > 0 for value in stop.values())
+                and stop['generation'] == announcement_generation
+                and stop['cancel_generation'] == replacement['generation']
+            )
+            evidence['device_stop_applied'] = valid_stop
+            require_evidence(valid_stop, 'interruption_device_stop_not_confirmed')
         require(
             ui.get('screen_sleeping') is False and d.get('playback_paused') is False,
             'interruption_device_not_ready_after_response',

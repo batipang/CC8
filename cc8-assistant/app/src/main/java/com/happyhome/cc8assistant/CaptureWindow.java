@@ -12,6 +12,7 @@ final class CaptureWindow {
   private final long deadline;
   final CaptureClockStats clockStats;
   private TranscriptEvidence transcript;
+  private StopEvidence stop;
   private static final Pattern INTERRUPTION_QUERY =
       Pattern.compile(
           "(?:换个问题\\s*[,，]?\\s*)?(?:三|3)\\s*(?:加上?|\\+)\\s*(?:五|5)\\s*(?:等于|=)\\s*(?:几|多少)[\\s?。.!！]*");
@@ -25,6 +26,19 @@ final class CaptureWindow {
       this.route = route;
       this.generation = generation;
       this.matched = matched;
+    }
+  }
+
+  static final class StopEvidence {
+    final long route, nanos;
+    final int generation, playbackId, cancelGeneration;
+
+    StopEvidence(long route, int generation, int playbackId, int cancelGeneration, long nanos) {
+      this.route = route;
+      this.generation = generation;
+      this.playbackId = playbackId;
+      this.cancelGeneration = cancelGeneration;
+      this.nanos = nanos;
     }
   }
 
@@ -69,5 +83,24 @@ final class CaptureWindow {
 
   synchronized TranscriptEvidence transcriptEvidence(long route, long now) {
     return allows(now) && transcript != null && transcript.route == route ? transcript : null;
+  }
+
+  synchronized void observeStop(
+      long route, int generation, int playbackId, int cancelGeneration, long nanos, long now) {
+    if (limitMs == 0
+        || !allows(now)
+        || route < 0
+        || generation < 0
+        || playbackId <= 0
+        || cancelGeneration <= generation
+        || nanos <= 0) return;
+    if (stop != null
+        && (route < stop.route || route == stop.route && cancelGeneration <= stop.cancelGeneration))
+      return;
+    stop = new StopEvidence(route, generation, playbackId, cancelGeneration, nanos);
+  }
+
+  synchronized StopEvidence stopEvidence(long route, long now) {
+    return allows(now) && stop != null && stop.route == route ? stop : null;
   }
 }
