@@ -226,6 +226,7 @@ class CaptureAndTransportTests(unittest.TestCase):
     def test_old_completion_ids_do_not_accumulate_or_finish_current_playback(self):
         value = self.bridge()
         value.playback.playing = True
+        value.playback.end_frames = 1
         for old in range(100):
             value.on_event({'event': 'play_done', 'generation': old})
         self.assertEqual(value.playback.completed, set())

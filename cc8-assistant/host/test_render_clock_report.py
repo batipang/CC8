@@ -368,6 +368,7 @@ class ClockWireTests(unittest.TestCase):
         bridge.playback.device_can_report_completion = True
         bridge.playback.playback_serial = 2
         bridge.playback.playing = True
+        bridge.playback.end_frames = 1
         for event in (
             {'event': 'play_done', 'generation': generation, 'playback_id': 1},
             {'event': 'playback_error', 'generation': generation, 'playback_id': 1},
@@ -385,6 +386,8 @@ class ClockWireTests(unittest.TestCase):
         for value in (
             {'event': 'device_ready', 'render_clock_report_version': True},
             {'event': 'play_done', 'generation': 2, 'playback_id': True},
+            {'event': 'play_done', 'generation': 2, 'played_frames': True},
+            {'event': 'play_done', 'generation': 2, 'played_frames': -1},
         ):
             with self.assertRaises(ValueError):
                 validate_device_event(value)
