@@ -1,10 +1,34 @@
-"""Create a new owner-private JSON report and atomically update only that file."""
+"""Read and atomically publish bounded owner-private JSON reports."""
 
 import json
 import os
 from pathlib import Path
 import stat
 import uuid
+
+
+def read_private_json(path, max_bytes):
+    def unique_object(pairs):
+        result = dict(pairs)
+        if len(result) != len(pairs):
+            raise ValueError('Duplicate report field')
+        return result
+
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or info.st_mode & 0o077
+            or info.st_nlink != 1
+            or not 0 < info.st_size <= max_bytes
+        ):
+            raise ValueError('Invalid private report')
+        raw = stream.read(max_bytes + 1)
+        if len(raw) != info.st_size:
+            raise ValueError('Report changed while reading')
+    return json.loads(raw, object_pairs_hook=unique_object)
 
 
 def private_directory(path):

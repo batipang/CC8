@@ -454,6 +454,10 @@ def main():
         from measure import main as measure_main
 
         return measure_main(sys.argv[2:])
+    if sys.argv[1:2] == ['audit-measure']:
+        from measure import audit_main as measurement_audit_main
+
+        return measurement_audit_main(sys.argv[2:])
     if sys.argv[1:2] == ['observe']:
         from observe import main as observe_main
 
@@ -485,6 +489,7 @@ def main():
     group.add_argument('--foreground', action='store_true')
     group.add_argument('--stop', action='store_true')
     commands.add_parser('measure', help='Collect content-free host receipts without capture')
+    commands.add_parser('audit-measure', help='Recompute voice playback coverage from a saved run')
     commands.add_parser(
         'verify-wake', help='Plan or explicitly run public synthetic keyword boundary checks'
     )

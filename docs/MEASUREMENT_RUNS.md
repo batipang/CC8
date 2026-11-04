@@ -89,6 +89,16 @@ stdout 只输出报告的绝对路径，提示写 stderr。退出 0 表示采集
 
 `summary / groups / scenarios` 给出样本数、终态、成功率和各耗时的样本数/p50/p95；缺少阶段或逆序时不填零、不加入该项耗时样本。成功率沿用后台规则，以 completed / failed / cancelled 为分母，rejected 和 pending 另列。`task_outcomes` 单独统计已执行任务，停止后续朗读不会撤销已完成工作。
 
+### 已确认播放的语音回答
+
+`voice_playout_coverage` 按场景单列已观察的语音请求。确认回答需要明确的语音准入、任务完成、请求完成，以及至少一个设备起播和完成相互匹配的段落。失败、取消、未决、被拒绝和缺少回执的记录各有计数。确认比例以本轮观察到的已完成、失败及取消为分母。只有能核对句尾、首次起播回执和播完回执顺序的确认回答才进入 P50 / P95；其他确认回答单列为缺测。原有阶段耗时仍可用于排障。
+
+```sh
+./cc8 audit-measure /absolute/private/run.json
+```
+
+复核命令从旧报告的请求记录重算，不读取原汇总或连接后台。输出保留采集状态、查询失败和窗口断裂计数，只输出汇总，不修改文件。起播回执的时延仍是代理指标，实体扬声器实际出声和整轮覆盖率需另外验证。
+
 所有阶段来自 Mac 单调时钟的请求内相对时长，不相减 Android 和 Mac 的原始时钟。`render_ack` 仅是播放数据回执；`render_ack_is_audible_onset=false`。新配对（后台 0.13.6 / APK 0.8.8）可增加 `playout_ack`：设备播放头越过首个非零 PCM 后的 Mac 收到回执时刻，`playout_ack_is_audible_onset=false`，其延时含轮询/传输开销，见 [设备播放回执](PLAYOUT_RECEIPT.md)。旧端缺少此阶段不填零。真实人声起点、扬声器出声与声学端到端耗时仍需后续实测，不能用此工具或 VAD 参数代替。
 
 `coverage.window_discontinuities` 标出相邻非空窗口无交集或窗口变空的情况，可能由重启、窗口溢出或采集间断造成。即使为零，`complete_capture_asserted` 仍为 false：两次轮询之间可能错过已被窗口淘汰的请求。实际观察到的请求与人工固定样本编号还须核对，不能把无数据写成零延迟或 100% 成功。

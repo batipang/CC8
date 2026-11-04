@@ -12,6 +12,7 @@ from diagnostics import (
     DOT_CONTEXT_FIELDS,
     MAX_CONFIRMED_PLAYBACK_CLAUSES,
     MAX_DEVICE_PAUSE_MS,
+    percentiles,
     summarize_requests,
     summarize_dot_contexts,
 )
@@ -155,7 +156,7 @@ def receipt(value):
     return result
 
 
-def snapshot(payload):
+def snapshot(payload, *, limit=128):
     if (
         not isinstance(payload, dict)
         or type(payload.get('schema')) is not int
@@ -169,12 +170,62 @@ def snapshot(payload):
     if payload.get('playout_ack_is_audible_onset', False) is not False:
         raise ValueError('Unsupported diagnostic acoustic contract')
     rows = payload.get('requests')
-    if not isinstance(rows, list) or len(rows) > 128:
+    if not isinstance(rows, list) or len(rows) > limit:
         raise ValueError('Invalid diagnostic window')
     clean = [receipt(row) for row in rows]
     if len({row['request_id'] for row in clean}) != len(clean):
         raise ValueError('Duplicate diagnostic request ID')
     return clean
+
+
+def voice_playout_coverage(rows):
+    """Separate confirmed completed voice responses from partial stage timing."""
+    groups = {
+        kind: {'outcomes': Counter(), 'elapsed': [], 'untimed_confirmed': 0}
+        for kind in sorted(SCENARIOS)
+    }
+    for row in rows:
+        if row['origin'] != 'voice':
+            continue
+        group = groups[row['scenario']]
+        outcome = row['outcome'] or 'pending'
+        if outcome == 'completed':
+            if (
+                row.get('gate') != 'accepted'
+                or row['generation'] is None
+                or row.get('task_outcome') != 'completed'
+                or row['error'] is not None
+                or 'brain_start' not in row['stages']
+            ):
+                outcome = 'completed_without_response_receipt'
+            elif not row.get('confirmed_playback_clauses'):
+                outcome = 'completed_without_playout_confirmation'
+            else:
+                outcome = 'completed_with_confirmed_playout'
+                stages = row['stages']
+                end, ack = stages.get('utterance_end'), stages['playout_ack']
+                if end is not None and end <= ack <= stages['playback_done']:
+                    group['elapsed'].append(ack - end)
+                else:
+                    group['untimed_confirmed'] += 1
+        group['outcomes'][outcome] += 1
+
+    result = {}
+    for kind, group in groups.items():
+        outcomes = group['outcomes']
+        observed = sum(outcomes.values())
+        terminal = observed - outcomes['pending'] - outcomes['rejected']
+        result[kind] = {
+            'observed_voice_requests': observed,
+            'terminal_for_rate': terminal,
+            'outcomes': dict(outcomes),
+            'confirmed_response_rate': (
+                outcomes['completed_with_confirmed_playout'] / terminal if terminal else None
+            ),
+            'utterance_to_first_playout_ack_ms': percentiles(group['elapsed']),
+            'confirmed_without_valid_timing': group['untimed_confirmed'],
+        }
+    return result
 
 
 class DiagnosticRun:
@@ -260,5 +311,6 @@ class DiagnosticRun:
                 for kind in sorted(SCENARIOS)
             },
             'dot_contexts': summarize_dot_contexts(rows),
+            'voice_playout_coverage': voice_playout_coverage(rows),
             'requests': rows,
         }
