@@ -144,6 +144,9 @@ def summarize_dot_contexts(samples):
     }
 
 
+MAX_CONFIRMED_PLAYBACK_CLAUSES = 65535
+
+
 class TraceBook:
     # 白名单内只记录阶段及单端耗时，不接收用户文本、音频、图片或任意 provider 字典。
     def __init__(self, limit=128, clock=time.monotonic):
@@ -286,6 +289,15 @@ class TraceBook:
             row['stages'].setdefault(stage, round((observed_at - row['started']) * 1000, 1))
             if field:
                 row[field] = reused
+
+    def playback_done(self, generation, *, confirmed):
+        with self.lock:
+            self.mark(generation, 'playback_done')
+            row = self._row(generation)
+            if confirmed and row is not None and row['outcome'] is None:
+                row['confirmed_playback_clauses'] = min(
+                    row.get('confirmed_playback_clauses', 0) + 1, MAX_CONFIRMED_PLAYBACK_CLAUSES
+                )
 
     def finish(self, key, outcome):
         if outcome not in OUTCOMES:

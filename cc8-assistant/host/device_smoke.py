@@ -19,6 +19,7 @@ import uuid
 from private_output import PrivateOutput, private_directory
 from release_info import load_release
 from mac_voice import resolve_voice, __file__ as voice_source
+from diagnostics import MAX_CONFIRMED_PLAYBACK_CLAUSES
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPONENT = 'com.happyhome.cc8assistant/.MainActivity'
@@ -26,6 +27,11 @@ TEST_TEXT = (
     '这是大黄蜂自动测试。现在检查语音播放、字幕高亮和播放完成回执。'
     '这段固定文字只用于设备检查，测试结束后会恢复麦克风关闭状态。'
 )
+MULTI_CLAUSE_TEXT = (
+    '这是本机自动化的多段播报测试，用于检查同一回合内的播放回执，测试结束后将保持麦克风关闭。' * 3
+)
+MULTI_CLAUSE_CHECK = 'multi_clause_announcement_and_playout'
+EXPECTED_CLAUSES = 2
 CHECKS = (
     'preflight',
     'maintenance_open_keeps_microphone_off',
@@ -159,7 +165,8 @@ def rpc(path, request, timeout=5):
         request in allowed
         or request == {'operation': 'transport_test', 'seconds': 12}
         or request == {'operation': 'playback_probe'}
-        or request == {'text': TEST_TEXT},
+        or request == {'text': TEST_TEXT}
+        or request == {'text': MULTI_CLAUSE_TEXT},
         'unsupported_test_operation',
     )
     info = path.lstat()
@@ -267,6 +274,7 @@ class SmokeRun:
         standby=False,
         acoustic=False,
         awake_dialogue=False,
+        multi_clause=False,
         playback_evidence=False,
         clock_evidence=False,
         capture_clock_evidence=False,
@@ -279,6 +287,8 @@ class SmokeRun:
         self.device, self.request = device, request
         self.capture, self.standby, self.acoustic = capture, standby, acoustic
         self.awake_dialogue = awake_dialogue
+        self.multi_clause = multi_clause
+        self.multi_clause_evidence = None
         self.playback_evidence = playback_evidence
         self.clock_evidence = clock_evidence
         self.capture_clock_required = capture_clock_evidence
@@ -329,6 +339,7 @@ class SmokeRun:
             'standby_enabled': self.standby,
             'synthetic_acoustic_probe_enabled': self.acoustic or self.awake_dialogue,
             'awake_dialogue_enabled': self.awake_dialogue,
+            'multi_clause_evidence': self.multi_clause_evidence,
             'raw_audio_saved': False,
             'contains_conversation_content': False,
             'physical_usb_unplug_tested': False,
@@ -369,6 +380,8 @@ class SmokeRun:
         if self.acoustic or self.awake_dialogue:
             self.device.prepare_speech_probe()
         h = self.health()
+        if self.multi_clause:
+            require(h.get('clause_receipts_supported') is True, 'clause_receipts_unsupported')
         require(
             not self.playback_evidence or h.get('playback_evidence_supported') is True,
             'backend_playback_evidence_unsupported',
@@ -406,6 +419,7 @@ class SmokeRun:
         require(ui.get('wake_checked') is True or not self.standby, 'standby_requires_wake_mode')
         if self.awake_dialogue:
             require(ui.get('wake_checked') is True, 'awake_dialogue_requires_wake_mode')
+        if self.awake_dialogue or self.multi_clause:
             require(
                 all(row.get('outcome') is not None for row in self.diagnostic_requests()),
                 'owner_request_pending',
@@ -435,13 +449,44 @@ class SmokeRun:
         require(ui.get('camera_open') is False, 'unexpected_camera_open')
 
     def playback(self):
-        before = self.request({'operation': 'diagnostics'})
-        ids = {r.get('request_id') for r in before.get('requests', [])}
+        before = self.diagnostic_requests()
+        ids = {r['request_id'] for r in before}
+        text = MULTI_CLAUSE_TEXT if self.multi_clause else TEST_TEXT
+        frames = None
+        if self.multi_clause:
+            require(
+                all(row.get('outcome') is not None for row in before),
+                'owner_request_pending',
+            )
+            health = self.health()
+            require(
+                health.get('playing') is False and health.get('calibrating') is False,
+                'owner_audio_busy',
+            )
+            frames = health.get('mic_frames')
+            require(type(frames) is int and frames >= 0, 'microphone_frame_count_missing')
+            self.multi_clause_evidence = {'expected_clauses': EXPECTED_CLAUSES}
+
+        def check_capture(health):
+            if frames is not None:
+                require(
+                    health.get('connected') is True and health.get('transport') == 'usb',
+                    'multi_clause_usb_changed',
+                )
+                require(
+                    health.get('microphone_active') is False and health.get('mic_frames') == frames,
+                    'multi_clause_capture_changed',
+                )
+
+        if self.multi_clause:
+            check_capture(health)
         observed = 0
         with ThreadPoolExecutor(max_workers=1) as pool:
-            result = pool.submit(self.request, {'text': TEST_TEXT})
+            result = pool.submit(self.request, {'text': text})
             while not result.done():
-                if self.health().get('playing') is True:
+                health = self.health()
+                check_capture(health)
+                if health.get('playing') is True:
                     d, ui = self.device.status()
                     require(d.get('microphone_active') is False, 'playback_started_capture')
                     require(ui.get('caption_progress_overlap') is False, 'caption_progress_overlap')
@@ -450,12 +495,15 @@ class SmokeRun:
                     require(ui.get('camera_open') is False, 'unexpected_camera_open')
                     observed += 1
                 self.sleep(0.25)
-            require(result.result().get('status') == 'completed', 'announcement_not_completed')
-        after = self.request({'operation': 'diagnostics'})
+            reply = result.result()
+            require(reply.get('status') == 'completed', 'announcement_not_completed')
+        if self.multi_clause:
+            check_capture(self.health())
+            require(reply.get('characters') == len(text), 'announcement_size_mismatch')
         rows = [
             r
-            for r in after.get('requests', [])
-            if r.get('request_id') not in ids and r.get('origin') == 'announcement'
+            for r in self.diagnostic_requests()
+            if r['request_id'] not in ids and r.get('origin') == 'announcement'
         ]
         require(len(rows) == 1, 'announcement_receipt_missing_or_ambiguous')
         row = rows[0]
@@ -464,6 +512,17 @@ class SmokeRun:
             {'playout_ack', 'playback_done'} <= set(row.get('stages', {})),
             'playout_receipt_missing',
         )
+        if self.multi_clause:
+            count = row.get('confirmed_playback_clauses')
+            self.multi_clause_evidence['confirmed_clauses'] = (
+                count
+                if type(count) is int and 0 < count <= MAX_CONFIRMED_PLAYBACK_CLAUSES
+                else None
+            )
+            require(
+                type(count) is int and count == EXPECTED_CLAUSES,
+                'multi_clause_receipts_not_confirmed',
+            )
         require(observed > 0, 'no_playing_ui_sample')
 
     def handover(self):
@@ -782,7 +841,7 @@ class SmokeRun:
         try:
             self.check(CHECKS[0], self.preflight)
             self.check(CHECKS[1], self.maintenance_open)
-            self.check(CHECKS[2], self.playback)
+            self.check(MULTI_CLAUSE_CHECK if self.multi_clause else CHECKS[2], self.playback)
             self.check(CHECKS[3], self.handover)
             if self.capture:
                 device_status = self.check(CHECKS[4], self.start_capture)
@@ -854,6 +913,11 @@ def main(argv=None):
         help='Play one public synthetic query while the screen is already awake',
     )
     parser.add_argument(
+        '--multi-clause',
+        action='store_true',
+        help='Verify separate device receipts for both clauses of a fixed announcement',
+    )
+    parser.add_argument(
         '--playback-evidence',
         action='store_true',
         help='Corroborate a fixed speaker phrase using already active bounded capture',
@@ -887,7 +951,7 @@ def main(argv=None):
     if args.leading_acoustic_evidence and not args.playback_evidence:
         parser.error('--leading-acoustic-evidence requires --playback-evidence')
     plan = {
-        'checks': list(CHECKS[:4])
+        'checks': [*CHECKS[:2], MULTI_CLAUSE_CHECK if args.multi_clause else CHECKS[2], CHECKS[3]]
         + (
             [CHECKS[4]]
             + ([CAPTURE_CLOCK_CHECK] if args.capture_clock_evidence else [])
@@ -904,6 +968,7 @@ def main(argv=None):
         'execute': args.execute,
         'capture': args.capture,
         'awake_dialogue': args.awake_dialogue,
+        'multi_clause': args.multi_clause,
         'playback_evidence': args.playback_evidence,
         'clock_evidence': args.clock_evidence,
         'capture_clock_evidence': args.capture_clock_evidence,
@@ -974,6 +1039,7 @@ def main(argv=None):
                     standby=args.standby,
                     acoustic=args.acoustic,
                     awake_dialogue=args.awake_dialogue,
+                    multi_clause=args.multi_clause,
                     playback_evidence=args.playback_evidence,
                     clock_evidence=args.clock_evidence,
                     capture_clock_evidence=args.capture_clock_evidence,
