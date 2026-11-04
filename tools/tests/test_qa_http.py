@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 import requests
 
+from tools.check_failure_ui import corpus_identity
 from tools.qa_faults import CASES, Case, generate
 from tools.qa_http import LoopbackHTTP
 
@@ -21,6 +22,7 @@ class HTTPFixtureTests(unittest.TestCase):
         rows = generate(http_fixture='loopback_tls', dot_fixture='local_stdio')
         self.assertEqual(len(rows), 48)
         self.assertEqual(sum(row['wire_requests'] for row in rows), 30)
+        self.assertEqual(sum(row['recovery_wire_requests'] for row in rows), 30)
         self.assertEqual(sum(row['dot_wire_counts']['fault_turns'] for row in rows), 33)
         self.assertEqual(sum(row['dot_wire_counts']['recovery_turns'] for row in rows), 48)
         self.assertEqual(sum(row['dot_wire_counts']['declined_approvals'] for row in rows), 3)
@@ -31,7 +33,9 @@ class HTTPFixtureTests(unittest.TestCase):
 
         for row in rows:
             self.assertEqual(row['http_fixture'], 'loopback_tls')
-            self.assertEqual(row['wire_requests'], 0 if row['case'].stage == 'brain' else 1)
+            expected = int(row['case'].stage in ('asr', 'tts'))
+            self.assertEqual(row['wire_requests'], expected)
+            self.assertEqual(row['recovery_wire_requests'], expected)
             errors = [decode_event(p.data) for p in row['error']]
             messages = [e for e in errors if e.get('phase') == 'error']
             self.assertEqual(len(messages), 1)
@@ -43,6 +47,11 @@ class HTTPFixtureTests(unittest.TestCase):
         rows = generate(http_fixture='loopback_tls', cases=selected)
         self.assertEqual(tuple(row['case'] for row in rows), selected)
         self.assertEqual([row['wire_requests'] for row in rows], [1, 1])
+        self.assertEqual([row['recovery_wire_requests'] for row in rows], [1, 1])
+        self.assertNotEqual(
+            corpus_identity(rows),
+            corpus_identity([{**rows[0], 'recovery_wire_requests': 0}, rows[1]]),
+        )
 
     def test_business_faults_and_next_http_request_recover_for_each_case(self):
         rows = generate(http_fixture='loopback_business', dot_fixture='local_stdio')
