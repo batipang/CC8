@@ -116,14 +116,14 @@ stdout 只输出报告的绝对路径，提示写 stderr。退出 0 表示采集
 
 ### 联网与工具任务分别采样
 
-后台 0.14.61 起，`--latency-scenario` 可选择固定的联网查询题或本机只读计算题。以下命令各打印 30 轮计划。长稳观察结束后，可分别加 `--execute` 执行，需要声学对照时可同时加 `--response-acoustic-evidence`。
+后台 0.14.62 起，`--latency-scenario` 可选择固定的联网查询题或本机只读计算题。以下命令各打印 30 轮计划。长稳观察结束后，可分别加 `--execute` 执行，需要声学对照时可同时加 `--response-acoustic-evidence`。
 
 ```sh
 ./cc8 verify-device --runtime-root /absolute/runtime --capture --qa-latency-suite --latency-scenario web
 ./cc8 verify-device --runtime-root /absolute/runtime --capture --qa-latency-suite --latency-scenario tool
 ```
 
-联网题只查询公开机构的官方网站，工具题只请求用本机终端做加法。每轮同时核对识别标题、后台记录的请求类型和完整播放回执。任何一项无法确认就停止该批次，保留此前合格的样本。简单问答、联网、工具分别绑定题库摘要并报告样本数、P50 和 P95。实际工具执行结果和回答内容仍需单独核对。
+联网题只查询公开机构的官方网站，工具题只请求用本机终端做加法。每轮同时核对识别标题、后台记录的请求类型、同轮联网或成功退出的终端命令、以及完整播放回执。任何一项无法确认就停止该批次，保留此前合格的样本。简单问答、联网、工具分别绑定题库摘要并报告样本数、P50 和 P95。回答的事实与计算结果仍需单独核对。
 
 ### 离线复核既有报告
 

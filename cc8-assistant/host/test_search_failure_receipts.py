@@ -60,6 +60,7 @@ class SearchFailureReceipts(unittest.TestCase):
                     )
                     row = b.diagnostics.report()['requests'][-1]
                     self.assertEqual(row['scenario'], 'web')
+                    self.assertNotIn('web_route_completed', row['stages'])
                     self.assertEqual(row['error'], {'stage': 'brain', 'kind': kind})
                     self.assertFalse(b.response.busy)
                     self.assertFalse(mini.last_metrics['completed'])
@@ -67,6 +68,21 @@ class SearchFailureReceipts(unittest.TestCase):
                         SECRET,
                         json.dumps([events, logs, b.diagnostics.report(), router.last_metrics]),
                     )
+
+    def test_search_completion_attaches_to_the_answer_without_provider_content(self):
+        transport = Fake()
+        router = BrainRouter(
+            MiniMaxBrain(transport), dot=StubBrain('unused-dot'), selected='minimax'
+        )
+        bridge, _, _, spoken = self.execute(router)
+        row = bridge.diagnostics.report()['requests'][-1]
+        self.assertTrue(spoken)
+        self.assertEqual(row['outcome'], 'completed')
+        self.assertEqual(row['scenario'], 'web')
+        stages = row['stages']
+        self.assertLessEqual(stages['brain_start'], stages['web_route_completed'])
+        self.assertLessEqual(stages['web_route_completed'], stages['first_clause'])
+        self.assertNotIn('tool_route_completed', stages)
 
     def test_failed_progress_callback_cannot_copy_provider_body_into_logs(self):
         class Brain:

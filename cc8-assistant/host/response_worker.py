@@ -12,7 +12,7 @@ import sys
 import threading
 from typing import Callable, ContextManager
 from announce import Announcement
-from diagnostics import TraceBook, error_kind
+from diagnostics import ROUTE_COMPLETION_STAGES, TraceBook, error_kind
 from failure_feedback import FailureSink, feedback
 from dot_receipt import UnconfirmedTurnStart
 from operation_failure import OperationFailure, KINDS
@@ -164,6 +164,16 @@ class ResponseWorker:
                     self.hooks.diagnostics().dot_stage(
                         generation, payload['stage'], payload['at'], payload.get('reused')
                     )
+                return
+            if kind == 'route_completed':
+                with self.hooks.lock:
+                    scenario = payload.get('scenario')
+                    if (
+                        self.hooks.valid(generation)
+                        and isinstance(scenario, str)
+                        and scenario in ROUTE_COMPLETION_STAGES
+                    ):
+                        self.hooks.diagnostics().mark(generation, ROUTE_COMPLETION_STAGES[scenario])
                 return
             if kind == 'dot_result':
                 with self.hooks.lock:

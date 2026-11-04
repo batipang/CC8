@@ -70,6 +70,7 @@ def saved_suite(*, qa=False, extended=False, scenario='qa'):
                     QA_PLAYOUT_METRIC: response,
                 },
                 'latency_scenario': scenario,
+                'latency_route_completed': scenario != 'qa',
                 'qa_stage_latencies_ms': dict.fromkeys(QA_STAGE_METRICS, response),
                 'response_acoustic_timing': {
                     'status': 'observed',
@@ -88,7 +89,7 @@ def saved_suite(*, qa=False, extended=False, scenario='qa'):
         extended_voice=extended,
         latency_scenario=scenario,
     )
-    backend = '0.14.60' if scenario == 'qa' else '0.14.61'
+    backend = '0.14.60' if scenario == 'qa' else '0.14.62'
     return {**data, 'backend_version': backend, 'protocol_version': 2}
 
 
@@ -119,7 +120,7 @@ class AuditDeviceSuiteTests(unittest.TestCase):
         self.assertTrue(reviewed['verified'])
         self.assertEqual(reviewed['latency_scenario'], 'web')
         with self.assertRaisesRegex(ValueError, 'Invalid suite mode'):
-            audit({**data, 'backend_version': '0.14.60'})
+            audit({**data, 'backend_version': '0.14.61'})
         data['latency_scenario'] = 'tool'
         with self.assertRaisesRegex(ValueError, 'Invalid suite mode'):
             audit(data)
@@ -132,6 +133,11 @@ class AuditDeviceSuiteTests(unittest.TestCase):
                 self.assertFalse(reviewed['verified'])
                 self.assertEqual(reviewed['reason'], 'suite_latency_scenario_unconfirmed')
                 self.assertEqual(reviewed['completed_phases'], 1)
+        evidence['latency_scenario'] = 'web'
+        del evidence['latency_route_completed']
+        reviewed = audit(data)
+        self.assertFalse(reviewed['verified'])
+        self.assertEqual(reviewed['reason'], 'suite_latency_route_incomplete')
 
     def test_claims_cannot_cover_missing_evidence_or_mix_runs(self):
         for case, reason in (

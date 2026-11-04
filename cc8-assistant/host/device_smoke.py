@@ -20,7 +20,13 @@ import uuid
 from private_output import PrivateOutput, private_directory
 from release_info import load_release
 from mac_voice import resolve_voice, __file__ as voice_source
-from diagnostics import INTERVALS, MAX_CONFIRMED_PLAYBACK_CLAUSES, MAX_DEVICE_PAUSE_MS, percentiles
+from diagnostics import (
+    INTERVALS,
+    MAX_CONFIRMED_PLAYBACK_CLAUSES,
+    MAX_DEVICE_PAUSE_MS,
+    ROUTE_COMPLETION_STAGES,
+    percentiles,
+)
 from diagnostic_run import receipt
 from qa_speech import QUESTIONS as QA_LATENCY_QUESTIONS
 from qa_speech import WAKE as ACOUSTIC_WAKE
@@ -77,7 +83,7 @@ STANDBY_SECONDS = 900
 PAIRED_PLAYOUT_MIN_BACKEND = '0.14.50'
 RESPONSE_ACOUSTIC_MIN_BACKEND = '0.14.57'
 EXTENDED_VOICE_MIN_BACKEND = '0.14.60'
-ROUTED_LATENCY_MIN_BACKEND = '0.14.61'
+ROUTED_LATENCY_MIN_BACKEND = '0.14.62'
 STOP_RECEIPT_MIN_APK_CODE = 69
 STOP_VISUAL_MIN_APK_CODE = 71
 SMOKE_OPTIONS = (
@@ -1377,6 +1383,10 @@ class SmokeRun:
                             completed, self.latency_scenario
                         ),
                         'latency_scenario': route if route in tuple(SCENARIO_QUESTIONS) else None,
+                        'latency_route_completed': ROUTE_COMPLETION_STAGES.get(
+                            self.latency_scenario
+                        )
+                        in completed['stages'],
                     }
                     if self.latency_sample and completed is not None
                     else {}
@@ -2112,6 +2122,12 @@ def run_device_suite(
                     phase.update(state='failed', reason='suite_awake_response_acoustic_incomplete')
                 elif qa_latency and evidence.get('latency_scenario', 'qa') != latency_scenario:
                     phase.update(state='failed', reason='suite_latency_scenario_unconfirmed')
+                elif (
+                    qa_latency
+                    and latency_scenario in ROUTE_COMPLETION_STAGES
+                    and evidence.get('latency_route_completed') is not True
+                ):
+                    phase.update(state='failed', reason='suite_latency_route_incomplete')
                 elif qa_latency:
                     stages = evidence.get('qa_stage_latencies_ms')
                     interval = observed_response_interval(evidence.get('response_acoustic_timing'))
