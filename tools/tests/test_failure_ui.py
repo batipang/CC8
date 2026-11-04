@@ -197,7 +197,7 @@ class ControllerFixtureTests(unittest.TestCase):
             check.corpus_identity([{**fixtures[0], 'error': [changed]}]),
         )
 
-    def test_local_stdio_matrix_has_real_approval_declines_and_explicit_recoveries(self):
+    def test_local_stdio_matrix_has_real_start_timeouts_declines_and_recoveries(self):
         # The test child talks only over stdio. A remote provider in the
         # controller would violate this independent network guard.
         with patch.object(
@@ -211,6 +211,7 @@ class ControllerFixtureTests(unittest.TestCase):
         for row in fixtures:
             case = row['case']
             with self.subTest(case=case.ident):
+                timeout = case.stage == 'brain' and case.kind == 'timeout'
                 self.assertEqual(row['dot_fixture'], 'local_stdio')
                 self.assertEqual(
                     row['dot_wire_counts'],
@@ -218,10 +219,13 @@ class ControllerFixtureTests(unittest.TestCase):
                         'fault_turns': int(case.stage != 'asr'),
                         'recovery_turns': 1,
                         'declined_approvals': int(case.kind == 'approval_declined'),
+                        'withheld_start_acks': int(timeout),
                     },
                 )
                 events = [decode_event(p.data) for p in row['error'] + row['recovery']]
                 self.assertNotIn('qa-injected-sensitive-body', json.dumps(events))
+                if timeout:
+                    self.assertIn('结果待核对', row['expected_message'])
         self.assertNotEqual(
             check.corpus_identity(fixtures),
             check.corpus_identity([{**row, 'dot_fixture': 'fake'} for row in fixtures]),
@@ -499,7 +503,12 @@ class DriverExecutionTests(unittest.TestCase):
 
     def test_report_binds_the_local_stdio_counts_and_passes_mode_to_generator(self):
         with self.driver() as (_, _, _, output):
-            counts = {'fault_turns': 0, 'recovery_turns': 1, 'declined_approvals': 0}
+            counts = {
+                'fault_turns': 0,
+                'recovery_turns': 1,
+                'declined_approvals': 0,
+                'withheld_start_acks': 0,
+            }
             check.generate.return_value[0].update(dot_fixture='local_stdio', dot_wire_counts=counts)
             self.assertEqual(
                 check.run(

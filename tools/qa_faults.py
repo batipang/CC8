@@ -222,6 +222,11 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
             state.recovery = False
             state.http_calls = state.brain_calls = 0
             packets.clear()
+            dot_start_timeout = (
+                local_dot is not None and case.stage == 'brain' and case.kind == 'timeout'
+            )
+            if local_dot:
+                local_dot.withhold_start_ack = dot_start_timeout
             b.submit_text('自动故障测试 ' + case.ident)
             job = b.response.queue.get_nowait()
             if case.stage == 'asr':
@@ -239,7 +244,9 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
                 run_one(b.response, job)
             error_packets = list(packets)
             unknown_start = (
-                local_dot is not None and case.stage == 'brain' and case.kind == 'transport_or_io'
+                local_dot is not None
+                and case.stage == 'brain'
+                and case.kind in ('transport_or_io', 'timeout')
             )
             expected_message = feedback(case.stage, case.kind, unconfirmed=unknown_start).message
             errors = [
@@ -271,6 +278,13 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
             )
             if expected_task and b.workspace.tasks[-1]['status'] != expected_task:
                 raise AssertionError('Failure changed task completion incorrectly')
+            if unknown_start and b.workspace.tasks[-1]['stage'] != '执行结果待核对':
+                raise AssertionError('Fixture task lost the unconfirmed start')
+            if dot_start_timeout:
+                expired_peer = local_dot.processes[-1]
+                if expired_peer.poll() is None:
+                    raise AssertionError('Timed-out Dot peer survived before explicit recovery')
+                local_dot.withhold_start_ack = False
             if 'qa-injected-sensitive-body' in json.dumps(
                 [decode_event(p.data) for p in error_packets]
             ):
@@ -298,6 +312,8 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
                 or state.http_calls != expected_http + recovery_wire_requests
             ):
                 raise AssertionError('Recovery did not complete')
+            if dot_start_timeout and local_dot.processes[-1] is expired_peer:
+                raise AssertionError('Recovery did not start a fresh Dot peer')
             dot_counts = {}
             if local_dot:
                 observed = local_dot.counts()
@@ -305,11 +321,13 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
                     'fault_turns': observed[case.ident + ':fault'],
                     'recovery_turns': observed[case.ident + ':recovery'],
                     'declined_approvals': observed[case.ident + ':declined'],
+                    'withheld_start_acks': observed[case.ident + ':withheld_start_ack'],
                 }
                 if dot_counts != {
                     'fault_turns': expected_brain,
                     'recovery_turns': 1,
                     'declined_approvals': int(case.kind == 'approval_declined'),
+                    'withheld_start_acks': int(dot_start_timeout),
                 }:
                     raise AssertionError('Unexpected Dot stdio request/recovery or approval')
             rows.append(
