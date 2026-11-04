@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-capture-clock-evidence-20261104.1",
+  "release_id": "p0-leading-acoustic-evidence-20261104.1",
   "backend": {
-    "version": "0.14.29"
+    "version": "0.14.30"
   },
   "assistant": {
     "version": "0.9.16",

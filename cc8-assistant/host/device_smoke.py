@@ -73,6 +73,30 @@ def summarize_capture_clock(value):
     return {'status': 'observed' if observed else 'unconfirmed', **{k: value[k] for k in fields}}
 
 
+def valid_leading_evidence(value, delay_ms):
+    if not isinstance(value, dict) or value.get('status') != 'observed':
+        return False
+    offset = value.get('reference_block_start_ms')
+    arrival = value.get('capture_minus_render_origin_ms')
+    correlation = value.get('minimum_correlation')
+    return (
+        type(offset) is int
+        and 0 <= offset <= 240
+        and offset % 20 == 0
+        and type(arrival) in (int, float)
+        and -81 <= arrival <= 1041
+        and type(delay_ms) in (int, float)
+        and -80 <= delay_ms <= 800
+        and abs(arrival - offset - delay_ms) <= 0.1
+        and type(correlation) in (int, float)
+        and 0.55 <= correlation <= 1
+        and type(value.get('block_ms')) is int
+        and value['block_ms'] == 20
+        and type(value.get('consecutive_blocks')) is int
+        and value['consecutive_blocks'] == 2
+    )
+
+
 def classify_voice_records(rows):
     """A VAD trace exists before admission; never equate it with a dialogue."""
     rejected_gates = ('empty', 'echo_text', 'echo_render', 'weak_near', 'wake_closed')
@@ -231,6 +255,7 @@ class SmokeRun:
         playback_evidence=False,
         clock_evidence=False,
         capture_clock_evidence=False,
+        leading_acoustic_evidence=False,
         clock=time.monotonic,
         sleep=time.sleep,
         checkpoint=lambda value: None,
@@ -241,6 +266,7 @@ class SmokeRun:
         self.playback_evidence = playback_evidence
         self.clock_evidence = clock_evidence
         self.capture_clock_required = capture_clock_evidence
+        self.leading_acoustic_evidence = leading_acoustic_evidence
         self.capture_clock_evidence = None
         self.playback_probe_evidence = None
         self.clock, self.sleep, self.checkpoint = clock, sleep, checkpoint
@@ -327,6 +353,11 @@ class SmokeRun:
         require(
             not self.playback_evidence or h.get('playback_evidence_supported') is True,
             'backend_playback_evidence_unsupported',
+        )
+        require(
+            not self.leading_acoustic_evidence
+            or h.get('leading_acoustic_evidence_supported') is True,
+            'backend_leading_acoustic_evidence_unsupported',
         )
         require(
             not self.clock_evidence or h.get('render_clock_evidence_supported') is True,
@@ -480,6 +511,18 @@ class SmokeRun:
             not self.clock_evidence
             or evidence.get('render_clock_evidence', {}).get('status') == 'observed',
             'render_clock_provenance_unconfirmed',
+        )
+        require(
+            not self.leading_acoustic_evidence
+            or (
+                type(evidence.get('render_clock_resets')) is int
+                and evidence['render_clock_resets'] == 0
+                and valid_leading_evidence(
+                    evidence.get('leading_acoustic_evidence'),
+                    evidence.get('matched_window_delay_ms'),
+                )
+            ),
+            'leading_acoustic_evidence_unconfirmed',
         )
 
     def home(self):
@@ -713,6 +756,11 @@ def main(argv=None):
         action='store_true',
         help='Require Android recording-clock evidence from the bounded capture window',
     )
+    parser.add_argument(
+        '--leading-acoustic-evidence',
+        action='store_true',
+        help='Require corroboration of the leading blocks of the fixed speaker phrase',
+    )
     args = parser.parse_args(argv)
     if args.standby and not args.capture or args.acoustic and not args.standby:
         parser.error('--standby requires --capture; --acoustic requires --standby')
@@ -722,6 +770,8 @@ def main(argv=None):
         parser.error('--clock-evidence requires --playback-evidence')
     if args.capture_clock_evidence and not args.capture:
         parser.error('--capture-clock-evidence requires --capture')
+    if args.leading_acoustic_evidence and not args.playback_evidence:
+        parser.error('--leading-acoustic-evidence requires --playback-evidence')
     plan = {
         'checks': list(CHECKS[:4])
         + (
@@ -736,6 +786,7 @@ def main(argv=None):
         'playback_evidence': args.playback_evidence,
         'clock_evidence': args.clock_evidence,
         'capture_clock_evidence': args.capture_clock_evidence,
+        'leading_acoustic_evidence': args.leading_acoustic_evidence,
         'full_p0_acceptance': False,
     }
     if not args.execute:
@@ -804,6 +855,7 @@ def main(argv=None):
                     playback_evidence=args.playback_evidence,
                     clock_evidence=args.clock_evidence,
                     capture_clock_evidence=args.capture_clock_evidence,
+                    leading_acoustic_evidence=args.leading_acoustic_evidence,
                     checkpoint=save,
                     expected_apk=(manifest.assistant.version, manifest.assistant.version_code),
                 )
