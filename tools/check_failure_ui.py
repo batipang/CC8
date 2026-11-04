@@ -1,4 +1,4 @@
-"""Explicit CC8 QA-package error UI checks; no capture, real providers or production install."""
+"""Isolated host fault checks and optional CC8 QA error UI replay."""
 
 import argparse
 from datetime import datetime, timezone
@@ -87,6 +87,27 @@ def corpus_identity(fixtures):
         for packet in [*fixture['error'], fixture['stale_error'], *fixture['recovery']]:
             digest.update(packet.encode())
     return digest.hexdigest()
+
+
+def fixture_summary(fixtures, http_fixture, dot_fixture):
+    return {
+        'automation_sha256': source_identity(http_fixture, dot_fixture),
+        'fixture_sha256': corpus_identity(fixtures),
+        'provider_http_fixture': http_fixture,
+        'provider_dot_fixture': dot_fixture,
+        'generated_wire_requests': sum(f.get('wire_requests', 0) for f in fixtures),
+        'generated_recovery_wire_requests': sum(
+            f.get('recovery_wire_requests', 0) for f in fixtures
+        ),
+        'generated_dot_wire_counts': (
+            {
+                key: sum(f['dot_wire_counts'][key] for f in fixtures)
+                for key in ('fault_turns', 'recovery_turns', 'declined_approvals')
+            }
+            if dot_fixture == 'local_stdio'
+            else None
+        ),
+    }
 
 
 class Device:
@@ -346,14 +367,7 @@ def run(
     baseline = service.sample()
     require(baseline is not None, 'production_not_idle_ready')
     fixtures = generate(http_fixture=http_fixture, dot_fixture=dot_fixture, cases=CASES[:limit])
-    dot_wire_counts = (
-        {
-            key: sum(f['dot_wire_counts'][key] for f in fixtures)
-            for key in ('fault_turns', 'recovery_turns', 'declined_approvals')
-        }
-        if dot_fixture == 'local_stdio'
-        else None
-    )
+    summary = fixture_summary(fixtures, http_fixture, dot_fixture)
     rows = []
     link = None
     touched = False
@@ -363,8 +377,6 @@ def run(
     phase = 'signer_preflight'
     began = time.monotonic()
     started_at = datetime.now(timezone.utc).isoformat()
-    sources = source_identity(http_fixture, dot_fixture)
-    corpus = corpus_identity(fixtures)
     failure = None
     owner_rechecks = []
 
@@ -376,8 +388,7 @@ def run(
                 'scope': 'physical_cc8_qa_ui_replay_from_real_controller_fixtures',
                 'source_commit': receipt['source_commit'],
                 'source_dirty': receipt['source_dirty'],
-                'automation_sha256': sources,
-                'fixture_sha256': corpus,
+                **summary,
                 'phase': phase,
                 'owner_rechecks': list(owner_rechecks),
                 'failure': failure,
@@ -395,14 +406,7 @@ def run(
                 'camera_used': False,
                 'capture_permissions_absent': True,
                 'real_provider_requested': False,
-                'provider_http_fixture': http_fixture,
-                'generated_wire_requests': sum(f.get('wire_requests', 0) for f in fixtures),
-                'generated_recovery_wire_requests': sum(
-                    f.get('recovery_wire_requests', 0) for f in fixtures
-                ),
                 'dot_provider_is_fixture': True,
-                'provider_dot_fixture': dot_fixture,
-                'generated_dot_wire_counts': dot_wire_counts,
                 'provider_calls_before_ui_replay': True,
                 'audio_playback_asserted': False,
                 'physical_usb_handover_tested': False,
@@ -543,22 +547,51 @@ def run(
     return state
 
 
+def host_check(args):
+    result = {
+        'execute': args.execute,
+        'scope': 'host_fault_recovery',
+        'selected_cases': args.limit,
+        'total_fixed_cases': len(CASES),
+        'physical_ui_tested': False,
+        'real_provider_requested': False,
+        'provider_http_fixture': args.http_fixture,
+        'provider_dot_fixture': args.dot_fixture,
+    }
+    if args.execute:
+        try:
+            fixtures = generate(
+                http_fixture=args.http_fixture,
+                dot_fixture=args.dot_fixture,
+                cases=CASES[: args.limit],
+            )
+            result.update(fixture_summary(fixtures, args.http_fixture, args.dot_fixture))
+            result['state'] = 'passed'
+        except KeyboardInterrupt:
+            return 130
+        except Exception as error:
+            result.update(state='failed', error_type=type(error).__name__)
+    print(json.dumps(result))
+    return 2 if result.get('state') == 'failed' else 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--runtime-root', type=Path, required=True)
+    parser.add_argument('--runtime-root', type=Path)
+    parser.add_argument(
+        '--host-only', action='store_true', help='Check fault/recovery fixtures without a device'
+    )
     parser.add_argument('--qa-receipt', type=Path)
     parser.add_argument('--limit', type=int, default=len(CASES))
     parser.add_argument('--execute', action='store_true')
     parser.add_argument(
         '--http-fixture',
         choices=HTTP_FIXTURES,
-        default='fake',
         help='Offline fake or certificate-verified loopback TLS with HTTP or business faults',
     )
     parser.add_argument(
         '--dot-fixture',
         choices=DOT_FIXTURES,
-        default='fake',
         help='Fixed Dot faults through an offline fake or a local JSON-RPC child',
     )
     parser.add_argument(
@@ -567,6 +600,18 @@ def main(argv=None):
         help='Explicit existing shared-directory installer compatibility route; see docs/APK_INSTALL.md',
     )
     args = parser.parse_args(argv)
+    if not 1 <= args.limit <= len(CASES):
+        parser.error(f'--limit must be between 1 and {len(CASES)}')
+    if args.host_only:
+        if args.runtime_root is not None or args.qa_receipt is not None or args.shared_staging:
+            parser.error('--host-only cannot be combined with device or installer options')
+        args.http_fixture = args.http_fixture or 'loopback_business'
+        args.dot_fixture = args.dot_fixture or 'local_stdio'
+        return host_check(args)
+    if args.runtime_root is None:
+        parser.error('--runtime-root is required for device checks')
+    args.http_fixture = args.http_fixture or 'fake'
+    args.dot_fixture = args.dot_fixture or 'fake'
     if not args.execute:
         print(
             json.dumps(
@@ -585,9 +630,7 @@ def main(argv=None):
         )
         return 0
     try:
-        require(
-            1 <= args.limit <= len(CASES) and args.qa_receipt is not None, 'invalid_qa_selection'
-        )
+        require(args.qa_receipt is not None, 'invalid_qa_selection')
         require(
             args.runtime_root.is_absolute() and args.runtime_root.resolve() == args.runtime_root,
             'invalid_runtime_root',
