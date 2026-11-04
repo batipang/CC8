@@ -232,7 +232,10 @@ class ServiceTests(unittest.TestCase):
                 root = Path(folder)
                 private = root / 'private'
                 agents = root / 'LaunchAgents'
-                agents.mkdir(mode=0o755)
+                agents.mkdir()
+                # Give the isolated fixture a known initial mode even when the
+                # test suite runs under a private umask.
+                agents.chmod(0o755)
                 marker, plist = private / 'enabled.json', agents / 'fixture.plist'
                 loaded = fault == 'existing'
                 previous_marker = b'{ "enabled": false }\n' if loaded else None
