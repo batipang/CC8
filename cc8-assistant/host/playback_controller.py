@@ -52,7 +52,17 @@ class PlaybackHooks:
     )
 
 
+@dataclass
+class PauseReceipt:
+    generation: int
+    trace: str | None
+    pause_nanos: int | None = None
+    resume_requested: bool = False
+
+
 class PlaybackController:
+    MAX_PENDING_PAUSE_RECEIPTS = 8
+
     def __init__(self, hooks: PlaybackHooks):
         self.hooks = hooks
         self.playing = False
@@ -63,8 +73,8 @@ class PlaybackController:
         self.spoken = deque(maxlen=32)
         self.pause_state = None
         self.pause_serial = 0
-        self.pause_token = 0
-        self.pause_trace = None
+        self.pause_receipts: dict[int, PauseReceipt] = {}
+        self.last_pause_receipt_nanos = None
         self.publication_lock = threading.RLock()
         self.device_can_pause = False
         self.device_can_report_playout = False
@@ -84,18 +94,19 @@ class PlaybackController:
             self.playout_probe.clear()
             return was_playing
 
-    def clear_cancelled_pause(self, was_playing):
+    def _clear_pause(self):
         self.pause_state = None
-        self.pause_token = 0
-        self.pause_trace = None
+        self.pause_receipts.clear()
+        self.last_pause_receipt_nanos = None
+
+    def clear_cancelled_pause(self, was_playing):
+        self._clear_pause()
         self.hooks.cancel_timeline_pause()
         if was_playing:
             self.last_audio_end = time.monotonic()
 
     def clear_transport_pause(self):
-        self.pause_state = None
-        self.pause_token = 0
-        self.pause_trace = None
+        self._clear_pause()
         self.set_playout_capability(False)
         self.set_completion_capability(False)
 
@@ -134,9 +145,7 @@ class PlaybackController:
     def reset_session(self):
         self.playout_probe.clear()
         self.spoken.clear()
-        self.pause_state = None
-        self.pause_token = 0
-        self.pause_trace = None
+        self._clear_pause()
         self.last_spoken = ''
         self.previous_spoken = ''
         self.previous_spoken_until = 0
@@ -189,21 +198,7 @@ class PlaybackController:
                         self.last_audio_end = time.monotonic()
                     self.done.notify_all()
         elif name in ('playback_paused', 'playback_resumed'):
-            with self.hooks.lock:
-                if (
-                    not self.pause_token
-                    or int(event.get('token', -1)) != self.pause_token
-                    or int(event.get('generation', -1)) != self.hooks.generation()
-                ):
-                    return
-                # Endpoint ownership ends at queue handoff. ACKs still belong
-                # to the trace captured when this pause token was allocated.
-                if name == 'playback_paused':
-                    self.hooks.diagnostics().mark(self.pause_trace, 'pause_ack')
-                    self.hooks.pause_timeline(int(event['nanos']))
-                else:
-                    self.hooks.diagnostics().mark(self.pause_trace, 'resume_ack')
-                    self.hooks.resume_timeline(int(event['nanos']))
+            self._accept_pause_receipt(name, event)
         elif name == 'playback_error':
             generation = int(event.get('generation', self.hooks.generation()))
             with self.hooks.lock:
@@ -227,6 +222,40 @@ class PlaybackController:
                     trace_key=generation,
                 )
 
+    def _accept_pause_receipt(self, name, event):
+        token, generation, nanos = event['token'], event['generation'], event['nanos']
+        with self.hooks.lock:
+            receipt = self.pause_receipts.get(token)
+            if (
+                receipt is None
+                or receipt.generation != generation
+                or generation != self.hooks.generation()
+                or (
+                    self.last_pause_receipt_nanos is not None
+                    and nanos < self.last_pause_receipt_nanos
+                )
+            ):
+                return
+            if name == 'playback_paused':
+                if receipt.pause_nanos is not None:
+                    return
+                receipt.pause_nanos = nanos
+                # Device receipts arrive on an ordered channel. Only a newer
+                # device pause supersedes prior tokens, not a host request.
+                for older in tuple(self.pause_receipts):
+                    if older >= token:
+                        break
+                    self.pause_receipts.pop(older)
+                self.hooks.diagnostics().mark(receipt.trace, 'pause_ack')
+                self.hooks.pause_timeline(nanos)
+            else:
+                if receipt.pause_nanos is None or not receipt.resume_requested:
+                    return
+                self.pause_receipts.pop(token)
+                self.hooks.diagnostics().mark(receipt.trace, 'resume_ack')
+                self.hooks.resume_timeline(nanos)
+            self.last_pause_receipt_nanos = nanos
+
     def pause_for_voice(self):
         # A tentative pause retains generation; confirmed speech cancels later.
         with self.hooks.lock:
@@ -240,10 +269,11 @@ class PlaybackController:
                 return None
             self.pause_serial += 1
             token = self.pause_serial
-            self.pause_token = token
             trace = self.hooks.trace()
             generation = self.hooks.generation()
-            self.pause_trace = trace
+            if len(self.pause_receipts) >= self.MAX_PENDING_PAUSE_RECEIPTS:
+                self.pause_receipts.pop(next(iter(self.pause_receipts)))
+            self.pause_receipts[token] = PauseReceipt(generation, trace)
             self.pause_state = {
                 'token': token,
                 'generation': generation,
@@ -268,6 +298,9 @@ class PlaybackController:
                 return
             if self.hooks.utterance_paused(token):
                 return
+            receipt = self.pause_receipts.get(token)
+            if receipt is not None:
+                receipt.resume_requested = True
             self.pause_state = None
             self.pause_cooldown = time.monotonic() + 0.6
         self.hooks.event('playback_resume', generation=generation, token=token)
