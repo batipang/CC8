@@ -202,6 +202,7 @@ def build_components(
                 wake_feed=lambda pcm, generation, **fields: host.wake.feed(
                     pcm, generation, **fields
                 ),
+                capture_current=lambda nanos: host.capture.endpoint_audio_current(nanos),
                 wake_allowed=lambda: host.wake.allowed(),
                 claim_wake=lambda: host.wake.claim_prefix(),
                 reset_wake_gap=lambda: host.wake.reset('capture_gap'),
@@ -345,6 +346,7 @@ def build_components(
             generation=lambda: host.session.generation,
             awake=lambda: host.session.awake,
             wake_mode=lambda: host.session.wake,
+            capture_current=lambda nanos: host.capture.endpoint_audio_current(nanos),
             busy=lambda: voice_busy(host),
             set_awake=lambda value: host.session.set_awake(value),
             touch_activity=lambda: host.touch_activity(),

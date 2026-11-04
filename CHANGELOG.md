@@ -1,5 +1,10 @@
 # Changelog
 
+## Backend 0.14.49 — fence buffered audio at the wake boundary
+
+- Keep audio already received before waiting for local wake out of keyword
+  detection and speech admission while retaining it for echo cancellation.
+
 ## Backend 0.14.48 — preserve wake activity at the standby boundary
 
 - Serialize the standby decision and screen events with local wake and touch.

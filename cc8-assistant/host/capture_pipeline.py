@@ -66,10 +66,18 @@ class CapturePipeline:
             # a fresh conversation after the owner releases the test lease.
             # Do not mutate the ingress-owned deque from an IPC thread. A
             # device-clock watermark drains its old packets through AEC only.
-            self.discard_endpoint_before_ns = self.last_received_mic_end
+            self.discard_buffered_endpoint_audio()
             self.measuring = False
             self.probe = None
             self.endpoint.reset_voice_activity()
+
+    def discard_buffered_endpoint_audio(self):
+        # Only the ingress thread drains lookahead. Preserve its AEC frames
+        # while fencing audio already received at the session boundary.
+        self.discard_endpoint_before_ns = self.last_received_mic_end
+
+    def endpoint_audio_current(self, nanos):
+        return not self.measuring and nanos >= self.discard_endpoint_before_ns
 
     def begin_render_clock(self, generation, playback_id):
         probe = self.probe
@@ -123,7 +131,7 @@ class CapturePipeline:
 
     def process_microphone(self, packet, *, read_gap=False):
         # Reference/capture use device timestamps, never network arrival time.
-        measurement_packet = self.measuring or packet.nanos < self.discard_endpoint_before_ns
+        exclude_from_endpoint = not self.endpoint_audio_current(packet.nanos)
         sequence_gap = self.last_sequence is not None and packet.sequence != self.last_sequence + 1
         if sequence_gap:
             self.hooks.add_metric('sequence_gaps', 1)
@@ -151,10 +159,8 @@ class CapturePipeline:
             if self.hooks.calibrating():
                 self.echo.record_calibration_frame(frame)
                 continue
-            if measurement_packet or self.measuring:
-                # An explicit fixed-phrase measurement is not a conversation:
-                # keep AEC running, but never turn its reflection into an ASR /
-                # Dot tool request or a barge-in. Owner Stop still cancels it.
+            if exclude_from_endpoint or not self.endpoint_audio_current(stamp):
+                # AEC still receives frames outside the current speech boundary.
                 continue
             self.endpoint.consume(frame)
         if time.monotonic() - self.last_status > 1:
@@ -174,11 +180,13 @@ class CapturePipeline:
             return
         if p.kind != MIC or not self.hooks.active() or p.generation != self.hooks.epoch():
             return
-        self.last_received_mic_end = p.nanos + round(len(p.data) / 2 * 1e9 / RATE)
         if self.pending_mic and p.nanos <= self.pending_mic[-1][0].nanos:
             raise ValueError('Non-monotonic microphone timestamp')
         if len(self.pending_mic) >= 64:
             raise ValueError('Microphone lookahead exceeded')
+        self.last_received_mic_end = max(
+            self.last_received_mic_end, p.nanos + round(len(p.data) / 2 * 1e9 / RATE)
+        )
         read_gap = p.sequence == self.next_read_gap
         self.next_read_gap = None
         self.pending_mic.append((p, read_gap))

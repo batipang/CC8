@@ -3,6 +3,7 @@
 import threading
 import time
 import unittest
+from unittest.mock import Mock
 import numpy as np
 from bridge import Bridge
 from dsp import FRAME, RATE
@@ -105,6 +106,59 @@ class WakePipelineTests(unittest.TestCase):
                     pcm.tobytes(),
                 )
             )
+
+    def queue_frames(self, b, first, last):
+        for index in range(first, last + 1):
+            pcm = np.full(FRAME, 800, dtype='<i2')
+            b.on_packet(
+                Packet(
+                    MIC,
+                    b.session.epoch,
+                    index,
+                    0,
+                    10_000_000_000 + index * 10_000_000,
+                    pcm.tobytes(),
+                )
+            )
+
+    def test_buffered_capture_from_before_waiting_cannot_wake_but_new_capture_can(self):
+        for transition in ('sleep', 'wake_mode'):
+            with self.subTest(transition=transition):
+                b, detector, _, requests, _, asr, _ = self.session('Bumblebee')
+                b.session.awake = True
+                if transition == 'wake_mode':
+                    b.session.wake = False
+                b.capture.echo.aec.process = Mock(wraps=b.capture.echo.aec.process)
+                self.queue_frames(b, 1, 4)
+                if transition == 'sleep':
+                    b.set_awake(False)
+                else:
+                    b.on_event({'event': 'settings', 'wake_mode': True})
+                self.queue_frames(b, 5, 12)
+                self.assertEqual(b.capture.echo.aec.process.call_count, 4)
+                self.assertEqual(detector.calls, 0)
+                self.assertFalse(b.session.awake)
+                self.assertFalse(asr.is_set())
+                self.assertEqual(requests, [])
+                self.queue_frames(b, 13, 15)
+                self.assertEqual(detector.calls, 3)
+                self.assertTrue(b.session.awake)
+
+    def test_waiting_cutoff_is_rechecked_when_endpoint_is_already_processing(self):
+        b, detector, _, _, _, _, _ = self.session()
+        b.session.awake = True
+        detector.feed = Mock(return_value='大黄蜂')
+        feed = b.wake.feed
+
+        def enter_waiting(pcm, generation, **fields):
+            b.set_awake(False)
+            return feed(pcm, generation, **fields)
+
+        b.wake.feed = enter_waiting
+        self.queue_frames(b, 1, 9)
+        detector.feed.assert_not_called()
+        self.assertEqual(b.capture.endpoint.vad.frames, [])
+        self.assertFalse(b.session.awake)
 
     def test_asleep_utterance_never_reaches_asr_or_brain(self):
         b, detector, audio, requests, events, asr, _ = self.session()
@@ -225,14 +279,14 @@ class WakePipelineTests(unittest.TestCase):
         b, detector, audio, requests, events, _, _ = self.session('大黄蜂')
         b.session.screen_sleeping = True
         detector.calls = 2
-        self.assertTrue(b.wake.feed(np.zeros(FRAME), b.session.generation))
+        self.assertTrue(b.wake.feed(np.zeros(FRAME), b.session.generation, capture_nanos=0))
         self.assertFalse(b.session.screen_sleeping)
         self.assertTrue(any(name == 'screen_wake' for name, _ in events))
         b.stop()
         self.assertFalse(b.session.active)
         self.assertIsNone(b.wake.deadline)
         count = detector.calls
-        self.assertFalse(b.wake.feed(np.zeros(FRAME), b.session.generation))
+        self.assertFalse(b.wake.feed(np.zeros(FRAME), b.session.generation, capture_nanos=0))
         b.change_transport(None)
         b.change_transport(Channel('wifi'))
         self.assertFalse(b.session.active)
@@ -264,7 +318,7 @@ class WakePipelineTests(unittest.TestCase):
     def test_repeated_mode_setting_does_not_sleep_or_cancel_an_awake_conversation(self):
         b, detector, _, _, _, _, _ = self.session('大黄蜂')
         detector.calls = 2
-        self.assertTrue(b.wake.feed(np.zeros(FRAME), b.session.generation))
+        self.assertTrue(b.wake.feed(np.zeros(FRAME), b.session.generation, capture_nanos=0))
         generation = b.session.generation
         b.on_event({'event': 'settings', 'wake_mode': True})
         self.assertTrue(b.session.awake)
