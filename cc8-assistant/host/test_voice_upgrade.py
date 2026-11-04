@@ -141,7 +141,7 @@ class IdleTests(unittest.TestCase):
                 # immediately before the timer applies that stale decision.
                 if b.guard.acquire(blocking=False):
                     try:
-                        accepted = b.wake.feed(np.zeros(160), b.generation)
+                        accepted = b.wake.feed(np.zeros(160), b.generation, capture_nanos=0)
                     finally:
                         b.guard.release()
             finally:
@@ -150,7 +150,7 @@ class IdleTests(unittest.TestCase):
         self.assertFalse(timer.is_alive())
         self.assertEqual(errors, [])
         if accepted is None:
-            accepted = b.wake.feed(np.zeros(160), b.generation)
+            accepted = b.wake.feed(np.zeros(160), b.generation, capture_nanos=0)
         self.assertTrue(accepted)
         self.assertTrue(b.session.awake)
         self.assertFalse(b.session.screen_sleeping)

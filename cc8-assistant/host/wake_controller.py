@@ -29,6 +29,7 @@ class WakeHooks:
     generation: Callable[[], int]
     awake: Callable[[], bool]
     wake_mode: Callable[[], bool]
+    capture_current: Callable[[int], bool]
     busy: Callable[[], bool]
     set_awake: Callable[[bool], None]
     touch_activity: Callable[[], None]
@@ -114,13 +115,14 @@ class WakeController:
             if self.hooks.active() and self.hooks.awake() and self.hooks.wake_mode():
                 self.deadline = self.clock() + self.window_seconds
 
-    def feed(self, pcm, generation, *, echo_risk=False, render_text=''):
+    def feed(self, pcm, generation, *, capture_nanos, echo_risk=False, render_text=''):
         with self.hooks.lock:
             if (
                 self.detector is None
                 or not self.hooks.active()
                 or self.hooks.awake()
                 or generation != self.hooks.generation()
+                or not self.hooks.capture_current(capture_nanos)
             ):
                 return False
             serial = self.serial

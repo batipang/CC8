@@ -271,6 +271,8 @@ class SessionController:
 
     def set_awake(self, value):
         with self.guard:
+            if self.active and self.awake and not value:
+                self.hooks.capture().discard_buffered_endpoint_audio()
             self.awake = value
             self.hooks.awake_changed(value)
 
@@ -300,12 +302,7 @@ class SessionController:
         )
         if self.active and not j.get('capture_active', False):
             self.hooks.stop()
-        if 'wake_mode' in j and bool(j['wake_mode']) != self.wake:
-            with self.guard:
-                self.hooks.cancel('wake_mode_change')
-                self.wake = bool(j['wake_mode'])
-                self.awake = not self.wake
-                self.hooks.wake_reset('mode')
+        self.update_wake_mode(bool(j.get('wake_mode', self.wake)))
         interrupted = self.playback_interrupted_by_transport
         if interrupted:
             message = (
@@ -354,13 +351,20 @@ class SessionController:
         else:
             self.hooks.route_event({**j, 'event': 'session_start'})
 
+    def update_wake_mode(self, value):
+        with self.guard:
+            if value == self.wake:
+                return False
+            self.hooks.cancel('wake_mode_change')
+            if self.active and value:
+                self.hooks.capture().discard_buffered_endpoint_audio()
+            self.wake = value
+            self.awake = not value
+            self.hooks.wake_reset('mode')
+            return True
+
     def settings(self, j):
-        if 'wake_mode' in j and bool(j['wake_mode']) != self.wake:
-            with self.guard:
-                self.hooks.cancel('wake_mode_change')
-                self.wake = bool(j['wake_mode'])
-                self.awake = not self.wake
-                self.hooks.wake_reset('mode')
+        if self.update_wake_mode(bool(j.get('wake_mode', self.wake))):
             if self.active and not self.hooks.calibration().active:
                 self.hooks.status('listening', WAITING if self.wake else '我在听，可以开始说话')
         if 'brain_provider' in j and hasattr(self.hooks.brain(), 'select'):

@@ -675,7 +675,10 @@ class WakeRoutingTests(unittest.TestCase):
         b.save_status = lambda: None
         b.speak = lambda *args: answered.set() or True
         if not awake:
-            self.assertEqual(b.wake.feed(np.zeros(320), b.session.generation), bool(local_keyword))
+            self.assertEqual(
+                b.wake.feed(np.zeros(320), b.session.generation, capture_nanos=0),
+                bool(local_keyword),
+            )
         local_wake = b.wake.claim_prefix()
         b.recognition.queue.put(
             (

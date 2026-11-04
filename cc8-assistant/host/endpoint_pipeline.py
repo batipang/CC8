@@ -15,7 +15,13 @@ from session_ports import EventSink, MetricSink
 
 class WakeFrame(Protocol):
     def __call__(
-        self, pcm: np.ndarray, generation: int, *, echo_risk: bool, render_text: str
+        self,
+        pcm: np.ndarray,
+        generation: int,
+        *,
+        capture_nanos: int,
+        echo_risk: bool,
+        render_text: str,
     ) -> bool: ...
 
 
@@ -45,6 +51,7 @@ class EndpointHooks:
     enqueue: Callable[[tuple[object, ...]], None]
     discard_recognition: Callable[[], None]
     wake_feed: WakeFrame
+    capture_current: Callable[[int], bool]
     wake_allowed: Callable[[], bool]
     claim_wake: Callable[[], bool]
     reset_wake_gap: Callable[[], None]
@@ -150,9 +157,12 @@ class EndpointPipeline:
         self.hooks.wake_feed(
             cleaned,
             self.hooks.generation(),
+            capture_nanos=stamp,
             echo_risk=echo_risk or recent_output,
             render_text=render_text,
         )
+        if not self.hooks.capture_current(stamp):
+            return
         if self.fast_stop and (self.hooks.awake() or echo_risk):
             self.hooks.metric('stop_input_dbfs', round(level(stop_cleaned), 1))
             keyword = self.fast_stop.feed(stop_cleaned)

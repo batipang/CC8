@@ -38,6 +38,7 @@ class WakeControllerTests(unittest.TestCase):
             generation=lambda: self.state.generation,
             awake=lambda: self.state.awake,
             wake_mode=lambda: self.state.wake,
+            capture_current=lambda nanos: True,
             busy=lambda: self.state.busy,
             set_awake=self.set_awake,
             touch_activity=self.touch,
@@ -68,7 +69,7 @@ class WakeControllerTests(unittest.TestCase):
         self.metrics[name] = self.metrics.get(name, 0) + 1 if increment else value
 
     def feed(self, **fields):
-        return self.controller.feed(np.zeros(320), self.state.generation, **fields)
+        return self.controller.feed(np.zeros(320), self.state.generation, capture_nanos=0, **fields)
 
     def test_local_name_authorizes_once_and_continuous_standby_also_requires_wake(self):
         self.assertFalse(self.controller.allowed())
@@ -138,7 +139,7 @@ class WakeControllerTests(unittest.TestCase):
             self.detector.word = word
             self.assertFalse(self.feed())
         self.detector.word = '大黄蜂'
-        self.assertFalse(self.controller.feed(np.zeros(320), 99))
+        self.assertFalse(self.controller.feed(np.zeros(320), 99, capture_nanos=0))
         self.assertFalse(self.state.awake)
         for window in (True, 0, 301, float('nan')):
             with self.assertRaises(ValueError):
