@@ -59,6 +59,7 @@ RENDER_CLOCK_CHECK = 'playback_clock_provenance'
 LEADING_ACOUSTIC_CHECK = 'leading_playback_acoustic_evidence'
 AWAKE_DIALOGUE_CHECK = 'synthetic_awake_dialogue'
 BARGE_CHECK = 'synthetic_acoustic_interruption'
+ACTIVE_HANDOVER_CHECK = 'active_capture_logical_handover'
 WAKE_SELF_CHECK = 'self_playback_does_not_wake'
 POST_DIALOGUE_SECONDS = 20
 STANDBY_SECONDS = 900
@@ -296,6 +297,7 @@ class SmokeRun:
         awake_dialogue=False,
         synthetic_barge=False,
         wake_self_playback=False,
+        active_handover=False,
         multi_clause=False,
         playback_evidence=False,
         clock_evidence=False,
@@ -311,6 +313,8 @@ class SmokeRun:
         self.awake_dialogue = awake_dialogue
         self.synthetic_barge = synthetic_barge
         self.wake_self_playback = wake_self_playback
+        self.active_handover = active_handover
+        self.active_handover_evidence = None
         self.wake_self_evidence = None
         self.barge_evidence = None
         self.multi_clause = multi_clause
@@ -378,6 +382,7 @@ class SmokeRun:
             'acoustic_evidence': self.acoustic_evidence,
             'barge_evidence': self.barge_evidence,
             'wake_self_evidence': self.wake_self_evidence,
+            'active_handover_evidence': self.active_handover_evidence,
             'standby_evidence': self.standby_evidence,
             'playback_probe_evidence': self.playback_probe_evidence,
             'capture_clock_evidence': self.capture_clock_evidence,
@@ -414,8 +419,8 @@ class SmokeRun:
         h = self.health()
         if self.multi_clause or self.wake_self_playback:
             require(h.get('clause_receipts_supported') is True, 'clause_receipts_unsupported')
-        if self.wake_self_playback:
-            self.wake_self_counters(h)
+        if self.wake_self_playback or self.active_handover:
+            self.audio_counters(h)
         require(
             not self.playback_evidence or h.get('playback_evidence_supported') is True,
             'backend_playback_evidence_unsupported',
@@ -441,6 +446,10 @@ class SmokeRun:
             'device_test_capture_limit_unsupported',
         )
         require(
+            not self.active_handover or device.get('test_capture_epoch_supported') is True,
+            'device_test_capture_epoch_unsupported',
+        )
+        require(
             not self.synthetic_barge
             or device.get('test_interruption_transcript_supported') is True,
             'device_interruption_transcript_unsupported',
@@ -460,11 +469,14 @@ class SmokeRun:
             require(ui.get('wake_checked') is True, 'awake_dialogue_requires_wake_mode')
         if self.wake_self_playback:
             require(ui.get('wake_checked') is True, 'wake_self_playback_requires_wake_mode')
+        if self.active_handover:
+            require(ui.get('wake_checked') is True, 'active_handover_requires_wake_mode')
         if (
             self.awake_dialogue
             or self.synthetic_barge
             or self.multi_clause
             or self.wake_self_playback
+            or self.active_handover
         ):
             require(
                 all(row.get('outcome') is not None for row in self.diagnostic_requests()),
@@ -590,6 +602,112 @@ class SmokeRun:
             d.get('microphone_active') is False and d.get('transport') == 'usb',
             'device_handover_state_invalid',
         )
+
+    def active_capture_handover(self):
+        def capture_health():
+            health = self.health()
+            require(
+                health.get('connected') is True
+                and health.get('microphone_active') is True
+                and health.get('calibrating') is False
+                and health.get('playing') is False
+                and health.get('waiting_for_wake') is True,
+                'active_handover_capture_changed',
+            )
+            return health
+
+        def native_capture(kind):
+            before = self.clock()
+            d = self.capture_status()
+            after = self.clock()
+            epoch = d.get('test_capture_epoch')
+            remaining = d['test_capture_remaining_ms'] / 1000
+            require(d.get('transport') == kind, 'active_handover_device_route_invalid')
+            require(type(epoch) is int and 0 < epoch < 2**31, 'active_handover_epoch_missing')
+            return epoch, before + remaining, after + remaining, remaining
+
+        def switches(kind):
+            status = self.request({'operation': 'transport_status'})
+            count = status.get('transport_switches')
+            require(
+                status.get('transport') == kind
+                and status.get('wifi_ready') is True
+                and status.get('usb_test_suppressed') is (kind == 'wifi')
+                and (kind != 'usb' or status.get('usb_ready') is True)
+                and type(count) is int
+                and count >= 0,
+                'active_handover_transport_receipt_invalid',
+            )
+            return count
+
+        baseline = capture_health()
+        require(baseline.get('transport') == 'usb', 'active_handover_requires_usb')
+        counters = self.audio_counters(baseline)
+        first_epoch, first_lo, first_hi, budget = native_capture('usb')
+        require(budget >= 45, 'active_handover_capture_budget_insufficient')
+        base_switches = switches('usb')
+        rows = self.diagnostic_requests()
+        require(all(row.get('outcome') is not None for row in rows), 'owner_request_pending')
+        before = {row['request_id'] for row in rows}
+        evidence = {'routes': [], 'no_new_requests': False}
+        self.active_handover_evidence = evidence
+        self.checkpoint(self.report('running'))
+        require(
+            self.request({'operation': 'transport_test', 'seconds': 12}).get('ok') is True,
+            'route_suppression_rejected',
+        )
+
+        last_frames = counters['mic_frames']
+
+        def newer_frames(kind, minimum):
+            nonlocal last_frames
+            health = capture_health()
+            current = self.audio_counters(health)
+            frames = current['mic_frames']
+            require(frames >= last_frames, 'active_handover_mic_counter_regressed')
+            last_frames = frames
+            require(
+                all(
+                    current[key] == counters[key]
+                    for key in ('render_frames', 'voice_asr_attempts', 'local_wake_count')
+                ),
+                'active_handover_unexpected_audio_activity',
+            )
+            return frames if health.get('transport') == kind and frames > minimum else None
+
+        for step, (kind, timeout) in enumerate((('wifi', 8), ('usb', 25)), start=1):
+            first = self.wait(
+                lambda: newer_frames(kind, -1), timeout, 'active_handover_route_not_selected'
+            )
+            progressed = self.wait(
+                lambda: newer_frames(kind, first), 2, 'active_handover_no_new_mic_frames'
+            )
+            epoch, low, high, remaining = native_capture(kind)
+            require(epoch == first_epoch, 'active_handover_capture_restarted')
+            require(
+                remaining < budget and low <= first_hi + 0.25 and high >= first_lo - 0.25,
+                'active_handover_capture_deadline_changed',
+            )
+            budget = remaining
+            count = switches(kind) - base_switches
+            require(count == step, 'active_handover_unexpected_switch_count')
+            evidence['routes'].append(
+                dict(transport=kind, mic_frames_advanced=progressed - first, switches=count)
+            )
+            self.checkpoint(self.report('running'))
+        new = [row for row in self.diagnostic_requests() if row['request_id'] not in before]
+        require(
+            all(
+                row.get('origin') == 'voice'
+                and row.get('outcome') == 'rejected'
+                and row.get('gate') == 'wake_closed'
+                and row.get('generation') is None
+                and 'asr_start' not in row.get('stages', {})
+                for row in new
+            ),
+            'active_handover_unexpected_request',
+        )
+        evidence['no_new_requests'] = True
 
     @property
     def capture_limit_ms(self):
@@ -881,11 +999,11 @@ class SmokeRun:
         self.capture_status((d, ui))
 
     @staticmethod
-    def wake_self_counters(health):
+    def audio_counters(health):
         keys = ('local_wake_count', 'voice_asr_attempts', 'mic_frames', 'render_frames')
         require(
             all(type(health.get(key)) is int and health[key] >= 0 for key in keys),
-            'wake_self_playback_counters_unavailable',
+            'audio_counters_unavailable',
         )
         return {key: health[key] for key in keys}
 
@@ -904,7 +1022,7 @@ class SmokeRun:
 
         def verify_counters(before, evidence):
             current = capture_health()
-            after = self.wake_self_counters(current)
+            after = self.audio_counters(current)
             changes = {key: after[key] - value for key, value in before.items()}
             require(all(delta >= 0 for delta in changes.values()), 'wake_self_counter_regressed')
             evidence.update(changes)
@@ -932,7 +1050,7 @@ class SmokeRun:
             rows = self.diagnostic_requests()
             require(all(row.get('outcome') is not None for row in rows), 'owner_request_pending')
             ids = {row['request_id'] for row in rows}
-            before = self.wake_self_counters(health)
+            before = self.audio_counters(health)
             evidence = {'language': language, 'playback_completed': False, 'quiet_seconds': 0}
             self.wake_self_evidence.append(evidence)
 
@@ -1198,6 +1316,8 @@ class SmokeRun:
                         self.leading_acoustic_probe,
                         continue_if_unconfirmed=True,
                     )
+                if self.active_handover:
+                    self.check(ACTIVE_HANDOVER_CHECK, self.active_capture_handover)
                 if self.wake_self_playback:
                     self.check(WAKE_SELF_CHECK, self.wake_self_probe)
                 if self.awake_dialogue or self.synthetic_barge:
@@ -1266,6 +1386,11 @@ def main(argv=None):
         help='Check that fixed Chinese and English CC8 announcements cannot wake the local detector',
     )
     parser.add_argument(
+        '--active-handover',
+        action='store_true',
+        help='Verify that the same bounded recording continues on Wi-Fi and USB',
+    )
+    parser.add_argument(
         '--multi-clause',
         action='store_true',
         help='Verify separate device receipts for both clauses of a fixed announcement',
@@ -1303,6 +1428,8 @@ def main(argv=None):
         parser.error(
             '--wake-self-playback requires --capture and a separate run from speech or standby probes'
         )
+    if args.active_handover and not args.capture:
+        parser.error('--active-handover requires --capture')
     if args.playback_evidence and not args.capture:
         parser.error('--playback-evidence requires --capture')
     if args.clock_evidence and not args.playback_evidence:
@@ -1319,6 +1446,7 @@ def main(argv=None):
             + ([CHECKS[9]] if args.playback_evidence else [])
             + ([RENDER_CLOCK_CHECK] if args.clock_evidence else [])
             + ([LEADING_ACOUSTIC_CHECK] if args.leading_acoustic_evidence else [])
+            + ([ACTIVE_HANDOVER_CHECK] if args.active_handover else [])
             + ([WAKE_SELF_CHECK] if args.wake_self_playback else [])
             + ([AWAKE_DIALOGUE_CHECK] if args.awake_dialogue or args.synthetic_barge else [])
             + ([BARGE_CHECK] if args.synthetic_barge else [])
@@ -1333,6 +1461,7 @@ def main(argv=None):
         'awake_dialogue': args.awake_dialogue,
         'synthetic_barge': args.synthetic_barge,
         'wake_self_playback': args.wake_self_playback,
+        'active_handover': args.active_handover,
         'multi_clause': args.multi_clause,
         'playback_evidence': args.playback_evidence,
         'clock_evidence': args.clock_evidence,
@@ -1412,6 +1541,7 @@ def main(argv=None):
                     awake_dialogue=args.awake_dialogue,
                     synthetic_barge=args.synthetic_barge,
                     wake_self_playback=args.wake_self_playback,
+                    active_handover=args.active_handover,
                     multi_clause=args.multi_clause,
                     playback_evidence=args.playback_evidence,
                     clock_evidence=args.clock_evidence,

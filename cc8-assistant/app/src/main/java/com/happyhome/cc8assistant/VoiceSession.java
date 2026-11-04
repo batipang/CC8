@@ -1262,6 +1262,12 @@ final class VoiceSession {
     Wire.put(j, "microphone_active", recording);
     CaptureWindow window = captureWindow;
     Wire.put(j, "test_capture_limit_supported", true);
+    Wire.put(j, "test_capture_epoch_supported", true);
+    if (window != null && window.limitMs > 0 && window.allows(SystemClock.elapsedRealtime())) {
+      synchronized (this) {
+        if (recording && captureWindow == window) Wire.put(j, "test_capture_epoch", epoch);
+      }
+    }
     Wire.put(j, "test_interruption_transcript_supported", true);
     if (recording && window != null) {
       CaptureWindow.TranscriptEvidence evidence =

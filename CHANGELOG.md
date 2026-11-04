@@ -1,5 +1,11 @@
 # Changelog
 
+## Assistant 0.9.26 — verify an active microphone across transport changes
+
+- Expose the native capture epoch only during an explicitly bounded test capture.
+  The optional logical handover check requires the same epoch and deadline,
+  fresh microphone frames on both routes, and exact switch counts.
+
 ## Backend 0.14.44 — check local wake during device playback
 
 - Expose cumulative local wake acceptances and voice ASR attempts in owner
