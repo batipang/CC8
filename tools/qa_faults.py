@@ -3,7 +3,8 @@
 Default I/O is fake and offline. Explicit loopback TLS uses a verified temporary
 certificate and fixed failures, never owner credentials or remote providers.
 Explicit local stdio uses a fixed peer, never a Codex installation.
-Recovery is UI-only: synthesis/playback is bypassed and never scored as audio.
+UI recovery never plays audio. The business fixture additionally checks local
+ASR/TTS recovery requests in memory.
 """
 
 from dataclasses import dataclass, replace
@@ -17,6 +18,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 DOT_FIXTURES = ('fake', 'local_stdio')
+HTTP_FIXTURES = ('fake', 'loopback_tls', 'loopback_business')
 KINDS = ('timeout', 'rate_limit', 'quota', 'credential_or_permission', 'transport_or_io')
 
 
@@ -40,7 +42,7 @@ CASES = tuple(
 
 
 def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
-    if http_fixture not in ('fake', 'loopback_tls'):
+    if http_fixture not in HTTP_FIXTURES:
         raise ValueError('Unknown QA HTTP fixture')
     if dot_fixture not in DOT_FIXTURES:
         raise ValueError('Unknown QA Dot fixture')
@@ -135,13 +137,21 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
         config = load_config(root=folder, environ={})
         tls = None
         factory = FaultSession
-        if http_fixture == 'loopback_tls':
-            from tools.qa_http import LoopbackHTTP
+        business = http_fixture == 'loopback_business'
+        if http_fixture != 'fake':
+            from tools.qa_http import LoopbackHTTP, RECOVERY_TEXT, RECOVERY_PCM
 
             def requested():
                 state.http_calls += 1
 
-            tls = stack.enter_context(LoopbackHTTP(lambda: state.case, requested))
+            tls = stack.enter_context(
+                LoopbackHTTP(
+                    lambda: state.case,
+                    requested,
+                    business=business,
+                    recovering=lambda: state.recovery,
+                )
+            )
             factory = tls.session_factory
         transport = Transport(
             key='qa-not-a-real-credential', session_factory=factory, config=config
@@ -267,12 +277,25 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
                 raise AssertionError('Provider body leaked into fixture')
             state.recovery = True
             packets.clear()
+            recovery_wire_requests = 0
+            if business and case.stage in ('asr', 'tts'):
+                if case.stage == 'asr':
+                    recovered = recognizer.recognize(audio) == RECOVERY_TEXT
+                else:
+                    pcm = b''.join(
+                        chunk.astype('<i2').tobytes() for chunk in voice.pcm(RECOVERY_TEXT)
+                    )
+                    recovered = pcm == RECOVERY_PCM
+                recovery_wire_requests = tls.count(case.ident, recovery=True)
+                if not recovered or recovery_wire_requests != 1 or transport.slots:
+                    raise AssertionError('Fixture transport did not recover on a new request')
             b.submit_text('自动恢复检查 ' + case.ident)
             run_one(b.response, b.response.queue.get_nowait())
             recovery = list(packets)
             if (
                 b.workspace.tasks[-1]['status'] != 'completed'
                 or b.session.text_generation is not None
+                or state.http_calls != expected_http + recovery_wire_requests
             ):
                 raise AssertionError('Recovery did not complete')
             dot_counts = {}
@@ -302,6 +325,7 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
                     'dot_fixture': dot_fixture,
                     'dot_wire_counts': dot_counts,
                     'wire_requests': wire_requests,
+                    'recovery_wire_requests': recovery_wire_requests,
                 }
             )
         if local_dot and sum(local_dot.counts().values()) != sum(

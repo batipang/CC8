@@ -5,6 +5,7 @@ failure-UI plan and fake-I/O matrix remain offline and standard-library-only.
 """
 
 from collections import Counter
+import json
 from pathlib import Path
 import socket
 import ssl
@@ -13,10 +14,20 @@ import tempfile
 import threading
 import time
 
+BUSINESS_CODES = {
+    'timeout': 1001,
+    'rate_limit': 1002,
+    'quota': 1008,
+    'credential_or_permission': 1004,
+}
+RECOVERY_TEXT = '自动测试识别恢复。'
+RECOVERY_PCM = b'\x01\x00' * 320
+
 
 class LoopbackHTTP:
-    def __init__(self, current_case, before_request):
+    def __init__(self, current_case, before_request, *, business=False, recovering=lambda: False):
         self.current_case, self.before_request = current_case, before_request
+        self.business, self.recovering = business, recovering
         self.stopped = threading.Event()
         self.guard = threading.Lock()
         self.counts = Counter()
@@ -132,6 +143,9 @@ class LoopbackHTTP:
             route = b'/v1/speech_to_text' if parts[0] == 'asr' else b'/v1/t2a_v2'
             if lines[0] != b'POST ' + route + b' HTTP/1.1':
                 raise ValueError('fixture_stage_route_mismatch')
+            phase = headers.get(b'x-cc8-qa-phase')
+            if phase not in ((b'fault', b'recovery') if self.business else (b'fault',)):
+                raise ValueError('fixture_unknown_phase')
             length = int(headers.get(b'content-length', b'-1'))
             if not 0 < length <= 65536:
                 raise ValueError('fixture_body_limit')
@@ -141,22 +155,36 @@ class LoopbackHTTP:
                     return
                 body += chunk
             with self.guard:
-                self.counts[ident] += 1
+                self.counts[(ident, phase)] += 1
             kind = parts[1]
+            if phase == b'recovery':
+                data = (
+                    {'text': RECOVERY_TEXT}
+                    if parts[0] == 'asr'
+                    else {'data': {'status': 2, 'audio': RECOVERY_PCM.hex()}}
+                )
+                self.send_payload(peer, 200, data, stream=parts[0] == 'tts')
+                return
+            if self.business and kind in BUSINESS_CODES:
+                self.send_payload(
+                    peer,
+                    200,
+                    {
+                        'base_resp': {
+                            'status_code': BUSINESS_CODES[kind],
+                            'status_msg': 'qa-injected-sensitive-body',
+                        }
+                    },
+                    stream=parts[0] == 'tts',
+                )
+                return
             if kind == 'timeout':
                 self.stopped.wait(4)
                 return
             if kind == 'transport_or_io':
                 return
             status = {'rate_limit': 429, 'quota': 402, 'credential_or_permission': 401}[kind]
-            payload = b'{"error":"qa-injected-sensitive-body"}'
-            peer.sendall(
-                f'HTTP/1.1 {status} QA injected failure\r\n'.encode()
-                + b'Content-Type: application/json\r\nConnection: close\r\nContent-Length: '
-                + str(len(payload)).encode()
-                + b'\r\n\r\n'
-                + payload
-            )
+            self.send_payload(peer, status, {'error': 'qa-injected-sensitive-body'})
         except (OSError, ssl.SSLError):
             # The client intentionally times out or closes the failed response.
             pass
@@ -165,6 +193,19 @@ class LoopbackHTTP:
                 self.errors.append(type(error).__name__)
         finally:
             peer.close()
+
+    @staticmethod
+    def send_payload(peer, status, value, *, stream=False):
+        body = json.dumps(value).encode()
+        content_type = 'application/json'
+        if stream:
+            body = b'data: ' + body + b'\n\n'
+            content_type = 'text/event-stream'
+        head = (
+            f'HTTP/1.1 {status} QA response\r\nContent-Type: {content_type}\r\n'
+            f'Connection: close\r\nContent-Length: {len(body)}\r\n\r\n'
+        )
+        peer.sendall(head.encode() + body)
 
     def session_factory(self):
         import requests
@@ -186,15 +227,16 @@ class LoopbackHTTP:
                 case = fixture.current_case()
                 headers = dict(kwargs.get('headers', {}))
                 headers['X-CC8-QA-Case'] = case.ident
+                headers['X-CC8-QA-Phase'] = 'recovery' if fixture.recovering() else 'fault'
                 kwargs['headers'] = headers
                 fixture.before_request()
                 return super().post(url, **kwargs)
 
         return LocalSession()
 
-    def count(self, ident):
+    def count(self, ident, *, recovery=False):
         with self.guard:
-            return self.counts[ident]
+            return self.counts[(ident, b'recovery' if recovery else b'fault')]
 
     def __exit__(self, *unused):
         self.stopped.set()

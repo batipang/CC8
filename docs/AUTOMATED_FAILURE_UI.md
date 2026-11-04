@@ -64,6 +64,18 @@ TLS模式仍在安装QA/操作屏幕之前生成协议包，再由相同实体QA
 
 两种 I/O 模式均在界面重放前生成故障包。合跑不需要真实凭证、麦克风或摄像头。48 项合跑已在最小 PATH 下通过。本地 TLS 实际收到 30 次请求，Dot 子进程收到 33 次初始请求（含 TTS 故障前的 15 次正常 Dot 回答）、48 次明确发起的恢复请求和 3 次审批拒绝。隔离语料通过只证明本地协议与控制器处理，实体屏幕重放需单独执行。
 
+## MiniMax 业务错误与下一次请求恢复
+
+`--http-fixture loopback_business` 在原有固定用例中，用 HTTP 200 加非零业务状态模拟请求超时、限流、额度不足和凭证权限错误。ASR 使用 JSON，TTS 使用 SSE，断线仍在完整接收本地请求后关闭连接。每条 ASR/TTS 故障结束后，同一个识别器或合成器主动发起一次独立的恢复探针，校验固定识别文本或完整数字 PCM，并确认请求槽清空。恢复探针只在本地回环中运行，PCM 不保存或播放。随后继续用原有界面恢复包验证新请求和旧错误隔离。
+
+```sh
+./cc8 verify-failure-ui --runtime-root /absolute/live/workspace \
+  --qa-receipt /absolute/private/qa-build.json \
+  --http-fixture loopback_business --dot-fixture local_stdio --execute
+```
+
+完整隔离矩阵验证 48 项，其中 30 次 ASR/TTS 故障请求、30 次独立 HTTP 恢复请求。报告分别记录两类请求计数，语料摘要绑定选择的模式与恢复计数。此模式的实体屏幕重放仍待验证。
+
 ## 设备门控与恢复
 
 要求唯一正常Android AILABS_S6、SDK27、shell UID2000；所有命令重核同一USB target。QA包事先必须不存在，包列表独立确认；已存在时拒绝替换/删除。生产助手必须版本匹配、前台空闲，双端采集关闭、无播放/校准或未完请求，既有守护及backend归属匹配。与其他设备检查共享实际runtime的互斥锁。
