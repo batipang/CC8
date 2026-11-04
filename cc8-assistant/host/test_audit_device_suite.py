@@ -20,7 +20,9 @@ from device_smoke import (
 )
 
 
-def saved_suite(*, qa=False, extended=False, scenario='qa', interruption=False, fail_at=None):
+def saved_suite(
+    *, qa=False, extended=False, scenario='qa', interruption=False, fail_at=None, echo_soak=False
+):
     index = 0
 
     def make_run(options, _checkpoint, **_kwargs):
@@ -66,6 +68,18 @@ def saved_suite(*, qa=False, extended=False, scenario='qa', interruption=False, 
             'confirmed_playback_done_ms': 100 + response,
             QA_PLAYOUT_METRIC: response,
         }
+        if 'echo_soak' in options:
+            pauses = int(index == 2 or fail_at == index)
+            report['elapsed_seconds'] = 955
+            report['echo_soak_evidence'] = {
+                'elapsed_seconds': 902,
+                'completed_announcements': 39,
+                'render_samples': 12300000,
+                'pause_requests': pauses,
+                'device_pauses': pauses,
+                'device_resumes': pauses,
+                'admitted_voice_requests': 0,
+            }
         if 'synthetic_barge' in options:
             report['barge_evidence'] = {
                 'device_stop_applied': True,
@@ -103,8 +117,11 @@ def saved_suite(*, qa=False, extended=False, scenario='qa', interruption=False, 
         extended_voice=extended,
         latency_scenario=scenario,
         interruption=interruption,
+        echo_soak=echo_soak,
     )
     backend = '0.14.60' if scenario == 'qa' else '0.14.62'
+    if echo_soak:
+        backend = '0.14.63'
     return {**data, 'backend_version': backend, 'protocol_version': 2}
 
 
@@ -153,6 +170,19 @@ class AuditDeviceSuiteTests(unittest.TestCase):
         reviewed = audit(data)
         self.assertFalse(reviewed['verified'])
         self.assertEqual(reviewed['reason'], 'suite_latency_route_incomplete')
+
+    def test_self_playback_soak_recomputes_coverage_and_uses_one_pause_budget(self):
+        data = saved_suite(echo_soak=True)
+        data['echo_soak_totals'] = {'pause_requests': 0}
+        reviewed = audit(data)
+        self.assertTrue(reviewed['verified'])
+        self.assertEqual(reviewed['echo_soak_totals']['elapsed_seconds'], 1804)
+        self.assertEqual(reviewed['echo_soak_totals']['pause_requests'], 1)
+        bad = saved_suite(echo_soak=True, fail_at=1)
+        self.assertEqual(bad['state'], 'failed')
+        self.assertEqual(bad['phases'][1]['reason'], 'suite_echo_soak_false_pause_limit')
+        data['phases'][0]['report']['echo_soak_evidence']['elapsed_seconds'] = 899
+        self.assertEqual(audit(data)['reason'], 'suite_echo_soak_evidence_incomplete')
 
     def test_interruption_audit_recomputes_separate_metrics_and_rejects_incomplete_pair(self):
         data = saved_suite(interruption=True)

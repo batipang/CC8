@@ -539,6 +539,111 @@ class DeviceAutomationTests(unittest.TestCase):
         self.assertEqual(plan['qa_corpus_sha256'], QA_CORPUS_SHA256)
         self.assertEqual(len(plan['phases']), 30)
 
+    def test_self_playback_soak_plan_is_read_only_and_keeps_two_full_windows(self):
+        with (
+            patch('device_smoke.Device') as device,
+            patch('device_smoke.rpc') as request,
+            redirect_stdout(io.StringIO()) as output,
+        ):
+            self.assertEqual(
+                main(['--runtime-root', '/unused', '--capture', '--self-playback-soak']), 0
+            )
+        device.assert_not_called()
+        request.assert_not_called()
+        plan = json.loads(output.getvalue())
+        self.assertEqual(plan['self_playback_seconds_per_phase'], 900)
+        self.assertEqual(plan['minimum_backend_version'], '0.14.63')
+        self.assertEqual(
+            [p['name'] for p in plan['phases']], ['self_playback_1', 'self_playback_2']
+        )
+
+    def test_self_playback_soak_checks_new_receipts_and_never_retries(self):
+        for case, expected in (
+            ('quiet', None),
+            ('recovered', None),
+            ('missing_resume', 'echo_soak_false_pause_limit_or_resume_missing'),
+            ('extra_voice', 'echo_soak_unexpected_voice'),
+            ('fast_stop', 'echo_soak_unexpected_voice'),
+            ('wrong_receipt', 'echo_soak_playback_unconfirmed'),
+            ('lost_window', 'echo_soak_receipt_window_lost'),
+        ):
+            with self.subTest(case=case), patch('device_smoke.ECHO_SOAK_SECONDS', 8):
+                run, device, health, now = self.fixture(capture=True, echo_soak=True)
+                health.update(
+                    microphone_active=True,
+                    waiting_for_wake=False,
+                    local_wake_count=0,
+                    voice_asr_attempts=0,
+                    render_frames=0,
+                    fast_stop_count=0,
+                    barge_in_pauses=0,
+                    barge_in_resumed=0,
+                )
+                d, _ = device.status.return_value
+                d.update(
+                    microphone_active=True,
+                    test_capture_limit_ms=1320000,
+                    test_capture_remaining_ms=1320000,
+                )
+                rows = [self.acoustic_row(request_id='old')]
+                cycles = []
+
+                def request(payload):
+                    if payload == {'operation': 'health'}:
+                        return dict(health)
+                    if payload == {'operation': 'diagnostics'}:
+                        return {'requests': list(rows)}
+                    self.assertEqual(payload, {'text': BARGE_ANNOUNCEMENT})
+                    index = len(cycles)
+                    cycles.append(index)
+                    health['mic_frames'] += 10
+                    health['render_frames'] += 8
+                    now[0] += 2
+                    if index == 0:
+                        if case in ('recovered', 'missing_resume'):
+                            stages = {'pause_request': 10, 'pause_ack': 20}
+                            health['barge_in_pauses'] += 1
+                            if case == 'recovered':
+                                stages['resume_ack'] = 40
+                                health['barge_in_resumed'] += 1
+                            rows.append(self.rejected_candidate(stages=stages))
+                        if case == 'extra_voice':
+                            rows.append(self.acoustic_row(request_id='external'))
+                        if case == 'fast_stop':
+                            health['fast_stop_count'] += 1
+                        if case == 'lost_window':
+                            rows.clear()
+                    rows.append(
+                        {
+                            'request_id': 'announcement' + str(index),
+                            'origin': 'announcement',
+                            'outcome': 'completed',
+                            'confirmed_playback_clauses': 1,
+                            'stages': {}
+                            if case == 'wrong_receipt'
+                            else {
+                                'confirmed_playout_ack': 50,
+                                'confirmed_playback_done': 100,
+                            },
+                        }
+                    )
+                    return {'status': 'completed', 'characters': len(BARGE_ANNOUNCEMENT)}
+
+                run.request = request
+                if expected:
+                    with self.assertRaisesRegex(CheckFailure, expected):
+                        run.self_playback_soak()
+                    self.assertEqual(cycles, [0])
+                else:
+                    run.self_playback_soak()
+                    self.assertEqual(cycles, [0, 1])
+                    self.assertEqual(run.echo_soak_evidence['elapsed_seconds'], 8)
+                    self.assertEqual(run.echo_soak_evidence['render_samples'], 16)
+                    self.assertEqual(
+                        run.echo_soak_evidence['device_resumes'], int(case == 'recovered')
+                    )
+                device.speak_probe.assert_not_called()
+
     def test_interruption_batch_dry_plan_never_contacts_device_or_backend(self):
         with (
             patch('device_smoke.Device') as device,

@@ -7,6 +7,8 @@ import re
 from types import SimpleNamespace
 
 from device_smoke import (
+    ECHO_SOAK_MIN_BACKEND,
+    ECHO_SOAK_SCOPE,
     POST_DIALOGUE_SECONDS,
     ROUTED_LATENCY_MIN_BACKEND,
     STANDBY_SECONDS,
@@ -48,7 +50,12 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
     backend = data.get('backend_version')
     if (
         scope
-        not in ('fixed_device_suite', 'synthetic_qa_latency', 'synthetic_interruption_latency')
+        not in (
+            'fixed_device_suite',
+            'synthetic_qa_latency',
+            'synthetic_interruption_latency',
+            ECHO_SOAK_SCOPE,
+        )
         or not isinstance(backend, str)
         or not re.fullmatch(VERSION, backend)
         or type(data.get('protocol_version')) is not int
@@ -65,17 +72,23 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
         raise ValueError('Invalid report scope')
     qa_latency = scope == 'synthetic_qa_latency'
     interruption = scope == 'synthetic_interruption_latency'
+    echo_soak = scope == ECHO_SOAK_SCOPE
     extended = data.get('extended_voice_evidence', False)
     room_latency = data.get('response_acoustic_evidence', False)
     scenario = data.get('latency_scenario', 'qa')
     if (
         type(extended) is not bool
         or type(room_latency) is not bool
-        or ((qa_latency or interruption) and extended)
+        or ((qa_latency or interruption or echo_soak) and extended)
         or (
             interruption
             and tuple(map(int, backend.split('.')))
             < tuple(map(int, EXTENDED_VOICE_MIN_BACKEND.split('.')))
+        )
+        or (
+            echo_soak
+            and tuple(map(int, backend.split('.')))
+            < tuple(map(int, ECHO_SOAK_MIN_BACKEND.split('.')))
         )
         or (room_latency and not qa_latency)
         or not isinstance(scenario, str)
@@ -98,7 +111,10 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
     ):
         raise ValueError('Invalid suite mode')
     plan = device_suite_phases(
-        qa_latency=qa_latency, extended_voice=extended, interruption=interruption
+        qa_latency=qa_latency,
+        extended_voice=extended,
+        interruption=interruption,
+        echo_soak=echo_soak,
     )
     phases = data.get('phases')
     if not isinstance(phases, list) or len(phases) != len(plan):
@@ -182,6 +198,7 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
         extended_voice=extended,
         latency_scenario=scenario,
         interruption=interruption,
+        echo_soak=echo_soak,
     )
     result['completed_phases'] = sum(p['state'] == 'passed' for p in reviewed['phases'])
     if reviewed['state'] != 'passed':
@@ -193,6 +210,8 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
         }
     if data.get('state') != 'passed':
         return {**result, 'reason': 'report_not_completed'}
+    if echo_soak:
+        result['echo_soak_totals'] = reviewed['echo_soak_totals']
     if qa_latency or interruption:
         result['latencies_ms'] = reviewed['latencies_ms']
         if scenario != 'qa':
