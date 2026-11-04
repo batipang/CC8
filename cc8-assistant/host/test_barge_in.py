@@ -24,7 +24,7 @@ class BargeInTests(unittest.TestCase):
         b = Bridge(speech, None)
         b.session.connection = Sink()
         b.session.active = True
-        b.playback.device_can_pause = True
+        b.playback.set_pause_capability(True)
         b.playback.playing = True
         b.save_status = lambda: None
         return b
@@ -68,9 +68,9 @@ class BargeInTests(unittest.TestCase):
 
     def test_unsupported_device_and_inactive_mic_do_not_pause(self):
         b = self.bridge()
-        b.playback.device_can_pause = False
+        b.playback.set_pause_capability(False)
         self.assertIsNone(b.pause_for_voice())
-        b.playback.device_can_pause = True
+        b.playback.set_pause_capability(True)
         b.session.active = False
         self.assertIsNone(b.pause_for_voice())
 
@@ -166,7 +166,7 @@ class BargeInTests(unittest.TestCase):
     def test_timeout_stops_instead_of_resuming_unconfirmed_audio(self):
         b = self.bridge()
         b.pause_for_voice()
-        b.playback.pause_state['started'] -= 21
+        b.playback.pause.pause_state['started'] -= 21
         old = b.session.generation
         b.wait_playback(old)
         self.assertGreater(b.session.generation, old)
@@ -194,8 +194,8 @@ class BargeInTests(unittest.TestCase):
                                 raise RuntimeError('Pause deadline barrier timed out')
                         return value
 
-                b.playback.pause_state['started'] -= 21
-                b.playback.pause_state = ExpiringPause(b.playback.pause_state)
+                b.playback.pause.pause_state['started'] -= 21
+                b.playback.pause.pause_state = ExpiringPause(b.playback.pause_state)
                 real_wait = b.playback.done.wait
 
                 def wait_for_replacement(timeout):
@@ -221,7 +221,7 @@ class BargeInTests(unittest.TestCase):
                         self.assertIsNone(b.playback.pause_state)
                         if replace:
                             # Bypass the unrelated cooldown within this fixture.
-                            b.playback.pause_cooldown = 0
+                            b.playback.pause.pause_cooldown = 0
                             new_token = b.pause_for_voice()
                             self.assertIsNotNone(new_token)
                             self.assertNotEqual(new_token, old_token)

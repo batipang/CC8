@@ -21,7 +21,8 @@ class CaptureGapTests(unittest.TestCase):
         b.session.connection = Sink()
         b.session.active = b.session.awake = True
         b.session.epoch = 7
-        b.playback.playing = b.playback.device_can_pause = True
+        b.playback.playing = True
+        b.playback.set_pause_capability(True)
         b.save_status = lambda: None
         endpoint = b.capture.endpoint
         endpoint.near_speech = SimpleNamespace(

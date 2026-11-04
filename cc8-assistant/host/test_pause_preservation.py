@@ -30,7 +30,7 @@ class Span:
 class PausePreservationTests(unittest.TestCase):
     def setup(self, sequence):
         b, frame, _ = fixture.CaptureDiagnosticsTests().endpoint()
-        b.playback.device_can_pause = True
+        b.playback.set_pause_capability(True)
         self.install(b, sequence)
         return b, frame
 

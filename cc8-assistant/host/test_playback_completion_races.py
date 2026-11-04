@@ -285,7 +285,7 @@ class CompletionRacesTests(unittest.TestCase):
     def test_expired_pause_status_cannot_overwrite_a_new_owner_request(self):
         b = self.session()
         generation = b.generation
-        b.playback.pause_state = {
+        b.playback.pause.pause_state = {
             'token': 1,
             'generation': generation,
             'started': time.monotonic() - 21,

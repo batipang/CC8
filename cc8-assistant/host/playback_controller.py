@@ -1,4 +1,4 @@
-"""Own speaker output, completion acknowledgements and tentative pause state.
+"""Own speaker output and playback completion acknowledgements.
 
 The session owns cancellation generations; DSP owns its render timeline.
 Only explicit callbacks cross those boundaries. No microphone is opened here.
@@ -10,60 +10,33 @@ from dataclasses import dataclass
 import itertools
 import threading
 import time
-from typing import Callable, ContextManager
+from typing import Callable
 from caption_timing import CaptionTiming
 from playout_receipt import PlayoutReceipt
-from diagnostics import TraceBook, error_kind
+from diagnostics import error_kind
 from failure_feedback import FailureSink
 from operation_failure import OperationFailure
 from dsp import RATE
 from minimax_client import MiniMaxError, Cancelled
-from protocol import Packet, SPEAKER, JsonValue
+from protocol import Packet, SPEAKER
 from reply_types import mood
 from speech_providers import DirectSpeech
-from session_ports import EventSink, MetricSink
+from playback_pause import PauseHooks, PlaybackPause
 
 
 @dataclass(frozen=True)
-class PlaybackHooks:
-    lock: ContextManager[object]
-    generation: Callable[[], int]  # Read-only, non-locking session generation accessor.
-    active: Callable[[], bool]
+class PlaybackHooks(PauseHooks):
     announcement_generation: Callable[[], int | None]
-    valid: Callable[[int], bool]
-    cancel_session: Callable[[str], int]
-    event: EventSink
     send: Callable[[Packet], None]
-    status: Callable[[str, str], None]
-    log: EventSink
-    metric: MetricSink
-    diagnostics: Callable[[], TraceBook]
     failure: FailureSink
-    trace: Callable[[], str | None]
-    echo_metrics: Callable[[], dict[str, JsonValue]]
-    utterance_paused: Callable[[int], bool]
     speech: Callable[[], object]
-    cancel_timeline_pause: Callable[[], None]
-    pause_timeline: Callable[[int], None]
-    resume_timeline: Callable[[int], None]
     begin_clock_report: Callable[[int, int], bool] = lambda generation, playback_id: False
     complete_clock_report: Callable[[int, object, object, int | None], None] = (
         lambda generation, playback_id, value, frames: None
     )
 
 
-@dataclass
-class PauseReceipt:
-    generation: int
-    trace: str | None
-    trigger_nanos: int | None = None
-    pause_nanos: int | None = None
-    resume_requested: bool = False
-
-
 class PlaybackController:
-    MAX_PENDING_PAUSE_RECEIPTS = 8
-
     def __init__(self, hooks: PlaybackHooks):
         self.hooks = hooks
         self.playing = False
@@ -74,18 +47,17 @@ class PlaybackController:
         self.last_spoken = ''
         self.last_audio_end = 0
         self.spoken = deque(maxlen=32)
-        self.pause_state = None
-        self.pause_serial = 0
-        self.pause_receipts: dict[int, PauseReceipt] = {}
-        self.last_pause_receipt_nanos = None
         self.publication_lock = threading.RLock()
-        self.device_can_pause = False
-        self.device_can_confirm_pause = False
+        self.pause = PlaybackPause(
+            hooks,
+            publication_lock=self.publication_lock,
+            done=self.done,
+            output_ready=lambda: self.playing and not self.begin_pending,
+        )
         self.device_can_report_playout = False
         self.device_can_report_completion = False
         self.device_can_report_clock = False
         self.playout_probe = PlayoutReceipt()
-        self.pause_cooldown = 0
         self.playback_serial = 0
         self.previous_spoken = ''
         self.previous_spoken_until = 0
@@ -100,20 +72,21 @@ class PlaybackController:
             self.playout_probe.clear()
             return was_playing
 
-    def _clear_pause(self):
-        self.pause_state = None
-        self.pause_receipts.clear()
-        self.last_pause_receipt_nanos = None
+    @property
+    def pause_state(self):
+        return self.pause.pause_state
+
+    @property
+    def device_can_pause(self):
+        return self.pause.device_can_pause
 
     def clear_cancelled_pause(self, was_playing):
-        self._clear_pause()
-        self.hooks.cancel_timeline_pause()
+        self.pause.clear_cancelled()
         if was_playing:
             self.last_audio_end = time.monotonic()
 
     def clear_transport_pause(self):
-        self._clear_pause()
-        self.device_can_confirm_pause = False
+        self.pause.clear_transport()
         self.set_playout_capability(False)
         self.set_completion_capability(False)
 
@@ -122,8 +95,7 @@ class PlaybackController:
             self.done.notify_all()
 
     def set_pause_capability(self, enabled, *, applied_receipt=False):
-        self.device_can_pause = enabled
-        self.device_can_confirm_pause = enabled and applied_receipt
+        self.pause.set_capability(enabled, applied_receipt=applied_receipt)
 
     def set_playout_capability(self, enabled):
         with self.publication_lock:
@@ -153,7 +125,7 @@ class PlaybackController:
     def reset_session(self):
         self.playout_probe.clear()
         self.spoken.clear()
-        self._clear_pause()
+        self.pause.clear()
         self.last_spoken = ''
         self.previous_spoken = ''
         self.previous_spoken_until = 0
@@ -218,7 +190,7 @@ class PlaybackController:
                     self.last_audio_end = time.monotonic()
                     self.done.notify_all()
         elif name in ('playback_paused', 'playback_resumed'):
-            self._accept_pause_receipt(name, event)
+            self.pause.accept_receipt(name, event)
         elif name == 'playback_error':
             generation = int(event.get('generation', self.hooks.generation()))
             with self.hooks.lock:
@@ -242,120 +214,14 @@ class PlaybackController:
                     trace_key=generation,
                 )
 
-    def _accept_pause_receipt(self, name, event):
-        token, generation, nanos = event['token'], event['generation'], event['nanos']
-        with self.hooks.lock:
-            receipt = self.pause_receipts.get(token)
-            if (
-                receipt is None
-                or receipt.generation != generation
-                or generation != self.hooks.generation()
-                or (
-                    self.last_pause_receipt_nanos is not None
-                    and nanos < self.last_pause_receipt_nanos
-                )
-            ):
-                return
-            if name == 'playback_paused':
-                if receipt.pause_nanos is not None:
-                    return
-                receipt.pause_nanos = nanos
-                # Device receipts arrive on an ordered channel. Only a newer
-                # device pause supersedes prior tokens, not a host request.
-                for older in tuple(self.pause_receipts):
-                    if older >= token:
-                        break
-                    self.pause_receipts.pop(older)
-                self.hooks.diagnostics().pause_ack(receipt.trace, receipt.trigger_nanos, nanos)
-                self.hooks.pause_timeline(nanos)
-            else:
-                if receipt.pause_nanos is None or not receipt.resume_requested:
-                    return
-                self.pause_receipts.pop(token)
-                self.hooks.diagnostics().mark(receipt.trace, 'resume_ack')
-                self.hooks.resume_timeline(nanos)
-            self.last_pause_receipt_nanos = nanos
-
     def pause_for_voice(self, trigger_nanos=None):
-        # A tentative pause retains generation; confirmed speech cancels later.
-        with self.hooks.lock, self.publication_lock:
-            if (
-                not self.device_can_pause
-                or not self.hooks.active()
-                or not self.playing
-                or self.begin_pending
-                or self.pause_state
-                or (time.monotonic() < self.pause_cooldown)
-            ):
-                return None
-            self.pause_serial += 1
-            token = self.pause_serial
-            trace = self.hooks.trace()
-            generation = self.hooks.generation()
-            if len(self.pause_receipts) >= self.MAX_PENDING_PAUSE_RECEIPTS:
-                self.pause_receipts.pop(next(iter(self.pause_receipts)))
-            self.pause_receipts[token] = PauseReceipt(
-                generation,
-                trace,
-                trigger_nanos if self.device_can_confirm_pause else None,
-            )
-            self.pause_state = {
-                'token': token,
-                'generation': generation,
-                'started': time.monotonic(),
-            }
-        self.hooks.diagnostics().mark(trace, 'pause_request')
-        self.hooks.event('playback_pause', generation=generation, token=token)
-        self.hooks.metric('barge_in_pauses', increment=True)
-        self.hooks.log('barge_in_tentative_pause', token=token, **self.hooks.echo_metrics())
-        return token
+        return self.pause.pause_for_voice(trigger_nanos)
 
     def resume_after_rejection(self, token, generation):
-        with self.hooks.lock:
-            state = self.pause_state
-            if (
-                token is None
-                or not state
-                or state['token'] != token
-                or (state['generation'] != generation)
-                or (not self.hooks.valid(generation))
-            ):
-                return
-            if self.hooks.utterance_paused(token):
-                return
-            receipt = self.pause_receipts.get(token)
-            if receipt is not None:
-                receipt.resume_requested = True
-            self.pause_state = None
-            self.pause_cooldown = time.monotonic() + 0.6
-        self.hooks.event('playback_resume', generation=generation, token=token)
-        self.hooks.metric('barge_in_resumed', increment=True)
-        self.hooks.log('barge_in_rejected_resumed', token=token)
-        with self.done:
-            self.done.notify_all()
+        return self.pause.resume_after_rejection(token, generation)
 
     def wait_playback(self, generation):
-        if not self.pause_state:
-            return 0.0
-        start = time.monotonic()
-        while self.hooks.valid(generation):
-            state = self.pause_state
-            if not state:
-                break
-            if time.monotonic() - state['started'] > 20:
-                # Rejection can resume playback or give another pause ownership
-                # within this generation while the timeout is being checked.
-                with self.hooks.lock:
-                    if not self.hooks.valid(generation):
-                        break
-                    if self.pause_state is not state:
-                        continue
-                    self.hooks.cancel_session('barge_in_timeout')
-                    self.hooks.status('listening', '插话识别超时，已停止旧播报')
-                break
-            with self.done:
-                self.done.wait(0.02)
-        return time.monotonic() - start
+        return self.pause.wait_playback(generation)
 
     def play(self, pcm, text, generation, role='assistant'):
         return self.play_stream(iter([pcm]), text, generation, role)

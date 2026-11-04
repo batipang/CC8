@@ -61,7 +61,7 @@ class WeakNearTests(unittest.TestCase):
         b.session.awake = True
         b.session.wake = False
         b.playback.playing = risky if playing is None else playing
-        b.playback.device_can_pause = True
+        b.playback.set_pause_capability(True)
         b.save_status = lambda: None
         replies = []
         b.recognition.hooks = replace(b.recognition.hooks, enqueue_response=replies.append)
