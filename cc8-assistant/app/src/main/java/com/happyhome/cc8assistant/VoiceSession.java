@@ -485,7 +485,17 @@ final class VoiceSession {
         dotChatSupported = Boolean.TRUE.equals(j.opt("supports_dot_chat_handoff"));
         savedTasksSupported = Boolean.TRUE.equals(j.opt("supports_saved_task_results"));
         listener.recognition(j.optString("asr_engine", "sensevoice"));
-        listener.state(recording ? "listening" : "idle", j.optString("message", "Mac 已连接，点击开始语音"));
+        synchronized (routeLock) {
+          if (!foreground || !currentRoute(route) || p.generation < minimumGeneration) return;
+          if (Boolean.TRUE.equals(j.opt("playback_interrupted_by_transport"))) {
+            if (!statusFeedback.transportInterruption(p.generation)) return;
+            phase = "error";
+            listener.state(phase, j.optString("message", "播报因连接切换中断，可在任务页查看已完成结果。"));
+          } else if (!statusFeedback.transportInterrupted(p.generation)) {
+            listener.state(
+                recording ? "listening" : "idle", j.optString("message", "Mac 已连接，点击开始语音"));
+          }
+        }
       } else if ("screen_sleep".equals(event)) {
         if (recording) listener.screen(true);
       } else if ("screen_wake".equals(event)) {
