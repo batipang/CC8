@@ -49,6 +49,7 @@ RENDER_CLOCK_CHECK = 'playback_clock_provenance'
 LEADING_ACOUSTIC_CHECK = 'leading_playback_acoustic_evidence'
 AWAKE_DIALOGUE_CHECK = 'synthetic_awake_dialogue'
 POST_DIALOGUE_SECONDS = 20
+STANDBY_SECONDS = 900
 
 
 class CheckFailure(RuntimeError):
@@ -305,6 +306,7 @@ class SmokeRun:
         self.speech_source_sha256 = hashlib.sha256(Path(voice_source).read_bytes()).hexdigest()
         self.expected_apk = expected_apk
         self.acoustic_evidence = None
+        self.standby_evidence = None
 
     def health(self):
         value = self.request({'operation': 'health'})
@@ -347,6 +349,7 @@ class SmokeRun:
             'acoustic_latency_asserted': False,
             'full_p0_acceptance': False,
             'acoustic_evidence': self.acoustic_evidence,
+            'standby_evidence': self.standby_evidence,
             'playback_probe_evidence': self.playback_probe_evidence,
             'capture_clock_evidence': self.capture_clock_evidence,
         }
@@ -561,9 +564,9 @@ class SmokeRun:
         )
         return self.capture_status()
 
-    def capture_status(self):
+    def capture_status(self, status=None):
         limit = self.capture_limit_ms
-        d, ui = self.device.status()
+        d, ui = self.device.status() if status is None else status
         require(
             type(d.get('test_capture_limit_ms')) is int
             and d['test_capture_limit_ms'] == limit
@@ -651,21 +654,44 @@ class SmokeRun:
         began = self.clock()
         self.start_capture()
         deadline = self.clock() + 970
+        evidence = {
+            'last_awake_seconds': None,
+            'black_screen_poll_started_seconds': None,
+            'first_black_screen_seconds': None,
+        }
+        self.standby_evidence = evidence
         while True:
+            poll_started = self.clock()
             h = self.health()
             require(
                 h.get('microphone_active') is True and h.get('connected') is True,
                 'idle_capture_or_connection_lost',
             )
             d, ui = self.device.status()
+            observed = self.clock()
+            require(observed <= deadline, 'idle_black_screen_timeout')
             require(ui.get('camera_open') is False, 'unexpected_camera_open')
-            if ui.get('screen_sleeping') is True:
-                require(d.get('foreground') is True, 'idle_left_foreground')
-                require(self.clock() - began >= 895, 'idle_black_screen_too_early')
-                break
-            require(self.clock() < deadline, 'idle_black_screen_timeout')
+            require(d.get('foreground') is True, 'idle_left_foreground')
+            self.capture_status((d, ui))
+            sleeping = ui.get('screen_sleeping')
+            require(type(sleeping) is bool, 'idle_screen_state_unavailable')
+            if sleeping:
+                evidence['black_screen_poll_started_seconds'] = round(poll_started - began, 3)
+                evidence['first_black_screen_seconds'] = round(observed - began, 3)
+                require(
+                    poll_started - began >= STANDBY_SECONDS,
+                    'idle_black_screen_too_early',
+                )
+                require(evidence['last_awake_seconds'] is not None, 'idle_awake_state_unobserved')
+                require(
+                    h.get('waiting_for_wake') is True and h.get('local_wake_ready') is True,
+                    'idle_local_wake_not_ready',
+                )
+                return
+            evidence['last_awake_seconds'] = round(observed - began, 3)
+            require(observed < deadline, 'idle_black_screen_timeout')
             self.checkpoint(self.report('running'))
-            self.sleep(5)
+            self.sleep(min(5, deadline - observed))
 
     def diagnostic_requests(self):
         rows = self.request({'operation': 'diagnostics'}).get('requests')
@@ -680,25 +706,28 @@ class SmokeRun:
     def acoustic_probe(self, *, awake=False):
         # A computer speaker is a synthetic source with unknown room geometry.
         # This can verify the live chain, never a human recall rate or dB level.
-        d, ui = self.device.status()
-        sleeping_before = not awake
+        h = self.health()
         require(
-            ui.get('screen_sleeping') is sleeping_before and d.get('microphone_active') is True,
+            h.get('connected') is True
+            and h.get('transport') == 'usb'
+            and h.get('microphone_active') is True
+            and h.get('playing') is False
+            and h.get('calibrating') is False
+            and h.get('waiting_for_wake') is True
+            and h.get('local_wake_ready') is True,
             'acoustic_probe_requires_idle_capture',
         )
         rows = self.diagnostic_requests()
         ids = {r['request_id'] for r in rows}
-        if awake:
-            d = self.require_idle_probe_capture()
-            h = self.health()
-            require(h.get('waiting_for_wake') is True, 'awake_dialogue_not_waiting_for_wake')
-            require(all(r.get('outcome') is not None for r in rows), 'owner_request_pending')
-            # Leave room for the bounded speech command, post-playback
-            # observation and the final diagnostic query before capture expires.
-            reserve = POST_DIALOGUE_SECONDS + 5
-            available = d['test_capture_remaining_ms'] / 1000
-            require(available > 20 + reserve, 'awake_dialogue_capture_budget_insufficient')
-            response_deadline = self.clock() + available - reserve
+        require(all(r.get('outcome') is not None for r in rows), 'owner_request_pending')
+        d, ui = self.device.status()
+        require(ui.get('screen_sleeping') is (not awake), 'acoustic_probe_screen_state_invalid')
+        d = self.capture_status((d, ui))
+        # Reserve space for the speech command and post-playback observation.
+        reserve = POST_DIALOGUE_SECONDS + 5
+        available = d['test_capture_remaining_ms'] / 1000
+        require(available > 20 + reserve, 'acoustic_probe_capture_budget_insufficient')
+        response_deadline = self.clock() + available - reserve
         self.device.speak_probe()
 
         admitted_id = None
@@ -710,8 +739,7 @@ class SmokeRun:
                 health.get('connected') is True and health.get('microphone_active') is True,
                 'acoustic_capture_or_connection_lost',
             )
-            if awake:
-                require(health.get('transport') == 'usb', 'awake_dialogue_usb_changed')
+            require(health.get('transport') == 'usb', 'acoustic_probe_usb_changed')
             rows = [
                 r
                 for r in self.diagnostic_requests()
@@ -771,20 +799,14 @@ class SmokeRun:
             )
             return any(
                 r.get('outcome') == 'completed'
-                and (
-                    not awake
-                    or (
-                        r.get('task_outcome') == 'completed'
-                        and 'playout_ack' in r.get('stages', {})
-                    )
-                )
-                and {'wake_detected', 'asr_end', 'brain_start', 'playback_done'}
+                and r.get('task_outcome') == 'completed'
+                and {'wake_detected', 'asr_end', 'brain_start', 'playout_ack', 'playback_done'}
                 <= set(r.get('stages', {}))
                 for r in admitted
             )
 
-        response_seconds = min(120, response_deadline - self.clock()) if awake else 120
-        require(response_seconds > 0, 'awake_dialogue_capture_budget_insufficient')
+        response_seconds = min(120, response_deadline - self.clock())
+        require(response_seconds > 0, 'acoustic_probe_capture_budget_insufficient')
         self.wait(received, response_seconds, 'synthetic_acoustic_chain_not_confirmed')
         # An immediate cleanup could hide a post-answer echo turn. Keep one
         # bounded observation window. An extra admitted dialogue fails, while
@@ -811,6 +833,7 @@ class SmokeRun:
             ui.get('screen_sleeping') is False and d.get('foreground') is True,
             'awake_dialogue_left_foreground' if awake else 'acoustic_probe_did_not_wake_foreground',
         )
+        self.capture_status((d, ui))
 
     def cleanup(self):
         if not self.touched:
