@@ -114,10 +114,11 @@ class DripServer:
 
 
 class ConnectProxy:
-    """One bounded plaintext CONNECT tunnel to the local TLS fixture."""
+    """One bounded CONNECT tunnel to the local TLS fixture."""
 
-    def __init__(self, target_port):
+    def __init__(self, target_port, context=None):
         self.target_port = target_port
+        self.context = context
         self.stopped, self.tunnelled = threading.Event(), threading.Event()
         self.errors = []
         self.listener = socket.socket()
@@ -133,6 +134,8 @@ class ConnectProxy:
         try:
             client, _ = self.listener.accept()
             client.settimeout(1)
+            if self.context is not None:
+                client = self.context.wrap_socket(client, server_side=True)
             data = b''
             while b'\r\n\r\n' not in data:
                 piece = client.recv(4096)
@@ -689,26 +692,28 @@ class HTTPBudgetTLS(unittest.TestCase):
             server.close()
 
     def test_successful_connect_tunnel_preserves_verified_tls_and_json(self):
-        server = DripServer(self.context, 'immediate', b'{"value":1}')
-        proxy = ConnectProxy(server.port)
-        try:
-            client = self.client(server)
-            original_factory = client.factory
+        for scheme in ('http', 'https'):
+            with self.subTest(proxy_scheme=scheme):
+                server = DripServer(self.context, 'immediate', b'{"value":1}')
+                proxy = ConnectProxy(server.port, self.context if scheme == 'https' else None)
+                try:
+                    client = self.client(server)
+                    original_factory = client.factory
 
-            def factory():
-                session = original_factory()
-                session.proxies = {'https': f'http://127.0.0.1:{proxy.port}'}
-                return session
+                    def factory():
+                        session = original_factory()
+                        session.proxies = {'https': f'{scheme}://localhost:{proxy.port}'}
+                        return session
 
-            client.factory = factory
-            client.timeout = (0.5, 0.5)
-            self.assertEqual(client.post_json('/v1/test', {}), {'value': 1})
-            self.assertTrue(proxy.tunnelled.is_set())
-            self.assertTrue(server.headers_received.is_set())
-            self.assertEqual(client.slots, set())
-        finally:
-            proxy.close()
-            server.close()
+                    client.factory = factory
+                    client.timeout = (0.5, 0.5)
+                    self.assertEqual(client.post_json('/v1/test', {}), {'value': 1})
+                    self.assertTrue(proxy.tunnelled.is_set())
+                    self.assertTrue(server.headers_received.is_set())
+                    self.assertEqual(client.slots, set())
+                finally:
+                    proxy.close()
+                    server.close()
 
     def test_tls_after_connect_inherits_only_remaining_connection_time(self):
         now = 0.0
