@@ -6,7 +6,10 @@ import sys
 import threading
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
+from app_runtime import reconcile_transport
+from bridge import Bridge
 from protocol import Packet
 from release_info import RELEASE
 from transport import TransportHub
@@ -88,6 +91,8 @@ class USBPipeTests(unittest.TestCase):
         pipe = self.peer(reject_writes=True)
         hub = self.hub()
         wifi = self.wifi(hub)
+        hub.selected(wifi)
+        switches = hub.switches
         usb = hub.register(pipe, 'usb')
         self.assertEqual(hub.events.get(timeout=2), ('up', usb, None))
         try:
@@ -97,6 +102,46 @@ class USBPipeTests(unittest.TestCase):
         self.assertTrue(usb.closed)
         self.assertIs(hub.preferred(), wifi)
         self.assertFalse(wifi.closed)
+        self.assertIs(hub.active, wifi)
+        self.assertEqual(hub.switches, switches)
+
+    def test_failed_upgrade_keeps_live_session_until_another_usb_activates(self):
+        hub = self.hub()
+        wifi = self.wifi(hub)
+        with patch('threading.Thread.start'):
+            bridge = Bridge(None, None)
+        bridge.save_status = lambda: None
+        self.assertTrue(reconcile_transport(bridge, hub))
+        bridge.session.active = True
+        bridge.session.epoch = 7
+        bridge.playback.playing = True
+        generation = bridge.generation
+        bridge.workspace.task_start(generation, '固定测试任务')
+
+        broken = hub.register(self.peer(reject_writes=True), 'usb')
+        self.assertEqual(hub.events.get(timeout=2), ('up', broken, None))
+        self.assertTrue(reconcile_transport(bridge, hub))
+        self.assertTrue(broken.closed)
+        self.assertIs(bridge.session.connection, wifi)
+        self.assertEqual(bridge.generation, generation)
+        self.assertTrue(bridge.playback.playing)
+        self.assertEqual(bridge.workspace.tasks[-1]['status'], 'running')
+        self.assertFalse(reconcile_transport(bridge, hub))
+        self.assertEqual(hub.events.get(timeout=2), ('down', broken, None))
+
+        host, peer = socket.socketpair()
+        self.addCleanup(peer.close)
+        usb = hub.register(host, 'usb')
+        peer.sendall(HELLO)
+        self.assertEqual(hub.events.get(timeout=2), ('up', usb, None))
+        self.assertTrue(reconcile_transport(bridge, hub))
+        self.assertIs(hub.active, usb)
+        self.assertIs(bridge.session.connection, usb)
+        self.assertEqual(bridge.generation, generation + 1)
+        self.assertTrue(bridge.session.active)
+        self.assertEqual(bridge.session.epoch, 7)
+        self.assertFalse(bridge.playback.playing)
+        self.assertEqual(bridge.workspace.tasks[-1]['status'], 'cancelled')
 
     def test_pipe_timeout_invalidates_direct_callers_and_does_not_append_bytes(self):
         pipe = self.peer()
