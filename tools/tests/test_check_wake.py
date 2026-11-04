@@ -1,5 +1,6 @@
 """Public synthetic checks never silently treat missing/failed inputs as success."""
 
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -26,7 +27,11 @@ class SyntheticWakeTests(unittest.TestCase):
     def rows(self):
         return [
             dict(
-                case=c[0], expected_keyword=c[4], state='measured', **{k: c[4] for k in CONDITIONS}
+                case=c[0],
+                expected_keyword=c[4],
+                state='measured',
+                fixture_pcm_sha256=hashlib.sha256(c[0].encode()).hexdigest(),
+                **{k: c[4] for k in CONDITIONS},
             )
             for c in CASES
         ]
