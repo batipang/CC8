@@ -1,5 +1,11 @@
 # Changelog
 
+## Backend 0.14.52 — keep working echo processors on rebuild failure
+
+- Publish the replacement echo processors and alignment only after the new
+  pair is warm. Release partial allocations and keep the prior pair on failure.
+- Publish host capture only once its echo processors have initialized.
+
 ## Backend 0.14.51 — treat a punctuated wake name as wake-only
 
 - Keep listening when a locally accepted wake name is followed only by

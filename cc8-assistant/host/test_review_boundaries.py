@@ -7,7 +7,10 @@ import subprocess
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+
+import numpy as np
+from dsp import FRAME
 
 from bridge import Bridge
 from dot_client import DotBrain, Turn, answer_sources
@@ -247,6 +250,69 @@ class CaptureAndTransportTests(unittest.TestCase):
         self.assertIs(value.capture.echo.aec, state)
         self.assertEqual(value.capture.echo.calibration_frames, [('new',)])
         self.assertTrue(value.calibration.active)
+
+    def test_calibration_rebuild_failure_leaves_the_working_pair_and_shift(self):
+        for failure in ('create_stop_processor', 'warm_stop_processor'):
+            with self.subTest(failure=failure):
+                value = self.bridge()
+                value.session.active = True
+                value.session.connection = object()
+                value.capture.endpoint.fast_stop = Mock()
+                echo = value.capture.echo
+                old, old_stop = Mock(), Mock()
+                new, new_stop = Mock(), Mock()
+                echo.aec, echo.stop_aec = old, old_stop
+                echo.reference_shift_ns = 25_000_000
+                samples = [(index * 10_000_000, np.zeros(FRAME)) for index in range(100)]
+                echo.calibration_frames = list(samples)
+                error = RuntimeError('native fixture failed')
+                if failure == 'warm_stop_processor':
+                    new_stop.process.side_effect = error
+                processors = [new, error if failure == 'create_stop_processor' else new_stop]
+                with (
+                    patch('bridge.WebRtcEchoCanceller', side_effect=processors),
+                    patch('echo_pipeline.estimate_reference_shift', return_value=(160, 0.5)),
+                    self.assertRaises(RuntimeError),
+                ):
+                    value.align_reference(value.session.generation)
+                old.close.assert_not_called()
+                old_stop.close.assert_not_called()
+                new.close.assert_called_once()
+                self.assertEqual(new_stop.close.call_count, int(failure == 'warm_stop_processor'))
+                self.assertIs(echo.aec, old)
+                self.assertIs(echo.stop_aec, old_stop)
+                self.assertEqual(echo.reference_shift_ns, 25_000_000)
+                echo.process(1_000_000_000, np.zeros(FRAME))
+                old.process.assert_called_once()
+                old_stop.process.assert_called_once()
+
+    def test_partial_native_start_does_not_publish_capture_or_accept_rebind(self):
+        value = self.bridge()
+        value.session.connection = object()
+        value.capture.endpoint.fast_stop = Mock()
+        first, retry, retry_stop = Mock(), Mock(), Mock()
+        error = RuntimeError('second native processor failed')
+        with (
+            patch('bridge.WebRtcEchoCanceller', side_effect=[first, error, retry, retry_stop]),
+            patch('threading.Thread.start') as start,
+        ):
+            with self.assertRaises(RuntimeError):
+                value.on_event({'event': 'session_start', 'epoch': 7})
+            first.close.assert_called_once()
+            self.assertFalse(value.session.active)
+            self.assertTrue(value.session.capture_start_required)
+            self.assertFalse(value.calibration.active)
+            self.assertIsNone(value.capture.echo.aec)
+            self.assertIsNone(value.capture.echo.stop_aec)
+            value.on_event({'event': 'session_rebind', 'epoch': 7, 'capture_active': True})
+            self.assertFalse(value.session.active)
+            start.assert_not_called()
+            value.on_event({'event': 'session_start', 'epoch': 8})
+            self.assertTrue(value.session.active)
+            self.assertEqual(value.session.epoch, 8)
+            self.assertIs(value.capture.echo.aec, retry)
+            self.assertIs(value.capture.echo.stop_aec, retry_stop)
+            start.assert_called_once()
 
     def test_cancel_during_alignment_cannot_finish_the_next_calibration(self):
         value = self.bridge()
