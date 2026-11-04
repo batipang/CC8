@@ -77,7 +77,9 @@ def plan(before_root, after_root, assistant_apk=None):
     return value
 
 
-def verify_assistant_transition(baseline_root, candidate_root, recovery_root, baseline_apk, pin):
+def verify_assistant_transition(
+    baseline_root, candidate_root, recovery_root, baseline_apk, pin, *, observation_path=None
+):
     """Bind the two source builds to a previously verified baseline APK."""
     from tools.apk_signing import require_same_signers
     from tools.release import check_apk, check_build_receipt, digest, git_state
@@ -149,6 +151,21 @@ def verify_assistant_transition(baseline_root, candidate_root, recovery_root, ba
     if any(digest(apk) != item['sha256'] for apk, item in zip(apks, artifacts)):
         raise ValueError('An APK changed during transition verification')
 
+    observation = {}
+    if observation_path is not None:
+        from audit_observation import audit, load_report
+
+        recorded = load_report(observation_path)
+        checked = audit(recorded, before.backend_version)
+        observation['observation_gate'] = {
+            'baseline_backend_version': before.backend_version,
+            'report_sha256': fingerprint(recorded),
+            'window_verified': checked['window_verified'],
+            'successful_polls': checked['successful_polls'],
+            'elapsed_seconds': checked['elapsed_seconds'],
+            'reasons': checked['reasons'],
+        }
+
     return {
         'schema_version': 1,
         'kind': 'cc8_assistant_transition_artifacts',
@@ -167,6 +184,7 @@ def verify_assistant_transition(baseline_root, candidate_root, recovery_root, ba
         'installed_signer_checked': False,
         'ready_for_installation': False,
         'device_acceptance': 'not_asserted',
+        **observation,
     }
 
 
@@ -286,6 +304,11 @@ def main(argv=None):
     transition.add_argument('--recovery-root', type=Path, required=True)
     transition.add_argument('--baseline-apk', type=Path, required=True)
     transition.add_argument('--baseline-sha256', required=True)
+    transition.add_argument(
+        '--observation-report',
+        type=Path,
+        help='Also require a complete 72-hour private report for the baseline backend version',
+    )
     transition.add_argument('--output', type=Path)
     saved = commands.add_parser(
         'backup', help='Explicitly save only one non-secret settings profile'
@@ -320,18 +343,24 @@ def main(argv=None):
                 args.recovery_root,
                 args.baseline_apk,
                 args.baseline_sha256,
+                observation_path=args.observation_report,
             )
         elif args.action == 'stage-restore':
             value = verify_backup(args.backup)
         else:
             value = plan(args.from_root, args.to_root, args.assistant_apk)
         print(output(value, args.output))
-        return 2 if args.action == 'plan' and not value['declared_protocol_compatible'] else 0
+        if args.action == 'plan' and not value['declared_protocol_compatible']:
+            return 2
+        if args.action == 'verify-transition' and args.observation_report is not None:
+            return 0 if value['observation_gate']['window_verified'] else 2
+        return 0
     except (
         OSError,
         ValueError,
         TypeError,
         KeyError,
+        OverflowError,
         RecursionError,
         RuntimeError,
         ConfigError,
