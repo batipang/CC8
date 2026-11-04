@@ -220,10 +220,10 @@ class PlayoutReceiptTests(unittest.TestCase):
         run = DiagnosticRun()
         run.ingest(book.report())
         book.begin('announcement', 1)
-        book.mark(1, 'playout_ack')
-        book.playback_done(1, confirmed=True)
+        ack = book.mark(1, 'playout_ack')
+        book.playback_done(1, confirmed_ack_ms=ack)
         run.ingest(book.report())
-        book.playback_done(1, confirmed=True)
+        book.playback_done(1, confirmed_ack_ms=book.mark(1, 'playout_ack'))
         book.finish(1, 'completed')
         run.ingest(book.report())
         for invalid in (None, True, 1, 3, 65536):
@@ -236,7 +236,7 @@ class PlayoutReceiptTests(unittest.TestCase):
                     row['confirmed_playback_clauses'] = invalid
                 with self.assertRaises(ValueError):
                     run.ingest(snapshot)
-        book.playback_done(1, confirmed=True)
+        book.playback_done(1, confirmed_ack_ms=ack)
         self.assertEqual(book.report()['requests'][0]['confirmed_playback_clauses'], 2)
         self.assertEqual(run.report()['requests'][0]['confirmed_playback_clauses'], 2)
 

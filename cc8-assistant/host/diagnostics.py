@@ -40,6 +40,8 @@ STAGES = (
             'render_ack',
             'playout_ack',
             'playback_done',
+            'confirmed_playout_ack',
+            'confirmed_playback_done',
             'task_result',
             'pause_request',
             'pause_ack',
@@ -256,6 +258,7 @@ class TraceBook:
             return row['request_id'] if row else self.begin(origin, generation)
 
     def mark(self, key, stage):
+        """Keep the first stage timestamp, returning this observation's elapsed time."""
         if stage not in STAGES:
             raise ValueError('Unknown diagnostic stage')
         with self.lock:
@@ -269,7 +272,9 @@ class TraceBook:
                 }.get(stage)
                 if phase:
                     row['active_stage'] = phase
-                row['stages'].setdefault(stage, round((self.clock() - row['started']) * 1000, 1))
+                elapsed = round((self.clock() - row['started']) * 1000, 1)
+                row['stages'].setdefault(stage, elapsed)
+                return elapsed
 
     def pause_ack(self, key, trigger_nanos, applied_nanos):
         with self.lock:
@@ -318,14 +323,18 @@ class TraceBook:
             if field:
                 row[field] = reused
 
-    def playback_done(self, generation, *, confirmed):
+    def playback_done(self, generation, *, confirmed_ack_ms):
         with self.lock:
-            self.mark(generation, 'playback_done')
+            completed_ms = self.mark(generation, 'playback_done')
             row = self._row(generation)
-            if confirmed and row is not None and row['outcome'] is None:
+            if confirmed_ack_ms is not None and row is not None and row['outcome'] is None:
                 row['confirmed_playback_clauses'] = min(
                     row.get('confirmed_playback_clauses', 0) + 1, MAX_CONFIRMED_PLAYBACK_CLAUSES
                 )
+                # Keep both timestamps from the first matched clause. The
+                # request-wide first progress and completion can differ.
+                row['stages'].setdefault('confirmed_playout_ack', confirmed_ack_ms)
+                row['stages'].setdefault('confirmed_playback_done', completed_ms)
 
     def finish(self, key, outcome):
         if outcome not in OUTCOMES:

@@ -121,6 +121,16 @@ def receipt(value):
         ):
             raise ValueError('Invalid confirmed playback clause count')
         result['confirmed_playback_clauses'] = count
+    ack = clean_stages.get('confirmed_playout_ack')
+    done = clean_stages.get('confirmed_playback_done')
+    if (ack is not None or done is not None) and (
+        not result.get('confirmed_playback_clauses')
+        or ack is None
+        or done is None
+        or not clean_stages['playout_ack'] <= ack <= done
+        or clean_stages['playback_done'] > done
+    ):
+        raise ValueError('Invalid confirmed playback timing')
     if 'device_pause_from_trigger_ms' in value:
         elapsed = value['device_pause_from_trigger_ms']
         if (
@@ -203,8 +213,8 @@ def voice_playout_coverage(rows):
             else:
                 outcome = 'completed_with_confirmed_playout'
                 stages = row['stages']
-                end, ack = stages.get('utterance_end'), stages['playout_ack']
-                if end is not None and end <= ack <= stages['playback_done']:
+                end, ack = stages.get('utterance_end'), stages.get('confirmed_playout_ack')
+                if end is not None and ack is not None and end <= ack:
                     group['elapsed'].append(ack - end)
                 else:
                     group['untimed_confirmed'] += 1

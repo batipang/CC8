@@ -58,6 +58,7 @@ class PlaybackController:
         self.device_can_report_completion = False
         self.device_can_report_clock = False
         self.playout_probe = PlayoutReceipt()
+        self.current_clause_ack_ms = None
         self.playback_serial = 0
         self.previous_spoken = ''
         self.previous_spoken_until = 0
@@ -150,7 +151,9 @@ class PlaybackController:
                 ):
                     # The admission point precedes local stop/publication; its
                     # clock and trace key are always the Mac and this generation.
-                    self.hooks.diagnostics().mark(generation, 'playout_ack')
+                    self.current_clause_ack_ms = self.hooks.diagnostics().mark(
+                        generation, 'playout_ack'
+                    )
                     self.hooks.metric('playout_receipts', increment=True)
             return
         if name == 'play_done':
@@ -182,7 +185,10 @@ class PlaybackController:
                         and type(played) is int
                         and self.playout_probe.observed(generation, clock_id)
                     )
-                    self.hooks.diagnostics().playback_done(generation, confirmed=confirmed)
+                    self.hooks.diagnostics().playback_done(
+                        generation,
+                        confirmed_ack_ms=self.current_clause_ack_ms if confirmed else None,
+                    )
                     self.completed = {generation}
                     self.playing = False
                     self.begin_pending = False
@@ -293,6 +299,7 @@ class PlaybackController:
                 self.end_frames = None
                 self.last_spoken = text
                 self.spoken.append((time.monotonic(), text))
+                self.current_clause_ack_ms = None
                 self.playback_serial += 1
                 playback_id = self.playback_serial
                 request_playout = self.device_can_report_playout

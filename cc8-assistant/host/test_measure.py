@@ -70,18 +70,20 @@ class MeasurementTests(unittest.TestCase):
             'playout_ack': 350,
             'playback_done': 650,
         }
+        confirmed = dict(stages, confirmed_playout_ack=375, confirmed_playback_done=700)
         variants = [
             {},
-            {'stages': {k: v for k, v in stages.items() if k != 'utterance_end'}},
-            {'stages': dict(stages, utterance_end=400)},
+            {'stages': {k: v for k, v in confirmed.items() if k != 'utterance_end'}},
+            {'stages': dict(confirmed, utterance_end=400)},
+            {'stages': stages},
             {'outcome': 'cancelled'},
             {'outcome': 'failed', 'error': {'stage': 'playback', 'kind': 'timeout'}},
             {'outcome': 'rejected', 'gate': 'wake_closed', 'generation': None},
             {'outcome': None},
-            {'confirmed_playback_clauses': None},
+            {'confirmed_playback_clauses': None, 'stages': stages},
             {'task_outcome': None},
             {'origin': 'text', 'gate': None},
-            {'scenario': 'web', 'stages': dict(stages, playout_ack=600)},
+            {'scenario': 'web', 'stages': dict(confirmed, confirmed_playout_ack=600)},
         ]
         rows = []
         for index, changes in enumerate(variants, start=1):
@@ -95,7 +97,7 @@ class MeasurementTests(unittest.TestCase):
                 'task_outcome': 'completed',
                 'error': None,
                 'confirmed_playback_clauses': 1,
-                'stages': stages,
+                'stages': confirmed,
             }
             row.update(changes)
             for field in ('gate', 'task_outcome', 'confirmed_playback_clauses'):
@@ -106,13 +108,13 @@ class MeasurementTests(unittest.TestCase):
         report = book.report()
         coverage = report['voice_playout_coverage']
         qa = coverage['qa']
-        self.assertEqual(qa['observed_voice_requests'], 9)
-        self.assertEqual(qa['terminal_for_rate'], 7)
-        self.assertEqual(qa['confirmed_response_rate'], 3 / 7)
+        self.assertEqual(qa['observed_voice_requests'], 10)
+        self.assertEqual(qa['terminal_for_rate'], 8)
+        self.assertEqual(qa['confirmed_response_rate'], 4 / 8)
         self.assertEqual(
             qa['outcomes'],
             {
-                'completed_with_confirmed_playout': 3,
+                'completed_with_confirmed_playout': 4,
                 'cancelled': 1,
                 'failed': 1,
                 'rejected': 1,
@@ -121,8 +123,8 @@ class MeasurementTests(unittest.TestCase):
                 'completed_without_response_receipt': 1,
             },
         )
-        self.assertEqual(qa['confirmed_without_valid_timing'], 2)
-        self.assertEqual(qa['utterance_to_first_playout_ack_ms'], dict(samples=1, p50=250, p95=250))
+        self.assertEqual(qa['confirmed_without_valid_timing'], 3)
+        self.assertEqual(qa['utterance_to_first_playout_ack_ms'], dict(samples=1, p50=275, p95=275))
         self.assertEqual(coverage['web']['utterance_to_first_playout_ack_ms']['p95'], 500)
         self.assertIsNone(coverage['tool']['confirmed_response_rate'])
         self.assertGreater(

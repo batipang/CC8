@@ -60,12 +60,14 @@ class AnnouncementTests(unittest.TestCase):
         self.assertNotIn('confirmed_playback_clauses', row)
 
     def test_two_clauses_require_matched_playout_and_framed_completion(self):
-        for missing in (None, 'start', 'frames'):
+        for missing in (None, 'start', 'frames', 'first_frames', 'first_start'):
             with self.subTest(missing=missing):
                 b = self.bridge()
                 b.playback.set_playout_capability(True)
                 b.playback.set_completion_capability(True)
                 begins = []
+                now = [100.0]
+                b.diagnostics.clock = lambda: now[0]
 
                 def inject(name, generation, playback_id, **fields):
                     payload = dict(
@@ -78,9 +80,10 @@ class AnnouncementTests(unittest.TestCase):
                         packet = receive(Fragmented(raw))
                         if packet.kind == SPEAKER:
                             current = begins[-1]
+                            now[0] = 100.0 + len(begins) / 4
                             if len(begins) == 2:
                                 self.progress(begins[0], packet)
-                            if len(begins) == 1 or missing != 'start':
+                            if (len(begins), missing) not in ((1, 'first_start'), (2, 'start')):
                                 self.progress(current, packet)
                                 self.progress(current, packet)
                         elif packet.kind == EVENT:
@@ -89,6 +92,7 @@ class AnnouncementTests(unittest.TestCase):
                                 begins.append(event)
                             if event['event'] == 'play_end':
                                 ident = begins[-1]['playback_id']
+                                now[0] += 0.125
                                 if len(begins) == 2:
                                     inject(
                                         'play_done', packet.generation, ident - 1, played_frames=320
@@ -96,7 +100,8 @@ class AnnouncementTests(unittest.TestCase):
                                 inject('play_done', packet.generation, ident, played_frames=319)
                                 fields = (
                                     {}
-                                    if len(begins) == 2 and missing == 'frames'
+                                    if (len(begins), missing)
+                                    in ((1, 'first_frames'), (2, 'frames'))
                                     else {'played_frames': 320}
                                 )
                                 inject('play_done', packet.generation, ident, **fields)
@@ -124,6 +129,16 @@ class AnnouncementTests(unittest.TestCase):
                 rows = b.diagnostics_report()['requests']
                 self.assertEqual(len(rows), 1)
                 self.assertEqual(rows[0]['confirmed_playback_clauses'], 2 if missing is None else 1)
+                stages = rows[0]['stages']
+                self.assertEqual(stages['playout_ack'], 500 if missing == 'first_start' else 250)
+                self.assertEqual(stages['playback_done'], 375)
+                first_confirmed_is_second = missing in ('first_frames', 'first_start')
+                self.assertEqual(
+                    stages['confirmed_playout_ack'], 500 if first_confirmed_is_second else 250
+                )
+                self.assertEqual(
+                    stages['confirmed_playback_done'], 625 if first_confirmed_is_second else 375
+                )
 
     def test_cancelled_announcement_cannot_resume_audio(self):
         b = self.bridge(interrupt=True)
