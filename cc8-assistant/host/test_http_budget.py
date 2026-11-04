@@ -270,8 +270,20 @@ class HTTPBudgetTLS(unittest.TestCase):
     def test_responsive_drip_sse_cannot_extend_request_forever(self):
         self.assert_drip_timeout('body', 'events')
 
-    def test_proxy_connect_drip_is_subject_to_the_same_budget(self):
-        self.assert_drip_timeout('proxy_headers', 'post_json')
+    def test_proxy_connect_drip_cannot_spend_the_response_read_budget(self):
+        proxy = DripServer(self.context, 'proxy_headers', b'')
+        try:
+            client = self.client(proxy)
+            client.timeout = (0.35, 1.65)
+            started = time.monotonic()
+            with self.assertRaises(MiniMaxError) as failure:
+                client.post_json('/v1/test', {})
+            self.assertEqual(failure.exception.kind, 'timeout')
+            self.assertTrue(proxy.headers_received.is_set())
+            self.assertLess(time.monotonic() - started, 1.25)
+            self.assertEqual(client.slots, set())
+        finally:
+            proxy.close()
 
     def assert_normal_verified_tls_asr_json_and_sse(self):
         bodies = (
@@ -693,6 +705,51 @@ class HTTPBudgetTLS(unittest.TestCase):
             self.assertEqual(client.post_json('/v1/test', {}), {'value': 1})
             self.assertTrue(proxy.tunnelled.is_set())
             self.assertTrue(server.headers_received.is_set())
+            self.assertEqual(client.slots, set())
+        finally:
+            proxy.close()
+            server.close()
+
+    def test_tls_after_connect_inherits_only_remaining_connection_time(self):
+        now = 0.0
+        original_recv = BudgetSocket.recv_into
+        original_wrap = ssl.SSLContext.wrap_socket
+        timeouts = []
+
+        def recv(peer, *args):
+            nonlocal now
+            count = original_recv(peer, *args)
+            if now == 0:
+                now = 0.75
+            return count
+
+        def wrap(context, peer, *args, **kwargs):
+            if not kwargs.get('server_side'):
+                timeouts.append(peer.gettimeout())
+            return original_wrap(context, peer, *args, **kwargs)
+
+        server = DripServer(self.context, 'immediate', b'{"value":1}')
+        proxy = ConnectProxy(server.port)
+        try:
+            client = self.client(server)
+            original_factory = client.factory
+
+            def factory():
+                session = original_factory()
+                session.proxies = {'https': f'http://127.0.0.1:{proxy.port}'}
+                return session
+
+            client.factory = factory
+            client.timeout = (1, 1)
+            with (
+                patch(
+                    'minimax_client.IOBudget', side_effect=lambda n: IOBudget(n, clock=lambda: now)
+                ),
+                patch.object(BudgetSocket, 'recv_into', recv),
+                patch.object(ssl.SSLContext, 'wrap_socket', wrap),
+            ):
+                self.assertEqual(client.post_json('/v1/test', {}), {'value': 1})
+            self.assertEqual(timeouts, [0.25])
             self.assertEqual(client.slots, set())
         finally:
             proxy.close()
