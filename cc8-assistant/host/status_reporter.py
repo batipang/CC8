@@ -116,6 +116,7 @@ class StatusReporter:
             'mic_frames': metrics.get('mic_frames', 0),
             'render_frames': metrics.get('render_frames', 0),
             'local_wake_count': metrics.get('local_wake_count', 0),
+            'local_wake_english_count': metrics.get('local_wake_english_count', 0),
             'voice_asr_attempts': metrics.get('voice_asr_attempts', 0),
             'fast_stop_ready': endpoint.fast_stop is not None,
             'fast_stop_count': metrics.get('fast_stop_count', 0),

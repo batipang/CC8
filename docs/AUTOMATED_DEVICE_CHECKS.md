@@ -264,6 +264,17 @@ APK 0.9.34（code 71）在同一轮另外记录 `device_stop_to_visuals_cleared_
 此后才加入上述阶段计数与20秒窗口。五项新增离线回归在原检查器复现七处断言失败、零fixture错误；补强后定向29项及完整主机729项通过。该结果是检查器的软件验证，不追认三轮现场执行了新门控；后台、APK、音频阈值和模型未随此次检查器变更部署。
 
 
+## 英文唤醒的实机检查
+
+后台 0.14.67 增加独立的英文实机用例。默认只打印计划，长稳观察结束后可加 `--execute`，使用 Mac 固定合成语句 “Bumblebee, what is three plus five?”。脚本验证新增一次英文唤醒、固定问题的同代任务和播放完成回执，并检查播完后的 20 秒及双端停采。报告只保存计数、匹配结果和时序。
+
+```sh
+./cc8 verify-device --runtime-root /absolute/live/workspace --capture --awake-dialogue --english-wake
+./cc8 verify-device --runtime-root /absolute/live/workspace --capture --standby --acoustic --english-wake
+```
+
+第一条在亮屏时测试，第二条先等待真实的 15 分钟应用内黑屏。英文样本的合成音色和语速经过数字回放筛选，单句实机通过也不能推断一般真人唤醒率或远场表现。
+
 ## 无录音的英文唤醒回归
 
 ```sh

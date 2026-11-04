@@ -52,6 +52,8 @@ BARGE_ANNOUNCEMENT = (
 BARGE_QUERY = '换个问题，三加五等于几？'
 STOP_QUERY = '停一下'
 ASR_STOP_QUERY = '大黄蜂，别说了。'
+ENGLISH_QUESTION = 'What is three plus five?'
+ENGLISH_WAKE_MIN_BACKEND = '0.14.67'
 ACOUSTIC_QUESTION = QA_LATENCY_QUESTIONS[0]
 WAKE_SELF_TEXT = {
     'zh': '大黄蜂正在播报。现在只检查设备自己的声音。',
@@ -348,7 +350,24 @@ def matches_acoustic_question(workspace, generation, question=ACOUSTIC_QUESTION)
     title = matches[0].get('title')
     if not isinstance(title, str) or len(title) > 80:
         return False
+    if question == ENGLISH_QUESTION:
+        return (
+            re.fullmatch(
+                r"(?:bumble[ -]*bee[, :]+)?(?:what is|what's) (?:three|3) *(?:plus|\+) *(?:five|5)",
+                ' '.join(title.lower().split()).rstrip('?.!'),
+            )
+            is not None
+        )
     return normalize_question(title) == normalize_question(question)
+
+
+def english_wake_counts(health):
+    counts = tuple(health.get(key) for key in ('local_wake_count', 'local_wake_english_count'))
+    require(
+        all(type(value) is int and value >= 0 for value in counts) and counts[0] >= counts[1],
+        'english_wake_counters_unavailable',
+    )
+    return counts
 
 
 def rpc(path, request, timeout=5):
@@ -455,24 +474,36 @@ class Device:
         text = self.shell('dumpsys activity ' + COMPONENT)
         return objects(text, 'CC8_ASSISTANT_STATUS '), objects(text, 'HUD_UI_STATUS ')
 
-    def prepare_speech_probe(self):
-        return resolve_voice('Tingting')
+    def prepare_speech_probe(self, *, english=False):
+        return resolve_voice('Daniel' if english else 'Tingting')
 
     def speak_probe(
-        self, *, interruption=False, stop=False, asr_stop=False, question=ACOUSTIC_QUESTION
+        self,
+        *,
+        interruption=False,
+        stop=False,
+        asr_stop=False,
+        english=False,
+        question=ACOUSTIC_QUESTION,
     ):
-        require(question in ALL_QUESTIONS, 'unknown_synthetic_probe')
-        voice = self.prepare_speech_probe()
+        require(
+            question == ENGLISH_QUESTION if english else question in ALL_QUESTIONS,
+            'unknown_synthetic_probe',
+        )
+        voice = self.prepare_speech_probe(english=True) if english else self.prepare_speech_probe()
         phrase = ACOUSTIC_WAKE + '，' + question
         if interruption:
             phrase = BARGE_QUERY
         if stop:
             phrase = ASR_STOP_QUERY if asr_stop else STOP_QUERY
+        if english:
+            phrase = 'Bumblebee, ' + question.lower()
         subprocess.run(
             [
                 '/usr/bin/say',
                 '-v',
                 voice,
+                *(['-r', '155'] if english else []),
                 phrase,
             ],
             stdin=subprocess.DEVNULL,
@@ -500,6 +531,7 @@ class SmokeRun:
         standby=False,
         acoustic=False,
         awake_dialogue=False,
+        english_wake=False,
         latency_sample=False,
         latency_scenario='qa',
         qa_question=ACOUSTIC_QUESTION,
@@ -525,9 +557,10 @@ class SmokeRun:
         self.device, self.request = device, request
         self.capture, self.standby, self.acoustic = capture, standby, acoustic
         self.awake_dialogue = awake_dialogue
+        self.english_wake = english_wake
         self.latency_sample = latency_sample
         self.latency_scenario = latency_scenario
-        self.qa_question = qa_question
+        self.qa_question = ENGLISH_QUESTION if english_wake else qa_question
         self.response_acoustic_evidence = response_acoustic_evidence
         self.synthetic_barge = synthetic_barge
         self.synthetic_stop = synthetic_stop
@@ -654,9 +687,13 @@ class SmokeRun:
             self.checkpoint(self.report('running'))
 
     def preflight(self):
-        if self.acoustic or self.awake_dialogue or self.interruption_enabled:
+        if self.english_wake:
+            self.device.prepare_speech_probe(english=True)
+        elif self.acoustic or self.awake_dialogue or self.interruption_enabled:
             self.device.prepare_speech_probe()
         h = self.health()
+        if self.english_wake:
+            english_wake_counts(h)
         if self.multi_clause or self.wake_self_playback or self.echo_soak:
             require(h.get('clause_receipts_supported') is True, 'clause_receipts_unsupported')
         if self.wake_self_playback or self.active_handover or self.all_route_loss or self.echo_soak:
@@ -1371,7 +1408,11 @@ class SmokeRun:
                 and re.fullmatch('[a-f0-9]{32}', probe_token) is not None,
                 'response_acoustic_probe_not_armed',
             )
-        self.device.speak_probe(question=self.qa_question)
+        wake_before = english_wake_counts(h) if self.english_wake else None
+        if self.english_wake:
+            self.device.speak_probe(question=self.qa_question, english=True)
+        else:
+            self.device.speak_probe(question=self.qa_question)
 
         admitted_id = None
         recognized_stimulus_matches = None
@@ -1452,6 +1493,19 @@ class SmokeRun:
                     'post_playback_quiet_seconds', 0
                 ),
             }
+            if wake_before is not None:
+                local, english = english_wake_counts(health)
+                wake_delta = local - wake_before[0]
+                english_delta = english - wake_before[1]
+                self.acoustic_evidence.update(
+                    wake_language='en',
+                    local_wake_detections=wake_delta,
+                    english_wake_detections=english_delta,
+                )
+                require(
+                    0 <= english_delta <= wake_delta <= 1,
+                    'english_wake_counter_delta_invalid',
+                )
             self.checkpoint(self.report('running'))
             require(len(admitted) <= 1, 'unexpected_extra_voice_request')
             if admitted:
@@ -1469,6 +1523,9 @@ class SmokeRun:
                 ),
                 'synthetic_voice_request_not_completed',
             )
+            if wake_before is not None and self.acoustic_evidence['english_wake_detections'] != 1:
+                require(completed is None, 'synthetic_english_wake_not_confirmed')
+                return None
             return completed
 
         response_seconds = min(120, response_deadline - self.clock())
@@ -2607,6 +2664,11 @@ def main(argv=None):
         help='Play one public synthetic query while the screen is already awake',
     )
     parser.add_argument(
+        '--english-wake',
+        action='store_true',
+        help='Use one fixed English wake and question stimulus in an individual speech check',
+    )
+    parser.add_argument(
         '--synthetic-barge',
         action='store_true',
         help='Use one fixed Mac speech stimulus to interrupt a verified ongoing CC8 announcement',
@@ -2678,7 +2740,17 @@ def main(argv=None):
     asr_stop = args.stop_route == 'asr'
     if asr_stop and not args.synthetic_stop:
         parser.error('--stop-route asr requires --synthetic-stop')
-    bound_runtime = batch or asr_stop
+    if args.english_wake and (
+        batch
+        or not (args.awake_dialogue or args.acoustic)
+        or args.response_acoustic_evidence
+        or args.synthetic_stop
+        or args.synthetic_barge
+    ):
+        parser.error(
+            '--english-wake requires a separate --awake-dialogue or --standby --acoustic run'
+        )
+    bound_runtime = batch or asr_stop or args.english_wake
     background_receipt = None
     if any((args.background_scenario, args.background_wav, args.background_sha256)):
         background_receipt = {'kind': args.background_scenario, 'sha256': args.background_sha256}
@@ -2791,6 +2863,8 @@ def main(argv=None):
                     minimum_backend_version=ASR_STOP_MIN_BACKEND,
                     minimum_apk_code=STOP_VISUAL_MIN_APK_CODE,
                 )
+            if args.english_wake:
+                plan.update(wake_language='en', minimum_backend_version=ENGLISH_WAKE_MIN_BACKEND)
         print(json.dumps(plan, ensure_ascii=False, indent=2))
         return 0
     try:
@@ -2816,6 +2890,13 @@ def main(argv=None):
             'runtime_source_version_mismatch',
         )
         instance = health.get('runtime_instance')
+        if args.english_wake:
+            require(
+                tuple(map(int, manifest.backend_version.split('.')))
+                >= tuple(map(int, ENGLISH_WAKE_MIN_BACKEND.split('.'))),
+                'runtime_english_wake_evidence_unsupported',
+            )
+            english_wake_counts(health)
         if asr_stop:
             require(
                 tuple(map(int, manifest.backend_version.split('.')))
@@ -2930,6 +3011,7 @@ def main(argv=None):
                         latency_scenario=args.latency_scenario,
                         background=background,
                         stop_route=args.stop_route,
+                        english_wake=args.english_wake,
                         response_acoustic_evidence=(
                             args.response_acoustic_evidence
                             or 'response_acoustic_evidence' in enabled

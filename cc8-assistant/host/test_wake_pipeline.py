@@ -193,6 +193,10 @@ class WakePipelineTests(unittest.TestCase):
                 )
                 np.testing.assert_array_equal(audio[0], expected)
                 self.assertTrue(b.session.awake)
+                self.assertEqual(b.metrics['local_wake_count'], 1)
+                self.assertEqual(
+                    b.metrics.get('local_wake_english_count', 0), int(cue == 'Bumblebee')
+                )
                 self.assertTrue(
                     any(
                         name == 'transcript' and fields['text'] == '常州属于哪个省'
@@ -221,6 +225,7 @@ class WakePipelineTests(unittest.TestCase):
                 self.assertEqual(audio, [])
                 self.assertEqual(requests, [])
                 self.assertEqual(b.metrics['wake_render_rejections'], 1)
+                self.assertEqual(b.metrics.get('local_wake_english_count', 0), 0)
 
     def test_recent_playback_end_guards_wake_when_render_reference_is_missing(self):
         for cue in ('大黄蜂', 'Bumblebee'):
