@@ -1,5 +1,11 @@
 # Changelog
 
+## Backend 0.14.46 — bound MiniMax search retries
+
+- Retry read-only MiniMax search at most once on HTTP 502, 503 or 504 without
+  a Retry-After header. Both attempts share the original network budget and
+  turn cancellation.
+
 ## Assistant 0.9.30 — discard obsolete playback UI updates
 
 - Check playback ownership both when publishing a caption or state and when

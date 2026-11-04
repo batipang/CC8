@@ -164,6 +164,7 @@
   - 依赖：P0-01、P0-02；本地唤醒场景依赖 P0-03。范围：CC8 / Mac 联调。不改变“应用内黑屏仍在前台”的既有含义。
 
 - [ ] **P0-06 — 超时、额度、权限和断网的明确反馈**
+  - 只读搜索有限重试（0.14.46 候选）：MiniMax 搜索收到 HTTP 502、503 或 504 且没有 `Retry-After` 时最多重试一次，共用原请求的网络预算和取消状态。真实本地 HTTPS 回归覆盖恢复、重试上限、延期、预算耗尽和代次取消。见 [失败反馈](FAILURE_FEEDBACK.md#01446minimax-联网搜索的有限重试)。
   - MiniMax 业务故障自动检查：`verify-failure-ui --http-fixture loopback_business` 在真实本地 TLS 上验证 HTTP 200 业务错误与断线，逐条核对下一次独立 ASR/TTS 请求恢复。48 项隔离矩阵通过，实体屏幕重放待长稳观察结束。见 [业务错误与请求恢复](AUTOMATED_FAILURE_UI.md#minimax-业务错误与下一次请求恢复)。
   - Dot 启动回执隔离（0.14.34 候选）：完整发送后缺少有效启动回执时明确显示「结果待核对」，关闭旧连接，待守护进程退出后才接纳下一条明确请求。真实本地管道、隔离 JSON-RPC 子进程及正式工作线程可自动验证，无需用户操作设备。见 [Dot RPC 截止时间](DOT_RPC_DEADLINES.md#dot-启动回执丢失)。
   - Dot 本地协议故障检查：`verify-failure-ui --dot-fixture local_stdio` 可让固定用例经过正式 JSON-RPC 客户端，核对真实管道断开、审批拒绝和下一条明确请求恢复。新增模式可与本地 TLS 合跑，现场观察期间仅验证离线故障包，实体屏幕重放另行执行。见 [自动故障界面检查](AUTOMATED_FAILURE_UI.md)。

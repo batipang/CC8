@@ -3,6 +3,12 @@
 
 当前实际部署见 [CURRENT_DEPLOYMENT](CURRENT_DEPLOYMENT.md)。后面旧小节的“候选／未部署”保留当批快照，不代表目前仍未包含这些历史修复。
 
+## 0.14.46：MiniMax 联网搜索的有限重试
+
+MiniMax 联网搜索收到 HTTP 502、503 或 504，且响应没有 `Retry-After` 时，最多重发一次原查询。两次请求复用同一请求槽、取消状态和累计网络 I/O 预算。首次响应关闭后重新检查当前会话和剩余预算，成功才发布搜索来源。该策略限于 MiniMax 读取网页结果的接口。限流、额度、凭证、业务错误、未收到 HTTP 响应的连接失败，以及查询规划、语音识别、播报和 Dot 工具请求均沿原路径收尾。[MiniMax 搜索参考实现](https://github.com/MiniMax-AI/MiniMax-Coding-Plan-MCP/blob/main/minimax_mcp/server.py) · [HTTP Retry-After](https://www.rfc-editor.org/rfc/rfc9110.html#section-10.2.3)
+
+证书验证开启的本地 HTTPS 回归覆盖三种网关错误后成功、第二次仍失败、明确延期、其他状态和其他入口。另在首个响应关闭时注入预算耗尽、取消或会话过期，核对均未发送第二个请求。此候选尚未部署，测试没有调用真实提供方或操作 CC8。
+
 ## 0.14.15：MiniMax业务失败分类与严格状态检查（源码候选）
 
 过去只按HTTP状态分类；`HTTP 200`携带非零`base_resp.status_code`时，虽然请求已经失败，界面仍可能只显示“服务或本机处理失败”，无法区分额度和凭证问题。另有部分非整数零值会通过旧成功判断。新候选在返回ASR文字、JSON或SSE事件前共用状态检查，并在MiniMax专属异常边界转换为原有固定类别，不改通用异常的猜测规则或协议。

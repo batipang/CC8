@@ -1,5 +1,6 @@
 """Real loopback TLS drip responses, without devices or provider requests."""
 
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 from pathlib import Path
 import select
@@ -295,6 +296,116 @@ class HTTPBudgetTLS(unittest.TestCase):
 
     def test_normal_verified_tls_asr_json_and_sse_still_complete_once(self):
         self.assert_normal_verified_tls_asr_json_and_sse()
+
+    def scripted_json_server(self, replies):
+        seen = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, format, *args):
+                pass
+
+            def do_POST(self):
+                payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                seen.append((self.path, payload))
+                status, headers, data = replies[min(len(seen), len(replies)) - 1]
+                wire = json.dumps(data).encode()
+                self.send_response(status)
+                self.send_header('Content-Length', str(len(wire)))
+                for name, value in headers.items():
+                    self.send_header(name, value)
+                self.end_headers()
+                self.wfile.write(wire)
+
+        server = HTTPServer(('127.0.0.1', 0), Handler)
+        self.addCleanup(server.server_close)
+        server.socket = self.context.wrap_socket(server.socket, server_side=True)
+        server.port, server.mode = server.server_port, 'scripted'
+        worker = threading.Thread(target=server.serve_forever, args=(0.01,), daemon=True)
+        worker.start()
+        self.addCleanup(worker.join, 2)
+        self.addCleanup(server.shutdown)
+        client = self.client(server)
+        client.timeout = (0.5, 0.5)
+        return client, seen
+
+    def test_search_retries_one_explicit_gateway_failure_over_verified_tls(self):
+        route = '/v1/coding_plan/search'
+        query = {'q': 'public-fixture'}
+        result = {'base_resp': {'status_code': 0}, 'organic': []}
+        for status in (502, 503, 504):
+            with self.subTest(status=status):
+                client, seen = self.scripted_json_server([(status, {}, {}), (200, {}, result)])
+                self.assertEqual(client.post_json(route, query), result)
+                self.assertEqual(seen, [(route, query), (route, query)])
+                self.assertFalse(client.slots)
+
+    def test_search_gateway_retry_stops_at_second_response(self):
+        client, seen = self.scripted_json_server([(503, {}, {}), (504, {}, {})])
+        with self.assertRaises(MiniMaxError) as failure:
+            client.post_json('/v1/coding_plan/search', {'q': 'public-fixture'})
+        self.assertEqual(failure.exception.http_status, 504)
+        self.assertEqual(len(seen), 2)
+        self.assertFalse(client.slots)
+
+    def test_search_never_retries_deferred_or_non_gateway_errors_or_other_routes(self):
+        search = '/v1/coding_plan/search'
+        for route, status, headers, body in (
+            (search, 503, {'Retry-After': '120'}, {}),
+            (search, 500, {}, {}),
+            (search, 401, {}, {}),
+            (search, 402, {}, {}),
+            (search, 403, {}, {}),
+            (search, 429, {}, {}),
+            (search, 200, {}, {'base_resp': {'status_code': 1001}}),
+            ('/v1/chat/completions', 503, {}, {}),
+        ):
+            with self.subTest(route=route, status=status):
+                client, seen = self.scripted_json_server([(status, headers, body)])
+                with self.assertRaises(MiniMaxError):
+                    client.post_json(route, {'q': 'public-fixture'})
+                self.assertEqual(len(seen), 1)
+                self.assertFalse(client.slots)
+
+    def test_search_retry_checks_original_budget_and_cancellation_after_closing_response(self):
+        for change in ('expired', 'cancelled', 'stale'):
+            with self.subTest(change=change):
+                client, seen = self.scripted_json_server([(502, {}, {})])
+                factory = client.factory
+                current = True
+
+                def session_factory():
+                    session = factory()
+
+                    def attach(response, **kwargs):
+                        close = response.close
+
+                        def end():
+                            nonlocal current
+                            close()
+                            # A repeated cleanup after the slot is gone has no effect.
+                            if client.slots:
+                                slot = next(iter(client.slots))
+                                if change == 'expired':
+                                    slot.budget.used = slot.budget.seconds
+                                elif change == 'cancelled':
+                                    slot.stopped.set()
+                                    slot.budget.cancel()
+                                else:
+                                    current = False
+
+                        response.close = end
+
+                    session.hooks['response'].append(attach)
+                    return session
+
+                client.factory = session_factory
+                expected = MiniMaxError if change == 'expired' else Cancelled
+                with self.assertRaises(expected) as failure:
+                    client.post_json('/v1/coding_plan/search', {'q': 'fixture'}, lambda: current)
+                if change == 'expired':
+                    self.assertEqual(failure.exception.kind, 'timeout')
+                self.assertEqual(len(seen), 1)
+                self.assertFalse(client.slots)
 
     def test_http_200_business_failures_cross_verified_tls_without_retry_or_content_leak(self):
         from diagnostics import error_kind

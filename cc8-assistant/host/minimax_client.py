@@ -83,6 +83,7 @@ def subscription_key(config=None):
 
 MAX_SSE_EVENT = 8 * 1024 * 1024
 MAX_STREAM_BYTES = 32 * 1024 * 1024
+SEARCH_ROUTE = '/v1/coding_plan/search'
 
 
 def bounded_lines(
@@ -345,17 +346,32 @@ class Transport:
     def post_json(self, route, payload, is_current=lambda: True):
         slot = self.request_slot()
         try:
-            slot.check(is_current)
-            response = slot.session.post(
-                self.base + route,
-                json=payload,
-                headers={'Authorization': 'Bearer ' + self.key, 'Content-Type': 'application/json'},
-                stream=True,
-                allow_redirects=False,
-                timeout=self.timeout,
-            )
-            slot.response = response
-            slot.check(is_current)
+            for attempt in range(2):
+                slot.check(is_current)
+                response = slot.session.post(
+                    self.base + route,
+                    json=payload,
+                    headers={
+                        'Authorization': 'Bearer ' + self.key,
+                        'Content-Type': 'application/json',
+                    },
+                    stream=True,
+                    allow_redirects=False,
+                    timeout=self.timeout,
+                )
+                slot.response = response
+                slot.check(is_current)
+                # Only the read-only search can resend a query. Keep its
+                # original I/O budget and respect any provider deferral.
+                if not (
+                    attempt == 0
+                    and route == SEARCH_ROUTE
+                    and response.status_code in (502, 503, 504)
+                    and 'Retry-After' not in response.headers
+                ):
+                    break
+                response.close()
+                slot.response = None
             if response.status_code != 200:
                 raise MiniMaxError('MiniMax HTTP request failed', http_status=response.status_code)
             data = response_json(response, is_current, slot, 2 * 1024 * 1024)
@@ -519,7 +535,7 @@ class MiniMaxBrain:
                     self.web_context = True
                     yield clarification
                     return
-                data = self.transport.post_json('/v1/coding_plan/search', {'q': query}, is_current)
+                data = self.transport.post_json(SEARCH_ROUTE, {'q': query}, is_current)
                 # A successful search must carry an explicit provider status.
                 check_api_result(data, require_status=True)
                 items = normalize(data)
