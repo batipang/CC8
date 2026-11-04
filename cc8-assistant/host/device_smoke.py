@@ -77,6 +77,7 @@ POST_DIALOGUE_SECONDS = 20
 STANDBY_SECONDS = 900
 PAIRED_PLAYOUT_MIN_BACKEND = '0.14.50'
 RESPONSE_ACOUSTIC_MIN_BACKEND = '0.14.57'
+EXTENDED_VOICE_MIN_BACKEND = '0.14.59'
 STOP_RECEIPT_MIN_APK_CODE = 69
 SMOKE_OPTIONS = (
     'capture',
@@ -118,6 +119,12 @@ P0_DEVICE_PHASES = (
 QA_LATENCY_PHASES = tuple(
     (f'qa_{index:02}', ('capture', 'awake_dialogue', 'latency_sample'))
     for index in range(1, len(QA_LATENCY_QUESTIONS) + 1)
+)
+EXTENDED_VOICE_PHASES = (
+    *P0_DEVICE_PHASES[:2],
+    ('synthetic_stop', ('capture', 'synthetic_stop')),
+    ('awake_dialogue', ('capture', 'awake_dialogue', 'response_acoustic_evidence')),
+    *P0_DEVICE_PHASES[3:],
 )
 QA_STAGE_METRICS = ('utterance_to_asr_ms', 'brain_first_clause_ms', 'tts_first_pcm_ms')
 QA_ENDPOINT_METRIC = 'device_vad_tail_ms'
@@ -1671,9 +1678,11 @@ class SmokeRun:
                     'fast_stop_count_unexpected',
                 )
                 evidence['fast_stop_detections'] = current_stop - before_stop
+                current_asr = health.get('voice_asr_attempts')
+                if type(current_asr) is int:
+                    evidence['stop_cloud_asr_attempts'] = current_asr - before_asr
                 require(
-                    type(health.get('voice_asr_attempts')) is int
-                    and health['voice_asr_attempts'] == before_asr,
+                    type(current_asr) is int and current_asr == before_asr,
                     'fast_stop_reached_cloud_asr',
                 )
                 require(not admitted and len(partial) <= 1, 'fast_stop_unexpected_voice_turn')
@@ -1922,8 +1931,16 @@ def planned_checks(options):
     )
 
 
-def run_device_suite(make_run, save, *, qa_latency=False, response_acoustic=False):
-    planned = QA_LATENCY_PHASES if qa_latency else P0_DEVICE_PHASES
+def device_suite_phases(*, qa_latency, extended_voice):
+    if qa_latency:
+        return QA_LATENCY_PHASES
+    return EXTENDED_VOICE_PHASES if extended_voice else P0_DEVICE_PHASES
+
+
+def run_device_suite(
+    make_run, save, *, qa_latency=False, response_acoustic=False, extended_voice=False
+):
+    planned = device_suite_phases(qa_latency=qa_latency, extended_voice=extended_voice)
     phases = [
         dict(name=name, state='not_run', expected_checks=planned_checks(set(options)))
         for name, options in planned
@@ -1937,6 +1954,8 @@ def run_device_suite(make_run, save, *, qa_latency=False, response_acoustic=Fals
         physical_usb_unplug_tested=False,
         human_accuracy_asserted=False,
     )
+    if extended_voice:
+        suite['extended_voice_evidence'] = True
     if qa_latency:
         suite['audible_onset_measured'] = False
         suite['qa_corpus_sha256'] = QA_CORPUS_SHA256
@@ -1977,6 +1996,24 @@ def run_device_suite(make_run, save, *, qa_latency=False, response_acoustic=Fals
                 != [(name, 'passed') for name in phase['expected_checks']]
             ):
                 phase.update(state='failed', reason='suite_phase_evidence_incomplete')
+            if phase['state'] == 'passed' and 'synthetic_stop' in options:
+                stop = result.get('barge_evidence')
+                if not (
+                    isinstance(stop, dict)
+                    and stop.get('device_stop_applied') is True
+                    and stop.get('announcement_cancelled') is True
+                    and stop.get('stimulus_played') is True
+                    and type(stop.get('fast_stop_detections')) is int
+                    and stop['fast_stop_detections'] == 1
+                    and type(stop.get('stop_cloud_asr_attempts')) is int
+                    and stop['stop_cloud_asr_attempts'] == 0
+                    and type(stop.get('admitted_voice_requests')) is int
+                    and stop['admitted_voice_requests'] == 0
+                    and type(stop.get('post_playback_quiet_seconds')) in (int, float)
+                    and isfinite(stop['post_playback_quiet_seconds'])
+                    and stop['post_playback_quiet_seconds'] >= POST_DIALOGUE_SECONDS
+                ):
+                    phase.update(state='failed', reason='suite_synthetic_stop_evidence_incomplete')
             if phase['state'] == 'passed' and (
                 'awake_dialogue' in options or 'acoustic' in options
             ):
@@ -1994,6 +2031,11 @@ def run_device_suite(make_run, save, *, qa_latency=False, response_acoustic=Fals
                     phase.update(state='failed', reason='suite_response_playout_timing_incomplete')
                 elif evidence.get('recognized_stimulus_matches') is not True:
                     phase.update(state='failed', reason='suite_synthetic_stimulus_not_confirmed')
+                elif (
+                    'response_acoustic_evidence' in options
+                    and observed_response_interval(evidence.get('response_acoustic_timing')) is None
+                ):
+                    phase.update(state='failed', reason='suite_awake_response_acoustic_incomplete')
                 elif qa_latency:
                     stages = evidence.get('qa_stage_latencies_ms')
                     interval = observed_response_interval(evidence.get('response_acoustic_timing'))
@@ -2050,6 +2092,11 @@ def main(argv=None):
         '--qa-latency-suite',
         action='store_true',
         help='Sample 30 fixed synthetic QA responses with matched playback receipts',
+    )
+    parser.add_argument(
+        '--extended-voice-evidence',
+        action='store_true',
+        help='Add local stop and room-confirmed awake response to the fixed P0 device suite',
     )
     parser.add_argument(
         '--standby',
@@ -2124,6 +2171,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     options = {key for key in SMOKE_OPTIONS if getattr(args, key)}
     batch = args.p0_device_suite or args.qa_latency_suite
+    if args.extended_voice_evidence and not args.p0_device_suite:
+        parser.error('--extended-voice-evidence requires --p0-device-suite')
     if args.response_acoustic_evidence and not (
         args.qa_latency_suite or (not batch and args.awake_dialogue)
     ):
@@ -2162,18 +2211,19 @@ def main(argv=None):
         parser.error('--capture-clock-evidence requires --capture')
     if args.leading_acoustic_evidence and not args.playback_evidence:
         parser.error('--leading-acoustic-evidence requires --playback-evidence')
-    minimum_batch_backend = (
-        RESPONSE_ACOUSTIC_MIN_BACKEND
-        if args.response_acoustic_evidence
-        else PAIRED_PLAYOUT_MIN_BACKEND
-    )
+    minimum_batch_backend = PAIRED_PLAYOUT_MIN_BACKEND
+    if args.extended_voice_evidence:
+        minimum_batch_backend = EXTENDED_VOICE_MIN_BACKEND
+    elif args.response_acoustic_evidence:
+        minimum_batch_backend = RESPONSE_ACOUSTIC_MIN_BACKEND
     if not args.execute:
         if batch:
             plan = {
                 'phases': [
                     dict(name=name, checks=planned_checks(set(flags)))
-                    for name, flags in (
-                        QA_LATENCY_PHASES if args.qa_latency_suite else P0_DEVICE_PHASES
+                    for name, flags in device_suite_phases(
+                        qa_latency=args.qa_latency_suite,
+                        extended_voice=args.extended_voice_evidence,
                     )
                 ],
                 'execute': False,
@@ -2185,6 +2235,9 @@ def main(argv=None):
                 plan['qa_corpus_sha256'] = QA_CORPUS_SHA256
                 if args.response_acoustic_evidence:
                     plan['response_acoustic_evidence'] = True
+            if args.extended_voice_evidence:
+                plan['extended_voice_evidence'] = True
+                plan['minimum_apk_code'] = STOP_RECEIPT_MIN_APK_CODE
         else:
             plan = {
                 'checks': planned_checks(options),
@@ -2227,11 +2280,16 @@ def main(argv=None):
                 and health.get('release_id') == manifest.release_id,
                 'suite_runtime_identity_unconfirmed',
             )
-        if (
-            args.response_acoustic_evidence
-            and health.get('response_acoustic_evidence_supported') is not True
-        ):
+        if (args.response_acoustic_evidence or args.extended_voice_evidence) and health.get(
+            'response_acoustic_evidence_supported'
+        ) is not True:
             parser.exit(2, '当前后台未声明支持问答声学计时。\n')
+        if args.extended_voice_evidence and (
+            manifest.assistant.version_code < STOP_RECEIPT_MIN_APK_CODE
+            or health.get('fast_stop_ready') is not True
+            or type(health.get('fast_stop_count')) is not int
+        ):
+            parser.exit(2, '当前版本组合不支持扩展语音验收。\n')
 
         def request(payload):
             timeout = 5
@@ -2291,6 +2349,12 @@ def main(argv=None):
                     )
 
                 device = Device()
+                if args.extended_voice_evidence:
+                    device_status, _ = device.status()
+                    require(
+                        device_status.get('test_playback_stop_supported') is True,
+                        'device_playback_stop_evidence_unsupported',
+                    )
 
                 def make_run(enabled, checkpoint, *, qa_question=ACOUSTIC_QUESTION):
                     return SmokeRun(
@@ -2298,9 +2362,12 @@ def main(argv=None):
                         request,
                         checkpoint=checkpoint,
                         qa_question=qa_question,
-                        response_acoustic_evidence=args.response_acoustic_evidence,
+                        response_acoustic_evidence=(
+                            args.response_acoustic_evidence
+                            or 'response_acoustic_evidence' in enabled
+                        ),
                         expected_apk=(manifest.assistant.version, manifest.assistant.version_code),
-                        **dict.fromkeys(enabled, True),
+                        **dict.fromkeys(enabled - {'response_acoustic_evidence'}, True),
                     )
 
                 print('自动设备检查已开始；结果仅保存状态，不留录音、图像或对话正文。', flush=True)
@@ -2319,6 +2386,7 @@ def main(argv=None):
                             save,
                             qa_latency=args.qa_latency_suite,
                             response_acoustic=args.response_acoustic_evidence,
+                            extended_voice=args.extended_voice_evidence,
                         )
                     else:
                         result = make_run(options, save).run()

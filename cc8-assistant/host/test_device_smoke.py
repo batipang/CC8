@@ -254,6 +254,141 @@ class DeviceAutomationTests(unittest.TestCase):
                 ],
             )
 
+    def test_extended_voice_plan_adds_stop_and_room_evidence_without_device_access(self):
+        output = io.StringIO()
+        with (
+            patch('device_smoke.Device') as device,
+            patch('device_smoke.rpc') as query,
+            redirect_stdout(output),
+        ):
+            self.assertEqual(
+                main(
+                    [
+                        '--runtime-root',
+                        '/unused',
+                        '--capture',
+                        '--p0-device-suite',
+                        '--extended-voice-evidence',
+                    ]
+                ),
+                0,
+            )
+            device.assert_not_called()
+            query.assert_not_called()
+        plan = json.loads(output.getvalue())
+        self.assertTrue(plan['extended_voice_evidence'])
+        self.assertEqual(plan['minimum_backend_version'], '0.14.59')
+        self.assertEqual(plan['minimum_apk_code'], 69)
+        self.assertEqual(
+            [phase['name'] for phase in plan['phases']],
+            [
+                'transport_and_self_wake',
+                'interruption_and_playback',
+                'synthetic_stop',
+                'awake_dialogue',
+                'standby_1',
+                'standby_2',
+                'standby_3',
+            ],
+        )
+        self.assertIn(STOP_CHECK, plan['phases'][2]['checks'])
+
+    def test_extended_voice_suite_requires_stop_and_room_results(self):
+        for case in ('ok', 'cloud_attempt', 'missing_room'):
+            with self.subTest(case=case):
+                runs, reports = [], []
+
+                def make_run(options, checkpoint):
+                    runs.append(options)
+                    report = {
+                        'state': 'passed',
+                        'checks': [
+                            dict(name=name, state='passed') for name in planned_checks(options)
+                        ],
+                        'cleanup_microphone_off_verified': True,
+                        'acoustic_evidence': {
+                            'post_playback_quiet_seconds': 20,
+                            'recognized_stimulus_matches': True,
+                            'response_playout_timing': {'status': 'observed'},
+                        },
+                    }
+                    if 'synthetic_stop' in options:
+                        report['barge_evidence'] = {
+                            'device_stop_applied': True,
+                            'announcement_cancelled': True,
+                            'stimulus_played': True,
+                            'fast_stop_detections': 1,
+                            'stop_cloud_asr_attempts': int(case == 'cloud_attempt'),
+                            'admitted_voice_requests': 0,
+                            'post_playback_quiet_seconds': 20,
+                        }
+                    if 'response_acoustic_evidence' in options and case != 'missing_room':
+                        report['acoustic_evidence']['response_acoustic_timing'] = {
+                            'status': 'observed',
+                            ACOUSTIC_RESPONSE_METRIC: 1200,
+                        }
+                    run = Mock(source_sha256='source', speech_source_sha256='speech')
+                    run.run.side_effect = lambda: checkpoint(report) or report
+                    return run
+
+                result = run_device_suite(make_run, reports.append, extended_voice=True)
+                self.assertTrue(result['extended_voice_evidence'])
+                self.assertFalse(result['full_p0_acceptance'])
+                if case == 'ok':
+                    self.assertEqual(result['state'], 'passed')
+                    self.assertEqual(len(runs), 7)
+                    self.assertIn('response_acoustic_evidence', runs[3])
+                else:
+                    failed = 2 if case == 'cloud_attempt' else 3
+                    self.assertEqual(len(runs), failed + 1)
+                    self.assertEqual(result['state'], 'failed')
+                    self.assertEqual(
+                        result['phases'][failed]['reason'],
+                        'suite_synthetic_stop_evidence_incomplete'
+                        if case == 'cloud_attempt'
+                        else 'suite_awake_response_acoustic_incomplete',
+                    )
+                    self.assertTrue(
+                        all(p['state'] == 'not_run' for p in result['phases'][failed + 1 :])
+                    )
+
+    def test_extended_voice_suite_rejects_missing_stop_detector_before_device_access(self):
+        from release_info import RELEASE
+
+        health = dict(
+            bridge_version=RELEASE.backend_version,
+            protocol_version=RELEASE.protocol_version,
+            release_id=RELEASE.release_id,
+            runtime_instance='test',
+            response_acoustic_evidence_supported=True,
+            fast_stop_ready=False,
+            fast_stop_count=0,
+        )
+        errors = io.StringIO()
+        with (
+            patch('device_smoke.load_release', return_value=RELEASE),
+            patch('device_smoke.rpc', return_value=health) as request,
+            patch('device_smoke.Device') as device,
+            patch('device_smoke.private_directory') as output,
+            redirect_stderr(errors),
+            self.assertRaises(SystemExit) as stopped,
+        ):
+            main(
+                [
+                    '--runtime-root',
+                    str(Path.cwd()),
+                    '--capture',
+                    '--p0-device-suite',
+                    '--extended-voice-evidence',
+                    '--execute',
+                ]
+            )
+        self.assertEqual(stopped.exception.code, 2)
+        self.assertIn('当前版本组合不支持扩展语音验收', errors.getvalue())
+        self.assertEqual(request.call_count, 1)
+        device.assert_not_called()
+        output.assert_not_called()
+
     def test_device_suite_does_not_retry_or_accept_missing_checks_and_cleanup(self):
         for case in (
             'passed',
