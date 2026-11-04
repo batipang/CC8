@@ -10,6 +10,7 @@ import queue
 import re
 import threading
 import time
+from unicodedata import category
 from typing import Callable, ContextManager, Mapping, Pattern, Protocol
 import numpy as np
 from diagnostics import TraceBook
@@ -70,14 +71,29 @@ STOP_COMMANDS = frozenset(
     ('停', '停下', '停一下', '停止', '暂停', '打住', '等等', '别说了', '听我说')
 )
 MIN_ECHO_RISK_CREDIBLE_FRAMES = 5
+WAKE_PREFIX_SEPARATORS = ' \t\r\n，。,！!：:'
+WAKE_QUOTES = {'“': '”', '「': '」', '『': '』', '"': '"'}
+
+
+def wake_payload(text, wake_pattern):
+    candidate = text.lstrip(WAKE_PREFIX_SEPARATORS)
+    closing_quote = WAKE_QUOTES.get(candidate[:1])
+    if closing_quote:
+        candidate = candidate[1:].lstrip(WAKE_PREFIX_SEPARATORS)
+    prefix = wake_pattern.match(candidate)
+    if prefix is None:
+        return None
+    tail = candidate[prefix.end() :]
+    if closing_quote:
+        tail = tail.removeprefix(closing_quote)
+    return tail.lstrip(WAKE_PREFIX_SEPARATORS)
 
 
 def stop_request(text, wake_pattern):
     if re.sub(r'\W', '', text) in STOP_COMMANDS:
         return True
-    candidate = text.lstrip('，。 ,！!')
-    prefix = wake_pattern.match(candidate)
-    return bool(prefix and re.sub(r'\W', '', candidate[prefix.end() :]) in STOP_COMMANDS)
+    payload = wake_payload(text, wake_pattern)
+    return payload is not None and re.sub(r'\W', '', payload) in STOP_COMMANDS
 
 
 class RecognitionWorker:
@@ -263,16 +279,17 @@ class RecognitionWorker:
                             self.hooks.status('listening', '我在听')
                         continue
                     if evidence and evidence.get('local_wake') is True:
-                        stripped = text.lstrip('，。 ,！!')
-                        found = self.hooks.wake_pattern.match(stripped)
-                        if found:
-                            text = stripped[found.end() :].lstrip('，。 ,！!')
-                        if not text:
-                            decision = 'wake_only'
-                            rejected = True
-                            self.hooks.cancel_session('wake_only')
-                            self.hooks.status('listening', '我在听，请说出你的问题')
-                            continue
+                        payload = wake_payload(text, self.hooks.wake_pattern)
+                        if payload is not None:
+                            text = payload
+                            # ASR can add punctuation to the name alone. Detect
+                            # that without stripping signs or decimal points from a query.
+                            if all(ch.isspace() or category(ch).startswith('P') for ch in text):
+                                decision = 'wake_only'
+                                rejected = True
+                                self.hooks.cancel_session('wake_only')
+                                self.hooks.status('listening', '我在听，请说出你的问题')
+                                continue
                     if (
                         self.hooks.wake()
                         and '休息' in text
