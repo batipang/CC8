@@ -8,14 +8,15 @@ from types import SimpleNamespace
 
 from device_smoke import (
     POST_DIALOGUE_SECONDS,
-    QA_CORPUS_SHA256,
     QA_PLAYOUT_METRIC,
+    ROUTED_LATENCY_MIN_BACKEND,
     STANDBY_SECONDS,
     device_suite_phases,
     planned_checks,
     run_device_suite,
 )
 from private_output import read_private_json
+from qa_speech import SCENARIO_DIGESTS
 
 VERSION = r'[0-9]{1,8}(?:\.[0-9]{1,8}){2}'
 SOURCE_DIGEST = r'[a-f0-9]{64}'
@@ -78,15 +79,26 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
     qa_latency = scope == 'synthetic_qa_latency'
     extended = data.get('extended_voice_evidence', False)
     room_latency = data.get('response_acoustic_evidence', False)
+    scenario = data.get('latency_scenario', 'qa')
     if (
         type(extended) is not bool
         or type(room_latency) is not bool
         or (qa_latency and extended)
         or (room_latency and not qa_latency)
+        or not isinstance(scenario, str)
+        or scenario not in SCENARIO_DIGESTS
+        or (
+            scenario != 'qa'
+            and (
+                not qa_latency
+                or tuple(map(int, backend.split('.')))
+                < tuple(map(int, ROUTED_LATENCY_MIN_BACKEND.split('.')))
+            )
+        )
         or (
             qa_latency
             and (
-                data.get('qa_corpus_sha256') != QA_CORPUS_SHA256
+                data.get('qa_corpus_sha256') != SCENARIO_DIGESTS[scenario]
                 or data.get('audible_onset_measured') is not False
             )
         )
@@ -172,6 +184,7 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
         qa_latency=qa_latency,
         response_acoustic=room_latency,
         extended_voice=extended,
+        latency_scenario=scenario,
     )
     result['completed_phases'] = sum(p['state'] == 'passed' for p in reviewed['phases'])
     if reviewed['state'] != 'passed':
@@ -185,6 +198,8 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
         return {**result, 'reason': 'report_not_completed'}
     if qa_latency:
         result['latencies_ms'] = reviewed['latencies_ms']
+        if scenario != 'qa':
+            result['latency_scenario'] = scenario
     return {**result, 'verified': True}
 
 

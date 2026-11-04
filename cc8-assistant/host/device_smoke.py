@@ -22,10 +22,9 @@ from release_info import load_release
 from mac_voice import resolve_voice, __file__ as voice_source
 from diagnostics import INTERVALS, MAX_CONFIRMED_PLAYBACK_CLAUSES, MAX_DEVICE_PAUSE_MS, percentiles
 from diagnostic_run import receipt
-from qa_speech import CORPUS_SHA256 as QA_CORPUS_SHA256
 from qa_speech import QUESTIONS as QA_LATENCY_QUESTIONS
 from qa_speech import WAKE as ACOUSTIC_WAKE
-from qa_speech import normalize_question
+from qa_speech import ALL_QUESTIONS, SCENARIO_DIGESTS, SCENARIO_QUESTIONS, normalize_question
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPONENT = 'com.happyhome.cc8assistant/.MainActivity'
@@ -78,6 +77,7 @@ STANDBY_SECONDS = 900
 PAIRED_PLAYOUT_MIN_BACKEND = '0.14.50'
 RESPONSE_ACOUSTIC_MIN_BACKEND = '0.14.57'
 EXTENDED_VOICE_MIN_BACKEND = '0.14.60'
+ROUTED_LATENCY_MIN_BACKEND = '0.14.61'
 STOP_RECEIPT_MIN_APK_CODE = 69
 STOP_VISUAL_MIN_APK_CODE = 71
 SMOKE_OPTIONS = (
@@ -267,12 +267,12 @@ def response_playout_timing(row):
     }
 
 
-def qa_stage_latencies(row):
+def qa_stage_latencies(row, scenario='qa'):
     try:
         clean = receipt(row)
     except ValueError:
         return {}
-    if clean['scenario'] != 'qa':
+    if clean['scenario'] != scenario:
         return {}
     stages = clean['stages']
     result = {
@@ -338,7 +338,7 @@ def rpc(path, request, timeout=5):
             request.get('operation') == 'response_probe_arm'
             and set(request) == {'operation', 'case'}
             and type(request['case']) is int
-            and 1 <= request['case'] <= len(QA_LATENCY_QUESTIONS)
+            and 1 <= request['case'] <= len(ALL_QUESTIONS)
         )
         or (
             request.get('operation') == 'response_probe_result'
@@ -429,7 +429,7 @@ class Device:
         return resolve_voice('Tingting')
 
     def speak_probe(self, *, interruption=False, stop=False, question=ACOUSTIC_QUESTION):
-        require(question in QA_LATENCY_QUESTIONS, 'unknown_synthetic_probe')
+        require(question in ALL_QUESTIONS, 'unknown_synthetic_probe')
         voice = self.prepare_speech_probe()
         phrase = ACOUSTIC_WAKE + '，' + question
         if interruption:
@@ -469,6 +469,7 @@ class SmokeRun:
         acoustic=False,
         awake_dialogue=False,
         latency_sample=False,
+        latency_scenario='qa',
         qa_question=ACOUSTIC_QUESTION,
         response_acoustic_evidence=False,
         synthetic_barge=False,
@@ -490,6 +491,7 @@ class SmokeRun:
         self.capture, self.standby, self.acoustic = capture, standby, acoustic
         self.awake_dialogue = awake_dialogue
         self.latency_sample = latency_sample
+        self.latency_scenario = latency_scenario
         self.qa_question = qa_question
         self.response_acoustic_evidence = response_acoustic_evidence
         self.synthetic_barge = synthetic_barge
@@ -1310,7 +1312,7 @@ class SmokeRun:
         response_deadline = self.clock() + available - reserve
         probe_token = None
         if self.response_acoustic_evidence:
-            case = QA_LATENCY_QUESTIONS.index(self.qa_question) + 1
+            case = ALL_QUESTIONS.index(self.qa_question) + 1
             armed = self.request({'operation': 'response_probe_arm', 'case': case})
             probe_token = armed.get('token')
             require(
@@ -1350,8 +1352,9 @@ class SmokeRun:
                 ),
                 None,
             )
-            # Keep only fixed counts and timing, never request IDs, transcripts,
-            # provider text or audio. A completed task is not a played answer.
+            route = completed.get('scenario') if completed is not None else None
+            # Keep only fixed counts, categories and timing. A completed task
+            # is not a played answer.
             self.acoustic_evidence = {
                 'new_voice_requests': len(rows),
                 'admitted_voice_requests': len(admitted),
@@ -1369,7 +1372,12 @@ class SmokeRun:
                 'recognized_stimulus_matches': recognized_stimulus_matches,
                 'response_playout_timing': response_playout_timing(completed),
                 **(
-                    {'qa_stage_latencies_ms': qa_stage_latencies(completed)}
+                    {
+                        'qa_stage_latencies_ms': qa_stage_latencies(
+                            completed, self.latency_scenario
+                        ),
+                        'latency_scenario': route if route in tuple(SCENARIO_QUESTIONS) else None,
+                    }
                     if self.latency_sample and completed is not None
                     else {}
                 ),
@@ -1985,7 +1993,13 @@ def device_suite_phases(*, qa_latency, extended_voice):
 
 
 def run_device_suite(
-    make_run, save, *, qa_latency=False, response_acoustic=False, extended_voice=False
+    make_run,
+    save,
+    *,
+    qa_latency=False,
+    response_acoustic=False,
+    extended_voice=False,
+    latency_scenario='qa',
 ):
     planned = device_suite_phases(qa_latency=qa_latency, extended_voice=extended_voice)
     phases = [
@@ -2005,7 +2019,9 @@ def run_device_suite(
         suite['extended_voice_evidence'] = True
     if qa_latency:
         suite['audible_onset_measured'] = False
-        suite['qa_corpus_sha256'] = QA_CORPUS_SHA256
+        suite['qa_corpus_sha256'] = SCENARIO_DIGESTS[latency_scenario]
+        if latency_scenario != 'qa':
+            suite['latency_scenario'] = latency_scenario
         suite['latencies_ms'] = {
             name: percentiles([])
             for name in (*QA_STAGE_METRICS, QA_ENDPOINT_METRIC, QA_PLAYOUT_METRIC)
@@ -2025,7 +2041,9 @@ def run_device_suite(
 
         save(suite)
         run = (
-            make_run(set(options), checkpoint, qa_question=QA_LATENCY_QUESTIONS[index])
+            make_run(
+                set(options), checkpoint, qa_question=SCENARIO_QUESTIONS[latency_scenario][index]
+            )
             if qa_latency
             else make_run(set(options), checkpoint)
         )
@@ -2092,6 +2110,8 @@ def run_device_suite(
                     and observed_response_interval(evidence.get('response_acoustic_timing')) is None
                 ):
                     phase.update(state='failed', reason='suite_awake_response_acoustic_incomplete')
+                elif qa_latency and evidence.get('latency_scenario', 'qa') != latency_scenario:
+                    phase.update(state='failed', reason='suite_latency_scenario_unconfirmed')
                 elif qa_latency:
                     stages = evidence.get('qa_stage_latencies_ms')
                     interval = observed_response_interval(evidence.get('response_acoustic_timing'))
@@ -2148,6 +2168,12 @@ def main(argv=None):
         '--qa-latency-suite',
         action='store_true',
         help='Sample 30 fixed synthetic QA responses with matched playback receipts',
+    )
+    parser.add_argument(
+        '--latency-scenario',
+        choices=tuple(SCENARIO_QUESTIONS),
+        default='qa',
+        help='Select simple questions, public web lookup, or read-only local tool prompts',
     )
     parser.add_argument(
         '--extended-voice-evidence',
@@ -2229,6 +2255,8 @@ def main(argv=None):
     batch = args.p0_device_suite or args.qa_latency_suite
     if args.extended_voice_evidence and not args.p0_device_suite:
         parser.error('--extended-voice-evidence requires --p0-device-suite')
+    if args.latency_scenario != 'qa' and not args.qa_latency_suite:
+        parser.error('--latency-scenario requires --qa-latency-suite')
     if args.response_acoustic_evidence and not (
         args.qa_latency_suite or (not batch and args.awake_dialogue)
     ):
@@ -2268,7 +2296,9 @@ def main(argv=None):
     if args.leading_acoustic_evidence and not args.playback_evidence:
         parser.error('--leading-acoustic-evidence requires --playback-evidence')
     minimum_batch_backend = PAIRED_PLAYOUT_MIN_BACKEND
-    if args.extended_voice_evidence:
+    if args.latency_scenario != 'qa':
+        minimum_batch_backend = ROUTED_LATENCY_MIN_BACKEND
+    elif args.extended_voice_evidence:
         minimum_batch_backend = EXTENDED_VOICE_MIN_BACKEND
     elif args.response_acoustic_evidence:
         minimum_batch_backend = RESPONSE_ACOUSTIC_MIN_BACKEND
@@ -2288,7 +2318,9 @@ def main(argv=None):
                 'minimum_backend_version': minimum_batch_backend,
             }
             if args.qa_latency_suite:
-                plan['qa_corpus_sha256'] = QA_CORPUS_SHA256
+                plan['qa_corpus_sha256'] = SCENARIO_DIGESTS[args.latency_scenario]
+                if args.latency_scenario != 'qa':
+                    plan['latency_scenario'] = args.latency_scenario
                 if args.response_acoustic_evidence:
                     plan['response_acoustic_evidence'] = True
             if args.extended_voice_evidence:
@@ -2419,6 +2451,7 @@ def main(argv=None):
                         request,
                         checkpoint=checkpoint,
                         qa_question=qa_question,
+                        latency_scenario=args.latency_scenario,
                         response_acoustic_evidence=(
                             args.response_acoustic_evidence
                             or 'response_acoustic_evidence' in enabled
@@ -2444,6 +2477,7 @@ def main(argv=None):
                             qa_latency=args.qa_latency_suite,
                             response_acoustic=args.response_acoustic_evidence,
                             extended_voice=args.extended_voice_evidence,
+                            latency_scenario=args.latency_scenario,
                         )
                     else:
                         result = make_run(options, save).run()
@@ -2461,6 +2495,8 @@ def main(argv=None):
                     }
                     if args.qa_latency_suite:
                         summary['latencies_ms'] = result['latencies_ms']
+                        if args.latency_scenario != 'qa':
+                            summary['latency_scenario'] = args.latency_scenario
                 else:
                     summary = {
                         key: result[key]
