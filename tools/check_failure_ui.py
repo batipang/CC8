@@ -102,7 +102,12 @@ def fixture_summary(fixtures, http_fixture, dot_fixture):
         'generated_dot_wire_counts': (
             {
                 key: sum(f['dot_wire_counts'][key] for f in fixtures)
-                for key in ('fault_turns', 'recovery_turns', 'declined_approvals')
+                for key in (
+                    'fault_turns',
+                    'recovery_turns',
+                    'declined_approvals',
+                    'withheld_start_acks',
+                )
             }
             if dot_fixture == 'local_stdio'
             else None

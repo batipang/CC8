@@ -10,7 +10,6 @@ import sys
 THREAD = 'qa-thread'
 BODY = 'qa-injected-sensitive-body'
 CODES = {
-    'timeout': {'httpConnectionFailed': {'httpStatusCode': 504}},
     'rate_limit': 'rateLimitExceeded',
     'quota': 'usageLimitExceeded',
     'credential_or_permission': 'unauthorized',
@@ -29,6 +28,15 @@ class LocalDot:
         self.audit = folder / 'dot-audit'
         self.audit.touch(mode=0o600)
         self.processes = []
+        self.withhold_start_ack = False
+
+        class FixtureRpc(CodexRpc):
+            def request(rpc, method, params, timeout=15):
+                # Keep the real request deadline and pipe, but avoid a 20-second
+                # wait for each deliberately unanswered test request.
+                if self.withhold_start_ack and method == 'turn/start':
+                    timeout = 1
+                return super().request(method, params, timeout=timeout)
 
         def spawn(command, **kwargs):
             process = subprocess.Popen(
@@ -38,7 +46,7 @@ class LocalDot:
             return process
 
         def rpc():
-            return CodexRpc(
+            return FixtureRpc(
                 command=[
                     sys.executable,
                     '-I',
@@ -101,6 +109,10 @@ def peer(audit):
         if failing and kind == 'transport_or_io':
             # Lose the real stdio connection before turn/start is acknowledged.
             return
+        if failing and kind == 'timeout':
+            # Keep the process and pipe alive, without acknowledging this turn.
+            record(case + ':withheld_start_ack')
+            continue
         turns += 1
         turn = f'qa-turn-{turns}'
         scope = {'threadId': THREAD, 'turnId': turn}
