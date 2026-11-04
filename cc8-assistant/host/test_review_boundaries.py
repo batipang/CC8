@@ -6,6 +6,7 @@ import socket
 import subprocess
 import tempfile
 import threading
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -313,6 +314,59 @@ class CaptureAndTransportTests(unittest.TestCase):
             self.assertIs(value.capture.echo.aec, retry)
             self.assertIs(value.capture.echo.stop_aec, retry_stop)
             start.assert_called_once()
+
+    def test_negotiated_capture_failure_can_be_resent_on_backup_without_restarting(self):
+        value = self.bridge()
+        value.session.connection = object()
+        value.event = Mock()
+        value.session.ready({'capture_reject_version': 1})
+        broken_id, fresh_id = 'a' * 32, 'b' * 32
+        failed = {'event': 'session_start', 'capture_id': broken_id, 'epoch': 7}
+        rebound = {**failed, 'event': 'session_rebind', 'capture_active': True}
+
+        def output(name, **fields):
+            if name == 'capture_rejected':
+                raise OSError('first link failed while notifying')
+
+        value.event.side_effect = output
+        with (
+            patch(
+                'bridge.WebRtcEchoCanceller', side_effect=[RuntimeError('fixture'), Mock()]
+            ) as native,
+            patch('threading.Thread.start') as start,
+        ):
+            with self.assertRaises(OSError):
+                value.on_event(failed)
+            self.assertFalse(value.session.active)
+            value.event.reset_mock(side_effect=True)
+            value.change_transport(SimpleNamespace(kind='wifi'))
+            self.assertFalse(value.session.capture_rejection_supported)
+            value.session.ready({'capture_reject_version': 1, 'capture_active': True})
+            for event in (rebound, failed):
+                value.on_event(event)
+                value.event.assert_called_with('capture_rejected', capture_id=broken_id)
+            native.assert_called_once()
+            start.assert_not_called()
+            value.on_event({**failed, 'capture_id': fresh_id})
+            self.assertTrue(value.session.active)
+            self.assertEqual(native.call_count, 2)
+            start.assert_called_once()
+            value.on_event(rebound)
+            value.event.assert_called_with('capture_rejected', capture_id=broken_id)
+            self.assertTrue(value.session.active)
+            self.assertEqual(native.call_count, 2)
+
+    def test_negotiated_capture_id_is_required_and_strict(self):
+        value = self.bridge()
+        value.session.connection = object()
+        value.session.ready({'capture_reject_version': 1})
+        for event in ('session_start', 'session_rebind'):
+            for fields in ({}, {'capture_id': True}, {'capture_id': 'untrusted'}):
+                with self.subTest(event=event, fields=fields), self.assertRaises(ValueError):
+                    value.on_event({'event': event, 'epoch': 7, 'capture_active': True, **fields})
+        self.assertFalse(value.session.active)
+        with self.assertRaises(ValueError):
+            value.on_event({'event': 'device_ready', 'capture_reject_version': True})
 
     def test_cancel_during_alignment_cannot_finish_the_next_calibration(self):
         value = self.bridge()

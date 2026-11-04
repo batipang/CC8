@@ -1,10 +1,12 @@
 package com.happyhome.cc8assistant;
 
 import java.text.Normalizer;
+import java.util.UUID;
 import java.util.regex.Pattern;
 
 /** Device-clock bound for one explicitly requested test capture; zero is normal use. */
 final class CaptureWindow {
+  final String id = UUID.randomUUID().toString().replace("-", "");
   static final long MIN_TEST_MS = 1000, MAX_TEST_MS = 1500000;
   final long limitMs;
   private final long deadline;

@@ -78,6 +78,8 @@ class SessionController:
         self.transport_kind = 'none'
         self.rebind_seen = False
         self.capture_start_required = False
+        self.capture_rejection_supported = False
+        self.rejected_capture_id = None
         self.playback_interrupted_by_transport = False
         self.write_lock = threading.RLock()
         self.guard = threading.RLock()
@@ -140,6 +142,7 @@ class SessionController:
         self.connection = channel
         self.hooks.visual().clear_challenge()
         self.rebind_seen = False
+        self.capture_rejection_supported = False
         self.transport_kind = channel.kind if channel else 'none'
         self.hooks.capture().reset_transport(self.transport_kind)
         self.hooks.wake_reset('transport')
@@ -284,6 +287,9 @@ class SessionController:
                     self.hooks.event('text_done', generation=generation)
 
     def ready(self, j):
+        self.capture_rejection_supported = (
+            type(j.get('capture_reject_version')) is int and j['capture_reject_version'] == 1
+        )
         self.hooks.visual().update_peer(j)
         self.hooks.playback().set_pause_capability(
             bool(j.get('supports_playback_pause')),
@@ -335,7 +341,19 @@ class SessionController:
         self.hooks.publish_workspace()
         self.hooks.save_status()
 
+    def resend_capture_rejection(self, capture_id):
+        if not self.capture_rejection_supported:
+            return False
+        if capture_id is None:
+            raise ValueError('Missing capture ID on supporting device')
+        if capture_id != self.rejected_capture_id:
+            return False
+        self.hooks.event('capture_rejected', capture_id=capture_id)
+        return True
+
     def rebind(self, j):
+        if self.resend_capture_rejection(j.get('capture_id')):
+            return
         # A rebind can recover existing capture, but cannot undo a stop.
         if self.rebind_seen or self.capture_start_required:
             return
@@ -382,6 +400,9 @@ class SessionController:
         self.hooks.save_status()
 
     def start_capture(self, j):
+        capture_id = j.get('capture_id')
+        if self.resend_capture_rejection(capture_id):
+            return
         self.rebind_seen = True
         # A route rebind can arrive before the capture worker's first start.
         # Both describe the same native recording epoch; never restart it.
@@ -398,8 +419,18 @@ class SessionController:
         self.hooks.playback().reset_session()
         try:
             self.hooks.capture().echo.open()
-        except ImportError:
-            raise RuntimeError('Local echo processor unavailable') from None
+        except (ImportError, OSError, RuntimeError, ValueError) as error:
+            if not self.capture_rejection_supported:
+                if isinstance(error, ImportError):
+                    raise RuntimeError('Local echo processor unavailable') from None
+                raise
+            self.rejected_capture_id = capture_id
+            self.hooks.log('capture_initialization_failed', error_type=type(error).__name__)
+            self.hooks.save_status()
+            # Keep the authenticated link on a local processor failure. If
+            # sending fails, a rebind can resend to this same recording only.
+            self.resend_capture_rejection(capture_id)
+            return
         self.capture_start_required = False
         self.active = True
         self.hooks.calibration().begin()

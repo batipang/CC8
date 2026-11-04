@@ -1,5 +1,11 @@
 # Changelog
 
+## Assistant 0.9.31 / Backend 0.14.53 — stop rejected microphone capture
+
+- Negotiate a capture rejection event bound to a single recording ID. Stop
+  AudioRecord when its host processing fails to initialize, even if the same
+  recording reconnects on the paired route. Ignore stale route or capture IDs.
+
 ## Backend 0.14.52 — keep working echo processors on rebuild failure
 
 - Publish the replacement echo processors and alignment only after the new
