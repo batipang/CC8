@@ -1,5 +1,10 @@
 # Changelog
 
+## Backend 0.14.54 — pass the remaining connection timeout to TLS
+
+- Recompute the socket timeout after TCP connects so the first TLS handshake
+  inherits the time remaining after DNS and TCP.
+
 ## Assistant 0.9.31 / Backend 0.14.53 — stop rejected microphone capture
 
 - Negotiate a capture rejection event bound to a single recording ID. Stop

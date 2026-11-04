@@ -516,6 +516,38 @@ class HTTPBudgetTLS(unittest.TestCase):
         finally:
             server.close()
 
+    def test_direct_tls_receives_only_the_unspent_tcp_connection_deadline(self):
+        original_connect = socket.socket.connect
+        original_wrap = ssl.SSLContext.wrap_socket
+        tcp_elapsed = 0
+        handshake_timeouts = []
+
+        def connect(peer, address):
+            nonlocal tcp_elapsed
+            original_connect(peer, address)
+            tcp_elapsed = 0.75
+
+        def wrap(context, peer, *args, **kwargs):
+            if not kwargs.get('server_side'):
+                handshake_timeouts.append(peer.gettimeout())
+            return original_wrap(context, peer, *args, **kwargs)
+
+        server = DripServer(self.context, 'immediate', b'{"value":1}')
+        client = self.client(server)
+        client.timeout = (1, 1)
+        try:
+            with (
+                patch('dns_budget.time') as clock,
+                patch.object(socket.socket, 'connect', connect),
+                patch.object(ssl.SSLContext, 'wrap_socket', wrap),
+            ):
+                clock.monotonic.side_effect = lambda: tcp_elapsed
+                self.assertEqual(client.post_json('/v1/test', {}), {'value': 1})
+            self.assertEqual(handshake_timeouts, [0.25])
+            self.assertEqual(client.slots, set())
+        finally:
+            server.close()
+
     def test_stalled_dns_times_out_before_the_os_lookup_finishes(self):
         original = socket.getaddrinfo
         for operation in ('transcribe', 'post_json', 'events'):

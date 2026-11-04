@@ -96,7 +96,9 @@ def connect(address, timeout, budget, *, source_address=None, socket_options=Non
             # requested host here, and never connect from a detached DNS worker.
             remaining(budget, deadline)
             peer.connect(target)
-            remaining(budget, deadline)
+            # The TLS handshake inherits this socket timeout. Carry forward
+            # the remaining connection deadline after the TCP attempt.
+            peer.settimeout(remaining(budget, deadline))
             return peer
         except OSError as error:
             last_error = error
