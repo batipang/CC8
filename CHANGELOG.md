@@ -1,5 +1,12 @@
 # Changelog
 
+## Assistant 0.9.20 — confirm playback pause and resume
+
+- Acknowledge only applied AudioTrack pause/resume commands. A pause during
+  initialization is applied before the first PCM write, and a withdrawn
+  pending pause emits no device receipt.
+- Route AudioTrack control failures through the existing playback error event.
+
 ## Backend 0.14.42 — local wake playback references
 
 - Preserve English word boundaries and clause order when suppressing a wake

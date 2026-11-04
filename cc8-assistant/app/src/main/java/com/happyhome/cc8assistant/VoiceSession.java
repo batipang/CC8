@@ -1280,7 +1280,7 @@ final class VoiceSession {
         j, "playback_padding_frames", playingNow == null ? 0 : playingNow.drain.paddingFrames());
     Wire.put(j, "last_playback_speech_frames", lastPlaybackSpeechFrames);
     Wire.put(j, "last_playback_padding_frames", lastPlaybackPaddingFrames);
-    Wire.put(j, "playback_paused", player != null && player.paused);
+    Wire.put(j, "playback_paused", playingNow != null && playingNow.confirmedPaused);
     Wire.put(j, "phase", phase);
     Wire.put(j, "raw_audio_saved", false);
     return j;
@@ -1408,7 +1408,7 @@ final class VoiceSession {
     long writeNanos;
     final ArrayBlockingQueue<byte[]> queue = new ArrayBlockingQueue<>(64);
     final ConcurrentLinkedQueue<Envelope> envelopes = new ConcurrentLinkedQueue<>();
-    volatile boolean ended, stopped, paused;
+    volatile boolean ended, stopped, paused, confirmedPaused;
     volatile int pauseToken;
     volatile AudioTrack track;
     volatile long written = 0;
@@ -1450,6 +1450,7 @@ final class VoiceSession {
 
     void cancel() {
       stopped = true;
+      confirmedPaused = false;
       queue.clear();
       AudioTrack t = track;
       if (t != null)
@@ -1462,44 +1463,88 @@ final class VoiceSession {
     }
 
     void pauseForVoice(int token) {
-      if (!allowed()) return;
-      pauseToken = token;
-      paused = true;
-      AudioTrack t = track;
-      if (t != null)
+      synchronized (routeLock) {
+        if (!allowed() || (paused && pauseToken == token)) return;
+        pauseToken = token;
+        paused = true;
+        AudioTrack t = track;
+        if (t == null) return; // The player will apply the pending pause before writing PCM.
         try {
-          t.pause();
-        } catch (IllegalStateException ignored) {
+          pauseTrack(t, token);
+        } catch (IllegalStateException error) {
+          failPlayback(error);
         }
+      }
+    }
+
+    private void pauseTrack(AudioTrack t, int token) {
+      t.pause();
+      long nanos = System.nanoTime();
+      if (!allowed()) return;
+      confirmedPaused = true;
       phase = "listening";
       listener.state("listening", "听到你说话，正在听…");
-      JSONObject ack = Wire.event("playback_paused");
+      pauseReceipt("playback_paused", token, nanos);
+    }
+
+    private void pauseReceipt(String name, int token, long nanos) {
+      JSONObject ack = Wire.event(name);
       Wire.put(ack, "generation", generation);
       Wire.put(ack, "token", token);
-      Wire.put(ack, "nanos", System.nanoTime());
+      Wire.put(ack, "nanos", nanos);
       send(ack);
     }
 
     void resumeAfterNoise(int token) {
-      if (!allowed() || !paused || pauseToken != token) return;
-      paused = false;
-      AudioTrack t = track;
-      if (t != null)
+      synchronized (routeLock) {
+        if (!allowed() || !paused || pauseToken != token) return;
+        AudioTrack t = track;
+        if (t == null) {
+          paused = false; // A withdrawn pending pause never changed AudioTrack.
+          return;
+        }
         try {
           t.play();
-        } catch (IllegalStateException ignored) {
+        } catch (IllegalStateException error) {
+          failPlayback(error);
+          return;
         }
-      resumeCount++;
-      JSONObject ack = Wire.event("playback_resumed");
-      Wire.put(ack, "generation", generation);
-      Wire.put(ack, "token", token);
-      Wire.put(ack, "nanos", System.nanoTime());
-      send(ack);
-      phase = "speaking";
-      listener.caption(text, mood);
-      listener.state("speaking", "继续播报 · 你可以开口打断");
-      synchronized (this) {
-        notifyAll();
+        long nanos = System.nanoTime();
+        if (!allowed()) return;
+        confirmedPaused = false;
+        paused = false;
+        resumeCount++;
+        pauseReceipt("playback_resumed", token, nanos);
+        phase = "speaking";
+        listener.caption(text, mood);
+        listener.state("speaking", "继续播报 · 你可以开口打断");
+        synchronized (this) {
+          notifyAll();
+        }
+      }
+    }
+
+    private boolean startTrack(AudioTrack t) {
+      // Serialize startup and control messages without holding a lock during PCM writes.
+      synchronized (routeLock) {
+        if (!allowed()) return false;
+        t.play();
+        track = t;
+        if (paused) pauseTrack(t, pauseToken);
+        return allowed();
+      }
+    }
+
+    private void failPlayback(Exception error) {
+      synchronized (routeLock) {
+        if (stopped || !foreground) return;
+        cancel();
+        listener.state("error", "播放已停止：" + error.getMessage());
+        JSONObject failure = Wire.event("playback_error");
+        Wire.put(failure, "error_type", error.getClass().getSimpleName());
+        Wire.put(failure, "generation", generation);
+        Wire.put(failure, "playback_id", playbackId);
+        send(failure);
       }
     }
 
@@ -1662,15 +1707,10 @@ final class VoiceSession {
                 AudioFormat.ENCODING_PCM_16BIT,
                 Math.max(min * 2, 3200),
                 AudioTrack.MODE_STREAM);
-        track = t;
         if (t.getState() != AudioTrack.STATE_INITIALIZED) throw new IOException("播放初始化失败");
         t.setVolume(.35f);
-        t.play();
-        if (!allowed()) return;
-        if (paused) {
-          t.pause();
-          waitIfPaused();
-        }
+        if (!startTrack(t)) return;
+        waitIfPaused();
         if (!allowed()) return;
         listener.caption(text, mood);
         listener.state(
@@ -1721,16 +1761,12 @@ final class VoiceSession {
       } catch (InterruptedException error) {
         Thread.currentThread().interrupt();
       } catch (Exception error) {
-        if (!stopped && foreground) {
-          listener.state("error", "播放已停止：" + error.getMessage());
-          JSONObject failure = Wire.event("playback_error");
-          Wire.put(failure, "error_type", error.getClass().getSimpleName());
-          Wire.put(failure, "generation", generation);
-          Wire.put(failure, "playback_id", playbackId);
-          send(failure);
-        }
+        failPlayback(error);
       } finally {
-        track = null;
+        synchronized (routeLock) {
+          track = null;
+          confirmedPaused = false;
+        }
         if (t != null) {
           try {
             t.stop();
