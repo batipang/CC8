@@ -20,6 +20,7 @@ from device_smoke import (
     objects,
     rpc,
     summarize_capture_clock,
+    valid_leading_evidence,
 )
 
 
@@ -160,6 +161,7 @@ class DeviceAutomationTests(unittest.TestCase):
             ['--acoustic'],
             ['--capture', '--acoustic'],
             ['--capture-clock-evidence'],
+            ['--capture', '--leading-acoustic-evidence'],
         ):
             with self.subTest(flags=flags), redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit), patch('device_smoke.Device') as device:
@@ -391,6 +393,62 @@ class DeviceAutomationTests(unittest.TestCase):
             run.playback_probe()
         evidence['render_clock_evidence']['status'] = 'observed'
         run.playback_probe()
+
+    def test_leading_acoustic_requirement_refuses_old_backend_before_any_open(self):
+        run, device, health, _ = self.fixture(
+            capture=True,
+            playback_evidence=True,
+            leading_acoustic_evidence=True,
+        )
+        health['playback_evidence_supported'] = True
+        result = run.run()
+        self.assertEqual(
+            result['checks'][0]['reason'], 'backend_leading_acoustic_evidence_unsupported'
+        )
+        device.open.assert_not_called()
+        device.home.assert_not_called()
+
+    def test_leading_acoustic_requires_bounded_numeric_match(self):
+        leading = {
+            'status': 'observed',
+            'block_ms': 20,
+            'consecutive_blocks': 2,
+            'minimum_correlation': 0.81,
+            'reference_block_start_ms': 80,
+            'capture_minus_render_origin_ms': 200.0,
+        }
+        for change in (
+            {'minimum_correlation': True},
+            {'minimum_correlation': 0.54},
+            {'capture_minus_render_origin_ms': float('nan')},
+            {'capture_minus_render_origin_ms': 8888},
+            {'capture_minus_render_origin_ms': 10**1000},
+            {'reference_block_start_ms': 19},
+            {'block_ms': 20.0},
+            {'consecutive_blocks': 1},
+        ):
+            with self.subTest(change=change):
+                self.assertFalse(valid_leading_evidence({**leading, **change}, 120))
+        self.assertTrue(valid_leading_evidence(leading, 120))
+        self.assertFalse(valid_leading_evidence(leading, 100))
+        self.assertFalse(valid_leading_evidence(leading, None))
+
+        run, _, health, _ = self.fixture(leading_acoustic_evidence=True)
+        health['microphone_active'] = True
+        request = run.request
+        evidence = {'status': 'observed', 'matched_window_delay_ms': 120, 'render_clock_resets': 0}
+        run.request = lambda payload: (
+            {'status': 'completed', 'evidence': evidence}
+            if payload == {'operation': 'playback_probe'}
+            else request(payload)
+        )
+        with self.assertRaisesRegex(CheckFailure, 'leading_acoustic_evidence_unconfirmed'):
+            run.playback_probe()
+        evidence['leading_acoustic_evidence'] = leading
+        run.playback_probe()
+        self.assertEqual(
+            run.report('passed')['playback_probe_evidence']['leading_acoustic_evidence'], leading
+        )
 
     def test_playback_probe_keeps_failed_numeric_evidence(self):
         run, device, health, _ = self.fixture(capture=True, playback_evidence=True)

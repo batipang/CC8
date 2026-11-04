@@ -70,10 +70,61 @@ class AcousticEvidenceTests(unittest.TestCase):
                     result = probe.result
                     self.assertEqual(result['status'], 'observed')
                     self.assertAlmostEqual(result['matched_window_delay_ms'], delay / 16, delta=1)
+                    self.assertEqual(result['leading_acoustic_evidence']['status'], 'observed')
+                    self.assertAlmostEqual(
+                        result['leading_acoustic_evidence']['capture_minus_render_origin_ms'],
+                        delay / 16,
+                        delta=1,
+                    )
                     self.assertFalse(result['first_audible_onset_measured'])
                     self.assertFalse(result['human_dialogue_latency_measured'])
                     self.assertEqual(observer.mic.size + observer.reference.size, 0)
                     self.assertNotIn('pcm', json.dumps(result))
+
+    def test_first_eligible_reference_blocks_are_independently_corroborated(self):
+        reference = public_signal()
+        reference[:1280] = 0  # 80 ms of reference pre-roll.
+        for render_first in (False, True):
+            with self.subTest(render_first=render_first):
+                observer = PlaybackEvidence()
+                probe = observer.arm(101, 7)
+                feed(observer, reference, scene(reference), render_first=render_first)
+                leading = probe.result['leading_acoustic_evidence']
+                self.assertEqual(leading['status'], 'observed')
+                self.assertEqual(leading['reference_block_start_ms'], 80)
+                self.assertAlmostEqual(leading['capture_minus_render_origin_ms'], 200, delta=1)
+                self.assertEqual(leading['block_ms'], 20)
+                self.assertEqual(leading['consecutive_blocks'], 2)
+                self.assertGreaterEqual(leading['minimum_correlation'], 0.55)
+                self.assertFalse(probe.result['first_audible_onset_measured'])
+
+    def test_later_match_cannot_hide_missing_leading_audio(self):
+        reference = public_signal()
+        delay = 1920
+        start = 3200 + delay
+        for offset in (0, 320):
+            with self.subTest(missing_block=offset):
+                microphone = scene(reference, delay)
+                microphone[start + offset : start + offset + 320] = 0
+                observer = PlaybackEvidence()
+                probe = observer.arm(101, 7)
+                feed(observer, reference, microphone)
+                self.assertEqual(probe.result['status'], 'observed')
+                self.assertEqual(
+                    probe.result['leading_acoustic_evidence'],
+                    {'status': 'leading_match_unconfirmed'},
+                )
+
+    def test_isolated_earlier_reference_burst_is_not_ignored_for_later_success(self):
+        reference = public_signal()
+        reference[320:1280] = 0
+        observer = PlaybackEvidence()
+        probe = observer.arm(101, 7)
+        feed(observer, reference, scene(reference))
+        self.assertEqual(probe.result['status'], 'observed')
+        self.assertEqual(
+            probe.result['leading_acoustic_evidence'], {'status': 'reference_not_sustained'}
+        )
 
     def test_silence_noise_unrelated_and_periodic_are_not_success(self):
         ref = public_signal()
@@ -171,6 +222,10 @@ class AcousticEvidenceTests(unittest.TestCase):
                         7, START - 200_000_000 + round(frame * 1e9 / RATE), mic[frame : frame + 320]
                     )
                 self.assertEqual(probe.result['status'], 'observed')
+                self.assertEqual(
+                    probe.result['leading_acoustic_evidence'],
+                    {'status': 'render_clock_discontinuous'},
+                )
                 self.assertEqual(probe.result['render_clock_resets'], 1)
                 self.assertAlmostEqual(probe.result['matched_window_delay_ms'], 120, delta=1)
                 self.assertFalse(probe.result['first_audible_onset_measured'])
@@ -492,6 +547,10 @@ class ProbeIntegrationTests(unittest.TestCase):
                     result = json.loads(client.recv(4096))
                 self.assertEqual(result['status'], 'completed')
                 self.assertEqual(result['evidence']['status'], 'observed')
+                leading = result['evidence']['leading_acoustic_evidence']
+                self.assertEqual(leading['status'], 'observed')
+                self.assertAlmostEqual(leading['capture_minus_render_origin_ms'], 120, delta=1)
+                self.assertFalse(result['evidence']['raw_audio_saved'])
                 self.assertEqual(self_text, [PROBE_TEXT])
                 self.assertEqual(endpoint_frames, [])
                 self.assertTrue(bridge.session.active)

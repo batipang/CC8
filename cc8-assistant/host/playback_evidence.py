@@ -2,7 +2,9 @@
 
 Only already arriving MIC/RENDER packets are inspected. Device timestamps locate
 a matching window; neither this correlation nor an AudioTrack ACK measures the
-first audible sample or human dialogue latency. Raw buffers never leave RAM.
+first audible sample or human dialogue latency. A separate leading-block check
+requires independent shape matches in the already observed microphone samples.
+Raw buffers never leave RAM.
 """
 
 from dataclasses import dataclass, field
@@ -18,6 +20,10 @@ MIC_LIMIT = 48000
 REFERENCE_LIMIT = 24000
 MIN_DELAY = -1280  # Render-clock estimates can be slightly ahead of capture.
 MAX_DELAY = 12800
+LEADING_BLOCK = 320  # 20 ms at 16 kHz.
+LEADING_LIMIT = 4000  # Search only the first 250 ms of the original reference.
+MIN_REFERENCE_RMS = 0.01
+MIN_CAPTURE_RMS = 0.002
 
 
 @dataclass(eq=False)
@@ -92,6 +98,7 @@ class PlaybackEvidence:
             'raw_audio_saved': False,
             'first_audible_onset_measured': False,
             'human_dialogue_latency_measured': False,
+            'leading_acoustic_evidence': {'status': 'not_checked'},
             **evidence,
         }
         probe.done.set()
@@ -127,12 +134,17 @@ class PlaybackEvidence:
                 self.render_start = nanos
             self.render_frame = frame + len(pcm)
             self.render_end = nanos + round(len(pcm) * 1e9 / RATE)
+            keep = (
+                REFERENCE_LIMIT
+                if self.template_offset is None
+                else LEADING_LIMIT + 2 * LEADING_BLOCK
+            )
+            if len(self.reference) < keep:
+                self.reference = np.concatenate((self.reference, pcm[: keep - len(self.reference)]))
             if self.template_offset is None:
-                take = max(0, REFERENCE_LIMIT - len(self.reference))
-                self.reference = np.concatenate((self.reference, pcm[:take]))
                 for offset in range(0, len(self.reference) - WINDOW + 1, 160):
                     template = self.reference[offset : offset + WINDOW]
-                    if np.std(template) >= 0.01:
+                    if np.std(template) >= MIN_REFERENCE_RMS:
                         self.template_offset = offset
                         self.template_start = self.render_start + round(offset * 1e9 / RATE)
                         break
@@ -162,6 +174,58 @@ class PlaybackEvidence:
             self.mic = joined[dropped:].copy()
             self.mic_start += round(dropped * 1e9 / RATE)
             self._analyze()
+
+    def _leading_evidence(self, aligned_origin):
+        if self.clock_resets:
+            return {'status': 'render_clock_discontinuous'}
+        offset = next(
+            (
+                i
+                for i in range(
+                    0, min(LEADING_LIMIT, len(self.reference) - LEADING_BLOCK + 1), LEADING_BLOCK
+                )
+                if np.std(self.reference[i : i + LEADING_BLOCK]) >= MIN_REFERENCE_RMS
+            ),
+            None,
+        )
+        if offset is None:
+            return {'status': 'reference_not_found'}
+        capture_offset = aligned_origin + offset
+        end = offset + 2 * LEADING_BLOCK
+        if capture_offset < 0 or capture_offset + 2 * LEADING_BLOCK > len(self.mic):
+            return {'status': 'capture_prefix_missing'}
+        if end > len(self.reference):
+            return {'status': 'reference_not_sustained'}
+
+        correlations = []
+        # Check both leading blocks at the long-window alignment. Finding an
+        # unrelated short peak at another delay cannot create onset evidence.
+        for start in (offset, offset + LEADING_BLOCK):
+            expected = self.reference[start : start + LEADING_BLOCK][::2]
+            expected = expected - expected.mean()
+            if np.std(expected) < MIN_REFERENCE_RMS:
+                return {'status': 'reference_not_sustained'}
+            start += aligned_origin
+            measured = self.mic[start : start + LEADING_BLOCK][::2]
+            measured = measured - measured.mean()
+            if np.std(measured) < MIN_CAPTURE_RMS:
+                return {'status': 'leading_match_unconfirmed'}
+            normalized = abs(np.dot(expected, measured)) / (
+                np.linalg.norm(expected) * np.linalg.norm(measured)
+            )
+            correlations.append(float(np.clip(normalized, 0, 1)))
+        confidence = min(correlations)
+        if confidence < 0.55:
+            return {'status': 'leading_match_unconfirmed'}
+        detected_nanos = self.mic_start + round(capture_offset * 1e9 / RATE)
+        return {
+            'status': 'observed',
+            'block_ms': 20,
+            'consecutive_blocks': 2,
+            'minimum_correlation': round(confidence, 4),
+            'reference_block_start_ms': offset * 1000 // RATE,
+            'capture_minus_render_origin_ms': round((detected_nanos - self.render_start) / 1e6, 3),
+        }
 
     def _analyze(self):
         if self.template_start is None or self.mic_start is None:
@@ -201,8 +265,14 @@ class PlaybackEvidence:
             if confidence >= 0.55
             else 'not_observed'
         )
+        leading = (
+            self._leading_evidence(left + peak * 2 - self.template_offset)
+            if status == 'observed'
+            else {'status': 'not_checked'}
+        )
         self._finish(
             status,
+            leading_acoustic_evidence=leading,
             correlation=round(confidence, 4),
             competing_correlation=round(rival, 4),
             matching_window_ms=200,
