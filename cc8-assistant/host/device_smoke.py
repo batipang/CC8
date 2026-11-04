@@ -21,7 +21,7 @@ import uuid
 from private_output import PrivateOutput, private_directory
 from release_info import load_release
 from mac_voice import resolve_voice, __file__ as voice_source
-from diagnostics import MAX_CONFIRMED_PLAYBACK_CLAUSES, MAX_DEVICE_PAUSE_MS
+from diagnostics import INTERVALS, MAX_CONFIRMED_PLAYBACK_CLAUSES, MAX_DEVICE_PAUSE_MS, percentiles
 from diagnostic_run import receipt
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -108,6 +108,12 @@ P0_DEVICE_PHASES = (
     ('standby_2', ('capture', 'standby', 'acoustic')),
     ('standby_3', ('capture', 'standby', 'acoustic')),
 )
+QA_LATENCY_PHASES = tuple(
+    (f'qa_{index:02}', ('capture', 'awake_dialogue', 'latency_sample')) for index in range(1, 31)
+)
+QA_STAGE_METRICS = ('utterance_to_asr_ms', 'brain_first_clause_ms', 'tts_first_pcm_ms')
+QA_ENDPOINT_METRIC = 'device_vad_tail_ms'
+QA_PLAYOUT_METRIC = 'utterance_to_confirmed_playout_ack_ms'
 
 
 class CheckFailure(RuntimeError):
@@ -231,6 +237,26 @@ def response_playout_timing(row):
         'confirmed_playback_done_ms': stages['confirmed_playback_done'],
         'utterance_to_confirmed_playout_ack_ms': round(ack - end, 1),
     }
+
+
+def qa_stage_latencies(row):
+    try:
+        clean = receipt(row)
+    except ValueError:
+        return {}
+    if clean['scenario'] != 'qa':
+        return {}
+    stages = clean['stages']
+    result = {
+        name: round(stages[end] - stages[start], 1)
+        for name in QA_STAGE_METRICS
+        for start, end in (INTERVALS[name],)
+        if start in stages and end in stages and stages[end] >= stages[start]
+    }
+    capture = clean.get('capture', {})
+    if QA_ENDPOINT_METRIC in capture:
+        result[QA_ENDPOINT_METRIC] = capture[QA_ENDPOINT_METRIC]
+    return result
 
 
 def objects(text, marker):
@@ -400,6 +426,7 @@ class SmokeRun:
         standby=False,
         acoustic=False,
         awake_dialogue=False,
+        latency_sample=False,
         synthetic_barge=False,
         wake_self_playback=False,
         active_handover=False,
@@ -417,6 +444,7 @@ class SmokeRun:
         self.device, self.request = device, request
         self.capture, self.standby, self.acoustic = capture, standby, acoustic
         self.awake_dialogue = awake_dialogue
+        self.latency_sample = latency_sample
         self.synthetic_barge = synthetic_barge
         self.wake_self_playback = wake_self_playback
         self.active_handover = active_handover
@@ -1204,6 +1232,11 @@ class SmokeRun:
                 'completed_tasks': sum(r.get('task_outcome') == 'completed' for r in rows),
                 'recognized_stimulus_matches': recognized_stimulus_matches,
                 'response_playout_timing': response_playout_timing(completed),
+                **(
+                    {'qa_stage_latencies_ms': qa_stage_latencies(completed)}
+                    if self.latency_sample and completed is not None
+                    else {}
+                ),
                 'stage_counts': {
                     stage: sum(stage in r.get('stages', {}) for r in rows)
                     for stage in (
@@ -1582,8 +1615,9 @@ class SmokeRun:
         try:
             self.check(CHECKS[0], self.preflight)
             self.check(CHECKS[1], self.maintenance_open)
-            self.check(MULTI_CLAUSE_CHECK if self.multi_clause else CHECKS[2], self.playback)
-            self.check(CHECKS[3], self.handover)
+            if not self.latency_sample:
+                self.check(MULTI_CLAUSE_CHECK if self.multi_clause else CHECKS[2], self.playback)
+                self.check(CHECKS[3], self.handover)
             if self.capture:
                 device_status = self.check(CHECKS[4], self.start_capture)
                 if self.capture_clock_required:
@@ -1640,6 +1674,8 @@ class SmokeRun:
 
 
 def planned_checks(options):
+    if 'latency_sample' in options:
+        return [*CHECKS[:2], CHECKS[4], AWAKE_DIALOGUE_CHECK, *CHECKS[5:7]]
     return (
         [*CHECKS[:2], MULTI_CLAUSE_CHECK if 'multi_clause' in options else CHECKS[2], CHECKS[3]]
         + (
@@ -1666,23 +1702,31 @@ def planned_checks(options):
     )
 
 
-def run_device_suite(make_run, save):
+def run_device_suite(make_run, save, *, qa_latency=False):
+    planned = QA_LATENCY_PHASES if qa_latency else P0_DEVICE_PHASES
     phases = [
         dict(name=name, state='not_run', expected_checks=planned_checks(set(options)))
-        for name, options in P0_DEVICE_PHASES
+        for name, options in planned
     ]
     suite = dict(
         schema=1,
-        scope='fixed_device_suite',
+        scope='synthetic_qa_latency' if qa_latency else 'fixed_device_suite',
         state='running',
         phases=phases,
         full_p0_acceptance=False,
         physical_usb_unplug_tested=False,
         human_accuracy_asserted=False,
     )
+    if qa_latency:
+        suite['audible_onset_measured'] = False
+        suite['latencies_ms'] = {
+            name: percentiles([])
+            for name in (*QA_STAGE_METRICS, QA_ENDPOINT_METRIC, QA_PLAYOUT_METRIC)
+        }
+    samples = []
     save(suite)
     source = None
-    for phase, (_, options) in zip(phases, P0_DEVICE_PHASES):
+    for phase, (_, options) in zip(phases, planned):
         phase['state'] = 'running'
 
         def checkpoint(report, phase=phase):
@@ -1722,6 +1766,25 @@ def run_device_suite(make_run, save):
                     phase.update(state='failed', reason='suite_response_playout_timing_incomplete')
                 elif evidence.get('recognized_stimulus_matches') is not True:
                     phase.update(state='failed', reason='suite_synthetic_stimulus_not_confirmed')
+                elif qa_latency:
+                    stages = evidence.get('qa_stage_latencies_ms')
+                    if (
+                        not isinstance(stages, dict)
+                        or set(stages) - {QA_ENDPOINT_METRIC} != set(QA_STAGE_METRICS)
+                        or any(
+                            type(value) not in (int, float) or not 0 <= value <= 604800000
+                            for value in (*stages.values(), timing.get(QA_PLAYOUT_METRIC))
+                        )
+                    ):
+                        phase.update(state='failed', reason='suite_qa_stage_timing_incomplete')
+                    else:
+                        samples.append({**stages, QA_PLAYOUT_METRIC: timing[QA_PLAYOUT_METRIC]})
+                        suite['latencies_ms'] = {
+                            name: percentiles(
+                                [sample[name] for sample in samples if name in sample]
+                            )
+                            for name in suite['latencies_ms']
+                        }
         if phase['state'] != 'passed':
             suite['state'] = phase['state']
             save(suite)
@@ -1743,10 +1806,16 @@ def main(argv=None):
         action='store_true',
         help='Explicitly enable bounded foreground mic lifecycle tests',
     )
-    parser.add_argument(
+    batches = parser.add_mutually_exclusive_group()
+    batches.add_argument(
         '--p0-device-suite',
         action='store_true',
         help='Run fixed device checks and three separate standby cycles with one runtime lock',
+    )
+    batches.add_argument(
+        '--qa-latency-suite',
+        action='store_true',
+        help='Sample 30 fixed synthetic QA responses with matched playback receipts',
     )
     parser.add_argument(
         '--standby',
@@ -1810,8 +1879,9 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
     options = {key for key in SMOKE_OPTIONS if getattr(args, key)}
-    if args.p0_device_suite and options != {'capture'}:
-        parser.error('--p0-device-suite requires --capture and accepts no individual check flags')
+    batch = args.p0_device_suite or args.qa_latency_suite
+    if batch and options != {'capture'}:
+        parser.error('Device batches require --capture and accept no individual check flags')
     if args.standby and not args.capture or args.acoustic and not args.standby:
         parser.error('--standby requires --capture; --acoustic requires --standby')
     if args.awake_dialogue and (not args.capture or args.standby):
@@ -1837,11 +1907,13 @@ def main(argv=None):
     if args.leading_acoustic_evidence and not args.playback_evidence:
         parser.error('--leading-acoustic-evidence requires --playback-evidence')
     if not args.execute:
-        if args.p0_device_suite:
+        if batch:
             plan = {
                 'phases': [
                     dict(name=name, checks=planned_checks(set(flags)))
-                    for name, flags in P0_DEVICE_PHASES
+                    for name, flags in (
+                        QA_LATENCY_PHASES if args.qa_latency_suite else P0_DEVICE_PHASES
+                    )
                 ],
                 'execute': False,
                 'capture': True,
@@ -1878,7 +1950,7 @@ def main(argv=None):
             'runtime_source_version_mismatch',
         )
         instance = health.get('runtime_instance')
-        if args.p0_device_suite:
+        if batch:
             if tuple(map(int, manifest.backend_version.split('.'))) < tuple(
                 map(int, PAIRED_PLAYOUT_MIN_BACKEND.split('.'))
             ):
@@ -1901,7 +1973,7 @@ def main(argv=None):
             elif payload == {'operation': 'playback_probe'}:
                 timeout = 25
             result = rpc(socket_path, payload, timeout)
-            if args.p0_device_suite and payload == {'operation': 'health'}:
+            if batch and payload == {'operation': 'health'}:
                 if not (
                     result.get('runtime_instance') == instance
                     and result.get('release_id') == manifest.release_id
@@ -1929,10 +2001,10 @@ def main(argv=None):
                 'unsafe_test_lock',
             )
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            if args.p0_device_suite:
+            if batch:
                 request({'operation': 'health'})
             name = (
-                ('device-suite-' if args.p0_device_suite else 'device-')
+                ('device-suite-' if batch else 'device-')
                 + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-')
                 + uuid.uuid4().hex[:8]
                 + '.json'
@@ -1945,7 +2017,7 @@ def main(argv=None):
                             **value,
                             'backend_version': health.get('bridge_version'),
                             'protocol_version': health.get('protocol_version'),
-                            **({'release_id': manifest.release_id} if args.p0_device_suite else {}),
+                            **({'release_id': manifest.release_id} if batch else {}),
                         }
                     )
 
@@ -1963,22 +2035,22 @@ def main(argv=None):
                 print('自动设备检查已开始；结果仅保存状态，不留录音、图像或对话正文。', flush=True)
                 keep_awake = None
                 try:
-                    if (args.standby or args.p0_device_suite) and sys.platform == 'darwin':
+                    if (args.standby or batch) and sys.platform == 'darwin':
                         keep_awake = subprocess.Popen(
                             ['/usr/bin/caffeinate', '-i', '-w', str(os.getpid())],
                             stdin=subprocess.DEVNULL,
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                         )
-                    if args.p0_device_suite:
-                        result = run_device_suite(make_run, save)
+                    if batch:
+                        result = run_device_suite(make_run, save, qa_latency=args.qa_latency_suite)
                     else:
                         result = make_run(options, save).run()
                 finally:
                     if keep_awake is not None and keep_awake.poll() is None:
                         keep_awake.terminate()
                         keep_awake.wait(timeout=5)
-                if args.p0_device_suite:
+                if batch:
                     summary = {
                         'state': result['state'],
                         'phases': [
@@ -1986,6 +2058,8 @@ def main(argv=None):
                             for phase in result['phases']
                         ],
                     }
+                    if args.qa_latency_suite:
+                        summary['latencies_ms'] = result['latencies_ms']
                 else:
                     summary = {
                         key: result[key]
