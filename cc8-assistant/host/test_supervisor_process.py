@@ -22,7 +22,7 @@ from unittest.mock import patch
 import diagnose
 import launch
 import service
-from process_lock import atomic_private_json
+from process_lock import ProcessLease, atomic_private_bytes, atomic_private_json
 
 HOST = Path(__file__).resolve().parent
 DUMMY = """
@@ -205,6 +205,108 @@ def exercise(root):
 
 
 class SupervisorProcessTests(unittest.TestCase):
+    def test_manual_open_reuses_supervisor_pid_while_real_worker_is_still_loading(self):
+        with tempfile.TemporaryDirectory(prefix='cc8-load-', dir='/tmp') as folder:
+            root = Path(folder)
+            private = root / 'p'
+            private.mkdir(mode=0o700)
+            script = root / 'bridge.py'
+            script.write_text('import time\ntime.sleep(30)\n')
+            with (
+                patch.object(service, 'ROOT', root),
+                patch.object(service, 'PRIVATE', private),
+                patch.object(service, 'BRIDGE', script),
+                patch.object(service, 'PYTHON', Path(sys.executable)),
+                patch.object(launch, 'ROOT', root),
+                patch.object(launch, 'PRIVATE', private),
+                patch.object(launch, 'BRIDGE', script),
+                patch.object(launch, 'PYTHON', Path(sys.executable)),
+                patch.object(launch, 'ensure_available') as preflight,
+                patch.object(sys, 'argv', ['launch.py', '--no-open']),
+            ):
+                supervisor = service.Supervisor()
+                try:
+                    with ProcessLease(private / 'launcher.lock'):
+                        supervisor.start_child()
+                    pidfile = private / 'bridge.pid'
+                    self.assertTrue(
+                        pidfile.is_file(), 'supervisor did not publish the starting PID'
+                    )
+                    self.assertEqual(int(pidfile.read_text()), supervisor.child.pid)
+                    self.assertEqual(pidfile.stat().st_mode & 0o777, 0o600)
+                    launch.main()
+                    preflight.assert_not_called()
+                    self.assertIsNone(supervisor.child.poll())
+                finally:
+                    supervisor.terminate()
+                    for handler in supervisor.log.handlers:
+                        handler.close()
+
+    def test_supervisor_waits_for_manual_launch_lease_and_adopts_published_worker(self):
+        with tempfile.TemporaryDirectory(prefix='cc8-launch-race-', dir='/tmp') as folder:
+            root = Path(folder)
+            private = root / 'p'
+            private.mkdir(mode=0o700)
+            script = root / 'bridge.py'
+            script.write_text('import time\ntime.sleep(30)\n')
+            waiting, adopted, stop = threading.Event(), threading.Event(), threading.Event()
+            errors = []
+            child = None
+            original_read = service.read_pid
+
+            class Gate:
+                def is_set(self):
+                    return stop.is_set()
+
+                def wait(self, seconds):
+                    if seconds == 0.5:
+                        waiting.set()
+                    return stop.wait(min(0.02, seconds))
+
+            def read_pid():
+                pid = original_read()
+                if child is not None and pid == child.pid:
+                    adopted.set()
+                return pid
+
+            with (
+                patch.object(service, 'PRIVATE', private),
+                patch.object(service, 'enabled', return_value=True),
+                patch.object(service, 'read_pid', side_effect=read_pid),
+                patch.object(service, 'ensure_available') as preflight,
+                patch.object(launch, 'BRIDGE', script),
+            ):
+                supervisor = service.Supervisor()
+                supervisor.stop = Gate()
+
+                def run():
+                    try:
+                        supervisor.run()
+                    except BaseException as error:
+                        errors.append(type(error).__name__)
+
+                thread = threading.Thread(target=run, daemon=True)
+                with patch.object(supervisor, 'start_child') as spawn:
+                    try:
+                        with ProcessLease(private / 'launcher.lock'):
+                            thread.start()
+                            self.assertTrue(waiting.wait(2))
+                            spawn.assert_not_called()
+                            child = subprocess.Popen([sys.executable, '-u', str(script)])
+                            atomic_private_bytes(private / 'bridge.pid', f'{child.pid}\n'.encode())
+                        self.assertTrue(adopted.wait(2))
+                    finally:
+                        stop.set()
+                        thread.join(3)
+                        if child is not None:
+                            if child.poll() is None:
+                                child.terminate()
+                            child.wait(timeout=3)
+                    self.assertFalse(thread.is_alive())
+                    self.assertEqual(errors, [])
+                    preflight.assert_not_called()
+                    spawn.assert_not_called()
+
     def check_mode(self, mode):
         with tempfile.TemporaryDirectory(prefix='cc8-sv-', dir='/tmp') as folder:
             root = Path(folder)

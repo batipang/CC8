@@ -217,6 +217,9 @@ class Supervisor:
             start_new_session=True,
         )
         self.pid = self.child.pid
+        # Model loading happens in the child. Publish its PID before releasing
+        # the shared launcher lease so a concurrent manual open can reuse it.
+        atomic_private_bytes(PRIVATE / 'bridge.pid', f'{self.pid}\n'.encode())
         threading.Thread(target=self._drain, args=(self.child.stdout,), daemon=True).start()
 
     def terminate(self):
@@ -245,21 +248,27 @@ class Supervisor:
         failures = 0
         try:
             while enabled() and not self.stop.is_set():
-                # 可接管已在当前目录正常运行的手动服务，避免安装登录服务时重复加载模型。
-                self.pid = read_pid()
-                if self.pid is None:
-                    try:
-                        ensure_available(ROOT)
-                    except RuntimeConflict:
-                        self.state('other_runtime', failures)
-                        if self.stop.wait(30):
+                try:
+                    with ProcessLease(PRIVATE / 'launcher.lock'):
+                        if not enabled() or self.stop.is_set():
                             break
-                        continue
-                    # Ownership checks can take time. Honor a disable or
-                    # shutdown received while the preflight was in progress.
-                    if not enabled() or self.stop.is_set():
+                        # Adoption and launch are serialized with the manual
+                        # launcher, including the worker's initial PID receipt.
+                        self.pid = read_pid()
+                        if self.pid is None:
+                            ensure_available(ROOT)
+                            if not enabled() or self.stop.is_set():
+                                break
+                            self.start_child()
+                except BlockingIOError:
+                    if self.stop.wait(0.5):
                         break
-                    self.start_child()
+                    continue
+                except RuntimeConflict:
+                    self.state('other_runtime', failures)
+                    if self.stop.wait(30):
+                        break
+                    continue
                 started = time.monotonic()
                 bad_health = 0
                 while enabled() and not self.stop.wait(2):

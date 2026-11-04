@@ -17,6 +17,7 @@ import subprocess
 import threading
 from typing import Callable
 from config_schema import ConfigError
+from process_lock import atomic_private_bytes
 
 
 @dataclass(frozen=True)
@@ -110,7 +111,7 @@ def run_backend(dependencies: BackendDependencies):
     announcements.start()
     dependencies.private.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(dependencies.private, 0o700)
-    (dependencies.private / 'bridge.pid').write_text(str(os.getpid()) + '\n')
+    atomic_private_bytes(dependencies.private / 'bridge.pid', f'{os.getpid()}\n'.encode())
     stop = threading.Event()
 
     def shutdown(*unused):
