@@ -15,11 +15,11 @@ import time
 
 from diagnose import query
 from launch import ROOT, PRIVATE, BRIDGE, PYTHON, own_process
-from process_lock import ProcessLease, atomic_private_bytes, atomic_private_json, read_private_bytes
+from process_lock import ProcessLease, atomic_private_bytes, atomic_private_json
 from runtime_env import command_path
 from configuration import load_config
 from config_schema import ConfigError
-from runtime_guard import ensure_available, RuntimeConflict
+from runtime_guard import _private_file, ensure_available, RuntimeConflict
 
 LABEL = 'com.happyhome.cc8.' + hashlib.sha256(str(ROOT).encode()).hexdigest()[:12]
 PLIST = Path.home() / 'Library/LaunchAgents' / f'{LABEL}.plist'
@@ -76,7 +76,7 @@ def _registered(domain, target):
 
 def _snapshot(path, limit):
     try:
-        return read_private_bytes(path, limit)
+        return _private_file(path, limit)
     except FileNotFoundError:
         return None
 

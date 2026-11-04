@@ -33,22 +33,6 @@ class ProcessLease:
             self.fd = None
 
 
-def read_private_bytes(path, limit):
-    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
-    with os.fdopen(os.open(path, flags), 'rb') as source:
-        info = os.fstat(source.fileno())
-        if (
-            not stat.S_ISREG(info.st_mode)
-            or info.st_uid != os.getuid()
-            or stat.S_IMODE(info.st_mode) & 0o077
-        ):
-            raise OSError('Unsafe owner state')
-        value = source.read(limit + 1)
-        if len(value) > limit:
-            raise OSError('Oversized owner state')
-        return value
-
-
 def atomic_private_bytes(path, value, *, private_parent=True):
     import tempfile
 
