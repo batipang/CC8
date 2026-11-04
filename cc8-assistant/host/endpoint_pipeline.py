@@ -6,7 +6,7 @@ import time
 from typing import Callable, Protocol
 import numpy as np
 from diagnostics import TraceBook
-from capture_evidence import CaptureEvidence
+from capture_evidence import CaptureEvidence, FRAME_NS, FRAME_JITTER_NS
 from dsp import VoiceDetector, ReferenceCapture, NearSpeechDetector, level
 from fast_stop import can_fast_stop
 from protocol import JsonValue
@@ -75,9 +75,25 @@ class EndpointPipeline:
         self.turn_pause_token = None
         self.owns_turn_pause = False
         self.capture_evidence = None
+        self.reset_voice_onset()
         self.last_fast_stop_ns = 0
         self.fast_stop_observation = None
         self.ignore_vad_until_ns = 0
+
+    def reset_voice_onset(self):
+        self.voice_onset_ns = None
+        self.last_voice_frame_ns = None
+
+    def observe_voice_onset(self, stamp, voiced):
+        previous = self.last_voice_frame_ns
+        self.last_voice_frame_ns = stamp
+        if previous is not None and abs(stamp - previous - FRAME_NS) > FRAME_JITTER_NS:
+            self.voice_onset_ns = None
+        if not self.vad.talking:
+            if not voiced:
+                self.voice_onset_ns = None
+            elif self.voice_onset_ns is None:
+                self.voice_onset_ns = stamp
 
     def cancel_partial_trace(self):
         # Only the endpoint-owned, unfinished capture belongs here. After
@@ -89,6 +105,7 @@ class EndpointPipeline:
 
     def reset_transport(self):
         self.cancel_partial_trace()
+        self.reset_voice_onset()
         self.fast_stop_observation = None
         self.vad.reset()
         self.reference_capture.reset()
@@ -99,6 +116,7 @@ class EndpointPipeline:
 
     def reset_session(self):
         self.cancel_partial_trace()
+        self.reset_voice_onset()
         self.fast_stop_observation = None
         self.vad = VoiceDetector()
         self.turn_reference = []
@@ -117,6 +135,7 @@ class EndpointPipeline:
 
     def reset_voice_activity(self):
         self.cancel_partial_trace()
+        self.reset_voice_onset()
         self.fast_stop_observation = None
         self.vad.reset()
         self.reference_capture.reset()
@@ -182,6 +201,7 @@ class EndpointPipeline:
         if stamp < self.ignore_vad_until_ns:
             return
         voiced, credible = self.near_speech.feed(cleaned, frame.raw, reference)
+        self.observe_voice_onset(stamp, voiced)
         self.vad.external_voice = voiced
         began, utterance, _ = self.vad.feed(cleaned)
         render_audio = self.reference_capture.feed(reference, began, utterance is not None)
@@ -234,6 +254,7 @@ class EndpointPipeline:
                 pause_requested=self.hooks.paused(),
             )
         if utterance is not None:
+            self.reset_voice_onset()
             self.hooks.diagnostics().mark(self.voice_trace, 'utterance_end')
             self.hooks.add_metric('utterances', 1)
             input_end_ns = None

@@ -26,6 +26,7 @@ from diagnostics import (
     MAX_CONFIRMED_PLAYBACK_CLAUSES,
     MAX_DEVICE_PAUSE_MS,
     ROUTE_COMPLETION_STAGES,
+    VAD_ONSET_PAUSE,
     percentiles,
 )
 from diagnostic_run import receipt
@@ -1760,6 +1761,7 @@ class SmokeRun:
             'announcement_cancelled': False,
             'replacement_completed': False,
             'device_pause_from_trigger_ms': None,
+            VAD_ONSET_PAUSE: None,
             'transcript_matches_stimulus': None,
             'admitted_voice_requests': 0,
             'rejected_pause_requests': 0,
@@ -1805,6 +1807,7 @@ class SmokeRun:
             announcement = announcements[0] if len(announcements) == 1 else {}
             replacement = admitted[0] if len(admitted) == 1 else {}
             elapsed = replacement.get('device_pause_from_trigger_ms')
+            onset = replacement.get(VAD_ONSET_PAUSE)
             old_generation = announcement.get('generation')
             new_generation = replacement.get('generation')
             evidence.update(
@@ -1836,6 +1839,14 @@ class SmokeRun:
                     'pause_request' in r.get('stages', {}) for r in groups['rejected']
                 ),
                 pending_voice_candidates=len(groups['pending']),
+            )
+            trigger = evidence['device_pause_from_trigger_ms']
+            evidence[VAD_ONSET_PAUSE] = (
+                onset
+                if trigger is not None
+                and type(onset) in (int, float)
+                and trigger <= onset <= MAX_DEVICE_PAUSE_MS
+                else None
             )
             self.checkpoint(self.report('running'))
             require(
@@ -2326,6 +2337,13 @@ def run_device_suite(
                         )
                         and type(evidence.get(BARGE_DEVICE_METRIC)) in (int, float)
                         and 0 <= evidence[BARGE_DEVICE_METRIC] <= MAX_DEVICE_PAUSE_MS
+                        and (
+                            evidence.get(VAD_ONSET_PAUSE) is None
+                            or type(evidence[VAD_ONSET_PAUSE]) in (int, float)
+                            and evidence[BARGE_DEVICE_METRIC]
+                            <= evidence[VAD_ONSET_PAUSE]
+                            <= MAX_DEVICE_PAUSE_MS
+                        )
                         and type(evidence.get('admitted_voice_requests')) is int
                         and evidence['admitted_voice_requests'] == 1
                         and type(evidence.get('post_playback_quiet_seconds')) in (int, float)
@@ -2341,6 +2359,10 @@ def run_device_suite(
                         interruption_samples[BARGE_DEVICE_METRIC].append(
                             evidence[BARGE_DEVICE_METRIC]
                         )
+                        if evidence.get(VAD_ONSET_PAUSE) is not None:
+                            interruption_samples.setdefault(VAD_ONSET_PAUSE, []).append(
+                                evidence[VAD_ONSET_PAUSE]
+                            )
                 else:
                     for name in (FAST_STOP_DEVICE_METRIC, STOP_VISUAL_METRIC):
                         interruption_samples[name].append(evidence[name])

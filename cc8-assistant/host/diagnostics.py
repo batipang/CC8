@@ -74,6 +74,7 @@ INTERVALS = {
     'pause_roundtrip_ms': ('pause_request', 'pause_ack'),
 }
 MAX_DEVICE_PAUSE_MS = 60_000
+VAD_ONSET_PAUSE = 'device_pause_from_vad_onset_ms'
 
 
 def error_kind(error):
@@ -131,13 +132,10 @@ def summarize_requests(samples):
         )
         for name, (a, b) in INTERVALS.items()
     }
-    latencies['device_pause_from_trigger_ms'] = percentiles(
-        [
-            row['device_pause_from_trigger_ms']
-            for row in samples
-            if row.get('gate') == 'accepted' and 'device_pause_from_trigger_ms' in row
-        ]
-    )
+    for metric in ('device_pause_from_trigger_ms', VAD_ONSET_PAUSE):
+        latencies[metric] = percentiles(
+            [row[metric] for row in samples if row.get('gate') == 'accepted' and metric in row]
+        )
     latencies[VAD_TAIL] = percentiles(
         [
             row['capture'][VAD_TAIL]
@@ -285,7 +283,7 @@ class TraceBook:
                 row['stages'].setdefault(stage, elapsed)
                 return elapsed
 
-    def pause_ack(self, key, trigger_nanos, applied_nanos):
+    def pause_ack(self, key, trigger_nanos, applied_nanos, *, onset_nanos=None):
         with self.lock:
             row = self._row(key)
             if row is None or 'pause_ack' in row['stages']:
@@ -303,6 +301,12 @@ class TraceBook:
                 row['device_pause_from_trigger_ms'] = round(
                     (applied_nanos - trigger_nanos) / 1_000_000, 1
                 )
+                if (
+                    type(onset_nanos) is int
+                    and 0 < onset_nanos <= trigger_nanos
+                    and applied_nanos - onset_nanos <= MAX_DEVICE_PAUSE_MS * 1_000_000
+                ):
+                    row[VAD_ONSET_PAUSE] = round((applied_nanos - onset_nanos) / 1_000_000, 1)
 
     def dot_stage(self, key, stage, observed_at, reused=None):
         """Admit only local Mac timestamps, including buffered pre-ACK events.

@@ -12,6 +12,7 @@ from diagnostics import (
     DOT_CONTEXT_FIELDS,
     MAX_CONFIRMED_PLAYBACK_CLAUSES,
     MAX_DEVICE_PAUSE_MS,
+    VAD_ONSET_PAUSE,
     percentiles,
     summarize_requests,
     summarize_dot_contexts,
@@ -48,6 +49,7 @@ ROW_FIELDS = frozenset(
         'gate',
         'confirmed_playback_clauses',
         'device_pause_from_trigger_ms',
+        VAD_ONSET_PAUSE,
     )
 )
 
@@ -141,6 +143,16 @@ def receipt(value):
         ):
             raise ValueError('Invalid device pause timing')
         result['device_pause_from_trigger_ms'] = elapsed
+    if VAD_ONSET_PAUSE in value:
+        elapsed = value[VAD_ONSET_PAUSE]
+        trigger = result.get('device_pause_from_trigger_ms')
+        if (
+            trigger is None
+            or type(elapsed) not in (int, float)
+            or not trigger <= elapsed <= MAX_DEVICE_PAUSE_MS
+        ):
+            raise ValueError('Invalid device VAD onset pause timing')
+        result[VAD_ONSET_PAUSE] = elapsed
     if 'turn_id' in value:
         turn = value['turn_id']
         if not isinstance(turn, str) or not re.fullmatch('[A-Za-z0-9_-]{1,80}', turn):
@@ -274,6 +286,7 @@ class DiagnosticRun:
                     'capture',
                     'gate',
                     'device_pause_from_trigger_ms',
+                    VAD_ONSET_PAUSE,
                 ):
                     if old.get(field) is not None and row.get(field) != old[field]:
                         raise ValueError('Conflicting diagnostic result')

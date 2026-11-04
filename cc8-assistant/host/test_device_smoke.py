@@ -50,6 +50,7 @@ from device_smoke import (
     summarize_capture_clock,
     valid_leading_evidence,
 )
+from diagnostics import VAD_ONSET_PAUSE
 from qa_speech import CORPUS_SHA256 as QA_CORPUS_SHA256
 from qa_speech import ALL_QUESTIONS, SCENARIO_DIGESTS, SCENARIO_QUESTIONS
 
@@ -2593,6 +2594,8 @@ class DeviceAutomationTests(unittest.TestCase):
                     )
                 if case != 'no_timing':
                     voice['device_pause_from_trigger_ms'] = 35.5
+                if case == 'valid_stop':
+                    voice[VAD_ONSET_PAUSE] = 165.5
                 rows = [old]
 
                 def submit(_request, payload):
@@ -2653,6 +2656,9 @@ class DeviceAutomationTests(unittest.TestCase):
                     self.assertEqual(now[0], 20)
                     evidence = run.report('passed')['barge_evidence']
                     self.assertEqual(evidence['device_pause_from_trigger_ms'], 35.5)
+                    self.assertEqual(
+                        evidence[VAD_ONSET_PAUSE], 165.5 if case == 'valid_stop' else None
+                    )
                     self.assertEqual(evidence['post_playback_quiet_seconds'], 20)
                     self.assertTrue(evidence['replacement_completed'])
                     self.assertEqual(evidence['response_playout_timing'][QA_PLAYOUT_METRIC], 25)
