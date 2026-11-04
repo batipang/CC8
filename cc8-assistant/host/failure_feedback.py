@@ -44,9 +44,15 @@ class FailureFeedback:
     message: str
 
 
-def feedback(stage, kind):
+def feedback(stage, kind, *, unconfirmed=False):
     if stage not in STAGES or kind not in KINDS:
         raise ValueError('Invalid feedback category')
+    if unconfirmed:
+        return FailureFeedback(
+            stage,
+            kind,
+            '助理执行 · 结果待核对。Dot 未返回有效启动回执，请在电脑端核对已执行步骤，再决定是否重新发起。',
+        )
     recovery = RECOVERY[stage]
     if kind == 'approval_declined':
         recovery = '请在电脑端核对已执行步骤和权限后重新发起；当前没有待批准的请求。'

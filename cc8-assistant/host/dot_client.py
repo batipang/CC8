@@ -27,6 +27,7 @@ from dot_receipt import (
     FinalAnswer,
     NoFinalAnswer,
     ReceiptWatch,
+    UnconfirmedTurnStart,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -242,8 +243,16 @@ class CodexRpc:
                     raise queue.Empty
                 result = waiter.get(timeout=remaining)
             except queue.Empty:
+                if method == 'turn/start':
+                    raise UnconfirmedTurnStart(kind='timeout') from None
                 raise DotError('Codex request timed out', kind='timeout') from None
             if isinstance(result, Exception):
+                if (
+                    method == 'turn/start'
+                    and isinstance(result, DotError)
+                    and result.kind == 'transport_or_io'
+                ):
+                    raise UnconfirmedTurnStart(kind=result.kind) from None
                 raise result
             if result.get('error'):
                 raise DotError('Codex RPC request failed')
@@ -390,8 +399,10 @@ class CodexRpc:
             self._disconnect()
             self.initialized = False
             guardian, self.guardian = self.guardian, None
-            if not close_guardian(self.process, guardian):
+            confirmed = close_guardian(self.process, guardian)
+            if not confirmed:
                 self.failure_reason = 'guardian_cleanup_unconfirmed'
+            return confirmed
 
 
 @dataclass
@@ -473,13 +484,18 @@ class DotBrain:
             # A timed-out thread/start has an unknown late response. Discard
             # only this owned initial client, without retrying or starting work.
             self.thread_id = None
-            self.rpc.close()
-            if self.rpc_factory:
+            closed = self.rpc.close()
+            if self.rpc_factory and closed is not False:
                 self.rpc = self.rpc_factory()
             raise
         finally:
             self.last_metrics = previous_metrics
             self.preparing = False
+
+    def _replace_rpc(self):
+        if self.rpc.close() is False:
+            raise DotError('Previous Codex process is still closing', kind='transport_or_io')
+        self.rpc = self.rpc_factory()
 
     def _thread(self, mark=None, *, context_timeout=150):
         # 沿用当前 Mac 的 Codex 配置创建临时语音上下文，不继承桌面聊天历史。
@@ -487,13 +503,11 @@ class DotBrain:
             mark('dot_rpc_start')
         if self.context_changed:
             if self.rpc_factory:
-                self.rpc.close()
-                self.rpc = self.rpc_factory()
+                self._replace_rpc()
             self.thread_id = None
             self.context_changed = False
         if self.rpc.failed and self.rpc_factory:
-            self.rpc.close()
-            self.rpc = self.rpc_factory()
+            self._replace_rpc()
             self.thread_id = None
             self.last_metrics['context_reset'] = True
         rpc_reused = getattr(self.rpc, 'initialized', False) is True and not self.rpc.failed
@@ -571,6 +585,7 @@ class DotBrain:
         self.current = turn
         start = self.clock()
         completed = False
+        unconfirmed_start = False
         watch = None
         speech = SpeechClauses()
         said = 0
@@ -685,12 +700,14 @@ class DotBrain:
                 timeout=20,
             )
             ack_at = self.clock()
-            turn.ident = (result.get('turn') or {}).get('id')
+            info = result.get('turn') if isinstance(result, dict) else None
+            ident = info.get('id') if isinstance(info, dict) else None
+            if not isinstance(ident, str) or not 0 < len(ident) <= 4096:
+                raise UnconfirmedTurnStart(kind='provider_or_runtime')
+            turn.ident = ident
             self.handoff_injected = True
-            self.last_metrics['turn_id'] = turn.ident
+            self.last_metrics['turn_id'] = ident
             turn.ident_ready.set()
-            if not turn.ident:
-                raise DotError('Codex did not start a turn')
             mark_stage('dot_turn_ack', at=ack_at)
             if turn.stopped.is_set() or not is_current():
                 self._interrupt(turn)
@@ -833,11 +850,17 @@ class DotBrain:
                 characters=len(answer),
                 elapsed_ms=round((self.clock() - start) * 1000),
             )
+        except UnconfirmedTurnStart:
+            unconfirmed_start = True
+            turn.stopped.set()
+            raise
         finally:
             if watch:
                 watch.close()
-            if not completed and turn.ident:
-                self._interrupt(turn)
             turn.ident_ready.set()
+            if unconfirmed_start:
+                self.rpc.close()
+            elif not completed and turn.ident:
+                self._interrupt(turn)
             if self.current is turn:
                 self.current = None

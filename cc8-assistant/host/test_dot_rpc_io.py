@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import unittest
 
 from dot_client import CodexRpc, DotError
+from dot_receipt import UnconfirmedTurnStart
 
 
 class PipeFixture:
@@ -83,6 +84,23 @@ class DotRpcIoTests(unittest.TestCase):
         self.assertTrue(result['done'].wait(1.2), 'Pipe write outlived request budget')
         self.assertIsInstance(result.get('error'), DotError)
         self.assertEqual(result['error'].kind, kind)
+
+    def test_turn_start_timeout_after_complete_write_has_unknown_outcome(self):
+        reader = self.pipe.spawn(lambda: self.pipe.receive(1, before_reply=0.15))
+        result = self.pipe.spawn(lambda: self.pipe.rpc.request('turn/start', {}, timeout=0.06))
+        self.assert_failure(result, 'timeout')
+        self.assertIsInstance(result['error'], UnconfirmedTurnStart)
+        self.assertTrue(reader['done'].wait(0.5))
+        self.assertEqual(reader['value'][0]['method'], 'turn/start')
+        self.assertEqual(self.pipe.rpc.pending, {})
+
+    def test_turn_start_timeout_waiting_to_write_is_not_an_unknown_dispatch(self):
+        with self.pipe.rpc.writer.lock:
+            result = self.pipe.spawn(lambda: self.pipe.rpc.request('turn/start', {}, timeout=0.04))
+            self.assert_failure(result, 'timeout')
+        self.assertNotIsInstance(result['error'], UnconfirmedTurnStart)
+        self.assertFalse(self.pipe.rpc.failed)
+        self.assertEqual(self.pipe.rpc.pending, {})
 
     def test_full_pipe_times_out_and_partial_packet_cannot_be_reused(self):
         result = self.request_async()

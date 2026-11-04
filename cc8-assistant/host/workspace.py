@@ -224,7 +224,9 @@ class Workspace:
             task['stage'] = title[:40]
             self.revision += 1
 
-    def task_finish(self, ident: str | None, status: str, result: str = '') -> None:
+    def task_finish(
+        self, ident: str | None, status: str, result: str = '', *, unconfirmed: bool = False
+    ) -> None:
         # 只有 running 可进入终态，迟到的进度或停止朗读不能覆盖已有完成结果。
         with self.lock:
             task = next((t for t in self.tasks if t['id'] == ident), None)
@@ -234,7 +236,7 @@ class Workspace:
             task['result'] = result[:1600]
             task['stage'] = {
                 'completed': '请求已完成',
-                'failed': '请求未完成',
+                'failed': '执行结果待核对' if unconfirmed else '请求未完成',
                 'cancelled': '已停止等待；已执行的操作不会撤销',
             }.get(status, status)
             for step in task['steps']:
