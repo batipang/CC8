@@ -79,7 +79,7 @@ class SessionController:
         self.transport_kind = 'none'
         self.rebind_seen = False
         self.playback_interrupted_by_transport = False
-        self.write_lock = threading.Lock()
+        self.write_lock = threading.RLock()
         self.guard = threading.RLock()
         self.active = False
         self.epoch = 0
@@ -118,9 +118,14 @@ class SessionController:
     def event(self, event, generation=None, **fields):
         if generation is not None and generation < self.generation:
             return
-        self.hooks.send(
-            Packet.event(event, self.generation if generation is None else generation, **fields)
+        packet = Packet.event(
+            event, self.generation if generation is None else generation, **fields
         )
+        with self.write_lock:
+            # Match the speaker send boundary. A route change or cancellation
+            # may have advanced the generation while this event was queued.
+            if generation is None or generation >= self.generation:
+                self.hooks.send(packet)
 
     def change_transport(self, channel):
         # 先作废旧回答并重置参考时钟；只可 rebind 已有录音，重连不能自行开麦。
