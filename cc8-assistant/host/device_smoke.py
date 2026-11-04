@@ -112,6 +112,7 @@ QA_LATENCY_PHASES = tuple(
     (f'qa_{index:02}', ('capture', 'awake_dialogue', 'latency_sample')) for index in range(1, 31)
 )
 QA_STAGE_METRICS = ('utterance_to_asr_ms', 'brain_first_clause_ms', 'tts_first_pcm_ms')
+QA_ENDPOINT_METRIC = 'device_vad_tail_ms'
 QA_PLAYOUT_METRIC = 'utterance_to_confirmed_playout_ack_ms'
 
 
@@ -246,12 +247,16 @@ def qa_stage_latencies(row):
     if clean['scenario'] != 'qa':
         return {}
     stages = clean['stages']
-    return {
+    result = {
         name: round(stages[end] - stages[start], 1)
         for name in QA_STAGE_METRICS
         for start, end in (INTERVALS[name],)
         if start in stages and end in stages and stages[end] >= stages[start]
     }
+    capture = clean.get('capture', {})
+    if QA_ENDPOINT_METRIC in capture:
+        result[QA_ENDPOINT_METRIC] = capture[QA_ENDPOINT_METRIC]
+    return result
 
 
 def objects(text, marker):
@@ -1715,7 +1720,8 @@ def run_device_suite(make_run, save, *, qa_latency=False):
     if qa_latency:
         suite['audible_onset_measured'] = False
         suite['latencies_ms'] = {
-            name: percentiles([]) for name in (*QA_STAGE_METRICS, QA_PLAYOUT_METRIC)
+            name: percentiles([])
+            for name in (*QA_STAGE_METRICS, QA_ENDPOINT_METRIC, QA_PLAYOUT_METRIC)
         }
     samples = []
     save(suite)
@@ -1764,7 +1770,7 @@ def run_device_suite(make_run, save, *, qa_latency=False):
                     stages = evidence.get('qa_stage_latencies_ms')
                     if (
                         not isinstance(stages, dict)
-                        or set(stages) != set(QA_STAGE_METRICS)
+                        or set(stages) - {QA_ENDPOINT_METRIC} != set(QA_STAGE_METRICS)
                         or any(
                             type(value) not in (int, float) or not 0 <= value <= 604800000
                             for value in (*stages.values(), timing.get(QA_PLAYOUT_METRIC))
@@ -1774,7 +1780,9 @@ def run_device_suite(make_run, save, *, qa_latency=False):
                     else:
                         samples.append({**stages, QA_PLAYOUT_METRIC: timing[QA_PLAYOUT_METRIC]})
                         suite['latencies_ms'] = {
-                            name: percentiles([sample[name] for sample in samples])
+                            name: percentiles(
+                                [sample[name] for sample in samples if name in sample]
+                            )
                             for name in suite['latencies_ms']
                         }
         if phase['state'] != 'passed':
