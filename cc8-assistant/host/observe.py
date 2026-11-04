@@ -1,10 +1,14 @@
 """Read-only health/resource observation up to 72 hours; never starts capture."""
 
 import argparse
+from contextlib import contextmanager
 from datetime import datetime, timezone
+import fcntl
 import math
+import os
 from pathlib import Path
 import re
+import stat
 import sys
 import time
 import uuid
@@ -36,6 +40,40 @@ def default_output():
     )
 
 
+@contextmanager
+def protect_window(address):
+    directory = address.parent
+    if address.name != 'announce.sock' or directory.name != 'voice-runtime':
+        # External health fixtures have no corresponding automation directory.
+        yield False
+        return
+    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(fd)
+        if info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise OSError('Unsafe automation directory')
+        lease = os.open(
+            'automation-test.lock',
+            os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
+            0o600,
+            dir_fd=fd,
+        )
+        with os.fdopen(lease, 'rb') as lock:
+            info = os.fstat(lock.fileno())
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.getuid()
+                or info.st_mode & 0o077
+                or info.st_nlink != 1
+            ):
+                raise OSError('Unsafe automation lock')
+            # Mutating QA takes an exclusive lease on this same file.
+            fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            yield True
+    finally:
+        os.close(fd)
+
+
 def run(args, *, query_fn=query, clock=time.monotonic, wall_clock=time.time, sleep=time.sleep):
     validate(args.seconds, args.interval)
     expected_backend = getattr(args, 'expect_backend', None)
@@ -50,7 +88,10 @@ def run(args, *, query_fn=query, clock=time.monotonic, wall_clock=time.time, sle
     deadline = started + args.seconds
     checkpoint = started + 300
     state = 'running'
-    with PrivateOutput(args.output if args.output is not None else default_output()) as output:
+    with (
+        protect_window(args.socket) as protected,
+        PrivateOutput(args.output if args.output is not None else default_output()) as output,
+    ):
 
         def save(*, terminal=False):
             nonlocal state
@@ -78,6 +119,7 @@ def run(args, *, query_fn=query, clock=time.monotonic, wall_clock=time.time, sle
                 'wall_elapsed_seconds': round(wall_elapsed, 3),
                 'checkpoint_seconds': 300,
                 'expected_backend_version': expected_backend,
+                'automation_lock_held': protected,
             }
             output.write(result)
 
@@ -133,6 +175,12 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         return run(args)
+    except BlockingIOError:
+        print(
+            'Observation cannot start while an automated device or service check is active.',
+            file=sys.stderr,
+        )
+        return 2
     except (OSError, ValueError, TypeError, RecursionError):
         print(
             'Observation failed; check bounded options, IPC and private output permissions. No provider data shown.',

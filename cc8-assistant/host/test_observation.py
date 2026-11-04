@@ -2,6 +2,7 @@
 
 import argparse
 from contextlib import redirect_stdout
+import fcntl
 import io
 import json
 import os
@@ -359,10 +360,48 @@ class ObservationTests(unittest.TestCase):
                 query.assert_not_called()
                 self.assertFalse(path.exists())
 
-    def test_real_root_cli_uses_only_owner_health_ipc_from_minimal_path(self):
-        with tempfile.TemporaryDirectory(prefix='cc8-ob-') as folder:
+    def test_managed_observation_holds_shared_lock_until_final_report(self):
+        with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            address = root / 'health.sock'
+            private = root / 'voice-runtime'
+            private.mkdir(mode=0o700)
+            output = root / 'observe.json'
+            lock = private / 'automation-test.lock'
+
+            def query(*args, **kwargs):
+                with lock.open('r+b') as test:
+                    with self.assertRaises(BlockingIOError):
+                        fcntl.flock(test, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    fcntl.flock(test, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                return health()
+
+            code, _ = self.execute(self.args(output, socket=private / 'announce.sock'), query)
+            self.assertEqual(code, 0)
+            self.assertTrue(json.loads(output.read_text())['observation']['automation_lock_held'])
+            with lock.open('r+b') as test:
+                fcntl.flock(test, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def test_active_automation_rejects_managed_observation_before_output_or_health(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            private = root / 'voice-runtime'
+            private.mkdir(mode=0o700)
+            lock = private / 'automation-test.lock'
+            lock.touch(mode=0o600)
+            output = root / 'observe.json'
+            with lock.open('r+b') as test, patch('observe.query') as query:
+                fcntl.flock(test, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                with self.assertRaises(BlockingIOError):
+                    self.execute(self.args(output, socket=private / 'announce.sock'), query)
+                query.assert_not_called()
+                self.assertFalse(output.exists())
+
+    def test_real_root_cli_uses_only_owner_health_ipc_from_minimal_path(self):
+        with tempfile.TemporaryDirectory(prefix='cc8-ob-', dir='/tmp') as folder:
+            root = Path(folder).resolve()
+            private = root / 'voice-runtime'
+            private.mkdir(mode=0o700)
+            address = private / 'announce.sock'
             output = root / 'observe.json'
             server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             server.bind(str(address))
@@ -421,6 +460,9 @@ class ObservationTests(unittest.TestCase):
                 self.assertEqual(
                     json.loads(output.read_text())['observation']['expected_backend_version'],
                     '0.14.5',
+                )
+                self.assertTrue(
+                    json.loads(output.read_text())['observation']['automation_lock_held']
                 )
             finally:
                 stopped.set()
