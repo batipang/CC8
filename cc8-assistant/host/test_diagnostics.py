@@ -169,6 +169,7 @@ class DiagnosticsTests(unittest.TestCase):
     def test_private_ipc_health_and_diagnostics_never_enable_capture(self):
         bridge = Bridge(None, None)
         bridge.metrics['last_asr'] = {'text': 'SECRET'}
+        bridge.metrics.update(local_wake_count=2, voice_asr_attempts=3)
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'owner.sock'
             server = AnnouncementServer(bridge, path)
@@ -178,6 +179,9 @@ class DiagnosticsTests(unittest.TestCase):
                 report = query(path, 'diagnostics')
                 self.assertFalse(health['microphone_active'])
                 self.assertFalse(health['connected'])
+                self.assertEqual(health['local_wake_count'], 2)
+                self.assertEqual(health['voice_asr_attempts'], 3)
+                self.assertNotIn('SECRET', json.dumps(health))
                 self.assertNotIn('SECRET', json.dumps(report))
                 self.assertFalse(bridge.session.active)
                 self.assertEqual(path.stat().st_mode & 0o777, 0o600)

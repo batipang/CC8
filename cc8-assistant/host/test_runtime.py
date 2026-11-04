@@ -572,6 +572,7 @@ class CancellationTests(unittest.TestCase):
         )
         self.assertTrue(answered.wait(1))
         self.assertEqual(b.metrics.get('render_asr_checks'), 1)
+        self.assertEqual(b.metrics.get('voice_asr_attempts'), 2)
         self.assertNotIn('render_asr_rejections', b.metrics)
 
     def test_render_asr_result_after_cancel_is_discarded(self):
