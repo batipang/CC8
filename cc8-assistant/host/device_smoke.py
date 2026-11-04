@@ -113,6 +113,10 @@ class EvidenceFailure(CheckFailure):
     """An observation is incomplete after its operational prerequisites passed."""
 
 
+class RuntimeChanged(CheckFailure):
+    """The test can no longer act on its original backend instance."""
+
+
 def require_evidence(condition, reason):
     if not condition:
         raise EvidenceFailure(reason)
@@ -375,6 +379,7 @@ class SmokeRun:
         self.touched = False
         self.cleanup_verified = False
         self.initial_instance = None
+        self.runtime_change_reason = None
         self.source_sha256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
         self.speech_source_sha256 = hashlib.sha256(Path(voice_source).read_bytes()).hexdigest()
         self.expected_apk = expected_apk
@@ -382,12 +387,18 @@ class SmokeRun:
         self.standby_evidence = None
 
     def health(self):
-        value = self.request({'operation': 'health'})
-        require(value.get('ok') is True, 'health_unavailable')
-        instance = value.get('runtime_instance')
-        require(isinstance(instance, str) and bool(instance), 'runtime_instance_missing')
-        if self.initial_instance is not None:
-            require(instance == self.initial_instance, 'runtime_restarted_during_test')
+        if self.runtime_change_reason is not None:
+            raise RuntimeChanged(self.runtime_change_reason)
+        try:
+            value = self.request({'operation': 'health'})
+            require(value.get('ok') is True, 'health_unavailable')
+            instance = value.get('runtime_instance')
+            require(isinstance(instance, str) and bool(instance), 'runtime_instance_missing')
+            if self.initial_instance is not None and instance != self.initial_instance:
+                raise RuntimeChanged('runtime_restarted_during_test')
+        except RuntimeChanged as error:
+            self.runtime_change_reason = str(error)
+            raise
         return value
 
     def wait(self, condition, seconds, reason):
@@ -410,6 +421,9 @@ class SmokeRun:
             'elapsed_seconds': round(self.clock() - self.started, 3),
             'checks': list(self.checks),
             'cleanup_microphone_off_verified': self.cleanup_verified,
+            'cleanup_reason': self.runtime_change_reason
+            if state == 'cleanup_unconfirmed'
+            else None,
             'capture_tests_enabled': self.capture,
             'standby_enabled': self.standby,
             'synthetic_acoustic_probe_enabled': (
@@ -1458,6 +1472,14 @@ class SmokeRun:
     def cleanup(self):
         if not self.touched:
             return
+        try:
+            self.health()
+        except RuntimeChanged:
+            raise
+        except (OSError, ValueError, CheckFailure):
+            # A failed health query alone must not prevent emergency Home
+            # from stopping this test's bounded device capture.
+            pass
         # Home always stops AudioRecord and disarms automatic startup. A fresh
         # maintenance open then restores the original foreground, mic-off state.
         self.device.home()
@@ -1793,14 +1815,14 @@ def main(argv=None):
                 timeout = 25
             result = rpc(socket_path, payload, timeout)
             if args.p0_device_suite and payload == {'operation': 'health'}:
-                require(
+                if not (
                     result.get('runtime_instance') == instance
                     and result.get('release_id') == manifest.release_id
                     and result.get('bridge_version') == manifest.backend_version
                     and type(result.get('protocol_version')) is int
-                    and result['protocol_version'] == manifest.protocol_version,
-                    'suite_runtime_changed',
-                )
+                    and result['protocol_version'] == manifest.protocol_version
+                ):
+                    raise RuntimeChanged('suite_runtime_changed')
             return result
 
         folder = private_directory(
