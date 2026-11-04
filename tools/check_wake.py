@@ -7,6 +7,7 @@ import importlib.metadata
 import json
 from pathlib import Path
 import platform
+import re
 import subprocess
 import sys
 import tempfile
@@ -106,6 +107,7 @@ def passed(rows):
         and {r.get('case') for r in rows} == {c[0] for c in CASES}
         and all(
             r.get('state') == 'measured'
+            and valid_digest(r.get('fixture_pcm_sha256'))
             and type(r.get('expected_keyword')) is bool
             and r['expected_keyword'] == expected[r['case']]
             and all(
@@ -115,55 +117,49 @@ def passed(rows):
             )
             for r in rows
         )
+        and not fixture_conflicts(rows)
     )
+
+
+def valid_digest(value):
+    return isinstance(value, str) and re.fullmatch('[0-9a-f]{64}', value) is not None
+
+
+def fixture_groups(rows):
+    groups = {}
+    for row in rows:
+        if valid_digest(row.get('fixture_pcm_sha256')):
+            groups.setdefault(row['fixture_pcm_sha256'], []).append(row)
+    return groups
+
+
+def fixture_conflicts(rows):
+    return [
+        {'pcm_sha256': digest, 'cases': [row['case'] for row in group]}
+        for digest, group in fixture_groups(rows).items()
+        if len({row['expected_keyword'] for row in group}) > 1
+    ]
 
 
 def evaluate(model_root, output):
     # Explicit execution only. Importing this module or printing a plan never
     # imports a native model, reads credentials, or starts device capture.
-    import numpy as np
-    from sherpa_onnx.lib import _sherpa_onnx
-
-    if __package__:
-        from .cc8 import verified_models
-    else:
-        from cc8 import verified_models
-    from local_wake import EnglishWake
-    from streaming_keywords import StreamingKeywords
-
-    if not verified_models(model_root, 'minimax'):
-        raise ValueError('Unverified model resources')
-    detector = EnglishWake.load(
-        model_root / '.toolchains/cc8/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01'
-    )
-
-    class ColdReference(StreamingKeywords):
-        KEYWORDS = EnglishWake.KEYWORDS
-
-    cold = ColdReference(detector.detector, gain=detector.gain, lock=detector.engine_lock)
     corpus_hash = hashlib.sha256(
         json.dumps([CASES, PREFIX_SAMPLES], ensure_ascii=False).encode()
     ).hexdigest()
-    from local_wake import __file__ as wake_source
-
-    source_hash = hashlib.sha256(Path(wake_source).read_bytes()).hexdigest()
+    source_hash = None
     automation_hash = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     speech_source_hash = hashlib.sha256(Path(voice_source).read_bytes()).hexdigest()
     native_versions = {}
-    for name in ('sherpa-onnx', 'sherpa-onnx-core'):
-        try:
-            native_versions[name] = importlib.metadata.version(name)
-        except importlib.metadata.PackageNotFoundError:
-            native_versions[name] = None
-    binary = Path(_sherpa_onnx.__file__)
-    native_files = [binary, *binary.parent.glob('*.dylib')]
-    native_hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in native_files}
-    rows = []
+    native_hashes = {}
+    rows, fixtures = [], {}
+    model_loaded = False
+    integrity = {'state': 'not_checked', 'conflicts': [], 'phonetic_correctness_asserted': False}
 
     def save(state):
         output.write(
             {
-                'schema': 1,
+                'schema': 2,
                 'state': state,
                 'scope': 'public_synthetic_keyword_boundaries',
                 'corpus_version': CORPUS_VERSION,
@@ -173,6 +169,8 @@ def evaluate(model_root, output):
                 'corpus_sha256': corpus_hash,
                 'native_package_versions': native_versions,
                 'native_binary_sha256': native_hashes,
+                'model_loaded': model_loaded,
+                'input_integrity': integrity,
                 'microphone_used': False,
                 'device_used': False,
                 'network_requested': False,
@@ -183,18 +181,84 @@ def evaluate(model_root, output):
             }
         )
 
-    save('running')
+    save('preparing_fixtures')
     try:
+        # Finish input validation before allocating native models or admitting
+        # any score. Opposing labels on identical PCM cannot test a detector.
         for ident, voice, rate, text, positive in CASES:
             row = {'case': ident, 'expected_keyword': positive}
             try:
+                if type(positive) is not bool:
+                    raise ValueError('Invalid fixture label')
                 row['voice_selection'] = 'system_default' if voice is None else 'installed_name'
                 row['requested_voice'] = voice
                 row['resolved_voice'] = resolve_voice(voice)
                 with tempfile.TemporaryDirectory(prefix='cc8-public-wake-fixture-') as temporary:
                     pcm = synthesize(Path(temporary), voice, rate, text)
-                samples = np.frombuffer(pcm, dtype='<i2').astype(np.float32) / 32768
+                if not isinstance(pcm, bytes) or not 0 < len(pcm) <= 320000 or len(pcm) % 2:
+                    raise ValueError('Invalid fixture PCM')
                 row['fixture_pcm_sha256'] = hashlib.sha256(pcm).hexdigest()
+                fixtures[ident] = pcm
+                row['state'] = 'prepared'
+            except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+                row['state'] = 'fixture_failed'
+            rows.append(row)
+            save('preparing_fixtures')
+        conflicts = fixture_conflicts(rows)
+        invalid = len(fixtures) != len(CASES) or bool(conflicts)
+        integrity.update(
+            state='invalid_fixtures' if invalid else 'verified_exact_pcm_labels',
+            conflicts=conflicts,
+            same_label_duplicate_groups=sum(
+                len(group) > 1 and len({r['expected_keyword'] for r in group}) == 1
+                for group in fixture_groups(rows).values()
+            ),
+        )
+        if invalid:
+            save('input_invalid')
+            return 'input_invalid', summary(rows)
+        try:
+            import numpy as np
+            from sherpa_onnx.lib import _sherpa_onnx
+
+            if __package__:
+                from .cc8 import verified_models
+            else:
+                from cc8 import verified_models
+            from local_wake import EnglishWake
+            from local_wake import __file__ as wake_source
+            from streaming_keywords import StreamingKeywords
+
+            source_hash = hashlib.sha256(Path(wake_source).read_bytes()).hexdigest()
+            if not verified_models(model_root, 'minimax'):
+                raise ValueError('Unverified model resources')
+            detector = EnglishWake.load(
+                model_root / '.toolchains/cc8/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01'
+            )
+            model_loaded = True
+
+            class ColdReference(StreamingKeywords):
+                KEYWORDS = EnglishWake.KEYWORDS
+
+            cold = ColdReference(detector.detector, gain=detector.gain, lock=detector.engine_lock)
+            for name in ('sherpa-onnx', 'sherpa-onnx-core'):
+                try:
+                    native_versions[name] = importlib.metadata.version(name)
+                except importlib.metadata.PackageNotFoundError:
+                    native_versions[name] = None
+            binary = Path(_sherpa_onnx.__file__)
+            native_files = [binary, *binary.parent.glob('*.dylib')]
+            native_hashes = {
+                p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in native_files
+            }
+        except (OSError, ValueError, RuntimeError, ImportError, subprocess.SubprocessError):
+            save('model_unavailable')
+            raise
+        save('running')
+        for row in rows:
+            try:
+                pcm = fixtures[row['case']]
+                samples = np.frombuffer(pcm, dtype='<i2').astype(np.float32) / 32768
                 for condition in CONDITIONS:
                     current = detector if condition.startswith('production_') else cold
                     current.reset()
@@ -212,11 +276,12 @@ def evaluate(model_root, output):
                 row['state'] = 'measured'
             except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
                 row['state'] = 'fixture_or_model_failed'
-            rows.append(row)
             save('running')
     except KeyboardInterrupt:
         save('cancelled')
         raise
+    finally:
+        fixtures.clear()
     state = 'passed' if passed(rows) else 'failed'
     save(state)
     return state, summary(rows)
@@ -235,6 +300,7 @@ def main(argv=None):
                     'corpus_version': CORPUS_VERSION,
                     'sample_count': len(CASES),
                     'conditions': CONDITIONS,
+                    'fixture_integrity': 'exact_pcm_labels_before_model_load',
                     'microphone_used': False,
                     'network_requested': False,
                 },
