@@ -2,7 +2,6 @@
 
 from pathlib import Path
 import argparse
-import fcntl
 import os
 import signal
 import shlex
@@ -12,6 +11,7 @@ import time
 from configuration import load_config
 from config_schema import ConfigError
 from runtime_guard import ensure_available, RuntimeConflict
+from process_lock import ProcessLease, atomic_private_bytes
 
 ROOT = Path(__file__).resolve().parents[2]
 PRIVATE = ROOT / 'device-access/private/voice-runtime'
@@ -68,8 +68,7 @@ def main():
             managed_stop = True
     PRIVATE.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(PRIVATE, 0o700)
-    with (PRIVATE / 'launcher.lock').open('w') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with ProcessLease(PRIVATE / 'launcher.lock', blocking=True):
         pid_file = PRIVATE / 'bridge.pid'
         try:
             pid = int(pid_file.read_text())
@@ -111,7 +110,7 @@ def main():
                     stderr=subprocess.STDOUT,
                     start_new_session=True,
                 )
-            pid_file.write_text(str(child.pid) + '\n')
+            atomic_private_bytes(pid_file, f'{child.pid}\n'.encode())
             print('本机语音服务已启动，正在准备识别模型。')
         else:
             print('本机语音服务已运行。')

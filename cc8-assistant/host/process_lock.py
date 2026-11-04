@@ -7,8 +7,9 @@ import stat
 
 
 class ProcessLease:
-    def __init__(self, path):
+    def __init__(self, path, *, blocking=False):
         self.path = Path(path)
+        self.blocking = blocking
         self.fd = None
 
     def __enter__(self):
@@ -20,7 +21,7 @@ class ProcessLease:
             if info.st_uid != os.getuid() or not stat.S_ISREG(info.st_mode):
                 raise OSError('Unsafe process lease')
             os.fchmod(fd, 0o600)
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(fd, fcntl.LOCK_EX | (0 if self.blocking else fcntl.LOCK_NB))
         except BaseException:
             os.close(fd)
             raise
