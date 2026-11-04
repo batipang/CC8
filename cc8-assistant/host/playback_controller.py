@@ -67,6 +67,7 @@ class PlaybackController:
         self.hooks = hooks
         self.playing = False
         self.begin_pending = False
+        self.end_frames = None
         self.completed = set()
         self.done = threading.Condition()
         self.last_spoken = ''
@@ -93,6 +94,7 @@ class PlaybackController:
             was_playing = self.playing
             self.playing = False
             self.begin_pending = False
+            self.end_frames = None
             self.playout_probe.clear()
             return was_playing
 
@@ -181,24 +183,30 @@ class PlaybackController:
             # renderer may immediately publish the next clause of this turn.
             # Order is publication -> completion, never completion -> session.
             with self.publication_lock:
-                if generation == self.hooks.generation() and not self.matches_completion(event):
+                played = event.get('played_frames')
+                if (
+                    generation != self.hooks.generation()
+                    or self.end_frames is None
+                    or not self.matches_completion(event)
+                    or (played is not None and played < self.end_frames)
+                ):
                     return
                 with self.done:
-                    if generation == self.hooks.generation():
-                        clock_id = event.get('playback_id')
-                        clock_frames = (
-                            self.playout_probe.expected_frames(generation, clock_id)
-                            if type(clock_id) is int
-                            else None
-                        )
-                        self.hooks.complete_clock_report(
-                            generation, clock_id, event.get('render_clock'), clock_frames
-                        )
-                        self.hooks.diagnostics().mark(generation, 'playback_done')
-                        self.completed = {generation}
-                        self.playing = False
-                        self.begin_pending = False
-                        self.last_audio_end = time.monotonic()
+                    clock_id = event.get('playback_id')
+                    clock_frames = (
+                        self.playout_probe.expected_frames(generation, clock_id)
+                        if type(clock_id) is int
+                        else None
+                    )
+                    self.hooks.complete_clock_report(
+                        generation, clock_id, event.get('render_clock'), clock_frames
+                    )
+                    self.hooks.diagnostics().mark(generation, 'playback_done')
+                    self.completed = {generation}
+                    self.playing = False
+                    self.begin_pending = False
+                    self.end_frames = None
+                    self.last_audio_end = time.monotonic()
                     self.done.notify_all()
         elif name in ('playback_paused', 'playback_resumed'):
             self._accept_pause_receipt(name, event)
@@ -403,6 +411,7 @@ class PlaybackController:
                     return False
                 self.playing = True
                 self.begin_pending = True
+                self.end_frames = None
                 self.last_spoken = text
                 self.spoken.append((time.monotonic(), text))
                 self.playback_serial += 1
@@ -469,8 +478,11 @@ class PlaybackController:
                         start += waited
                         deadline += waited
                         time.sleep(min(0.01, max(0, deadline - time.monotonic())))
-            if not self.hooks.valid(generation):
-                return False
+            with self.publication_lock:
+                if not self.hooks.valid(generation) or playback_id != self.playback_serial:
+                    return False
+                # The device can drain and acknowledge before the send returns.
+                self.end_frames = written
             self.output_event('play_end', generation=generation, frames=written)
             with self.done:
                 deadline = time.monotonic() + 4

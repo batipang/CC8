@@ -21,6 +21,41 @@ class CompletionRacesTests(unittest.TestCase):
         b.event = lambda *a, **k: None
         return b
 
+    def test_done_requires_end_submission_and_complete_frames_and_is_consumed_once(self):
+        b = self.session()
+        b.playback.device_can_report_completion = True
+        generation = b.generation
+        playback_id = None
+        observations = []
+
+        def done(frames):
+            b.on_event(
+                {
+                    'event': 'play_done',
+                    'generation': generation,
+                    'playback_id': playback_id,
+                    'played_frames': frames,
+                }
+            )
+            return b.playback.playing, generation in b.playback.completed
+
+        def output(name, **fields):
+            nonlocal playback_id
+            if name == 'play_begin':
+                playback_id = fields['playback_id']
+                observations.append(done(400))
+            if name == 'play_end':
+                observations.append(done(fields['frames'] - 1))
+                observations.append(done(fields['frames'] + 2))  # Pause recovery can pad the tail.
+                end = b.playback.last_audio_end
+                with patch('playback_controller.time.monotonic', return_value=end + 1):
+                    done(fields['frames'] + 2)
+                observations.append(b.playback.last_audio_end == end)
+
+        b.event = output
+        self.assertTrue(b.play(np.ones(400, dtype=np.int16), 'fixed', generation))
+        self.assertEqual(observations, [(True, False), (True, False), (False, True), True])
+
     def test_previous_clause_done_cannot_clear_the_next_clause_playing_state(self):
         b = self.session()
         generation = b.generation
