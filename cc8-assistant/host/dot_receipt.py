@@ -3,6 +3,7 @@
 import threading
 import time
 from operation_failure import OperationFailure
+from dot_errors import GENERIC, error_kind, error_notice, turn_completion
 
 
 class DotError(OperationFailure):
@@ -29,6 +30,8 @@ class FinalAnswer:
         self.stream_id = None
         self.stream_text = ''
         self.status = None
+        self.failure_kind = None
+        self.failure_hint = None
         self.finished = False
 
     def feed(self, event):
@@ -43,8 +46,25 @@ class FinalAnswer:
             if turn.get('id') == self.turn_id:
                 self.finished = True
                 self.status = turn.get('status')
+                if self.status == 'failed':
+                    reason = turn.get('error')
+                    missing = reason is None or (
+                        type(reason) is dict and reason.get('codexErrorInfo') is None
+                    )
+                    self.failure_kind = (
+                        self.failure_hint or GENERIC if missing else error_kind(reason)
+                    )
+                self.failure_hint = None
             return None
         if p.get('turnId') != self.turn_id:
+            return None
+        if method == 'error':
+            notice = error_notice(event)
+            if notice is not None:
+                fields = notice['params']
+                # A warning alone never fails a task. Only the matching failed
+                # terminal can use a non-retried hint; a retry clears it.
+                self.failure_hint = None if fields['willRetry'] else error_kind(fields['error'])
             return None
         if method in ('item/started', 'item/completed'):
             item = p.get('item') or {}
@@ -143,6 +163,12 @@ class ReceiptWatch:
             try:
                 if not self.valid():
                     return
+                if event.get('method') == 'error':
+                    event = error_notice(event)
+                    if event is None:
+                        return
+                elif event.get('method') == 'turn/completed':
+                    event = turn_completion(event)
                 if self.state is None:
                     p = event.get('params') or {}
                     method = event.get('method')
@@ -151,7 +177,7 @@ class ReceiptWatch:
                     if method in ('item/started', 'item/completed'):
                         if (p.get('item') or {}).get('type') != 'agentMessage':
                             return
-                    elif method not in ('item/agentMessage/delta', 'turn/completed'):
+                    elif method not in ('item/agentMessage/delta', 'turn/completed', 'error'):
                         return
                     if len(self.early) >= 256:
                         raise DotError('Codex pending receipt exceeds size limit')
