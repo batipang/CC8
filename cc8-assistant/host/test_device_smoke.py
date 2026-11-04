@@ -539,6 +539,31 @@ class DeviceAutomationTests(unittest.TestCase):
         self.assertEqual(plan['qa_corpus_sha256'], QA_CORPUS_SHA256)
         self.assertEqual(len(plan['phases']), 30)
 
+    def test_interruption_batch_dry_plan_never_contacts_device_or_backend(self):
+        with (
+            patch('device_smoke.Device') as device,
+            patch('device_smoke.rpc') as request,
+            redirect_stdout(io.StringIO()) as output,
+        ):
+            self.assertEqual(
+                main(['--runtime-root', '/unused', '--capture', '--interruption-suite']), 0
+            )
+        device.assert_not_called()
+        request.assert_not_called()
+        plan = json.loads(output.getvalue())
+        self.assertEqual(plan['minimum_backend_version'], '0.14.60')
+        self.assertEqual(plan['minimum_apk_code'], 71)
+        self.assertEqual(len(plan['phases']), 30)
+        self.assertEqual(
+            [p['name'] for p in plan['phases'][:4]],
+            [
+                'barge_01',
+                'stop_01',
+                'barge_02',
+                'stop_02',
+            ],
+        )
+
     def test_routed_latency_plans_bind_distinct_fixed_corpora_without_device_access(self):
         self.assertEqual(len(set(ALL_QUESTIONS)), 90)
         self.assertEqual(len(set(SCENARIO_DIGESTS.values())), 3)
@@ -2367,6 +2392,8 @@ class DeviceAutomationTests(unittest.TestCase):
             ('completed_announcement', 'interruption_announcement_not_cancelled'),
             ('wrong_generation', 'interruption_replacement_not_confirmed'),
             ('no_timing', 'interruption_pause_timing_missing'),
+            ('no_pair', 'interruption_replacement_playout_unconfirmed'),
+            ('wrong_pair', 'interruption_replacement_playout_unconfirmed'),
             ('rejected_pause', 'interruption_rejected_voice_paused'),
             ('extra_voice', 'interruption_unexpected_voice'),
             ('lost_capture', 'interruption_capture_or_usb_lost'),
@@ -2397,9 +2424,23 @@ class DeviceAutomationTests(unittest.TestCase):
                     'outcome': None,
                     'stages': {} if case == 'no_playout' else {'playout_ack': 0},
                 }
-                voice = self.acoustic_row(request_id='new')
+                voice = self.acoustic_row(
+                    request_id='c' * 32, scenario='qa', error=None, confirmed_playback_clauses=1
+                )
+                del voice['text']
                 voice.update(gate='accepted', generation=20 if case == 'wrong_generation' else 21)
-                voice['stages'].update(pause_request=20, pause_ack=40)
+                voice['stages'].update(
+                    pause_request=20,
+                    pause_ack=40,
+                    utterance_end=80,
+                    playout_ack=100,
+                    playback_done=130,
+                )
+                if case != 'no_pair':
+                    voice['stages'].update(
+                        confirmed_playout_ack=105,
+                        confirmed_playback_done=110 if case == 'wrong_pair' else 130,
+                    )
                 if case != 'no_timing':
                     voice['device_pause_from_trigger_ms'] = 35.5
                 rows = [old]
@@ -2464,6 +2505,7 @@ class DeviceAutomationTests(unittest.TestCase):
                     self.assertEqual(evidence['device_pause_from_trigger_ms'], 35.5)
                     self.assertEqual(evidence['post_playback_quiet_seconds'], 20)
                     self.assertTrue(evidence['replacement_completed'])
+                    self.assertEqual(evidence['response_playout_timing'][QA_PLAYOUT_METRIC], 25)
                     self.assertIs(evidence['transcript_matches_stimulus'], True)
                     self.assertNotIn('announcement-id', json.dumps(evidence))
                     if case == 'valid_stop':

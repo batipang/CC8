@@ -127,6 +127,11 @@ QA_LATENCY_PHASES = tuple(
     (f'qa_{index:02}', ('capture', 'awake_dialogue', 'latency_sample'))
     for index in range(1, len(QA_LATENCY_QUESTIONS) + 1)
 )
+INTERRUPTION_PHASES = tuple(
+    (f'{kind}_{index:02}', ('capture', f'synthetic_{kind}'))
+    for index in range(1, 16)
+    for kind in ('barge', 'stop')
+)
 EXTENDED_VOICE_PHASES = (
     *P0_DEVICE_PHASES[:2],
     ('synthetic_stop', ('capture', 'synthetic_stop')),
@@ -137,10 +142,12 @@ QA_STAGE_METRICS = ('utterance_to_asr_ms', 'brain_first_clause_ms', 'tts_first_p
 QA_ENDPOINT_METRIC = 'device_vad_tail_ms'
 QA_PLAYOUT_METRIC = 'utterance_to_confirmed_playout_ack_ms'
 ACOUSTIC_RESPONSE_METRIC = 'last_voiced_to_confirmed_output_block_ms'
+BARGE_DEVICE_METRIC = 'device_pause_from_trigger_ms'
 FAST_STOP_DEVICE_METRIC = 'detecting_frame_to_device_stop_ms'
 MAX_FAST_STOP_DEVICE_MS = 20000
 STOP_VISUAL_METRIC = 'device_stop_to_visuals_cleared_ms'
 MAX_STOP_VISUAL_MS = 2000
+MAX_PHASE_ELAPSED_MS = 86_400_000
 
 
 class CheckFailure(RuntimeError):
@@ -1764,6 +1771,11 @@ class SmokeRun:
                 'interruption_replacement_failed',
             )
             if evidence['announcement_cancelled'] and evidence['replacement_completed']:
+                timing = response_playout_timing(replacement)
+                evidence['response_playout_timing'] = timing
+                require(
+                    timing['status'] == 'observed', 'interruption_replacement_playout_unconfirmed'
+                )
                 return replacement
             return None
 
@@ -1996,7 +2008,27 @@ def planned_checks(options):
     )
 
 
-def device_suite_phases(*, qa_latency, extended_voice):
+def matched_playout(evidence):
+    timing = evidence.get('response_playout_timing')
+    if not isinstance(timing, dict) or timing.get('status') != 'observed':
+        return False
+    start = timing.get('utterance_end_ms')
+    ack = timing.get('confirmed_playout_ack_ms')
+    done = timing.get('confirmed_playback_done_ms')
+    elapsed = timing.get(QA_PLAYOUT_METRIC)
+    return (
+        all(
+            type(value) in (int, float) and 0 <= value <= MAX_PHASE_ELAPSED_MS
+            for value in (start, ack, done, elapsed)
+        )
+        and start <= ack <= done
+        and elapsed == round(ack - start, 1)
+    )
+
+
+def device_suite_phases(*, qa_latency, extended_voice, interruption=False):
+    if interruption:
+        return INTERRUPTION_PHASES
     if qa_latency:
         return QA_LATENCY_PHASES
     return EXTENDED_VOICE_PHASES if extended_voice else P0_DEVICE_PHASES
@@ -2010,15 +2042,21 @@ def run_device_suite(
     response_acoustic=False,
     extended_voice=False,
     latency_scenario='qa',
+    interruption=False,
 ):
-    planned = device_suite_phases(qa_latency=qa_latency, extended_voice=extended_voice)
+    planned = device_suite_phases(
+        qa_latency=qa_latency, extended_voice=extended_voice, interruption=interruption
+    )
+    scope = 'synthetic_qa_latency' if qa_latency else 'fixed_device_suite'
+    if interruption:
+        scope = 'synthetic_interruption_latency'
     phases = [
         dict(name=name, state='not_run', expected_checks=planned_checks(set(options)))
         for name, options in planned
     ]
     suite = dict(
         schema=1,
-        scope='synthetic_qa_latency' if qa_latency else 'fixed_device_suite',
+        scope=scope,
         state='running',
         phases=phases,
         full_p0_acceptance=False,
@@ -2039,6 +2077,14 @@ def run_device_suite(
         if response_acoustic:
             suite['response_acoustic_evidence'] = True
             suite['latencies_ms'][ACOUSTIC_RESPONSE_METRIC] = percentiles([])
+    interruption_samples = {}
+    if interruption:
+        interruption_samples = {
+            name: [] for name in (BARGE_DEVICE_METRIC, FAST_STOP_DEVICE_METRIC, STOP_VISUAL_METRIC)
+        }
+        suite['latencies_ms'] = {
+            name: percentiles(values) for name, values in interruption_samples.items()
+        }
     samples = []
     save(suite)
     source = None
@@ -2074,7 +2120,9 @@ def run_device_suite(
             if phase['state'] == 'passed' and 'synthetic_stop' in options:
                 stop = result.get('barge_evidence')
                 apk = result.get('expected_apk_code')
-                visuals_required = type(apk) is int and apk >= STOP_VISUAL_MIN_APK_CODE
+                visuals_required = interruption or (
+                    type(apk) is int and apk >= STOP_VISUAL_MIN_APK_CODE
+                )
                 if not (
                     isinstance(stop, dict)
                     and stop.get('device_stop_applied') is True
@@ -2098,6 +2146,44 @@ def run_device_suite(
                     and stop['post_playback_quiet_seconds'] >= POST_DIALOGUE_SECONDS
                 ):
                     phase.update(state='failed', reason='suite_synthetic_stop_evidence_incomplete')
+            if phase['state'] == 'passed' and interruption:
+                evidence = result.get('barge_evidence')
+                if 'synthetic_barge' in options:
+                    if not (
+                        isinstance(evidence, dict)
+                        and all(
+                            evidence.get(key) is True
+                            for key in (
+                                'device_stop_applied',
+                                'announcement_cancelled',
+                                'stimulus_played',
+                                'replacement_completed',
+                                'transcript_matches_stimulus',
+                            )
+                        )
+                        and type(evidence.get(BARGE_DEVICE_METRIC)) in (int, float)
+                        and 0 <= evidence[BARGE_DEVICE_METRIC] <= MAX_DEVICE_PAUSE_MS
+                        and type(evidence.get('admitted_voice_requests')) is int
+                        and evidence['admitted_voice_requests'] == 1
+                        and type(evidence.get('post_playback_quiet_seconds')) in (int, float)
+                        and POST_DIALOGUE_SECONDS
+                        <= evidence['post_playback_quiet_seconds']
+                        <= 86400
+                        and matched_playout(evidence)
+                    ):
+                        phase.update(
+                            state='failed', reason='suite_synthetic_barge_evidence_incomplete'
+                        )
+                    else:
+                        interruption_samples[BARGE_DEVICE_METRIC].append(
+                            evidence[BARGE_DEVICE_METRIC]
+                        )
+                else:
+                    for name in (FAST_STOP_DEVICE_METRIC, STOP_VISUAL_METRIC):
+                        interruption_samples[name].append(evidence[name])
+                suite['latencies_ms'] = {
+                    name: percentiles(values) for name, values in interruption_samples.items()
+                }
             if phase['state'] == 'passed' and (
                 'awake_dialogue' in options or 'acoustic' in options
             ):
@@ -2185,6 +2271,11 @@ def main(argv=None):
         action='store_true',
         help='Sample 30 fixed synthetic QA responses with matched playback receipts',
     )
+    batches.add_argument(
+        '--interruption-suite',
+        action='store_true',
+        help='Measure 15 synthetic question interruptions and 15 local stop commands',
+    )
     parser.add_argument(
         '--latency-scenario',
         choices=tuple(SCENARIO_QUESTIONS),
@@ -2268,7 +2359,7 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
     options = {key for key in SMOKE_OPTIONS if getattr(args, key)}
-    batch = args.p0_device_suite or args.qa_latency_suite
+    batch = args.p0_device_suite or args.qa_latency_suite or args.interruption_suite
     if args.extended_voice_evidence and not args.p0_device_suite:
         parser.error('--extended-voice-evidence requires --p0-device-suite')
     if args.latency_scenario != 'qa' and not args.qa_latency_suite:
@@ -2314,7 +2405,7 @@ def main(argv=None):
     minimum_batch_backend = PAIRED_PLAYOUT_MIN_BACKEND
     if args.latency_scenario != 'qa':
         minimum_batch_backend = ROUTED_LATENCY_MIN_BACKEND
-    elif args.extended_voice_evidence:
+    elif args.extended_voice_evidence or args.interruption_suite:
         minimum_batch_backend = EXTENDED_VOICE_MIN_BACKEND
     elif args.response_acoustic_evidence:
         minimum_batch_backend = RESPONSE_ACOUSTIC_MIN_BACKEND
@@ -2326,6 +2417,7 @@ def main(argv=None):
                     for name, flags in device_suite_phases(
                         qa_latency=args.qa_latency_suite,
                         extended_voice=args.extended_voice_evidence,
+                        interruption=args.interruption_suite,
                     )
                 ],
                 'execute': False,
@@ -2339,6 +2431,8 @@ def main(argv=None):
                     plan['latency_scenario'] = args.latency_scenario
                 if args.response_acoustic_evidence:
                     plan['response_acoustic_evidence'] = True
+            if args.interruption_suite:
+                plan['minimum_apk_code'] = STOP_VISUAL_MIN_APK_CODE
             if args.extended_voice_evidence:
                 plan['extended_voice_evidence'] = True
                 plan['minimum_apk_code'] = STOP_RECEIPT_MIN_APK_CODE
@@ -2388,8 +2482,11 @@ def main(argv=None):
             'response_acoustic_evidence_supported'
         ) is not True:
             parser.exit(2, '当前后台未声明支持问答声学计时。\n')
-        if args.extended_voice_evidence and (
-            manifest.assistant.version_code < STOP_RECEIPT_MIN_APK_CODE
+        minimum_stop_apk = (
+            STOP_VISUAL_MIN_APK_CODE if args.interruption_suite else STOP_RECEIPT_MIN_APK_CODE
+        )
+        if (args.extended_voice_evidence or args.interruption_suite) and (
+            manifest.assistant.version_code < minimum_stop_apk
             or health.get('fast_stop_ready') is not True
             or health.get('fast_stop_timing_supported') is not True
             or type(health.get('fast_stop_count')) is not int
@@ -2454,12 +2551,17 @@ def main(argv=None):
                     )
 
                 device = Device()
-                if args.extended_voice_evidence:
+                if args.extended_voice_evidence or args.interruption_suite:
                     device_status, _ = device.status()
                     require(
                         device_status.get('test_playback_stop_supported') is True,
                         'device_playback_stop_evidence_unsupported',
                     )
+                    if args.interruption_suite:
+                        require(
+                            device_status.get('test_stop_visual_timing_supported') is True,
+                            'device_stop_visual_timing_unsupported',
+                        )
 
                 def make_run(enabled, checkpoint, *, qa_question=ACOUSTIC_QUESTION):
                     return SmokeRun(
@@ -2494,6 +2596,7 @@ def main(argv=None):
                             response_acoustic=args.response_acoustic_evidence,
                             extended_voice=args.extended_voice_evidence,
                             latency_scenario=args.latency_scenario,
+                            interruption=args.interruption_suite,
                         )
                     else:
                         result = make_run(options, save).run()
@@ -2509,7 +2612,7 @@ def main(argv=None):
                             for phase in result['phases']
                         ],
                     }
-                    if args.qa_latency_suite:
+                    if args.qa_latency_suite or args.interruption_suite:
                         summary['latencies_ms'] = result['latencies_ms']
                         if args.latency_scenario != 'qa':
                             summary['latency_scenario'] = args.latency_scenario
