@@ -47,6 +47,28 @@ class AuditObservationTests(unittest.TestCase):
         self.assertEqual(result['gauges']['rss_bytes']['slope_per_hour'], 0)
         self.assertNotIn('samples', result)
 
+    def test_frozen_and_gradually_drifting_uptime_cannot_verify_one_live_process(self):
+        for speed in (0, 0.999):
+            with self.subTest(speed=speed):
+
+                def update(elapsed, sample):
+                    sample['uptime_seconds'] = round(10 + elapsed * speed, 1)
+
+                report = observation(update=update)
+                self.assertEqual(report['uptime_discontinuities'], 0)
+                result = audit(report, BACKEND)
+                self.assertFalse(result['window_verified'])
+                self.assertIn('uptime_clock_mismatch', result['reasons'])
+                self.assertEqual(result['gauges'], {})
+
+    def test_uptime_offset_allows_ipc_delay_and_rounding_within_the_read_budget(self):
+        def update(elapsed, sample):
+            sample['uptime_seconds'] = 10 + elapsed - (5.1 if elapsed % 120 else 0)
+
+        result = audit(observation(update=update), BACKEND)
+        self.assertTrue(result['window_verified'])
+        self.assertEqual(result['uptime_offset_span_seconds'], 5.1)
+
     def test_short_running_wrong_version_and_coarse_schedule_each_block_acceptance(self):
         for key, value, reason in (
             ('elapsed_seconds', DURATION - 1, 'window_shorter_than_72_hours'),
