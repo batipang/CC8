@@ -228,17 +228,17 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
             else:
                 run_one(b.response, job)
             error_packets = list(packets)
+            unknown_start = (
+                local_dot is not None and case.stage == 'brain' and case.kind == 'transport_or_io'
+            )
+            expected_message = feedback(case.stage, case.kind, unconfirmed=unknown_start).message
             errors = [
                 p
                 for p in error_packets
                 if (d := decode_event(p.data)).get('event') == 'status'
                 and d.get('phase') == 'error'
             ]
-            if (
-                len(errors) != 1
-                or decode_event(errors[0].data)['message']
-                != feedback(case.stage, case.kind).message
-            ):
+            if len(errors) != 1 or decode_event(errors[0].data)['message'] != expected_message:
                 raise AssertionError('Fixture did not preserve its declared failure')
             report = b.diagnostics.report()['requests'][-1]
             if report['outcome'] != 'failed' or report['error'] != {
@@ -296,7 +296,7 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
                     'stale_error': errors[0],
                     'recovery': recovery,
                     'expected_task': expected_task,
-                    'expected_message': feedback(case.stage, case.kind).message,
+                    'expected_message': expected_message,
                     'provider_requests': expected_http + expected_brain,
                     'http_fixture': http_fixture,
                     'dot_fixture': dot_fixture,

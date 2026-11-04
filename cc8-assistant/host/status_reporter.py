@@ -19,6 +19,7 @@ from diagnostics import TraceBook, error_kind
 from operation_failure import OperationFailure
 from dsp import NearSpeechDetector, VoiceDetector
 from failure_feedback import feedback
+from dot_receipt import UnconfirmedTurnStart
 from release_info import RELEASE
 from session_controller import SessionView
 from playback_controller import PlaybackController
@@ -182,10 +183,10 @@ class StatusReporter:
         self.hooks.diagnostics().failure(key, stage, error)
         record = self.hooks.diagnostics().failure_record(key)
         # Only stable categories reach UI/logs, never provider text or URLs.
-        guidance = (
-            feedback(record['stage'], record['kind'])
-            if record
-            else feedback(stage, error_kind(error))
+        guidance = feedback(
+            record['stage'] if record else stage,
+            record['kind'] if record else error_kind(error),
+            unconfirmed=isinstance(error, UnconfirmedTurnStart),
         )
         self.hooks.log(
             'runtime_error',

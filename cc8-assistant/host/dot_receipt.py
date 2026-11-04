@@ -16,6 +16,13 @@ class DotApprovalRequired(DotError):
         super().__init__(message, kind='approval_declined')
 
 
+class UnconfirmedTurnStart(DotError):
+    """The complete start request was sent, but no usable turn ID arrived."""
+
+    def __init__(self, *, kind):
+        super().__init__('Codex turn start could not be confirmed', kind=kind)
+
+
 class NoFinalAnswer(DotError):
     pass
 

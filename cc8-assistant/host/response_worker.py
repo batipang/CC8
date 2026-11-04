@@ -14,6 +14,7 @@ from typing import Callable, ContextManager
 from announce import Announcement
 from diagnostics import TraceBook, error_kind
 from failure_feedback import FailureSink, feedback
+from dot_receipt import UnconfirmedTurnStart
 from operation_failure import OperationFailure, KINDS
 from reply_types import Reply, TextReply, VisualReply, BrainPreparation
 from session_ports import EventSink, MetricSink
@@ -274,8 +275,12 @@ class ResponseWorker:
             with self.hooks.lock:
                 if failure:
                     stage, error = failure
+                    unconfirmed = isinstance(error, UnconfirmedTurnStart)
                     self.hooks.workspace().task_finish(
-                        task_id, 'failed', feedback(stage, error_kind(error)).message
+                        task_id,
+                        'failed',
+                        feedback(stage, error_kind(error), unconfirmed=unconfirmed).message,
+                        unconfirmed=unconfirmed,
                     )
                 failed = bool(
                     self.hooks.brain()
