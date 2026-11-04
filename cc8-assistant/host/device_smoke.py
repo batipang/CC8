@@ -77,7 +77,7 @@ POST_DIALOGUE_SECONDS = 20
 STANDBY_SECONDS = 900
 PAIRED_PLAYOUT_MIN_BACKEND = '0.14.50'
 RESPONSE_ACOUSTIC_MIN_BACKEND = '0.14.57'
-EXTENDED_VOICE_MIN_BACKEND = '0.14.59'
+EXTENDED_VOICE_MIN_BACKEND = '0.14.60'
 STOP_RECEIPT_MIN_APK_CODE = 69
 SMOKE_OPTIONS = (
     'capture',
@@ -130,6 +130,8 @@ QA_STAGE_METRICS = ('utterance_to_asr_ms', 'brain_first_clause_ms', 'tts_first_p
 QA_ENDPOINT_METRIC = 'device_vad_tail_ms'
 QA_PLAYOUT_METRIC = 'utterance_to_confirmed_playout_ack_ms'
 ACOUSTIC_RESPONSE_METRIC = 'last_voiced_to_confirmed_output_block_ms'
+FAST_STOP_DEVICE_METRIC = 'detecting_frame_to_device_stop_ms'
+MAX_FAST_STOP_DEVICE_MS = 20000
 
 
 class CheckFailure(RuntimeError):
@@ -664,7 +666,9 @@ class SmokeRun:
             )
         if self.synthetic_stop:
             require(
-                h.get('fast_stop_ready') is True and type(h.get('fast_stop_count')) is int,
+                h.get('fast_stop_ready') is True
+                and h.get('fast_stop_timing_supported') is True
+                and type(h.get('fast_stop_count')) is int,
                 'backend_fast_stop_evidence_unsupported',
             )
         require(
@@ -1600,6 +1604,7 @@ class SmokeRun:
             before_asr = health.get('voice_asr_attempts')
             require(
                 health.get('fast_stop_ready') is True
+                and health.get('fast_stop_timing_supported') is True
                 and all(type(count) is int and count >= 0 for count in (before_stop, before_asr)),
                 'backend_fast_stop_evidence_unsupported',
             )
@@ -1796,6 +1801,23 @@ class SmokeRun:
             )
             evidence['device_stop_applied'] = valid_stop
             require_evidence(valid_stop, 'interruption_device_stop_not_confirmed')
+            if stop_only:
+                timing = active_health().get('fast_stop_observation')
+                require_evidence(
+                    isinstance(timing, dict)
+                    and set(timing) == {'cancel_generation', 'detecting_frame_nanos'}
+                    and type(timing['cancel_generation']) is int
+                    and timing['cancel_generation'] == cancel_generation
+                    and type(timing['detecting_frame_nanos']) is int
+                    and 0 < timing['detecting_frame_nanos'] <= stop['nanos'],
+                    'fast_stop_device_timing_unconfirmed',
+                )
+                elapsed_ns = stop['nanos'] - timing['detecting_frame_nanos']
+                require_evidence(
+                    elapsed_ns <= MAX_FAST_STOP_DEVICE_MS * 1000000,
+                    'fast_stop_device_timing_out_of_range',
+                )
+                evidence[FAST_STOP_DEVICE_METRIC] = round(elapsed_ns / 1e6, 3)
         require(
             ui.get('screen_sleeping') is False
             and d.get('playback_paused') is False
@@ -2007,6 +2029,8 @@ def run_device_suite(
                     and stop['fast_stop_detections'] == 1
                     and type(stop.get('stop_cloud_asr_attempts')) is int
                     and stop['stop_cloud_asr_attempts'] == 0
+                    and type(stop.get(FAST_STOP_DEVICE_METRIC)) in (int, float)
+                    and 0 <= stop[FAST_STOP_DEVICE_METRIC] <= MAX_FAST_STOP_DEVICE_MS
                     and type(stop.get('admitted_voice_requests')) is int
                     and stop['admitted_voice_requests'] == 0
                     and type(stop.get('post_playback_quiet_seconds')) in (int, float)
@@ -2287,6 +2311,7 @@ def main(argv=None):
         if args.extended_voice_evidence and (
             manifest.assistant.version_code < STOP_RECEIPT_MIN_APK_CODE
             or health.get('fast_stop_ready') is not True
+            or health.get('fast_stop_timing_supported') is not True
             or type(health.get('fast_stop_count')) is not int
         ):
             parser.exit(2, '当前版本组合不支持扩展语音验收。\n')

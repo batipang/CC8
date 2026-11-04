@@ -1,5 +1,10 @@
 # Changelog
 
+## Backend 0.14.60 — time the stop command on the device clock
+
+- Pair the capture frame that triggered the local stop detector with the
+  device pause-and-flush receipt for the same cancellation.
+
 ## Backend 0.14.59 — automate the local stop-command check
 
 - Expose the local stop detector's availability and hit count. Require one

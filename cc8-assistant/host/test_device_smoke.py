@@ -24,6 +24,7 @@ from device_smoke import (
     BARGE_CHECK,
     BARGE_PRIME_CHECK,
     BARGE_QUERY,
+    FAST_STOP_DEVICE_METRIC,
     STOP_CHECK,
     STOP_QUERY,
     WAKE_SELF_CHECK,
@@ -277,7 +278,7 @@ class DeviceAutomationTests(unittest.TestCase):
             query.assert_not_called()
         plan = json.loads(output.getvalue())
         self.assertTrue(plan['extended_voice_evidence'])
-        self.assertEqual(plan['minimum_backend_version'], '0.14.59')
+        self.assertEqual(plan['minimum_backend_version'], '0.14.60')
         self.assertEqual(plan['minimum_apk_code'], 69)
         self.assertEqual(
             [phase['name'] for phase in plan['phases']],
@@ -319,6 +320,7 @@ class DeviceAutomationTests(unittest.TestCase):
                             'stimulus_played': True,
                             'fast_stop_detections': 1,
                             'stop_cloud_asr_attempts': int(case == 'cloud_attempt'),
+                            FAST_STOP_DEVICE_METRIC: 120,
                             'admitted_voice_requests': 0,
                             'post_playback_quiet_seconds': 20,
                         }
@@ -2052,6 +2054,10 @@ class DeviceAutomationTests(unittest.TestCase):
             ('cloud', 'fast_stop_reached_cloud_asr'),
             ('new_turn', 'fast_stop_unexpected_voice_turn'),
             ('wrong_cancel', 'interruption_device_stop_not_confirmed'),
+            ('wrong_clock_generation', 'fast_stop_device_timing_unconfirmed'),
+            ('inverted_clock', 'fast_stop_device_timing_unconfirmed'),
+            ('missing_clock', 'fast_stop_device_timing_unconfirmed'),
+            ('long_interval', 'fast_stop_device_timing_out_of_range'),
         ):
             with self.subTest(case=case), patch('device_smoke.ThreadPoolExecutor') as executor:
                 run, device, health, now = self.fixture(capture=True, synthetic_stop=True)
@@ -2059,6 +2065,7 @@ class DeviceAutomationTests(unittest.TestCase):
                     microphone_active=True,
                     waiting_for_wake=False,
                     fast_stop_ready=True,
+                    fast_stop_timing_supported=True,
                     fast_stop_count=12,
                     voice_asr_attempts=5,
                 )
@@ -2096,13 +2103,20 @@ class DeviceAutomationTests(unittest.TestCase):
                     health['playing'] = False
                     health['fast_stop_count'] += {'no_hit': 0, 'double_hit': 2}.get(case, 1)
                     health['voice_asr_attempts'] += int(case == 'cloud')
+                    if case != 'missing_clock':
+                        health['fast_stop_observation'] = {
+                            'cancel_generation': 20 if case == 'wrong_clock_generation' else 21,
+                            'detecting_frame_nanos': (
+                                1829374651 if case == 'inverted_clock' else 1709374650
+                            ),
+                        }
                     device_status.update(
                         announcement_active=False,
                         test_playback_stop={
                             'generation': 20,
                             'playback_id': 938471,
                             'cancel_generation': 22 if case == 'wrong_cancel' else 21,
-                            'nanos': 1829374650,
+                            'nanos': 22829374650 if case == 'long_interval' else 1829374650,
                         },
                     )
                     rows.append(
@@ -2135,9 +2149,11 @@ class DeviceAutomationTests(unittest.TestCase):
                     evidence = run.report('passed')['barge_evidence']
                     self.assertEqual(evidence['fast_stop_detections'], 1)
                     self.assertTrue(evidence['device_stop_applied'])
+                    self.assertEqual(evidence[FAST_STOP_DEVICE_METRIC], 120)
                     self.assertEqual(evidence['admitted_voice_requests'], 0)
                     self.assertEqual(now[0], 20)
                     self.assertNotIn('1829374650', json.dumps(evidence))
+                    self.assertNotIn('1709374650', json.dumps(evidence))
                 if case == 'preexisting_hit':
                     device.speak_probe.assert_not_called()
                 else:
