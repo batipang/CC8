@@ -162,6 +162,21 @@ class WitnessTests(unittest.TestCase):
             check.sample(bus(cc8(4)), *status(None, switches=2), 2)
         self.assertFalse(check.rows)
 
+    def test_usb_return_requires_paired_wifi_to_remain_ready(self):
+        check = self.ready()
+        check.sample(bus(), *status('wifi'), 1)
+        health, transport = status(switches=2)
+        transport['wifi_ready'] = False
+        with self.assertRaisesRegex(CheckFailure, 'wifi_backup_not_ready_after_usb'):
+            check.sample(bus(cc8(4)), health, transport, 2)
+        self.assertFalse(check.rows)
+
+    def test_missing_backup_between_cycles_breaks_continuous_witness(self):
+        health, transport = status()
+        transport['wifi_ready'] = False
+        with self.assertRaisesRegex(CheckFailure, 'idle_usb_or_wifi_not_ready'):
+            self.ready().sample(bus(cc8()), health, transport, 1)
+
     def test_extra_switches_between_samples_cannot_pass(self):
         check = self.ready()
         check.sample(bus(), *status('wifi'), 1)
@@ -218,7 +233,7 @@ class WitnessTests(unittest.TestCase):
                 wall=lambda: now[0],
             )
             self.assertEqual(result, 0)
-            self.assertEqual(seen, ['health', 'transport_status'] * 3)
+            self.assertEqual(seen, ['health', 'transport_status', 'health'] * 3)
             data = args.output.read_text()
             self.assertNotIn('fixture-private-', data)
             report = json.loads(data)
@@ -227,35 +242,94 @@ class WitnessTests(unittest.TestCase):
             self.assertEqual(len(report['completed_cycles']), 1)
             self.assertEqual(args.output.stat().st_mode & 0o777, 0o600)
 
-    def test_bus_edge_crossing_probe_window_never_qualifies_wifi(self):
+    def test_bus_or_route_edge_crossing_probe_window_never_qualifies_wifi(self):
+        for crossing in ('bus', 'route'):
+            with self.subTest(crossing=crossing), tempfile.TemporaryDirectory() as temporary:
+                args = SimpleNamespace(
+                    runtime_root=Path(temporary),
+                    output=Path(temporary) / 'edge.json',
+                    seconds=20,
+                    cycles=1,
+                )
+                plugged, absent, returned = bus(cc8()), bus(), bus(cc8(4))
+                after_edge = returned if crossing == 'bus' else absent
+                samples = iter([plugged, plugged, absent, after_edge, returned, returned])
+                usb_health, usb_transport = status()
+                wifi_health, wifi_transport = status('wifi')
+                before_edge = wifi_health if crossing == 'bus' else usb_health
+                reports = iter(
+                    [
+                        usb_health,
+                        usb_transport,
+                        usb_health,
+                        before_edge,
+                        wifi_transport,
+                        wifi_health,
+                        usb_health,
+                        usb_transport,
+                        usb_health,
+                    ]
+                )
+                now = [0.0]
+
+                def sleep(seconds):
+                    now[0] += seconds
+
+                result = run(
+                    args,
+                    read_bus=lambda timeout: next(samples),
+                    request=lambda path, operation, timeout: next(reports),
+                    clock=lambda: now[0],
+                    wall=lambda: now[0],
+                    sleep=sleep,
+                )
+                self.assertEqual(result, 2)
+                report = json.loads(args.output.read_text())
+                self.assertEqual(report['unstable_bus_polls'], int(crossing == 'bus'))
+                self.assertEqual(report['unstable_route_polls'], int(crossing == 'route'))
+                self.assertEqual(report['reason'], 'usb_detach_not_observed')
+                self.assertFalse(report['completed_cycles'])
+
+    def test_replaced_backend_cannot_supply_last_transport_receipt(self):
         with tempfile.TemporaryDirectory() as temporary:
             args = SimpleNamespace(
                 runtime_root=Path(temporary),
-                output=Path(temporary) / 'edge.json',
+                output=Path(temporary) / 'replacement.json',
                 seconds=20,
                 cycles=1,
             )
             plugged, absent, returned = bus(cc8()), bus(), bus(cc8(4))
-            samples = iter([plugged, plugged, absent, returned, returned, returned])
-            reports = iter([*status(), *status('wifi'), *status()])
+            buses = iter([plugged, plugged, absent, absent, returned, returned])
+            samples = (status(), status('wifi'), status(switches=2))
+            reads = [0, 0, 0]
             now = [0.0]
+
+            def request(path, operation, timeout):
+                index = int(now[0] * 2)
+                health, transport = samples[index]
+                if operation == 'transport_status':
+                    return transport
+                reads[index] += 1
+                if index == 2 and reads[index] == 2:
+                    return {**health, 'runtime_instance': 'PRIVATE_NEW_INSTANCE'}
+                return health
 
             def sleep(seconds):
                 now[0] += seconds
 
             result = run(
                 args,
-                read_bus=lambda timeout: next(samples),
-                request=lambda path, operation, timeout: next(reports),
+                read_bus=lambda timeout: next(buses),
+                request=request,
                 clock=lambda: now[0],
                 wall=lambda: now[0],
                 sleep=sleep,
             )
             self.assertEqual(result, 2)
             report = json.loads(args.output.read_text())
-            self.assertEqual(report['unstable_bus_polls'], 1)
-            self.assertEqual(report['reason'], 'usb_detach_not_observed')
+            self.assertEqual(report['reason'], 'runtime_changed')
             self.assertFalse(report['completed_cycles'])
+            self.assertNotIn('PRIVATE_NEW_INSTANCE', args.output.read_text())
 
     def test_wall_clock_gap_cannot_count_as_a_continuous_round(self):
         with tempfile.TemporaryDirectory() as temporary:
