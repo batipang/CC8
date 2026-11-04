@@ -16,6 +16,8 @@ from device_smoke import (
     BARGE_ANNOUNCEMENT,
     BARGE_CHECK,
     BARGE_QUERY,
+    WAKE_SELF_CHECK,
+    WAKE_SELF_TEXT,
     CheckFailure,
     Device,
     MULTI_CLAUSE_TEXT,
@@ -171,6 +173,9 @@ class DeviceAutomationTests(unittest.TestCase):
             ['--capture', '--standby', '--awake-dialogue'],
             ['--synthetic-barge'],
             ['--capture', '--standby', '--synthetic-barge'],
+            ['--wake-self-playback'],
+            ['--capture', '--standby', '--wake-self-playback'],
+            ['--capture', '--synthetic-barge', '--wake-self-playback'],
             ['--capture-clock-evidence'],
             ['--capture', '--leading-acoustic-evidence'],
         ):
@@ -1063,6 +1068,95 @@ class DeviceAutomationTests(unittest.TestCase):
                 'maintenance_reopen_keeps_microphone_off',
             ],
         )
+
+    def test_self_playback_plan_and_capability_gate(self):
+        output = io.StringIO()
+        with patch('device_smoke.Device') as device, redirect_stdout(output):
+            self.assertEqual(
+                main(['--runtime-root', '/unused', '--capture', '--wake-self-playback']), 0
+            )
+            device.assert_not_called()
+        self.assertIn(WAKE_SELF_CHECK, json.loads(output.getvalue())['checks'])
+        run, device, health, _ = self.fixture(capture=True, wake_self_playback=True)
+        health['clause_receipts_supported'] = True
+        report = run.run()
+        self.assertEqual(report['checks'][-1]['reason'], 'wake_self_playback_counters_unavailable')
+        device.open.assert_not_called()
+
+    def test_self_playback_both_languages_and_quiet_window(self):
+        for case, failure in (
+            ('valid', None),
+            ('woke_and_reclosed', 'wake_self_playback_woke'),
+            ('asr_during_tail', 'wake_self_playback_reached_asr'),
+            ('missing_render', 'wake_self_playback_audio_not_observed'),
+            ('missing_clause', 'wake_self_playback_receipt_missing'),
+            ('extra_request', 'wake_self_playback_unexpected_request'),
+            ('counter_regressed', 'wake_self_counter_regressed'),
+        ):
+            with self.subTest(case=case):
+                run, device, health, now = self.fixture(capture=True, wake_self_playback=True)
+                health.update(
+                    microphone_active=True,
+                    local_wake_ready=True,
+                    waiting_for_wake=True,
+                    local_wake_count=2,
+                    voice_asr_attempts=4,
+                    render_frames=100,
+                )
+                d, _ = device.status.return_value
+                d.update(
+                    microphone_active=True,
+                    test_capture_limit_ms=180000,
+                    test_capture_remaining_ms=150000,
+                )
+                rows, spoken = [], []
+
+                def request(payload):
+                    if payload == {'operation': 'health'}:
+                        if case == 'asr_during_tail' and now[0] >= 5:
+                            health['voice_asr_attempts'] = 5
+                        return dict(health)
+                    if payload == {'operation': 'diagnostics'}:
+                        return {'requests': rows}
+                    text = payload['text']
+                    spoken.append(text)
+                    health['mic_frames'] += 400
+                    if case != 'missing_render':
+                        health['render_frames'] += 400
+                    if case == 'woke_and_reclosed':
+                        health['local_wake_count'] += 1
+                    if case == 'counter_regressed':
+                        health['voice_asr_attempts'] -= 1
+                    rows.append(
+                        dict(
+                            request_id=f'announcement-{len(spoken)}',
+                            origin='announcement',
+                            outcome='completed',
+                            confirmed_playback_clauses=int(case != 'missing_clause'),
+                            stages={'playout_ack': 4, 'playback_done': 8},
+                        )
+                    )
+                    if case == 'extra_request':
+                        rows.append(self.acoustic_row(request_id='unrelated-voice'))
+                    return {'status': 'completed', 'characters': len(text)}
+
+                run.request = request
+                if failure:
+                    with self.assertRaisesRegex(CheckFailure, failure):
+                        run.wake_self_probe()
+                    self.assertEqual(spoken, [WAKE_SELF_TEXT['zh']])
+                else:
+                    run.wake_self_probe()
+                    self.assertEqual(spoken, list(WAKE_SELF_TEXT.values()))
+                    self.assertEqual(now[0], 40)
+                    evidence = run.report('passed')['wake_self_evidence']
+                    self.assertEqual([row['language'] for row in evidence], ['zh', 'en'])
+                    for row in evidence:
+                        self.assertTrue(row['playback_completed'])
+                        self.assertEqual(row['quiet_seconds'], 20)
+                        self.assertEqual(row['local_wake_count'], 0)
+                        self.assertEqual(row['voice_asr_attempts'], 0)
+                device.speak_probe.assert_not_called()
 
     def test_barge_failure_runs_existing_capture_cleanup(self):
         run, device, _, _ = self.fixture(capture=True, synthetic_barge=True)

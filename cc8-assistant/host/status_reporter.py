@@ -78,6 +78,7 @@ class StatusReporter:
     def health(self):
         state = self.hooks.session()
         playback = self.hooks.playback()
+        metrics = self.hooks.metrics()
         # 白名单输出就绪位，不导出 metrics 内可能存在的自检文字和用户内容。
         return {
             'ok': True,
@@ -109,8 +110,10 @@ class StatusReporter:
             'brain_provider': getattr(self.hooks.brain(), 'selected', 'echo'),
             'dot_runtime': self.hooks.dot_runtime(),
             'playing': self.hooks.playback().playing,
-            'mic_frames': self.hooks.metrics().get('mic_frames', 0),
-            'render_frames': self.hooks.metrics().get('render_frames', 0),
+            'mic_frames': metrics.get('mic_frames', 0),
+            'render_frames': metrics.get('render_frames', 0),
+            'local_wake_count': metrics.get('local_wake_count', 0),
+            'voice_asr_attempts': metrics.get('voice_asr_attempts', 0),
         }
 
     def save_status(self):

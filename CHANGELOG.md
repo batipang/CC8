@@ -1,5 +1,11 @@
 # Changelog
 
+## Backend 0.14.44 — check local wake during device playback
+
+- Expose cumulative local wake acceptances and voice ASR attempts in owner
+  health. Check each fixed Chinese and English name announcement while
+  waiting for wake, including a 20-second observation after it finishes.
+
 ## Assistant 0.9.24 — verify the synthetic interruption transcript
 
 - During explicitly bounded device tests, record whether the received transcript
