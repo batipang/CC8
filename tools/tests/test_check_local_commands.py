@@ -7,7 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 from tools import check_local_commands as probe
@@ -20,9 +20,10 @@ class ChineseKeywordTests(unittest.TestCase):
                 case=c[0],
                 expected=probe.expected(c),
                 state='measured',
+                fixture_pcm_sha256=f'{index:064x}',
                 **{k: probe.expected(c) for k in probe.CONDITIONS},
             )
-            for c in probe.CASES
+            for index, c in enumerate(probe.CASES)
         ]
 
     def test_real_minimal_path_plan_has_no_native_import_or_side_effect(self):
@@ -82,6 +83,8 @@ class ChineseKeywordTests(unittest.TestCase):
             'false_wake',
             'failed',
             'partial',
+            'digest',
+            'conflicting_digest',
         ):
             rows = self.rows()
             if kind == 'missing':
@@ -96,6 +99,10 @@ class ChineseKeywordTests(unittest.TestCase):
                 rows[-1]['start_60ms'] = {'wake': ['大黄蜂'], 'stop': []}
             elif kind == 'failed':
                 rows[0]['state'] = 'fixture_or_model_failed'
+            elif kind == 'digest':
+                rows[0].pop('fixture_pcm_sha256')
+            elif kind == 'conflicting_digest':
+                rows[-1]['fixture_pcm_sha256'] = rows[0]['fixture_pcm_sha256']
             else:
                 rows[0].pop('start_1000ms')
             with self.subTest(kind=kind):
@@ -155,6 +162,30 @@ class ChineseKeywordTests(unittest.TestCase):
         load.assert_not_called()
         synth.assert_not_called()
 
+    def test_conflicting_or_invalid_pcm_is_rejected_before_any_detector_runs(self):
+        for pcm, conflicts in ((b'\x01\x00', True), (b'\x01', False)):
+            with self.subTest(conflicts=conflicts):
+                output = Mock()
+                with (
+                    patch.object(probe, 'CASES', (probe.CASES[0], probe.CASES[-1])),
+                    patch('tools.cc8.verified_models', return_value=True),
+                    patch.object(probe, 'model_identity', return_value={}),
+                    patch.object(probe, 'resolve_voice', side_effect=lambda voice: voice),
+                    patch.object(probe, 'synthesize', return_value=pcm),
+                    patch.object(probe, 'load_detectors') as load,
+                    patch.object(probe, 'measure') as measure,
+                ):
+                    state, counts = probe.evaluate(Path('/unused'), output)
+                self.assertEqual(state, 'input_invalid')
+                self.assertEqual(counts['start_0ms']['measured'], 0)
+                result = output.write.call_args.args[0]
+                self.assertFalse(result['model_loaded'])
+                integrity = result['input_integrity']
+                self.assertEqual(integrity['state'], 'invalid_fixtures')
+                self.assertEqual(bool(integrity['conflicts']), conflicts)
+                load.assert_not_called()
+                measure.assert_not_called()
+
     def test_cancel_is_saved_and_not_reported_as_success(self):
         class Output:
             def __init__(self):
@@ -174,7 +205,7 @@ class ChineseKeywordTests(unittest.TestCase):
         ):
             with self.assertRaises(KeyboardInterrupt):
                 probe.evaluate(Path('/unused'), output)
-        self.assertEqual(output.states, ['running', 'cancelled'])
+        self.assertEqual(output.states, ['preparing_fixtures', 'cancelled'])
 
     def test_main_explicit_execute_keeps_failure_and_cancellation_exit_codes(self):
         with (

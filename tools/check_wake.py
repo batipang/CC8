@@ -133,11 +133,11 @@ def fixture_groups(rows):
     return groups
 
 
-def fixture_conflicts(rows):
+def fixture_conflicts(rows, *, label=lambda row: row['expected_keyword']):
     return [
         {'pcm_sha256': digest, 'cases': [row['case'] for row in group]}
         for digest, group in fixture_groups(rows).items()
-        if len({row['expected_keyword'] for row in group}) > 1
+        if len({label(row) for row in group}) > 1
     ]
 
 

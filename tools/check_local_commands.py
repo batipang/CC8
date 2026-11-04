@@ -15,8 +15,10 @@ import uuid
 
 if __package__:
     from .private_output import PrivateOutput, private_directory
+    from . import check_wake
 else:
     from private_output import PrivateOutput, private_directory
+    import check_wake
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'cc8-assistant/host'))
 from mac_voice import resolve_voice, synthesize
@@ -62,6 +64,13 @@ def expected(case):
     return {'wake': ['大黄蜂'] if case[4] else [], 'stop': [case[5]] if case[5] else []}
 
 
+def fixture_conflicts(rows):
+    def label(row):
+        return tuple(row['expected']['wake']), tuple(row['expected']['stop'])
+
+    return check_wake.fixture_conflicts(rows, label=label)
+
+
 def passed(rows):
     labels = {c[0]: expected(c) for c in CASES}
     return (
@@ -69,10 +78,12 @@ def passed(rows):
         and {r.get('case') for r in rows} == set(labels)
         and all(
             row.get('state') == 'measured'
+            and check_wake.valid_digest(row.get('fixture_pcm_sha256'))
             and row.get('expected') == labels[row['case']]
             and all(row.get(condition) == labels[row['case']] for condition in CONDITIONS)
             for row in rows
         )
+        and not fixture_conflicts(rows)
     )
 
 
@@ -161,8 +172,6 @@ def measure(detectors, samples, prefix):
 
 
 def evaluate(model_root, output):
-    import numpy as np
-
     if __package__:
         from .cc8 import verified_models
     else:
@@ -173,11 +182,10 @@ def evaluate(model_root, output):
     # Resolve every named voice before running any fixture. Missing voices fail,
     # rather than letting say silently substitute the system default.
     voices = {voice: resolve_voice(voice) for voice in {c[1] for c in CASES}}
-    detectors = load_detectors(model_root)
-    provenance = fingerprint()
-    provenance['model_manifest_sha256'] = model_hashes
+    provenance = {'model_manifest_sha256': model_hashes}
     source_files = (
         Path(__file__),
+        Path(check_wake.__file__),
         *(
             ROOT / 'cc8-assistant/host' / name
             for name in (
@@ -196,16 +204,20 @@ def evaluate(model_root, output):
     provenance['corpus_sha256'] = hashlib.sha256(
         json.dumps([CASES, PREFIX_SAMPLES], ensure_ascii=False).encode()
     ).hexdigest()
-    rows = []
+    rows, fixtures = [], {}
+    integrity = {'state': 'not_checked', 'conflicts': []}
+    model_loaded = False
 
     def save(state):
         output.write(
             {
-                'schema': 1,
+                'schema': 2,
                 'state': state,
                 'scope': 'public_synthetic_chinese_keyword_boundaries',
                 'corpus_version': CORPUS_VERSION,
                 **provenance,
+                'model_loaded': model_loaded,
+                'input_integrity': integrity,
                 'microphone_used': False,
                 'camera_used': False,
                 'device_used': False,
@@ -220,7 +232,7 @@ def evaluate(model_root, output):
             }
         )
 
-    save('running')
+    save('preparing_fixtures')
     try:
         for case in CASES:
             ident, voice, rate, text, _, _ = case
@@ -228,14 +240,38 @@ def evaluate(model_root, output):
             try:
                 with tempfile.TemporaryDirectory(prefix='cc8-public-chinese-') as temporary:
                     pcm = synthesize(Path(temporary), voices[voice], rate, text)
+                if not isinstance(pcm, bytes) or not 0 < len(pcm) <= 320000 or len(pcm) % 2:
+                    raise ValueError('Invalid fixture PCM')
                 row['fixture_pcm_sha256'] = hashlib.sha256(pcm).hexdigest()
-                samples = np.frombuffer(pcm, dtype='<i2').astype(np.float32) / 32768
+                fixtures[ident] = pcm
+                row['state'] = 'prepared'
+            except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+                row['state'] = 'fixture_failed'
+            rows.append(row)
+            save('preparing_fixtures')
+        conflicts = fixture_conflicts(rows)
+        invalid = len(fixtures) != len(CASES) or bool(conflicts)
+        integrity.update(
+            state='invalid_fixtures' if invalid else 'verified_exact_pcm_labels',
+            conflicts=conflicts,
+        )
+        if invalid:
+            save('input_invalid')
+            return 'input_invalid', summary(rows)
+
+        import numpy as np
+
+        detectors = load_detectors(model_root)
+        model_loaded = True
+        provenance.update(fingerprint())
+        for row in rows:
+            samples = np.frombuffer(fixtures[row['case']], dtype='<i2').astype(np.float32) / 32768
+            try:
                 for condition in CONDITIONS:
                     row[condition] = measure(detectors, samples, PREFIX_SAMPLES[condition])
                 row['state'] = 'measured'
             except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
                 row['state'] = 'fixture_or_model_failed'
-            rows.append(row)
             save('running')
     except KeyboardInterrupt:
         save('cancelled')
