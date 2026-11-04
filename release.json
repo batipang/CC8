@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-synthetic-stop-20261105.1",
+  "release_id": "p0-stop-device-clock-20261105.1",
   "backend": {
-    "version": "0.14.59"
+    "version": "0.14.60"
   },
   "assistant": {
     "version": "0.9.32",
