@@ -78,6 +78,7 @@ class SessionController:
         self.connection = None
         self.transport_kind = 'none'
         self.rebind_seen = False
+        self.capture_start_required = False
         self.playback_interrupted_by_transport = False
         self.write_lock = threading.RLock()
         self.guard = threading.RLock()
@@ -256,6 +257,7 @@ class SessionController:
         return generation
 
     def stop(self):
+        self.capture_start_required = True
         self.active = False
         self.hooks.calibration().stop()
         self.screen_sleeping = False
@@ -333,7 +335,8 @@ class SessionController:
         self.hooks.save_status()
 
     def rebind(self, j):
-        if self.rebind_seen:
+        # A rebind can recover existing capture, but cannot undo a stop.
+        if self.rebind_seen or self.capture_start_required:
             return
         self.rebind_seen = True
         if self.active and int(j.get('epoch', -1)) == self.epoch:
@@ -381,6 +384,7 @@ class SessionController:
         if self.active or self.hooks.announcements().generation is not None:
             self.hooks.stop()
         self.epoch = int(j['epoch'])
+        self.capture_start_required = False
         self.active = True
         self.generation += 1
         self.hooks.capture().reset_session()
@@ -408,7 +412,10 @@ class SessionController:
         self.hooks.log('foreground_capture_started')
 
     def stop_capture(self, j):
-        if self.active and int(j.get('epoch', self.epoch)) == self.epoch:
+        if not self.active:
+            # A native capture worker can stop before its Start reaches us.
+            self.capture_start_required = True
+        elif int(j.get('epoch', self.epoch)) == self.epoch:
             self.hooks.stop()
             self.hooks.log('foreground_capture_stopped')
 
