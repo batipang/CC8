@@ -44,6 +44,48 @@ class HTTPFixtureTests(unittest.TestCase):
         self.assertEqual(tuple(row['case'] for row in rows), selected)
         self.assertEqual([row['wire_requests'] for row in rows], [1, 1])
 
+    def test_business_faults_and_next_http_request_recover_for_each_case(self):
+        rows = generate(http_fixture='loopback_business', dot_fixture='local_stdio')
+        self.assertEqual(len(rows), 48)
+        self.assertEqual(sum(row['wire_requests'] for row in rows), 30)
+        self.assertEqual(sum(row['recovery_wire_requests'] for row in rows), 30)
+        self.assertEqual(sum(row['dot_wire_counts']['fault_turns'] for row in rows), 33)
+        self.assertEqual(sum(row['dot_wire_counts']['recovery_turns'] for row in rows), 48)
+        self.assertEqual(sum(row['dot_wire_counts']['declined_approvals'] for row in rows), 3)
+        for row in rows:
+            expected = int(row['case'].stage in ('asr', 'tts'))
+            self.assertEqual(row['wire_requests'], expected)
+            self.assertEqual(row['recovery_wire_requests'], expected)
+
+    def test_business_fixture_serves_nonzero_http_200_before_a_distinct_success(self):
+        recovery = [False]
+        with LoopbackHTTP(
+            lambda: Case('tts', 'quota', 2),
+            lambda: None,
+            business=True,
+            recovering=lambda: recovery[0],
+        ) as fixture:
+            with fixture.session_factory() as client:
+                for is_recovery in (False, True):
+                    recovery[0] = is_recovery
+                    response = client.post(
+                        fixture.base + '/v1/t2a_v2',
+                        json={'text': 'fixed'},
+                        headers={'Authorization': 'Bearer qa-not-a-real-credential'},
+                        timeout=2,
+                    )
+                    with response:
+                        self.assertEqual(response.status_code, 200)
+                        self.assertIn('text/event-stream', response.headers['Content-Type'])
+                        event = json.loads(response.content.splitlines()[0][len(b'data: ') :])
+                        if is_recovery:
+                            self.assertEqual(event['data']['status'], 2)
+                            self.assertTrue(event['data']['audio'])
+                        else:
+                            self.assertEqual(event['base_resp']['status_code'], 1008)
+            self.assertEqual(fixture.count('tts-quota-2'), 1)
+            self.assertEqual(fixture.count('tts-quota-2', recovery=True), 1)
+
     def test_unknown_or_duplicate_cases_are_rejected_before_network_or_process(self):
         for selection in (
             (),

@@ -20,13 +20,13 @@ sys.path.insert(0, str(ROOT / 'cc8-assistant/host'))
 
 if __package__:
     from .qa_variant import PACKAGE, COMPONENT, PORT, apk_metadata, safe_source, snapshot_files
-    from .qa_faults import CASES, DOT_FIXTURES, generate
+    from .qa_faults import CASES, DOT_FIXTURES, HTTP_FIXTURES, generate
     from .qa_ui import stdout_hierarchy, status_target, dialog_close
     from .private_output import private_directory, PrivateOutput
 else:
     # Root entry imports this as tools.check_failure_ui to keep one module identity.
     from tools.qa_variant import PACKAGE, COMPONENT, PORT, apk_metadata, safe_source, snapshot_files
-    from tools.qa_faults import CASES, DOT_FIXTURES, generate
+    from tools.qa_faults import CASES, DOT_FIXTURES, HTTP_FIXTURES, generate
     from tools.qa_ui import stdout_hierarchy, status_target, dialog_close
     from tools.private_output import private_directory, PrivateOutput
 
@@ -64,7 +64,7 @@ def private_json(path):
 
 def source_identity(http_fixture='fake', dot_fixture='fake'):
     names = ['check_failure_ui.py', 'qa_faults.py', 'qa_variant.py', 'qa_ui.py']
-    if http_fixture == 'loopback_tls':
+    if http_fixture != 'fake':
         names.append('qa_http.py')
     if dot_fixture == 'local_stdio':
         names.append('qa_dot.py')
@@ -79,6 +79,8 @@ def corpus_identity(fixtures):
         digest.update(fixture['expected_message'].encode())
         digest.update(fixture.get('http_fixture', 'fake').encode())
         digest.update(str(fixture.get('wire_requests', 0)).encode())
+        if fixture.get('http_fixture') == 'loopback_business':
+            digest.update(str(fixture['recovery_wire_requests']).encode())
         if fixture.get('dot_fixture') == 'local_stdio':
             digest.update(b'local_stdio')
             digest.update(json.dumps(fixture['dot_wire_counts'], sort_keys=True).encode())
@@ -306,7 +308,7 @@ def run(
     http_fixture='fake',
     dot_fixture='fake',
 ):
-    require(http_fixture in ('fake', 'loopback_tls'), 'unknown_qa_http_fixture')
+    require(http_fixture in HTTP_FIXTURES, 'unknown_qa_http_fixture')
     require(dot_fixture in DOT_FIXTURES, 'unknown_qa_dot_fixture')
     from service_smoke import LiveService
     from protocol import decode_event
@@ -395,6 +397,9 @@ def run(
                 'real_provider_requested': False,
                 'provider_http_fixture': http_fixture,
                 'generated_wire_requests': sum(f.get('wire_requests', 0) for f in fixtures),
+                'generated_recovery_wire_requests': sum(
+                    f.get('recovery_wire_requests', 0) for f in fixtures
+                ),
                 'dot_provider_is_fixture': True,
                 'provider_dot_fixture': dot_fixture,
                 'generated_dot_wire_counts': dot_wire_counts,
@@ -546,9 +551,9 @@ def main(argv=None):
     parser.add_argument('--execute', action='store_true')
     parser.add_argument(
         '--http-fixture',
-        choices=('fake', 'loopback_tls'),
+        choices=HTTP_FIXTURES,
         default='fake',
-        help='Fixed provider I/O: offline fake or certificate-verified loopback TLS',
+        help='Offline fake or certificate-verified loopback TLS with HTTP or business faults',
     )
     parser.add_argument(
         '--dot-fixture',
