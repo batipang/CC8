@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-vad-onset-pause-20261105.1",
+  "release_id": "p0-prefixed-stop-fallback-20261105.1",
   "backend": {
-    "version": "0.14.64"
+    "version": "0.14.65"
   },
   "assistant": {
     "version": "0.9.34",

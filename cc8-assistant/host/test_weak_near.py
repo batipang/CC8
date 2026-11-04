@@ -43,6 +43,7 @@ class WeakNearTests(unittest.TestCase):
         local_wake=False,
         delayed=False,
         playing=None,
+        references=None,
     ):
         entered, release = threading.Event(), threading.Event()
         calls = []
@@ -75,7 +76,7 @@ class WeakNearTests(unittest.TestCase):
                 generation,
                 np.zeros(16000),
                 risky,
-                ['一加一等于二。'],
+                ['一加一等于二。'] if references is None else references,
                 {
                     'echo_risk': risky,
                     'captured_at': time.monotonic(),
@@ -126,12 +127,19 @@ class WeakNearTests(unittest.TestCase):
             ('大黄蜂，换一个。', True, True, False),
             ('停一下。', True, False, True),
             ('大黄蜂，停一下。', True, True, True),
+            ('大黄蜂，暂停。', True, False, True),
+            ('Bumblebee，暂停。', True, False, True),
+            ('大黄蜂，展厅怎么走？', True, False, False),
         ]
         for text, risky, local_wake, stop in cases:
             with self.subTest(text=text):
                 b, key, _, replies, _, _, _ = self.start(
                     text,
-                    capture=captured(risky=risky, local_wake=local_wake),
+                    capture=captured(
+                        credible=30 if '展厅' in text else 2,
+                        risky=risky,
+                        local_wake=local_wake,
+                    ),
                     risky=risky,
                     local_wake=local_wake,
                 )
@@ -140,6 +148,27 @@ class WeakNearTests(unittest.TestCase):
                 self.assertEqual(len(replies), int(not stop))
                 if stop:
                     self.assertEqual(row['outcome'], 'completed')
+
+    def test_asr_stop_matching_playback_needs_confirmed_near_speech(self):
+        for count, gate in ((2, 'echo_text'), (30, 'accepted')):
+            with self.subTest(credible_frames=count):
+                b, key, generation, replies, _, _, _ = self.start(
+                    '暂停。',
+                    capture=captured(credible=count),
+                    references=['你可以说“暂停”来打断我。'],
+                )
+                row = self.wait(b, key)
+                self.assertEqual(row['gate'], gate)
+                self.assertEqual(replies, [])
+                events = [json.loads(p.data) for p in b.session.connection.packets]
+                if gate == 'echo_text':
+                    self.assertEqual(row['outcome'], 'rejected')
+                    self.assertEqual(b.session.generation, generation)
+                    self.assertTrue(any(e['event'] == 'playback_resume' for e in events))
+                    self.assertFalse(any(e['event'] == 'transcript' for e in events))
+                else:
+                    self.assertEqual(row['outcome'], 'completed')
+                    self.assertGreater(b.session.generation, generation)
 
     def test_stale_inflight_asr_cannot_resume_or_reclassify_a_new_request(self):
         b, key, _, replies, _, entered, release = self.start(capture=captured(), delayed=True)
