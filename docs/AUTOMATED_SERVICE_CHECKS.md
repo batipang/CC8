@@ -12,6 +12,19 @@ P0-02 的真实进程验证使用 `verify-service`，与隔离模拟 worker 的 
 
 执行前须由用户授权相关维护，实际运行目录必须是已启用原有 LaunchAgent 的真实绝对路径。共享实际 runtime 的 `automation-test.lock`，不能与自动设备测试并行。不会安装/启用一个停止的服务，不调用任意终端命令，不打开 UI、不开始麦克风或相机。
 
+## Mac 睡眠与恢复观察
+
+```sh
+./cc8 verify-service --runtime-root /absolute/live/workspace --observe-sleep
+./cc8 verify-service --runtime-root /absolute/live/workspace --observe-sleep --sleep-wait 900 --execute
+```
+
+第一条仅显示计划。执行模式等待一次外部发生的系统睡眠，使用同一把自动验收锁。它不发送睡眠命令、不阻止睡眠、不重启服务、不打开助手。等待时比较 macOS 两个原始时钟，只有连续时钟比清醒时钟多走至少 5 秒才有睡眠证据。普通调度延迟和系统墙钟变化不满足条件。 [Apple 时钟说明](https://developer.apple.com/documentation/kernel/1646199-mach_continuous_time)
+
+唤醒后先复核同一 USB 设备的序列和端口，再查询原 LaunchAgent、原后台实例、CC8 前台及 USB 就绪。该检查需要后台 0.14.44 起提供的累计音频计数。两端必须停采，帧计数、自动开麦次数和请求集合保持原样，再观察 3 秒确认稳定。报告保留睡眠时长下界、恢复首次可见时间和未就绪采样次数，不保存设备序列、进程号、实例或请求 ID。若首次查询已经就绪，报告表示睡眠后已恢复可用，连接在睡眠期间是否曾断开仍未知。
+
+当前只完成软件和本机双时钟验证。实机系统睡眠需在 72 小时长稳观察之外另行验证。
+
 ## 门控和依据
 
 - 正常 Android 模式下唯一 AILABS_S6 / SDK27 / shell UID2000，每次状态操作重核同一 USB target。
