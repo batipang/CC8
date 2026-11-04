@@ -7,8 +7,11 @@ import io
 import os
 from pathlib import Path
 import re
+import select
+import signal
 import stat
 import subprocess
+import sys
 import tempfile
 import wave
 
@@ -16,6 +19,7 @@ KINDS = ('tv', 'low-noise')
 RATE = 16000
 PLAYBACK_SECONDS = 1050
 MAX_BYTES = 44 * 1024**2
+PLAYER = '/usr/bin/afplay'
 
 
 def valid_background(value):
@@ -62,24 +66,71 @@ class Background:
 
     @contextmanager
     def play(self):
-        # afplay receives the same bytes verified above, independent of the
-        # original file's path or changes while the test is running.
-        with tempfile.TemporaryDirectory(prefix='cc8-background-') as folder:
-            path = Path(folder) / 'background.wav'
-            path.write_bytes(self.wav)
-            child = subprocess.Popen(
-                ['/usr/bin/afplay', '-t', str(PLAYBACK_SECONDS), str(path)],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+        from rpc_process import close_guardian, start_guardian
+
+        # The guardian owns the audio process and closes its group on socket
+        # EOF, including when the test process is killed before its finally.
+        process, owner = start_guardian(
+            subprocess.Popen,
+            [sys.executable, '-I', '-S', str(Path(__file__).resolve()), '--owned-player'],
+            cwd=None,
+            env=None,
+        )
+        try:
+            pending = memoryview(self.wav)
+            with process.stdin as track:
+                while pending:
+                    count = track.write(pending)
+                    if not count:
+                        raise OSError('Background player input closed')
+                    pending = pending[count:]
+            if not select.select([process.stdout], [], [], 5)[0] or process.stdout.read(1) != b'1':
+                raise OSError('Background player did not start')
+            yield (
+                lambda: process.poll() is None and not select.select([process.stdout], [], [], 0)[0]
             )
+        finally:
             try:
-                yield lambda: child.poll() is None
+                if not close_guardian(process, owner):
+                    raise OSError('Background player cleanup unconfirmed')
             finally:
-                if child.poll() is None:
-                    child.terminate()
+                process.stdout.close()
+                process.stderr.close()
+
+
+def owned_player():
+    def stop(_signal, _frame):
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    data = sys.stdin.buffer.read(MAX_BYTES + 1)
+    if not 0 < len(data) <= MAX_BYTES:
+        return 2
+    # The process watched by the guardian owns the private copy. Its signal
+    # handler lets this context remove the copy even if the original test dies.
+    with tempfile.TemporaryDirectory(prefix='cc8-background-') as folder:
+        path = Path(folder) / 'background.wav'
+        path.write_bytes(data)
+        with subprocess.Popen(
+            [PLAYER, '-t', str(PLAYBACK_SECONDS), str(path)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ) as player:
+            try:
+                sys.stdout.buffer.write(b'1')
+                sys.stdout.buffer.flush()
+                return player.wait()
+            finally:
+                if player.poll() is None:
+                    player.terminate()
                     try:
-                        child.wait(timeout=3)
+                        player.wait(timeout=2)
                     except subprocess.TimeoutExpired:
-                        child.kill()
-                        child.wait(timeout=3)
+                        player.kill()
+                        player.wait(timeout=1)
+
+
+if __name__ == '__main__':
+    raise SystemExit(owned_player() if sys.argv[1:] == ['--owned-player'] else 2)
