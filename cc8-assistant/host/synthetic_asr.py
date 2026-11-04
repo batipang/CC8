@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import stat
 import subprocess
 import sys
@@ -108,6 +109,57 @@ def totals(rows):
     return result
 
 
+def selected_digest(samples):
+    return hashlib.sha256(
+        json.dumps(samples, ensure_ascii=False, sort_keys=True).encode()
+    ).hexdigest()
+
+
+def fixture_digest(pcm):
+    if type(pcm) is not bytes or not pcm or len(pcm) % 2 or len(pcm) > 320000 or not any(pcm):
+        raise ValueError('Invalid public synthetic PCM')
+    return hashlib.sha256(pcm).hexdigest()
+
+
+def reference_fixtures(path, samples, synthesize_pcm):
+    report = read_json(path, private=True)
+    expected = {item['id']: (item['category'], item['partition']) for item in samples}
+    if (
+        not isinstance(report, dict)
+        or type(report.get('schema')) is not int
+        or report['schema'] != 1
+        or report.get('scope') != 'public_synthetic_asr_api'
+        or report.get('corpus_sha256') != hashlib.sha256(CORPUS.read_bytes()).hexdigest()
+        or report.get('selected_samples_sha256') != selected_digest(samples)
+        or not isinstance(report.get('samples'), list)
+        or len(report['samples']) != len(expected)
+    ):
+        raise ValueError('Reference ASR report does not cover the selected corpus')
+
+    hashes = {}
+    for row in report['samples']:
+        sample_id = row.get('id') if isinstance(row, dict) else None
+        if not isinstance(sample_id, str) or sample_id not in expected or sample_id in hashes:
+            raise ValueError('Invalid reference sample ID')
+        digest = row.get('fixture_pcm_sha256')
+        if (row.get('category'), row.get('partition')) != expected[sample_id] or not (
+            isinstance(digest, str) and re.fullmatch(r'[0-9a-f]{64}', digest)
+        ):
+            raise ValueError('Invalid reference fixture')
+        hashes[sample_id] = digest
+
+    # Keep the checked bytes in memory so recognition consumes exactly what
+    # was verified. The fixed corpus and per-clip bound cap this at 24 MB.
+    verified = {}
+    for item in samples:
+        started = time.monotonic()
+        pcm = synthesize_pcm(item['reference'])
+        if fixture_digest(pcm) != hashes[item['id']]:
+            raise ValueError('Synthetic PCM differs from reference')
+        verified[item['id']] = (pcm, round(time.monotonic() - started, 3))
+    return verified
+
+
 class SyntheticRun:
     def __init__(
         self,
@@ -115,19 +167,20 @@ class SyntheticRun:
         recognize,
         synthesize_pcm,
         *,
+        verified_fixtures=None,
         clock=time.monotonic,
+        started=None,
         checkpoint=lambda value: None,
     ):
         self.samples, self.recognize, self.synthesize = samples, recognize, synthesize_pcm
         self.clock, self.checkpoint = clock, checkpoint
-        self.started = clock()
+        self.verified_fixtures = verified_fixtures
+        self.started = clock() if started is None else started
         self.rows = []
         self.source_hash = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
         self.voice_hash = hashlib.sha256(Path(voice_source).read_bytes()).hexdigest()
         self.corpus_hash = hashlib.sha256(CORPUS.read_bytes()).hexdigest()
-        self.selected_hash = hashlib.sha256(
-            json.dumps(samples, ensure_ascii=False, sort_keys=True).encode()
-        ).hexdigest()
+        self.selected_hash = selected_digest(samples)
 
     def report(self, state):
         return {
@@ -141,6 +194,7 @@ class SyntheticRun:
             'speech_probe_source_sha256': self.voice_hash,
             'corpus_sha256': self.corpus_hash,
             'selected_samples_sha256': self.selected_hash,
+            'reference_fixtures_verified': self.verified_fixtures is not None,
             'elapsed_seconds': round(self.clock() - self.started, 3),
             'delivery_realized': 'normal_mac_synthetic',
             'critical_fields_assessed': False,
@@ -171,18 +225,16 @@ class SyntheticRun:
                 self.rows.append(row)
                 phase = 'fixture'
                 started = self.clock()
+                earlier_synthesis_seconds = 0
                 try:
-                    pcm = self.synthesize(item['reference'])
-                    if (
-                        type(pcm) is not bytes
-                        or not pcm
-                        or len(pcm) % 2
-                        or len(pcm) > 320000
-                        or not any(pcm)
-                    ):
-                        raise ValueError('Invalid public synthetic PCM')
-                    row['synthesis_seconds'] = round(self.clock() - started, 3)
-                    row['fixture_pcm_sha256'] = hashlib.sha256(pcm).hexdigest()
+                    if self.verified_fixtures is None:
+                        pcm = self.synthesize(item['reference'])
+                        synthesis_seconds = round(self.clock() - started, 3)
+                    else:
+                        pcm, synthesis_seconds = self.verified_fixtures[item['id']]
+                        earlier_synthesis_seconds = synthesis_seconds
+                    row['fixture_pcm_sha256'] = fixture_digest(pcm)
+                    row['synthesis_seconds'] = synthesis_seconds
                     phase = 'recognition'
                     began = self.clock()
                     transcript = self.recognize(pcm)
@@ -213,7 +265,9 @@ class SyntheticRun:
                     row['outcome'] = phase + '_failed'
                     consecutive_failures += 1
                 finally:
-                    row['total_seconds'] = round(self.clock() - started, 3)
+                    row['total_seconds'] = round(
+                        self.clock() - started + earlier_synthesis_seconds, 3
+                    )
                 self.checkpoint(self.report(state))
                 if consecutive_failures >= 3:
                     break
@@ -240,6 +294,9 @@ def main(argv=None):
         '--partition', choices=('calibration', 'acceptance', 'all'), default='calibration'
     )
     parser.add_argument('--execute', action='store_true')
+    parser.add_argument(
+        '--reference-report', type=Path, help='Require identical PCM to a private earlier report'
+    )
     args = parser.parse_args(argv)
     try:
         samples = select_samples(args.partition)
@@ -250,6 +307,8 @@ def main(argv=None):
                         'execute': False,
                         'sample_count': len(samples),
                         'partition': args.partition,
+                        'verify_reference_fixtures_when_executed': args.reference_report
+                        is not None,
                         'microphone_used': False,
                         'network_target_when_executed': 'configured_minimax_asr',
                         'full_p0_acceptance': False,
@@ -285,13 +344,22 @@ def main(argv=None):
             ):
                 raise ValueError('Unsafe automation lock')
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+            def fixture(text):
+                with tempfile.TemporaryDirectory(prefix='cc8-public-asr-') as temporary:
+                    return synthesize(Path(temporary), resolved, 185, text)
+
+            verified = None
+            started = None
+            if args.reference_report is not None:
+                started = time.monotonic()
+                try:
+                    verified = reference_fixtures(args.reference_report, samples, fixture)
+                except (OSError, ValueError, subprocess.SubprocessError):
+                    print('无法核对基准报告与全部合成 PCM，未调用识别 API。', file=sys.stderr)
+                    return 2
             recognize, cancel, metadata = pipeline(runtime)
             try:
-
-                def fixture(text):
-                    with tempfile.TemporaryDirectory(prefix='cc8-public-asr-') as temporary:
-                        return synthesize(Path(temporary), resolved, 185, text)
-
                 name = (
                     'api-'
                     + args.partition
@@ -314,7 +382,14 @@ def main(argv=None):
                             }
                         )
 
-                    result = SyntheticRun(samples, recognize, fixture, checkpoint=save).run()
+                    result = SyntheticRun(
+                        samples,
+                        recognize,
+                        fixture,
+                        verified_fixtures=verified,
+                        started=started,
+                        checkpoint=save,
+                    ).run()
                     print(json.dumps({'state': result['state'], 'summary': result['summary']}))
                     print(output.path)
                     return (
