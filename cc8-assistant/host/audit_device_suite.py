@@ -1,0 +1,237 @@
+"""Recheck a saved fixed device suite or synthetic latency batch without device access."""
+
+import argparse
+import json
+from pathlib import Path
+import re
+from types import SimpleNamespace
+
+from device_smoke import (
+    ECHO_SOAK_MIN_BACKEND,
+    ECHO_SOAK_SCOPE,
+    POST_DIALOGUE_SECONDS,
+    ROUTED_LATENCY_MIN_BACKEND,
+    STANDBY_SECONDS,
+    device_suite_phases,
+    matched_playout,
+    STOP_VISUAL_MIN_APK_CODE,
+    EXTENDED_VOICE_MIN_BACKEND,
+    planned_checks,
+    run_device_suite,
+)
+from private_output import read_private_json
+from qa_speech import SCENARIO_DIGESTS
+
+VERSION = r'[0-9]{1,8}(?:\.[0-9]{1,8}){2}'
+SOURCE_DIGEST = r'[a-f0-9]{64}'
+
+
+def bounded_number(value, low, high):
+    return type(value) in (int, float) and low <= value <= high
+
+
+def real_standby(evidence, elapsed):
+    if not isinstance(evidence, dict) or not bounded_number(elapsed, STANDBY_SECONDS, 86400):
+        return False
+    awake = evidence.get('last_awake_seconds')
+    poll = evidence.get('black_screen_poll_started_seconds')
+    black = evidence.get('first_black_screen_seconds')
+    return (
+        all(bounded_number(value, 0, elapsed) for value in (awake, poll, black))
+        and awake <= poll <= black
+        and poll >= STANDBY_SECONDS
+    )
+
+
+def audit(data, *, expect_backend=None, expect_apk_code=None):
+    if not isinstance(data, dict) or type(data.get('schema')) is not int or data['schema'] != 1:
+        raise ValueError('Unknown report schema')
+    scope = data.get('scope')
+    backend = data.get('backend_version')
+    if (
+        scope
+        not in (
+            'fixed_device_suite',
+            'synthetic_qa_latency',
+            'synthetic_interruption_latency',
+            ECHO_SOAK_SCOPE,
+        )
+        or not isinstance(backend, str)
+        or not re.fullmatch(VERSION, backend)
+        or type(data.get('protocol_version')) is not int
+        or data['protocol_version'] <= 0
+        or any(
+            data.get(key) is not False
+            for key in (
+                'full_p0_acceptance',
+                'physical_usb_unplug_tested',
+                'human_accuracy_asserted',
+            )
+        )
+    ):
+        raise ValueError('Invalid report scope')
+    qa_latency = scope == 'synthetic_qa_latency'
+    interruption = scope == 'synthetic_interruption_latency'
+    echo_soak = scope == ECHO_SOAK_SCOPE
+    extended = data.get('extended_voice_evidence', False)
+    room_latency = data.get('response_acoustic_evidence', False)
+    scenario = data.get('latency_scenario', 'qa')
+    if (
+        type(extended) is not bool
+        or type(room_latency) is not bool
+        or ((qa_latency or interruption or echo_soak) and extended)
+        or (
+            interruption
+            and tuple(map(int, backend.split('.')))
+            < tuple(map(int, EXTENDED_VOICE_MIN_BACKEND.split('.')))
+        )
+        or (
+            echo_soak
+            and tuple(map(int, backend.split('.')))
+            < tuple(map(int, ECHO_SOAK_MIN_BACKEND.split('.')))
+        )
+        or (room_latency and not qa_latency)
+        or not isinstance(scenario, str)
+        or scenario not in SCENARIO_DIGESTS
+        or (
+            scenario != 'qa'
+            and (
+                not qa_latency
+                or tuple(map(int, backend.split('.')))
+                < tuple(map(int, ROUTED_LATENCY_MIN_BACKEND.split('.')))
+            )
+        )
+        or (
+            qa_latency
+            and (
+                data.get('qa_corpus_sha256') != SCENARIO_DIGESTS[scenario]
+                or data.get('audible_onset_measured') is not False
+            )
+        )
+    ):
+        raise ValueError('Invalid suite mode')
+    plan = device_suite_phases(
+        qa_latency=qa_latency,
+        extended_voice=extended,
+        interruption=interruption,
+        echo_soak=echo_soak,
+    )
+    phases = data.get('phases')
+    if not isinstance(phases, list) or len(phases) != len(plan):
+        raise ValueError('Invalid suite length')
+    result = {
+        'scope': scope,
+        'verified': False,
+        'full_p0_acceptance': False,
+        'completed_phases': 0,
+        'expected_phases': len(plan),
+    }
+    if expect_backend is not None and backend != expect_backend:
+        return {**result, 'reason': 'backend_version_mismatch'}
+
+    reports = []
+    artifact = None
+    for phase, (name, options) in zip(phases, plan):
+        if (
+            not isinstance(phase, dict)
+            or phase.get('name') != name
+            or phase.get('expected_checks') != planned_checks(set(options))
+        ):
+            return {**result, 'phase': name, 'reason': 'phase_plan_mismatch'}
+        report = phase.get('report')
+        if phase.get('state') != 'passed' or not isinstance(report, dict):
+            return {**result, 'phase': name, 'reason': 'phase_not_completed'}
+        version, code = report.get('expected_apk_version'), report.get('expected_apk_code')
+        if (
+            not isinstance(version, str)
+            or not re.fullmatch(VERSION, version)
+            or type(code) is not int
+            or not 0 < code < 2**31
+            or (interruption and code < STOP_VISUAL_MIN_APK_CODE)
+            or (expect_apk_code is not None and code != expect_apk_code)
+            or (artifact is not None and artifact != (version, code))
+        ):
+            return {**result, 'phase': name, 'reason': 'apk_identity_mismatch'}
+        artifact = (version, code)
+        if (
+            type(report.get('schema')) is not int
+            or report['schema'] != 1
+            or report.get('capture_tests_enabled') is not True
+            or report.get('raw_audio_saved') is not False
+            or report.get('contains_conversation_content') is not False
+            or not all(
+                isinstance(report.get(key), str) and re.fullmatch(SOURCE_DIGEST, report[key])
+                for key in ('automation_source_sha256', 'speech_probe_source_sha256')
+            )
+        ):
+            return {**result, 'phase': name, 'reason': 'phase_provenance_incomplete'}
+        if 'standby' in options and not real_standby(
+            report.get('standby_evidence'), report.get('elapsed_seconds')
+        ):
+            return {**result, 'phase': name, 'reason': 'standby_duration_unconfirmed'}
+        if {'awake_dialogue', 'acoustic'} & set(options):
+            evidence = report.get('acoustic_evidence')
+            quiet = (
+                evidence.get('post_playback_quiet_seconds') if isinstance(evidence, dict) else None
+            )
+            if not bounded_number(quiet, POST_DIALOGUE_SECONDS, 86400) or not matched_playout(
+                evidence
+            ):
+                return {**result, 'phase': name, 'reason': 'dialogue_timing_unconfirmed'}
+        reports.append(report)
+
+    rows = iter(reports)
+
+    def replay(_options, _checkpoint, **_kwargs):
+        row = next(rows)
+        return SimpleNamespace(
+            source_sha256=row['automation_source_sha256'],
+            speech_source_sha256=row['speech_probe_source_sha256'],
+            run=lambda: row,
+        )
+
+    reviewed = run_device_suite(
+        replay,
+        lambda _value: None,
+        qa_latency=qa_latency,
+        response_acoustic=room_latency,
+        extended_voice=extended,
+        latency_scenario=scenario,
+        interruption=interruption,
+        echo_soak=echo_soak,
+    )
+    result['completed_phases'] = sum(p['state'] == 'passed' for p in reviewed['phases'])
+    if reviewed['state'] != 'passed':
+        failed = next(p for p in reviewed['phases'] if p['state'] != 'passed')
+        return {
+            **result,
+            'phase': failed['name'],
+            'reason': failed.get('reason', 'phase_not_completed'),
+        }
+    if data.get('state') != 'passed':
+        return {**result, 'reason': 'report_not_completed'}
+    if echo_soak:
+        result['echo_soak_totals'] = reviewed['echo_soak_totals']
+    if qa_latency or interruption:
+        result['latencies_ms'] = reviewed['latencies_ms']
+        if scenario != 'qa':
+            result['latency_scenario'] = scenario
+    return {**result, 'verified': True}
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('report', type=Path)
+    parser.add_argument('--expect-backend')
+    parser.add_argument('--expect-apk-code', type=int)
+    args = parser.parse_args(argv)
+    try:
+        result = audit(
+            read_private_json(args.report, 4 * 1024**2),
+            expect_backend=args.expect_backend,
+            expect_apk_code=args.expect_apk_code,
+        )
+    except (OSError, ValueError, TypeError, KeyError, RecursionError):
+        parser.exit(2, '无法复核所选私有设备批次报告。\n')
+    print(json.dumps(result, ensure_ascii=False))
+    return 0 if result['verified'] else 2

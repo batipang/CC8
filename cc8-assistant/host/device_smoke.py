@@ -20,12 +20,17 @@ import uuid
 from private_output import PrivateOutput, private_directory
 from release_info import load_release
 from mac_voice import resolve_voice, __file__ as voice_source
-from diagnostics import INTERVALS, MAX_CONFIRMED_PLAYBACK_CLAUSES, MAX_DEVICE_PAUSE_MS, percentiles
+from diagnostics import (
+    INTERVALS,
+    MAX_CONFIRMED_PLAYBACK_CLAUSES,
+    MAX_DEVICE_PAUSE_MS,
+    ROUTE_COMPLETION_STAGES,
+    percentiles,
+)
 from diagnostic_run import receipt
-from qa_speech import CORPUS_SHA256 as QA_CORPUS_SHA256
 from qa_speech import QUESTIONS as QA_LATENCY_QUESTIONS
 from qa_speech import WAKE as ACOUSTIC_WAKE
-from qa_speech import normalize_question
+from qa_speech import ALL_QUESTIONS, SCENARIO_DIGESTS, SCENARIO_QUESTIONS, normalize_question
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPONENT = 'com.happyhome.cc8assistant/.MainActivity'
@@ -48,6 +53,13 @@ WAKE_SELF_TEXT = {
     'en': 'Bumblebee is speaking. This is a playback check.',
 }
 WAKE_SELF_TIMEOUT = 30
+ECHO_SOAK_SECONDS = 900
+ECHO_SOAK_CAPTURE_MS = 1320000
+ECHO_SOAK_QUIET_SECONDS = 2
+ECHO_SOAK_MIN_BACKEND = '0.14.63'
+ECHO_SOAK_COUNTERS = ('barge_in_pauses', 'barge_in_resumed', 'fast_stop_count')
+ECHO_SOAK_CHECK = 'awake_self_playback_soak'
+ECHO_SOAK_SCOPE = 'synthetic_self_playback_soak'
 MULTI_CLAUSE_CHECK = 'multi_clause_announcement_and_playout'
 EXPECTED_CLAUSES = 2
 CHECKS = (
@@ -78,6 +90,7 @@ STANDBY_SECONDS = 900
 PAIRED_PLAYOUT_MIN_BACKEND = '0.14.50'
 RESPONSE_ACOUSTIC_MIN_BACKEND = '0.14.57'
 EXTENDED_VOICE_MIN_BACKEND = '0.14.60'
+ROUTED_LATENCY_MIN_BACKEND = '0.14.62'
 STOP_RECEIPT_MIN_APK_CODE = 69
 STOP_VISUAL_MIN_APK_CODE = 71
 SMOKE_OPTIONS = (
@@ -121,6 +134,14 @@ QA_LATENCY_PHASES = tuple(
     (f'qa_{index:02}', ('capture', 'awake_dialogue', 'latency_sample'))
     for index in range(1, len(QA_LATENCY_QUESTIONS) + 1)
 )
+ECHO_SOAK_PHASES = tuple(
+    (f'self_playback_{index}', ('capture', 'awake_dialogue', 'echo_soak')) for index in (1, 2)
+)
+INTERRUPTION_PHASES = tuple(
+    (f'{kind}_{index:02}', ('capture', f'synthetic_{kind}'))
+    for index in range(1, 16)
+    for kind in ('barge', 'stop')
+)
 EXTENDED_VOICE_PHASES = (
     *P0_DEVICE_PHASES[:2],
     ('synthetic_stop', ('capture', 'synthetic_stop')),
@@ -131,10 +152,12 @@ QA_STAGE_METRICS = ('utterance_to_asr_ms', 'brain_first_clause_ms', 'tts_first_p
 QA_ENDPOINT_METRIC = 'device_vad_tail_ms'
 QA_PLAYOUT_METRIC = 'utterance_to_confirmed_playout_ack_ms'
 ACOUSTIC_RESPONSE_METRIC = 'last_voiced_to_confirmed_output_block_ms'
+BARGE_DEVICE_METRIC = 'device_pause_from_trigger_ms'
 FAST_STOP_DEVICE_METRIC = 'detecting_frame_to_device_stop_ms'
 MAX_FAST_STOP_DEVICE_MS = 20000
 STOP_VISUAL_METRIC = 'device_stop_to_visuals_cleared_ms'
 MAX_STOP_VISUAL_MS = 2000
+MAX_PHASE_ELAPSED_MS = 86_400_000
 
 
 class CheckFailure(RuntimeError):
@@ -267,12 +290,12 @@ def response_playout_timing(row):
     }
 
 
-def qa_stage_latencies(row):
+def qa_stage_latencies(row, scenario='qa'):
     try:
         clean = receipt(row)
     except ValueError:
         return {}
-    if clean['scenario'] != 'qa':
+    if clean['scenario'] != scenario:
         return {}
     stages = clean['stages']
     result = {
@@ -338,7 +361,7 @@ def rpc(path, request, timeout=5):
             request.get('operation') == 'response_probe_arm'
             and set(request) == {'operation', 'case'}
             and type(request['case']) is int
-            and 1 <= request['case'] <= len(QA_LATENCY_QUESTIONS)
+            and 1 <= request['case'] <= len(ALL_QUESTIONS)
         )
         or (
             request.get('operation') == 'response_probe_result'
@@ -429,7 +452,7 @@ class Device:
         return resolve_voice('Tingting')
 
     def speak_probe(self, *, interruption=False, stop=False, question=ACOUSTIC_QUESTION):
-        require(question in QA_LATENCY_QUESTIONS, 'unknown_synthetic_probe')
+        require(question in ALL_QUESTIONS, 'unknown_synthetic_probe')
         voice = self.prepare_speech_probe()
         phrase = ACOUSTIC_WAKE + '，' + question
         if interruption:
@@ -469,11 +492,13 @@ class SmokeRun:
         acoustic=False,
         awake_dialogue=False,
         latency_sample=False,
+        latency_scenario='qa',
         qa_question=ACOUSTIC_QUESTION,
         response_acoustic_evidence=False,
         synthetic_barge=False,
         synthetic_stop=False,
         wake_self_playback=False,
+        echo_soak=False,
         active_handover=False,
         all_route_loss=False,
         multi_clause=False,
@@ -490,12 +515,15 @@ class SmokeRun:
         self.capture, self.standby, self.acoustic = capture, standby, acoustic
         self.awake_dialogue = awake_dialogue
         self.latency_sample = latency_sample
+        self.latency_scenario = latency_scenario
         self.qa_question = qa_question
         self.response_acoustic_evidence = response_acoustic_evidence
         self.synthetic_barge = synthetic_barge
         self.synthetic_stop = synthetic_stop
         self.interruption_enabled = synthetic_barge or synthetic_stop
         self.wake_self_playback = wake_self_playback
+        self.echo_soak = echo_soak
+        self.echo_soak_evidence = None
         self.active_handover = active_handover
         self.active_handover_evidence = None
         self.all_route_loss = all_route_loss
@@ -578,6 +606,7 @@ class SmokeRun:
             'acoustic_evidence': self.acoustic_evidence,
             'barge_evidence': self.barge_evidence,
             'wake_self_evidence': self.wake_self_evidence,
+            'echo_soak_evidence': self.echo_soak_evidence,
             'active_handover_evidence': self.active_handover_evidence,
             'all_route_loss_evidence': self.all_route_loss_evidence,
             'standby_evidence': self.standby_evidence,
@@ -615,10 +644,12 @@ class SmokeRun:
         if self.acoustic or self.awake_dialogue or self.interruption_enabled:
             self.device.prepare_speech_probe()
         h = self.health()
-        if self.multi_clause or self.wake_self_playback:
+        if self.multi_clause or self.wake_self_playback or self.echo_soak:
             require(h.get('clause_receipts_supported') is True, 'clause_receipts_unsupported')
-        if self.wake_self_playback or self.active_handover or self.all_route_loss:
+        if self.wake_self_playback or self.active_handover or self.all_route_loss or self.echo_soak:
             self.audio_counters(h)
+        if self.echo_soak:
+            self.echo_soak_counters(h)
         require(
             not self.playback_evidence or h.get('playback_evidence_supported') is True,
             'backend_playback_evidence_unsupported',
@@ -1080,6 +1111,8 @@ class SmokeRun:
 
     @property
     def capture_limit_ms(self):
+        if self.echo_soak:
+            return ECHO_SOAK_CAPTURE_MS
         if self.standby:
             return 1200000
         return 300000 if self.interruption_enabled else 180000
@@ -1310,7 +1343,7 @@ class SmokeRun:
         response_deadline = self.clock() + available - reserve
         probe_token = None
         if self.response_acoustic_evidence:
-            case = QA_LATENCY_QUESTIONS.index(self.qa_question) + 1
+            case = ALL_QUESTIONS.index(self.qa_question) + 1
             armed = self.request({'operation': 'response_probe_arm', 'case': case})
             probe_token = armed.get('token')
             require(
@@ -1350,8 +1383,9 @@ class SmokeRun:
                 ),
                 None,
             )
-            # Keep only fixed counts and timing, never request IDs, transcripts,
-            # provider text or audio. A completed task is not a played answer.
+            route = completed.get('scenario') if completed is not None else None
+            # Keep only fixed counts, categories and timing. A completed task
+            # is not a played answer.
             self.acoustic_evidence = {
                 'new_voice_requests': len(rows),
                 'admitted_voice_requests': len(admitted),
@@ -1369,7 +1403,16 @@ class SmokeRun:
                 'recognized_stimulus_matches': recognized_stimulus_matches,
                 'response_playout_timing': response_playout_timing(completed),
                 **(
-                    {'qa_stage_latencies_ms': qa_stage_latencies(completed)}
+                    {
+                        'qa_stage_latencies_ms': qa_stage_latencies(
+                            completed, self.latency_scenario
+                        ),
+                        'latency_scenario': route if route in tuple(SCENARIO_QUESTIONS) else None,
+                        'latency_route_completed': ROUTE_COMPLETION_STAGES.get(
+                            self.latency_scenario
+                        )
+                        in completed['stages'],
+                    }
                     if self.latency_sample and completed is not None
                     else {}
                 ),
@@ -1563,6 +1606,108 @@ class SmokeRun:
             )
             self.capture_status()
 
+    @staticmethod
+    def echo_soak_counters(health):
+        require(
+            all(type(health.get(key)) is int and health[key] >= 0 for key in ECHO_SOAK_COUNTERS),
+            'echo_soak_counters_unavailable',
+        )
+        return {key: health[key] for key in ECHO_SOAK_COUNTERS}
+
+    def self_playback_soak(self):
+        def snapshot():
+            health = self.health()
+            require(
+                health.get('connected') is True
+                and health.get('transport') == 'usb'
+                and health.get('microphone_active') is True
+                and health.get('calibrating') is False
+                and health.get('waiting_for_wake') is False
+                and health.get('playing') is False,
+                'echo_soak_capture_or_awake_lost',
+            )
+            return {**self.audio_counters(health), **self.echo_soak_counters(health)}
+
+        def delta(after, before):
+            changes = {key: after[key] - value for key, value in before.items()}
+            require(all(value >= 0 for value in changes.values()), 'echo_soak_counter_regressed')
+            return changes
+
+        baseline = snapshot()
+        rows = self.diagnostic_requests()
+        require(
+            rows and all(row.get('outcome') is not None for row in rows),
+            'owner_request_pending',
+        )
+        began = self.clock()
+        self.echo_soak_evidence = evidence = {
+            'elapsed_seconds': 0,
+            'completed_announcements': 0,
+            'pause_requests': 0,
+            'device_pauses': 0,
+            'device_resumes': 0,
+            'render_samples': 0,
+            'admitted_voice_requests': 0,
+        }
+        while self.clock() - began < ECHO_SOAK_SECONDS:
+            device = self.capture_status()
+            require(
+                device['test_capture_remaining_ms'] >= 135000,
+                'echo_soak_capture_budget_insufficient',
+            )
+            before = snapshot()
+            ids = {row['request_id'] for row in rows}
+            last = rows[-1]['request_id']
+            reply = self.request({'text': BARGE_ANNOUNCEMENT})
+            self.sleep(ECHO_SOAK_QUIET_SECONDS)
+            after = snapshot()
+            changes = delta(after, before)
+            totals = delta(after, baseline)
+            rows = self.diagnostic_requests()
+            require(last in {row['request_id'] for row in rows}, 'echo_soak_receipt_window_lost')
+            new = [row for row in rows if row['request_id'] not in ids]
+            announcements = [row for row in new if row.get('origin') == 'announcement']
+            voices = [row for row in new if row.get('origin') == 'voice']
+            groups = classify_voice_records(voices)
+            paused = [row for row in voices if 'pause_ack' in row.get('stages', {})]
+            resumed = sum('resume_ack' in row['stages'] for row in paused)
+            evidence['device_pauses'] += len(paused)
+            evidence['device_resumes'] += resumed
+            evidence['admitted_voice_requests'] += len(groups['admitted'])
+            evidence.update(
+                elapsed_seconds=round(self.clock() - began, 3),
+                pause_requests=totals['barge_in_pauses'],
+                render_samples=totals['render_frames'],
+            )
+            self.checkpoint(self.report('running'))
+            require(
+                len(new) == len(announcements) + len(voices)
+                and len(groups['rejected']) == len(voices)
+                and not totals['local_wake_count']
+                and not totals['fast_stop_count'],
+                'echo_soak_unexpected_voice',
+            )
+            require(
+                totals['barge_in_pauses'] <= 1
+                and totals['barge_in_pauses'] == totals['barge_in_resumed']
+                and changes['barge_in_pauses'] == len(paused) == resumed,
+                'echo_soak_false_pause_limit_or_resume_missing',
+            )
+            require(
+                reply.get('status') == 'completed'
+                and reply.get('characters') == len(BARGE_ANNOUNCEMENT)
+                and len(announcements) == 1
+                and announcements[0].get('outcome') == 'completed'
+                and type(announcements[0].get('confirmed_playback_clauses')) is int
+                and announcements[0]['confirmed_playback_clauses'] == 1
+                and {'confirmed_playout_ack', 'confirmed_playback_done'}
+                <= announcements[0]['stages'].keys()
+                and changes['mic_frames'] > 0
+                and changes['render_frames'] > 0,
+                'echo_soak_playback_unconfirmed',
+            )
+            evidence['completed_announcements'] += 1
+
     def interruption_probe(self):
         def active_health():
             health = self.health()
@@ -1746,6 +1891,11 @@ class SmokeRun:
                 'interruption_replacement_failed',
             )
             if evidence['announcement_cancelled'] and evidence['replacement_completed']:
+                timing = response_playout_timing(replacement)
+                evidence['response_playout_timing'] = timing
+                require(
+                    timing['status'] == 'observed', 'interruption_replacement_playout_unconfirmed'
+                )
                 return replacement
             return None
 
@@ -1920,6 +2070,8 @@ class SmokeRun:
                         BARGE_PRIME_CHECK if self.interruption_enabled else AWAKE_DIALOGUE_CHECK,
                         lambda: self.acoustic_probe(awake=True, quiet_seconds=quiet_seconds),
                     )
+                if self.echo_soak:
+                    self.check(ECHO_SOAK_CHECK, self.self_playback_soak)
                 if self.interruption_enabled:
                     self.check(
                         STOP_CHECK if self.synthetic_stop else BARGE_CHECK,
@@ -1967,6 +2119,7 @@ def planned_checks(options):
                 if interruption or 'awake_dialogue' in options
                 else []
             )
+            + ([ECHO_SOAK_CHECK] if 'echo_soak' in options else [])
             + ([STOP_CHECK if 'synthetic_stop' in options else BARGE_CHECK] if interruption else [])
             + list(CHECKS[5:7])
             + ([ALL_ROUTE_LOSS_CHECK] if 'all_route_loss' in options else [])
@@ -1978,23 +2131,63 @@ def planned_checks(options):
     )
 
 
-def device_suite_phases(*, qa_latency, extended_voice):
+def matched_playout(evidence):
+    timing = evidence.get('response_playout_timing')
+    if not isinstance(timing, dict) or timing.get('status') != 'observed':
+        return False
+    start = timing.get('utterance_end_ms')
+    ack = timing.get('confirmed_playout_ack_ms')
+    done = timing.get('confirmed_playback_done_ms')
+    elapsed = timing.get(QA_PLAYOUT_METRIC)
+    return (
+        all(
+            type(value) in (int, float) and 0 <= value <= MAX_PHASE_ELAPSED_MS
+            for value in (start, ack, done, elapsed)
+        )
+        and start <= ack <= done
+        and elapsed == round(ack - start, 1)
+    )
+
+
+def device_suite_phases(*, qa_latency, extended_voice, interruption=False, echo_soak=False):
+    if echo_soak:
+        return ECHO_SOAK_PHASES
+    if interruption:
+        return INTERRUPTION_PHASES
     if qa_latency:
         return QA_LATENCY_PHASES
     return EXTENDED_VOICE_PHASES if extended_voice else P0_DEVICE_PHASES
 
 
 def run_device_suite(
-    make_run, save, *, qa_latency=False, response_acoustic=False, extended_voice=False
+    make_run,
+    save,
+    *,
+    qa_latency=False,
+    response_acoustic=False,
+    extended_voice=False,
+    latency_scenario='qa',
+    interruption=False,
+    echo_soak=False,
 ):
-    planned = device_suite_phases(qa_latency=qa_latency, extended_voice=extended_voice)
+    planned = device_suite_phases(
+        qa_latency=qa_latency,
+        extended_voice=extended_voice,
+        interruption=interruption,
+        echo_soak=echo_soak,
+    )
+    scope = 'synthetic_qa_latency' if qa_latency else 'fixed_device_suite'
+    if interruption:
+        scope = 'synthetic_interruption_latency'
+    if echo_soak:
+        scope = ECHO_SOAK_SCOPE
     phases = [
         dict(name=name, state='not_run', expected_checks=planned_checks(set(options)))
         for name, options in planned
     ]
     suite = dict(
         schema=1,
-        scope='synthetic_qa_latency' if qa_latency else 'fixed_device_suite',
+        scope=scope,
         state='running',
         phases=phases,
         full_p0_acceptance=False,
@@ -2005,7 +2198,9 @@ def run_device_suite(
         suite['extended_voice_evidence'] = True
     if qa_latency:
         suite['audible_onset_measured'] = False
-        suite['qa_corpus_sha256'] = QA_CORPUS_SHA256
+        suite['qa_corpus_sha256'] = SCENARIO_DIGESTS[latency_scenario]
+        if latency_scenario != 'qa':
+            suite['latency_scenario'] = latency_scenario
         suite['latencies_ms'] = {
             name: percentiles([])
             for name in (*QA_STAGE_METRICS, QA_ENDPOINT_METRIC, QA_PLAYOUT_METRIC)
@@ -2013,6 +2208,26 @@ def run_device_suite(
         if response_acoustic:
             suite['response_acoustic_evidence'] = True
             suite['latencies_ms'][ACOUSTIC_RESPONSE_METRIC] = percentiles([])
+    interruption_samples = {}
+    if interruption:
+        interruption_samples = {
+            name: [] for name in (BARGE_DEVICE_METRIC, FAST_STOP_DEVICE_METRIC, STOP_VISUAL_METRIC)
+        }
+        suite['latencies_ms'] = {
+            name: percentiles(values) for name, values in interruption_samples.items()
+        }
+    if echo_soak:
+        suite['echo_soak_totals'] = dict.fromkeys(
+            (
+                'elapsed_seconds',
+                'completed_announcements',
+                'pause_requests',
+                'device_pauses',
+                'device_resumes',
+                'render_samples',
+            ),
+            0,
+        )
     samples = []
     save(suite)
     source = None
@@ -2025,7 +2240,9 @@ def run_device_suite(
 
         save(suite)
         run = (
-            make_run(set(options), checkpoint, qa_question=QA_LATENCY_QUESTIONS[index])
+            make_run(
+                set(options), checkpoint, qa_question=SCENARIO_QUESTIONS[latency_scenario][index]
+            )
             if qa_latency
             else make_run(set(options), checkpoint)
         )
@@ -2046,7 +2263,9 @@ def run_device_suite(
             if phase['state'] == 'passed' and 'synthetic_stop' in options:
                 stop = result.get('barge_evidence')
                 apk = result.get('expected_apk_code')
-                visuals_required = type(apk) is int and apk >= STOP_VISUAL_MIN_APK_CODE
+                visuals_required = interruption or (
+                    type(apk) is int and apk >= STOP_VISUAL_MIN_APK_CODE
+                )
                 if not (
                     isinstance(stop, dict)
                     and stop.get('device_stop_applied') is True
@@ -2070,6 +2289,44 @@ def run_device_suite(
                     and stop['post_playback_quiet_seconds'] >= POST_DIALOGUE_SECONDS
                 ):
                     phase.update(state='failed', reason='suite_synthetic_stop_evidence_incomplete')
+            if phase['state'] == 'passed' and interruption:
+                evidence = result.get('barge_evidence')
+                if 'synthetic_barge' in options:
+                    if not (
+                        isinstance(evidence, dict)
+                        and all(
+                            evidence.get(key) is True
+                            for key in (
+                                'device_stop_applied',
+                                'announcement_cancelled',
+                                'stimulus_played',
+                                'replacement_completed',
+                                'transcript_matches_stimulus',
+                            )
+                        )
+                        and type(evidence.get(BARGE_DEVICE_METRIC)) in (int, float)
+                        and 0 <= evidence[BARGE_DEVICE_METRIC] <= MAX_DEVICE_PAUSE_MS
+                        and type(evidence.get('admitted_voice_requests')) is int
+                        and evidence['admitted_voice_requests'] == 1
+                        and type(evidence.get('post_playback_quiet_seconds')) in (int, float)
+                        and POST_DIALOGUE_SECONDS
+                        <= evidence['post_playback_quiet_seconds']
+                        <= 86400
+                        and matched_playout(evidence)
+                    ):
+                        phase.update(
+                            state='failed', reason='suite_synthetic_barge_evidence_incomplete'
+                        )
+                    else:
+                        interruption_samples[BARGE_DEVICE_METRIC].append(
+                            evidence[BARGE_DEVICE_METRIC]
+                        )
+                else:
+                    for name in (FAST_STOP_DEVICE_METRIC, STOP_VISUAL_METRIC):
+                        interruption_samples[name].append(evidence[name])
+                suite['latencies_ms'] = {
+                    name: percentiles(values) for name, values in interruption_samples.items()
+                }
             if phase['state'] == 'passed' and (
                 'awake_dialogue' in options or 'acoustic' in options
             ):
@@ -2092,6 +2349,14 @@ def run_device_suite(
                     and observed_response_interval(evidence.get('response_acoustic_timing')) is None
                 ):
                     phase.update(state='failed', reason='suite_awake_response_acoustic_incomplete')
+                elif qa_latency and evidence.get('latency_scenario', 'qa') != latency_scenario:
+                    phase.update(state='failed', reason='suite_latency_scenario_unconfirmed')
+                elif (
+                    qa_latency
+                    and latency_scenario in ROUTE_COMPLETION_STAGES
+                    and evidence.get('latency_route_completed') is not True
+                ):
+                    phase.update(state='failed', reason='suite_latency_route_incomplete')
                 elif qa_latency:
                     stages = evidence.get('qa_stage_latencies_ms')
                     interval = observed_response_interval(evidence.get('response_acoustic_timing'))
@@ -2117,6 +2382,32 @@ def run_device_suite(
                             )
                             for name in suite['latencies_ms']
                         }
+        if phase['state'] == 'passed' and echo_soak:
+            evidence = result.get('echo_soak_evidence')
+            totals = suite['echo_soak_totals']
+            if not (
+                isinstance(evidence, dict)
+                and type(evidence.get('elapsed_seconds')) in (int, float)
+                and ECHO_SOAK_SECONDS <= evidence['elapsed_seconds'] <= ECHO_SOAK_CAPTURE_MS / 1000
+                and all(
+                    type(evidence.get(key)) is int and evidence[key] >= 0
+                    for key in totals
+                    if key != 'elapsed_seconds'
+                )
+                and evidence['completed_announcements'] > 0
+                and evidence['render_samples'] > 0
+                and evidence['pause_requests']
+                == evidence['device_pauses']
+                == evidence['device_resumes']
+                and type(evidence.get('admitted_voice_requests')) is int
+                and evidence['admitted_voice_requests'] == 0
+            ):
+                phase.update(state='failed', reason='suite_echo_soak_evidence_incomplete')
+            else:
+                for key in totals:
+                    totals[key] += evidence[key]
+                if totals['pause_requests'] > 1:
+                    phase.update(state='failed', reason='suite_echo_soak_false_pause_limit')
         if phase['state'] != 'passed':
             suite['state'] = phase['state']
             save(suite)
@@ -2148,6 +2439,22 @@ def main(argv=None):
         '--qa-latency-suite',
         action='store_true',
         help='Sample 30 fixed synthetic QA responses with matched playback receipts',
+    )
+    batches.add_argument(
+        '--interruption-suite',
+        action='store_true',
+        help='Measure 15 synthetic question interruptions and 15 local stop commands',
+    )
+    batches.add_argument(
+        '--self-playback-soak',
+        action='store_true',
+        help='Observe two timed awake self-playback windows without external speech',
+    )
+    parser.add_argument(
+        '--latency-scenario',
+        choices=tuple(SCENARIO_QUESTIONS),
+        default='qa',
+        help='Select simple questions, public web lookup, or read-only local tool prompts',
     )
     parser.add_argument(
         '--extended-voice-evidence',
@@ -2226,9 +2533,16 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
     options = {key for key in SMOKE_OPTIONS if getattr(args, key)}
-    batch = args.p0_device_suite or args.qa_latency_suite
+    batch = (
+        args.p0_device_suite
+        or args.qa_latency_suite
+        or args.interruption_suite
+        or args.self_playback_soak
+    )
     if args.extended_voice_evidence and not args.p0_device_suite:
         parser.error('--extended-voice-evidence requires --p0-device-suite')
+    if args.latency_scenario != 'qa' and not args.qa_latency_suite:
+        parser.error('--latency-scenario requires --qa-latency-suite')
     if args.response_acoustic_evidence and not (
         args.qa_latency_suite or (not batch and args.awake_dialogue)
     ):
@@ -2268,7 +2582,11 @@ def main(argv=None):
     if args.leading_acoustic_evidence and not args.playback_evidence:
         parser.error('--leading-acoustic-evidence requires --playback-evidence')
     minimum_batch_backend = PAIRED_PLAYOUT_MIN_BACKEND
-    if args.extended_voice_evidence:
+    if args.self_playback_soak:
+        minimum_batch_backend = ECHO_SOAK_MIN_BACKEND
+    elif args.latency_scenario != 'qa':
+        minimum_batch_backend = ROUTED_LATENCY_MIN_BACKEND
+    elif args.extended_voice_evidence or args.interruption_suite:
         minimum_batch_backend = EXTENDED_VOICE_MIN_BACKEND
     elif args.response_acoustic_evidence:
         minimum_batch_backend = RESPONSE_ACOUSTIC_MIN_BACKEND
@@ -2280,6 +2598,8 @@ def main(argv=None):
                     for name, flags in device_suite_phases(
                         qa_latency=args.qa_latency_suite,
                         extended_voice=args.extended_voice_evidence,
+                        interruption=args.interruption_suite,
+                        echo_soak=args.self_playback_soak,
                     )
                 ],
                 'execute': False,
@@ -2288,9 +2608,15 @@ def main(argv=None):
                 'minimum_backend_version': minimum_batch_backend,
             }
             if args.qa_latency_suite:
-                plan['qa_corpus_sha256'] = QA_CORPUS_SHA256
+                plan['qa_corpus_sha256'] = SCENARIO_DIGESTS[args.latency_scenario]
+                if args.latency_scenario != 'qa':
+                    plan['latency_scenario'] = args.latency_scenario
                 if args.response_acoustic_evidence:
                     plan['response_acoustic_evidence'] = True
+            if args.self_playback_soak:
+                plan['self_playback_seconds_per_phase'] = ECHO_SOAK_SECONDS
+            if args.interruption_suite:
+                plan['minimum_apk_code'] = STOP_VISUAL_MIN_APK_CODE
             if args.extended_voice_evidence:
                 plan['extended_voice_evidence'] = True
                 plan['minimum_apk_code'] = STOP_RECEIPT_MIN_APK_CODE
@@ -2340,8 +2666,11 @@ def main(argv=None):
             'response_acoustic_evidence_supported'
         ) is not True:
             parser.exit(2, '当前后台未声明支持问答声学计时。\n')
-        if args.extended_voice_evidence and (
-            manifest.assistant.version_code < STOP_RECEIPT_MIN_APK_CODE
+        minimum_stop_apk = (
+            STOP_VISUAL_MIN_APK_CODE if args.interruption_suite else STOP_RECEIPT_MIN_APK_CODE
+        )
+        if (args.extended_voice_evidence or args.interruption_suite) and (
+            manifest.assistant.version_code < minimum_stop_apk
             or health.get('fast_stop_ready') is not True
             or health.get('fast_stop_timing_supported') is not True
             or type(health.get('fast_stop_count')) is not int
@@ -2406,12 +2735,17 @@ def main(argv=None):
                     )
 
                 device = Device()
-                if args.extended_voice_evidence:
+                if args.extended_voice_evidence or args.interruption_suite:
                     device_status, _ = device.status()
                     require(
                         device_status.get('test_playback_stop_supported') is True,
                         'device_playback_stop_evidence_unsupported',
                     )
+                    if args.interruption_suite:
+                        require(
+                            device_status.get('test_stop_visual_timing_supported') is True,
+                            'device_stop_visual_timing_unsupported',
+                        )
 
                 def make_run(enabled, checkpoint, *, qa_question=ACOUSTIC_QUESTION):
                     return SmokeRun(
@@ -2419,6 +2753,7 @@ def main(argv=None):
                         request,
                         checkpoint=checkpoint,
                         qa_question=qa_question,
+                        latency_scenario=args.latency_scenario,
                         response_acoustic_evidence=(
                             args.response_acoustic_evidence
                             or 'response_acoustic_evidence' in enabled
@@ -2444,6 +2779,9 @@ def main(argv=None):
                             qa_latency=args.qa_latency_suite,
                             response_acoustic=args.response_acoustic_evidence,
                             extended_voice=args.extended_voice_evidence,
+                            latency_scenario=args.latency_scenario,
+                            interruption=args.interruption_suite,
+                            echo_soak=args.self_playback_soak,
                         )
                     else:
                         result = make_run(options, save).run()
@@ -2459,8 +2797,12 @@ def main(argv=None):
                             for phase in result['phases']
                         ],
                     }
-                    if args.qa_latency_suite:
+                    if args.self_playback_soak:
+                        summary['echo_soak_totals'] = result['echo_soak_totals']
+                    if args.qa_latency_suite or args.interruption_suite:
                         summary['latencies_ms'] = result['latencies_ms']
+                        if args.latency_scenario != 'qa':
+                            summary['latency_scenario'] = args.latency_scenario
                 else:
                     summary = {
                         key: result[key]

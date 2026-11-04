@@ -1,5 +1,20 @@
 # Changelog
 
+## Backend 0.14.63 — measure false pauses during self-playback
+
+- Expose pause and resume counters to the owner-only runtime check.
+- Verify two timed self-playback windows with capture and playback receipts.
+
+## Backend 0.14.62 — confirm routed operations before counting latency
+
+- Record bounded web and terminal completion timestamps for the current request.
+  Routed latency batches exclude answers without a matching completion.
+
+## Backend 0.14.61 — separate web and local tool latency samples
+
+- Add fixed public web lookups and read-only local calculations to the
+  synthetic timing suite. Require evidence of the intended route.
+
 ## Assistant 0.9.34 — record when stop updates the playback visuals
 
 - In bounded capture tests, associate the first cleared caption, progress and

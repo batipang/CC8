@@ -143,7 +143,10 @@ class WebTurns(unittest.TestCase):
             [r for r, _ in f.calls],
             ['/v1/chat/completions', '/v1/coding_plan/search', '/v1/chat/completions'],
         )
-        self.assertEqual([k for k, _ in updates], ['clear', 'searching', 'sources'])
+        self.assertEqual(
+            [k for k, _ in updates], ['clear', 'searching', 'route_completed', 'sources']
+        )
+        self.assertEqual(updates[-2][1], {'scenario': 'web'})
         self.assertNotIn('snippet', updates[-1][1]['items'][0])
         self.assertTrue(updates[-1][1]['retrieved_at'])
         prompt = f.calls[-1][1]['messages']
@@ -172,7 +175,12 @@ class WebTurns(unittest.TestCase):
 
     def test_empty_results_do_not_get_a_model_answer(self):
         f = Fake(search={'base_resp': {'status_code': 0}, 'organic': []})
-        self.assertIn('无法核实', MiniMaxBrain(f).reply('查一下新闻', []))
+        updates = []
+        answer = ''.join(
+            MiniMaxBrain(f).clauses('查一下新闻', [], on_web=lambda kind, _: updates.append(kind))
+        )
+        self.assertIn('无法核实', answer)
+        self.assertEqual(updates, ['clear', 'searching'])
         self.assertEqual(len(f.calls), 2)
 
     def test_missing_provider_status_is_failure(self):
@@ -193,6 +201,7 @@ class WebTurns(unittest.TestCase):
                 )
             )
         self.assertNotIn('sources', updates)
+        self.assertNotIn('route_completed', updates)
         self.assertEqual(len(f.calls), 2)
 
     def test_cancel_before_start_makes_no_network_request(self):

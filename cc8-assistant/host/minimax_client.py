@@ -548,6 +548,7 @@ class MiniMaxBrain:
                     yield '这次没有查到可用的网页结果，暂时无法核实。你可以补充关键词让我再查。'
                     return
                 if on_web:
+                    on_web('route_completed', {'scenario': 'web'})
                     on_web(
                         'sources',
                         {
