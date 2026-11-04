@@ -11,11 +11,19 @@
 ./cc8 verify-device --runtime-root /absolute/live/workspace --execute --capture
 # 在相同限时开麦窗口内，追加录音时钟检查
 ./cc8 verify-device --runtime-root /absolute/live/workspace --execute --capture --capture-clock-evidence
+# 在屏幕已亮时测试本地唤醒、问答和播完后的回声；单独一轮，无需等待黑屏
+./cc8 verify-device --runtime-root /absolute/live/workspace --execute --capture --awake-dialogue
 # 追加真实 15 分钟待机，黑屏后由 Mac 播放合成问句
 ./cc8 verify-device --runtime-root /absolute/live/workspace --execute --capture --standby --acoustic
 ```
 
 runtime-root 指**实际运行目录**。现场为 `/Volumes/AI/Codex/CC8-P0`，冻结运行源码1ab67a0：后台0.14.17 / 保留原签名APK0.9.13 code48；实际部署与验收范围见 [CURRENT_DEPLOYMENT](CURRENT_DEPLOYMENT.md)。自动检查脚本可来自另一份已验证源码；报告中的脚本摘要与受测后台版本分别记录。深层候选目录曾超出 macOS Unix socket 路径限制，已改为短路径并重新创建独立 venv。
+
+## 清醒状态合成问答
+
+`--awake-dialogue` 复用 180 秒前台限时收音，在 Home 停采前执行。先核对当前等待唤醒、USB 连接、设备前台与剩余收音时间，排除历史回执和未结束请求。Mac 只播一次固定公开问句，随后核对同一个新请求的唤醒、识别、Dot 任务完成、设备开始与结束播放回执。播完后再观察 20 秒。第二个准入请求、未决候选或拒绝后未恢复的暂停都会使检查失败；所有退出复用双端停采和维护重开流程。报告只保存计数和阶段，不写请求 ID、正文或音频。
+
+这条用例与 `--standby` 分轮执行，共用当前实际运行目录的自动测试锁。它验证亮屏时的一次合成语音链路。黑屏唤醒、问句正文准确率、真人与远场仍各自验收。
 
 ## 录音时钟证据
 

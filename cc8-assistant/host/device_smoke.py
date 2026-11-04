@@ -41,6 +41,8 @@ CHECKS = (
 CAPTURE_CLOCK_CHECK = 'recording_clock_provenance'
 RENDER_CLOCK_CHECK = 'playback_clock_provenance'
 LEADING_ACOUSTIC_CHECK = 'leading_playback_acoustic_evidence'
+AWAKE_DIALOGUE_CHECK = 'synthetic_awake_dialogue'
+POST_DIALOGUE_SECONDS = 20
 
 
 class CheckFailure(RuntimeError):
@@ -264,6 +266,7 @@ class SmokeRun:
         capture=False,
         standby=False,
         acoustic=False,
+        awake_dialogue=False,
         playback_evidence=False,
         clock_evidence=False,
         capture_clock_evidence=False,
@@ -275,6 +278,7 @@ class SmokeRun:
     ):
         self.device, self.request = device, request
         self.capture, self.standby, self.acoustic = capture, standby, acoustic
+        self.awake_dialogue = awake_dialogue
         self.playback_evidence = playback_evidence
         self.clock_evidence = clock_evidence
         self.capture_clock_required = capture_clock_evidence
@@ -323,7 +327,8 @@ class SmokeRun:
             'cleanup_microphone_off_verified': self.cleanup_verified,
             'capture_tests_enabled': self.capture,
             'standby_enabled': self.standby,
-            'synthetic_acoustic_probe_enabled': self.acoustic,
+            'synthetic_acoustic_probe_enabled': self.acoustic or self.awake_dialogue,
+            'awake_dialogue_enabled': self.awake_dialogue,
             'raw_audio_saved': False,
             'contains_conversation_content': False,
             'physical_usb_unplug_tested': False,
@@ -361,7 +366,7 @@ class SmokeRun:
             self.checkpoint(self.report('running'))
 
     def preflight(self):
-        if self.acoustic:
+        if self.acoustic or self.awake_dialogue:
             self.device.prepare_speech_probe()
         h = self.health()
         require(
@@ -399,6 +404,12 @@ class SmokeRun:
             device.get('vision_active') is False and ui.get('camera_open') is False, 'camera_busy'
         )
         require(ui.get('wake_checked') is True or not self.standby, 'standby_requires_wake_mode')
+        if self.awake_dialogue:
+            require(ui.get('wake_checked') is True, 'awake_dialogue_requires_wake_mode')
+            require(
+                all(row.get('outcome') is not None for row in self.diagnostic_requests()),
+                'owner_request_pending',
+            )
         t = self.request({'operation': 'transport_status'})
         require(
             t.get('wifi_ready') is True and t.get('usb_ready') is True, 'standby_route_not_ready'
@@ -529,7 +540,7 @@ class SmokeRun:
             and h.get('calibrating') is False,
             'playback_probe_requires_idle_capture',
         )
-        self.capture_status()
+        return self.capture_status()
 
     def playback_probe(self):
         self.require_idle_probe_capture()
@@ -597,36 +608,55 @@ class SmokeRun:
             self.checkpoint(self.report('running'))
             self.sleep(5)
 
-    def acoustic_probe(self):
+    def diagnostic_requests(self):
+        rows = self.request({'operation': 'diagnostics'}).get('requests')
+        require(
+            isinstance(rows, list)
+            and all(isinstance(r, dict) and isinstance(r.get('request_id'), str) for r in rows),
+            'diagnostics_unavailable',
+        )
+        require(len({r['request_id'] for r in rows}) == len(rows), 'duplicate_diagnostic_id')
+        return rows
+
+    def acoustic_probe(self, *, awake=False):
         # A computer speaker is a synthetic source with unknown room geometry.
         # This can verify the live chain, never a human recall rate or dB level.
         d, ui = self.device.status()
+        sleeping_before = not awake
         require(
-            ui.get('screen_sleeping') is True and d.get('microphone_active') is True,
+            ui.get('screen_sleeping') is sleeping_before and d.get('microphone_active') is True,
             'acoustic_probe_requires_idle_capture',
         )
-        ids = {
-            r.get('request_id')
-            for r in self.request({'operation': 'diagnostics'}).get('requests', [])
-        }
+        rows = self.diagnostic_requests()
+        ids = {r['request_id'] for r in rows}
+        if awake:
+            d = self.require_idle_probe_capture()
+            h = self.health()
+            require(h.get('waiting_for_wake') is True, 'awake_dialogue_not_waiting_for_wake')
+            require(all(r.get('outcome') is not None for r in rows), 'owner_request_pending')
+            # Leave room for the bounded speech command, post-playback
+            # observation and the final diagnostic query before capture expires.
+            reserve = POST_DIALOGUE_SECONDS + 5
+            available = d['test_capture_remaining_ms'] / 1000
+            require(available > 20 + reserve, 'awake_dialogue_capture_budget_insufficient')
+            response_deadline = self.clock() + available - reserve
         self.device.speak_probe()
 
+        admitted_id = None
+
         def received():
+            nonlocal admitted_id
             health = self.health()
             require(
                 health.get('connected') is True and health.get('microphone_active') is True,
                 'acoustic_capture_or_connection_lost',
             )
-            p = self.request({'operation': 'diagnostics'})
-            require(
-                isinstance(p.get('requests'), list)
-                and all(isinstance(r, dict) for r in p['requests']),
-                'diagnostics_unavailable',
-            )
+            if awake:
+                require(health.get('transport') == 'usb', 'awake_dialogue_usb_changed')
             rows = [
                 r
-                for r in p['requests']
-                if r.get('request_id') not in ids and r.get('origin') == 'voice'
+                for r in self.diagnostic_requests()
+                if r['request_id'] not in ids and r.get('origin') == 'voice'
             ]
             groups = classify_voice_records(rows)
             admitted, rejected = groups['admitted'], groups['rejected']
@@ -665,6 +695,13 @@ class SmokeRun:
             }
             self.checkpoint(self.report('running'))
             require(len(admitted) <= 1, 'unexpected_extra_voice_request')
+            if admitted:
+                current_id = admitted[0]['request_id']
+                require(
+                    admitted_id is None or current_id == admitted_id,
+                    'unexpected_extra_voice_request',
+                )
+                admitted_id = current_id
             require(not groups['invalid'], 'synthetic_voice_candidate_not_rejected')
             require(
                 all(
@@ -675,19 +712,28 @@ class SmokeRun:
             )
             return any(
                 r.get('outcome') == 'completed'
+                and (
+                    not awake
+                    or (
+                        r.get('task_outcome') == 'completed'
+                        and 'playout_ack' in r.get('stages', {})
+                    )
+                )
                 and {'wake_detected', 'asr_end', 'brain_start', 'playback_done'}
                 <= set(r.get('stages', {}))
                 for r in admitted
             )
 
-        self.wait(received, 120, 'synthetic_acoustic_chain_not_confirmed')
+        response_seconds = min(120, response_deadline - self.clock()) if awake else 120
+        require(response_seconds > 0, 'awake_dialogue_capture_budget_insufficient')
+        self.wait(received, response_seconds, 'synthetic_acoustic_chain_not_confirmed')
         # An immediate cleanup could hide a post-answer echo turn. Keep one
         # bounded observation window. An extra admitted dialogue fails, while
         # a transient candidate must resolve and a rejected pause must resume.
         # Counts remain visible; success never implies pause-free playback.
         quiet_started = self.clock()
-        while self.clock() - quiet_started < 20:
-            self.sleep(min(0.5, 20 - (self.clock() - quiet_started)))
+        while self.clock() - quiet_started < POST_DIALOGUE_SECONDS:
+            self.sleep(min(0.5, POST_DIALOGUE_SECONDS - (self.clock() - quiet_started)))
             require(received(), 'synthetic_acoustic_chain_not_confirmed')
             self.acoustic_evidence['post_playback_quiet_seconds'] = round(
                 self.clock() - quiet_started, 3
@@ -704,7 +750,7 @@ class SmokeRun:
         d, ui = self.device.status()
         require(
             ui.get('screen_sleeping') is False and d.get('foreground') is True,
-            'acoustic_probe_did_not_wake_foreground',
+            'awake_dialogue_left_foreground' if awake else 'acoustic_probe_did_not_wake_foreground',
         )
 
     def cleanup(self):
@@ -758,6 +804,8 @@ class SmokeRun:
                         self.leading_acoustic_probe,
                         continue_if_unconfirmed=True,
                     )
+                if self.awake_dialogue:
+                    self.check(AWAKE_DIALOGUE_CHECK, lambda: self.acoustic_probe(awake=True))
                 self.check(CHECKS[5], self.home)
                 self.check(CHECKS[6], self.maintenance_open)
             if self.standby:
@@ -801,6 +849,11 @@ def main(argv=None):
         help='Play one public synthetic query on Mac speakers after standby',
     )
     parser.add_argument(
+        '--awake-dialogue',
+        action='store_true',
+        help='Play one public synthetic query while the screen is already awake',
+    )
+    parser.add_argument(
         '--playback-evidence',
         action='store_true',
         help='Corroborate a fixed speaker phrase using already active bounded capture',
@@ -823,6 +876,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.standby and not args.capture or args.acoustic and not args.standby:
         parser.error('--standby requires --capture; --acoustic requires --standby')
+    if args.awake_dialogue and (not args.capture or args.standby):
+        parser.error('--awake-dialogue requires --capture and a separate run from --standby')
     if args.playback_evidence and not args.capture:
         parser.error('--playback-evidence requires --capture')
     if args.clock_evidence and not args.playback_evidence:
@@ -839,6 +894,7 @@ def main(argv=None):
             + ([CHECKS[9]] if args.playback_evidence else [])
             + ([RENDER_CLOCK_CHECK] if args.clock_evidence else [])
             + ([LEADING_ACOUSTIC_CHECK] if args.leading_acoustic_evidence else [])
+            + ([AWAKE_DIALOGUE_CHECK] if args.awake_dialogue else [])
             + list(CHECKS[5:7])
             if args.capture
             else []
@@ -847,6 +903,7 @@ def main(argv=None):
         + ([CHECKS[8]] if args.acoustic else []),
         'execute': args.execute,
         'capture': args.capture,
+        'awake_dialogue': args.awake_dialogue,
         'playback_evidence': args.playback_evidence,
         'clock_evidence': args.clock_evidence,
         'capture_clock_evidence': args.capture_clock_evidence,
@@ -916,6 +973,7 @@ def main(argv=None):
                     capture=args.capture,
                     standby=args.standby,
                     acoustic=args.acoustic,
+                    awake_dialogue=args.awake_dialogue,
                     playback_evidence=args.playback_evidence,
                     clock_evidence=args.clock_evidence,
                     capture_clock_evidence=args.capture_clock_evidence,

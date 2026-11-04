@@ -161,6 +161,8 @@ class DeviceAutomationTests(unittest.TestCase):
             ['--standby'],
             ['--acoustic'],
             ['--capture', '--acoustic'],
+            ['--awake-dialogue'],
+            ['--capture', '--standby', '--awake-dialogue'],
             ['--capture-clock-evidence'],
             ['--capture', '--leading-acoustic-evidence'],
         ):
@@ -168,6 +170,30 @@ class DeviceAutomationTests(unittest.TestCase):
                 with self.assertRaises(SystemExit), patch('device_smoke.Device') as device:
                     main(['--runtime-root', '/unused', *flags])
                 device.assert_not_called()
+
+    def test_awake_dialogue_plan_never_calls_device_and_is_separate_from_standby(self):
+        plan_output = io.StringIO()
+        with (
+            patch('device_smoke.Device') as device,
+            patch('device_smoke.rpc') as query,
+            redirect_stdout(plan_output),
+        ):
+            self.assertEqual(
+                main(['--runtime-root', '/nonexistent', '--capture', '--awake-dialogue']), 0
+            )
+            device.assert_not_called()
+            query.assert_not_called()
+        plan = json.loads(plan_output.getvalue())
+        self.assertTrue(plan['awake_dialogue'])
+        self.assertNotIn('real_idle_black_screen', plan['checks'])
+        self.assertEqual(
+            plan['checks'][-3:],
+            [
+                'synthetic_awake_dialogue',
+                'home_stops_capture',
+                'maintenance_reopen_keeps_microphone_off',
+            ],
+        )
 
     def test_maintenance_reports_connection_loss_separately_from_capture(self):
         for connected, capture, reason in (
@@ -793,9 +819,12 @@ class DeviceAutomationTests(unittest.TestCase):
             run.acoustic_probe()
         device.speak_probe.assert_not_called()
 
-    def acoustic_fixture(self, rows):
-        run, device, health, now = self.fixture(capture=True, standby=True, acoustic=True)
+    def acoustic_fixture(self, rows, *, awake=False, before=()):
+        run, device, health, now = self.fixture(
+            capture=True, standby=not awake, acoustic=not awake, awake_dialogue=awake
+        )
         health['microphone_active'] = True
+        health['waiting_for_wake'] = True
         spoken = [False]
 
         def speak():
@@ -803,8 +832,14 @@ class DeviceAutomationTests(unittest.TestCase):
 
         def status():
             return (
-                {'foreground': True, 'microphone_active': True},
-                {'camera_open': False, 'screen_sleeping': not spoken[0]},
+                {
+                    'foreground': True,
+                    'microphone_active': True,
+                    'vision_active': False,
+                    'test_capture_limit_ms': 180000,
+                    'test_capture_remaining_ms': 150000,
+                },
+                {'camera_open': False, 'screen_sleeping': not awake and not spoken[0]},
             )
 
         def request(p):
@@ -812,12 +847,86 @@ class DeviceAutomationTests(unittest.TestCase):
                 return dict(health)
             self.assertEqual(p, {'operation': 'diagnostics'})
             # Existing success must never count as a fresh spoken response.
-            return {'requests': rows(now[0]) if spoken[0] else []}
+            return {'requests': rows(now[0]) if spoken[0] else list(before)}
 
         device.speak_probe.side_effect = speak
         device.status.side_effect = status
         run.request = request
         return run, device, health, now
+
+    def test_awake_dialogue_runs_before_home_without_waiting_for_black_screen(self):
+        old = self.acoustic_row(request_id='old')
+        run, device, _, now = self.acoustic_fixture(
+            lambda _: [old, self.acoustic_row()], awake=True, before=(old,)
+        )
+        for operation in ('preflight', 'maintenance_open', 'playback', 'handover', 'start_capture'):
+            setattr(run, operation, Mock())
+        run.home = Mock()
+        run.cleanup = Mock()
+        result = run.run()
+        self.assertEqual(result['state'], 'passed')
+        self.assertTrue(result['awake_dialogue_enabled'])
+        self.assertFalse(result['standby_enabled'])
+        self.assertEqual(result['acoustic_evidence']['admitted_voice_requests'], 1)
+        self.assertEqual(now[0], 20)
+        self.assertEqual(
+            [row['name'] for row in result['checks'][-3:]],
+            [
+                'synthetic_awake_dialogue',
+                'home_stops_capture',
+                'maintenance_reopen_keeps_microphone_off',
+            ],
+        )
+        device.speak_probe.assert_called_once_with()
+        run.cleanup.assert_called_once()
+
+    def test_awake_dialogue_rejects_unready_wake_or_capture_before_speaking(self):
+        for case in ('wake', 'short_budget', 'pending'):
+            with self.subTest(case=case):
+                before = (self.acoustic_row(outcome=None),) if case == 'pending' else ()
+                run, device, health, _ = self.acoustic_fixture(
+                    lambda _: [], awake=True, before=before
+                )
+                if case == 'wake':
+                    health['waiting_for_wake'] = False
+                if case == 'short_budget':
+                    original_status = device.status.side_effect
+
+                    def short_status():
+                        device_status, ui = original_status()
+                        return {**device_status, 'test_capture_remaining_ms': 45000}, ui
+
+                    device.status.side_effect = short_status
+                with self.assertRaises(CheckFailure):
+                    run.acoustic_probe(awake=True)
+                device.speak_probe.assert_not_called()
+
+    def test_awake_dialogue_requires_task_and_playout_and_bounds_wait_by_capture(self):
+        for missing in ('task', 'playout'):
+            with self.subTest(missing=missing):
+                row = self.acoustic_row()
+                if missing == 'task':
+                    row.pop('task_outcome')
+                else:
+                    row['stages'].pop('playout_ack')
+                run, device, _, now = self.acoustic_fixture(lambda _: [row], awake=True)
+                run.require_idle_probe_capture = Mock(
+                    return_value={'test_capture_remaining_ms': 50000}
+                )
+                with self.assertRaisesRegex(CheckFailure, 'synthetic_acoustic_chain_not_confirmed'):
+                    run.acoustic_probe(awake=True)
+                self.assertEqual(now[0], 25)
+                device.speak_probe.assert_called_once_with()
+
+    def test_same_admitted_request_must_stay_present_through_post_playback(self):
+        run, device, _, now = self.acoustic_fixture(
+            lambda elapsed: [self.acoustic_row(request_id='before' if elapsed < 5 else 'after')],
+            awake=True,
+        )
+        with self.assertRaisesRegex(CheckFailure, 'unexpected_extra_voice_request'):
+            run.acoustic_probe(awake=True)
+        self.assertEqual(now[0], 5)
+        device.speak_probe.assert_called_once_with()
 
     @staticmethod
     def acoustic_row(**changes):
