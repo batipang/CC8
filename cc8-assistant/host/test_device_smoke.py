@@ -17,8 +17,10 @@ from device_smoke import (
     ACTIVE_HANDOVER_CHECK,
     ALL_ROUTE_LOSS_CHECK,
     ALL_ROUTE_LOSS_REQUEST,
+    AWAKE_DIALOGUE_CHECK,
     BARGE_ANNOUNCEMENT,
     BARGE_CHECK,
+    BARGE_PRIME_CHECK,
     BARGE_QUERY,
     WAKE_SELF_CHECK,
     WAKE_SELF_TEXT,
@@ -26,6 +28,7 @@ from device_smoke import (
     Device,
     MULTI_CLAUSE_TEXT,
     P0_DEVICE_PHASES,
+    POST_DIALOGUE_SECONDS,
     SmokeRun,
     main,
     objects,
@@ -211,12 +214,17 @@ class DeviceAutomationTests(unittest.TestCase):
         plan = json.loads(output.getvalue())
         self.assertFalse(plan['full_p0_acceptance'])
         phases = plan['phases']
-        self.assertEqual(len(phases), 5)
+        self.assertEqual(len(phases), 6)
         self.assertIn(ACTIVE_HANDOVER_CHECK, phases[0]['checks'])
         self.assertIn(ALL_ROUTE_LOSS_CHECK, phases[0]['checks'])
         self.assertIn(WAKE_SELF_CHECK, phases[0]['checks'])
         self.assertIn(BARGE_CHECK, phases[1]['checks'])
-        for index, phase in enumerate(phases[2:], start=1):
+        self.assertIn(BARGE_PRIME_CHECK, phases[1]['checks'])
+        self.assertNotIn(AWAKE_DIALOGUE_CHECK, phases[1]['checks'])
+        self.assertEqual(phases[2]['name'], 'awake_dialogue')
+        self.assertIn(AWAKE_DIALOGUE_CHECK, phases[2]['checks'])
+        self.assertNotIn(BARGE_CHECK, phases[2]['checks'])
+        for index, phase in enumerate(phases[3:], start=1):
             self.assertEqual(phase['name'], f'standby_{index}')
             self.assertEqual(
                 phase['checks'][-2:],
@@ -235,6 +243,8 @@ class DeviceAutomationTests(unittest.TestCase):
             'missing_check',
             'missing_cleanup',
             'source_changed',
+            'missing_awake_quiet',
+            'short_awake_quiet',
         ):
             with self.subTest(case=case):
                 runs, saves = [], []
@@ -260,6 +270,12 @@ class DeviceAutomationTests(unittest.TestCase):
                             index == 1 and case == 'missing_cleanup'
                         ),
                     }
+                    if 'awake_dialogue' in options and case != 'missing_awake_quiet':
+                        report['acoustic_evidence'] = {
+                            'post_playback_quiet_seconds': 2
+                            if case == 'short_awake_quiet'
+                            else POST_DIALOGUE_SECONDS,
+                        }
                     run.run.side_effect = lambda: checkpoint(report) or report
                     return run
 
@@ -272,11 +288,16 @@ class DeviceAutomationTests(unittest.TestCase):
                     self.assertEqual(len(runs), len(P0_DEVICE_PHASES))
                     self.assertEqual(result['state'], 'passed')
                 else:
-                    self.assertEqual(len(runs), 2)
-                    self.assertEqual(
-                        [row['state'] for row in result['phases'][2:]], ['not_run'] * 3
+                    attempted = 3 if case.endswith('_awake_quiet') else 2
+                    self.assertEqual(len(runs), attempted)
+                    self.assertTrue(
+                        all(row['state'] == 'not_run' for row in result['phases'][attempted:])
                     )
                     self.assertNotEqual(result['state'], 'passed')
+                    if attempted == 3:
+                        self.assertEqual(
+                            result['phases'][2]['reason'], 'suite_awake_dialogue_quiet_incomplete'
+                        )
                 if case == 'source_changed':
                     runs[1].run.assert_not_called()
                     self.assertEqual(result['phases'][1]['reason'], 'suite_source_changed')
@@ -1450,7 +1471,7 @@ class DeviceAutomationTests(unittest.TestCase):
         self.assertEqual(
             plan['checks'][-4:],
             [
-                'synthetic_awake_dialogue',
+                BARGE_PRIME_CHECK,
                 BARGE_CHECK,
                 'home_stops_capture',
                 'maintenance_reopen_keeps_microphone_off',
