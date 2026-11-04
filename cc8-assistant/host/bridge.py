@@ -178,8 +178,8 @@ class Bridge:
     def control_device(self, action, percent=None):
         return self.device.control(action, percent)
 
-    def pause_for_voice(self):
-        return self.playback.pause_for_voice()
+    def pause_for_voice(self, trigger_nanos=None):
+        return self.playback.pause_for_voice(trigger_nanos)
 
     def resume_after_rejection(self, token, generation):
         return self.playback.resume_after_rejection(token, generation)

@@ -313,6 +313,7 @@ final class VoiceSession {
       }
       JSONObject hello = Wire.event("device_ready");
       Wire.put(hello, "supports_playback_pause", true);
+      Wire.put(hello, "playback_pause_applied_version", 1);
       Wire.put(hello, "playout_receipt_version", 1);
       Wire.put(hello, "render_clock_report_version", 1);
       Wire.put(hello, "playback_done_id_version", 1);

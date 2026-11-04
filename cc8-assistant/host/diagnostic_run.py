@@ -11,6 +11,7 @@ from diagnostics import (
     STAGES,
     DOT_CONTEXT_FIELDS,
     MAX_CONFIRMED_PLAYBACK_CLAUSES,
+    MAX_DEVICE_PAUSE_MS,
     summarize_requests,
     summarize_dot_contexts,
 )
@@ -45,6 +46,7 @@ ROW_FIELDS = frozenset(
         'capture',
         'gate',
         'confirmed_playback_clauses',
+        'device_pause_from_trigger_ms',
     )
 )
 
@@ -118,6 +120,16 @@ def receipt(value):
         ):
             raise ValueError('Invalid confirmed playback clause count')
         result['confirmed_playback_clauses'] = count
+    if 'device_pause_from_trigger_ms' in value:
+        elapsed = value['device_pause_from_trigger_ms']
+        if (
+            value['origin'] != 'voice'
+            or type(elapsed) not in (int, float)
+            or not 0 <= elapsed <= MAX_DEVICE_PAUSE_MS
+            or not {'pause_request', 'pause_ack'} <= clean_stages.keys()
+        ):
+            raise ValueError('Invalid device pause timing')
+        result['device_pause_from_trigger_ms'] = elapsed
     if 'turn_id' in value:
         turn = value['turn_id']
         if not isinstance(turn, str) or not re.fullmatch('[A-Za-z0-9_-]{1,80}', turn):
@@ -200,6 +212,7 @@ class DiagnosticRun:
                     'dot_context_reused',
                     'capture',
                     'gate',
+                    'device_pause_from_trigger_ms',
                 ):
                     if old.get(field) is not None and row.get(field) != old[field]:
                         raise ValueError('Conflicting diagnostic result')

@@ -1,5 +1,11 @@
 # Changelog
 
+## Assistant 0.9.22 / Backend 0.14.43 — device pause timing
+
+- Record estimated microphone trigger frame to applied Android pause latency
+  when the device advertises applied receipts. Aggregate only accepted
+  voice turns and keep the existing Mac round-trip measure separate.
+
 ## Assistant 0.9.20 — confirm playback pause and resume
 
 - Acknowledge only applied AudioTrack pause/resume commands. A pause during

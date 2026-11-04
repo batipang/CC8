@@ -1,4 +1,4 @@
-"""Bounded, content-free pipeline receipts measured on the Mac monotonic clock."""
+"""Bounded pipeline receipts with Mac stages and optional device elapsed times."""
 
 from collections import Counter, deque
 from copy import deepcopy
@@ -69,6 +69,7 @@ INTERVALS = {
     'pcm_to_playout_ack_ms': ('first_pcm', 'playout_ack'),
     'pause_roundtrip_ms': ('pause_request', 'pause_ack'),
 }
+MAX_DEVICE_PAUSE_MS = 60_000
 
 
 def error_kind(error):
@@ -116,20 +117,28 @@ def percentiles(values):
 def summarize_requests(samples):
     counts = dict(Counter(r['outcome'] or 'pending' for r in samples))
     terminal = sum(counts.get(k, 0) for k in ('completed', 'failed', 'cancelled'))
+    latencies = {
+        name: percentiles(
+            [
+                r['stages'][b] - r['stages'][a]
+                for r in samples
+                if a in r['stages'] and b in r['stages'] and r['stages'][b] >= r['stages'][a]
+            ]
+        )
+        for name, (a, b) in INTERVALS.items()
+    }
+    latencies['device_pause_from_trigger_ms'] = percentiles(
+        [
+            row['device_pause_from_trigger_ms']
+            for row in samples
+            if row.get('gate') == 'accepted' and 'device_pause_from_trigger_ms' in row
+        ]
+    )
     return {
         'samples': len(samples),
         'outcomes': counts,
         'success_rate': counts.get('completed', 0) / terminal if terminal else None,
-        'latencies': {
-            name: percentiles(
-                [
-                    r['stages'][b] - r['stages'][a]
-                    for r in samples
-                    if a in r['stages'] and b in r['stages'] and r['stages'][b] >= r['stages'][a]
-                ]
-            )
-            for name, (a, b) in INTERVALS.items()
-        },
+        'latencies': latencies,
     }
 
 
@@ -261,6 +270,25 @@ class TraceBook:
                 if phase:
                     row['active_stage'] = phase
                 row['stages'].setdefault(stage, round((self.clock() - row['started']) * 1000, 1))
+
+    def pause_ack(self, key, trigger_nanos, applied_nanos):
+        with self.lock:
+            row = self._row(key)
+            if row is None or 'pause_ack' in row['stages']:
+                return
+            self.mark(key, 'pause_ack')
+            # The frame estimate and AudioTrack.pause() return use the same device clock.
+            if (
+                row['origin'] == 'voice'
+                and 'pause_request' in row['stages']
+                and type(trigger_nanos) is int
+                and type(applied_nanos) is int
+                and 0 < trigger_nanos <= applied_nanos < 2**64
+                and applied_nanos - trigger_nanos <= MAX_DEVICE_PAUSE_MS * 1_000_000
+            ):
+                row['device_pause_from_trigger_ms'] = round(
+                    (applied_nanos - trigger_nanos) / 1_000_000, 1
+                )
 
     def dot_stage(self, key, stage, observed_at, reused=None):
         """Admit only local Mac timestamps, including buffered pre-ACK events.

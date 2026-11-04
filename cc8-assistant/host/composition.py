@@ -198,7 +198,7 @@ def build_components(
                     host.playback.pause_state['token'] if host.playback.pause_state else None
                 ),
                 paused=lambda: host.playback.pause_state is not None,
-                pause_voice=lambda: host.pause_for_voice(),
+                pause_voice=lambda stamp: host.pause_for_voice(stamp),
                 resume_rejected=lambda token, generation: host.playback.resume_after_rejection(
                     token, generation
                 ),

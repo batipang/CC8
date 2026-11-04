@@ -56,6 +56,7 @@ class PlaybackHooks:
 class PauseReceipt:
     generation: int
     trace: str | None
+    trigger_nanos: int | None = None
     pause_nanos: int | None = None
     resume_requested: bool = False
 
@@ -79,6 +80,7 @@ class PlaybackController:
         self.last_pause_receipt_nanos = None
         self.publication_lock = threading.RLock()
         self.device_can_pause = False
+        self.device_can_confirm_pause = False
         self.device_can_report_playout = False
         self.device_can_report_completion = False
         self.device_can_report_clock = False
@@ -111,6 +113,7 @@ class PlaybackController:
 
     def clear_transport_pause(self):
         self._clear_pause()
+        self.device_can_confirm_pause = False
         self.set_playout_capability(False)
         self.set_completion_capability(False)
 
@@ -118,8 +121,9 @@ class PlaybackController:
         with self.done:
             self.done.notify_all()
 
-    def set_pause_capability(self, enabled):
+    def set_pause_capability(self, enabled, *, applied_receipt=False):
         self.device_can_pause = enabled
+        self.device_can_confirm_pause = enabled and applied_receipt
 
     def set_playout_capability(self, enabled):
         with self.publication_lock:
@@ -262,7 +266,7 @@ class PlaybackController:
                     if older >= token:
                         break
                     self.pause_receipts.pop(older)
-                self.hooks.diagnostics().mark(receipt.trace, 'pause_ack')
+                self.hooks.diagnostics().pause_ack(receipt.trace, receipt.trigger_nanos, nanos)
                 self.hooks.pause_timeline(nanos)
             else:
                 if receipt.pause_nanos is None or not receipt.resume_requested:
@@ -272,7 +276,7 @@ class PlaybackController:
                 self.hooks.resume_timeline(nanos)
             self.last_pause_receipt_nanos = nanos
 
-    def pause_for_voice(self):
+    def pause_for_voice(self, trigger_nanos=None):
         # A tentative pause retains generation; confirmed speech cancels later.
         with self.hooks.lock, self.publication_lock:
             if (
@@ -290,7 +294,11 @@ class PlaybackController:
             generation = self.hooks.generation()
             if len(self.pause_receipts) >= self.MAX_PENDING_PAUSE_RECEIPTS:
                 self.pause_receipts.pop(next(iter(self.pause_receipts)))
-            self.pause_receipts[token] = PauseReceipt(generation, trace)
+            self.pause_receipts[token] = PauseReceipt(
+                generation,
+                trace,
+                trigger_nanos if self.device_can_confirm_pause else None,
+            )
             self.pause_state = {
                 'token': token,
                 'generation': generation,

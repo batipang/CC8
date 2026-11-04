@@ -31,7 +31,7 @@ class EndpointHooks:
     recent_spoken: Callable[[], list[str]]
     pause_token: Callable[[], int | None]
     paused: Callable[[], bool]
-    pause_voice: Callable[[], int | None]
+    pause_voice: Callable[[int], int | None]
     resume_rejected: Callable[[int | None, int], None]
     cancel_session: Callable[[str], int]
     event: EventSink
@@ -205,7 +205,7 @@ class EndpointPipeline:
             and self.hooks.awake()
             and (not self.hooks.paused())
         ):
-            self.turn_pause_token = self.hooks.pause_voice()
+            self.turn_pause_token = self.hooks.pause_voice(stamp)
             self.owns_turn_pause = self.turn_pause_token is not None
         if self.vad.talking or utterance is not None:
             self.turn_echo_risk |= echo_risk
