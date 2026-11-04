@@ -5,12 +5,10 @@ from collections import deque
 from dataclasses import dataclass, field
 import json
 import base64
-import os
 from pathlib import Path
 import queue
 import re
 import shutil
-import signal
 import subprocess
 import threading
 import time
@@ -21,6 +19,7 @@ from web_search import SpeechClauses, now, public_url
 from vision import jpeg_dimensions
 from runtime_env import command_path, runtime_environment
 from rpc_pipe import RpcPipeWriter, deadline_after
+from rpc_process import child_exited, close_owned_group
 from dot_errors import GENERIC, error_notice, turn_completion
 from dot_receipt import (
     DotError as DotError,
@@ -114,6 +113,7 @@ class CodexRpc:
         self.command = command
         self.popen = popen
         self.process = None
+        self.lifecycle_lock = threading.Lock()
         self.lock = threading.Lock()
         self.writer = RpcPipeWriter()
         self.pending = {}
@@ -157,20 +157,21 @@ class CodexRpc:
             self.events.put_nowait(message)
 
     def start(self):
-        if self.process is not None:
-            if self.failed or self.process.poll() is not None:
+        with self.lifecycle_lock:
+            if self.failed or (self.process is not None and child_exited(self.process)):
                 raise DotError('Codex process is no longer connected', kind='transport_or_io')
-            return
-        self.process = self.popen(
-            self.command or codex_command(),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            cwd=ROOT,
-            bufsize=0,
-            start_new_session=True,
-            env=runtime_environment(),
-        )
+            if self.process is not None:
+                return
+            self.process = self.popen(
+                self.command or codex_command(),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=ROOT,
+                bufsize=0,
+                start_new_session=True,
+                env=runtime_environment(),
+            )
 
         def drain():
             while self.process.stderr.read(8192):
@@ -191,7 +192,8 @@ class CodexRpc:
             timeout=20,
         )
         self.notify('initialized', {})
-        self.initialized = True
+        with self.lifecycle_lock:
+            self.initialized = not self.failed
 
     def _send(self, value, *, deadline=None):
         if deadline is None:
@@ -373,19 +375,11 @@ class CodexRpc:
                 pass
 
     def close(self):
-        p = self.process
-        self.failed = True
-        self.initialized = False
-        if p is not None:
-            try:
-                if p.poll() is None:
-                    os.killpg(p.pid, signal.SIGTERM)
-                    p.wait(timeout=2)
-            except (OSError, subprocess.TimeoutExpired):
-                try:
-                    os.killpg(p.pid, signal.SIGKILL)
-                except OSError:
-                    pass
+        with self.lifecycle_lock:
+            self._disconnect()
+            self.initialized = False
+            if self.process is not None:
+                close_owned_group(self.process)
 
 
 @dataclass
