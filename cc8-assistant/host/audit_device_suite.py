@@ -1,4 +1,4 @@
-"""Recheck a saved fixed device suite or QA latency batch without device access."""
+"""Recheck a saved fixed device suite or synthetic latency batch without device access."""
 
 import argparse
 import json
@@ -8,10 +8,12 @@ from types import SimpleNamespace
 
 from device_smoke import (
     POST_DIALOGUE_SECONDS,
-    QA_PLAYOUT_METRIC,
     ROUTED_LATENCY_MIN_BACKEND,
     STANDBY_SECONDS,
     device_suite_phases,
+    matched_playout,
+    STOP_VISUAL_MIN_APK_CODE,
+    EXTENDED_VOICE_MIN_BACKEND,
     planned_checks,
     run_device_suite,
 )
@@ -20,26 +22,10 @@ from qa_speech import SCENARIO_DIGESTS
 
 VERSION = r'[0-9]{1,8}(?:\.[0-9]{1,8}){2}'
 SOURCE_DIGEST = r'[a-f0-9]{64}'
-MAX_ELAPSED_MS = 86400000
 
 
 def bounded_number(value, low, high):
     return type(value) in (int, float) and low <= value <= high
-
-
-def matched_playout(evidence):
-    timing = evidence.get('response_playout_timing')
-    if not isinstance(timing, dict) or timing.get('status') != 'observed':
-        return False
-    start = timing.get('utterance_end_ms')
-    ack = timing.get('confirmed_playout_ack_ms')
-    done = timing.get('confirmed_playback_done_ms')
-    elapsed = timing.get(QA_PLAYOUT_METRIC)
-    return (
-        all(bounded_number(value, 0, MAX_ELAPSED_MS) for value in (start, ack, done, elapsed))
-        and start <= ack <= done
-        and elapsed == round(ack - start, 1)
-    )
 
 
 def real_standby(evidence, elapsed):
@@ -61,7 +47,8 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
     scope = data.get('scope')
     backend = data.get('backend_version')
     if (
-        scope not in ('fixed_device_suite', 'synthetic_qa_latency')
+        scope
+        not in ('fixed_device_suite', 'synthetic_qa_latency', 'synthetic_interruption_latency')
         or not isinstance(backend, str)
         or not re.fullmatch(VERSION, backend)
         or type(data.get('protocol_version')) is not int
@@ -77,13 +64,19 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
     ):
         raise ValueError('Invalid report scope')
     qa_latency = scope == 'synthetic_qa_latency'
+    interruption = scope == 'synthetic_interruption_latency'
     extended = data.get('extended_voice_evidence', False)
     room_latency = data.get('response_acoustic_evidence', False)
     scenario = data.get('latency_scenario', 'qa')
     if (
         type(extended) is not bool
         or type(room_latency) is not bool
-        or (qa_latency and extended)
+        or ((qa_latency or interruption) and extended)
+        or (
+            interruption
+            and tuple(map(int, backend.split('.')))
+            < tuple(map(int, EXTENDED_VOICE_MIN_BACKEND.split('.')))
+        )
         or (room_latency and not qa_latency)
         or not isinstance(scenario, str)
         or scenario not in SCENARIO_DIGESTS
@@ -104,7 +97,9 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
         )
     ):
         raise ValueError('Invalid suite mode')
-    plan = device_suite_phases(qa_latency=qa_latency, extended_voice=extended)
+    plan = device_suite_phases(
+        qa_latency=qa_latency, extended_voice=extended, interruption=interruption
+    )
     phases = data.get('phases')
     if not isinstance(phases, list) or len(phases) != len(plan):
         raise ValueError('Invalid suite length')
@@ -136,6 +131,7 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
             or not re.fullmatch(VERSION, version)
             or type(code) is not int
             or not 0 < code < 2**31
+            or (interruption and code < STOP_VISUAL_MIN_APK_CODE)
             or (expect_apk_code is not None and code != expect_apk_code)
             or (artifact is not None and artifact != (version, code))
         ):
@@ -185,6 +181,7 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
         response_acoustic=room_latency,
         extended_voice=extended,
         latency_scenario=scenario,
+        interruption=interruption,
     )
     result['completed_phases'] = sum(p['state'] == 'passed' for p in reviewed['phases'])
     if reviewed['state'] != 'passed':
@@ -196,7 +193,7 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
         }
     if data.get('state') != 'passed':
         return {**result, 'reason': 'report_not_completed'}
-    if qa_latency:
+    if qa_latency or interruption:
         result['latencies_ms'] = reviewed['latencies_ms']
         if scenario != 'qa':
             result['latency_scenario'] = scenario
