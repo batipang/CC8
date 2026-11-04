@@ -240,23 +240,27 @@ class SessionController:
             self.hooks.wake_reset('cancel')
         # Wake local waiters independently of provider/transport cancellation.
         self.hooks.playback().notify()
-        if self.hooks.brain():
-            self.hooks.brain().cancel()
-        cancel_speech = getattr(self.hooks.speech(), 'cancel', None)
-        if cancel_speech:
-            cancel_speech()
         try:
-            if self.connection is not None:
-                self.hooks.event('cancel', generation=generation)
-            if workspace_changed:
-                self.hooks.publish_workspace()
-        except (OSError, EOFError, ValueError) as error:
-            # Local invalidation already succeeded; a broken notification must
-            # never prevent Stop from releasing capture or block an old waiter.
-            self.hooks.log('cancel_notification_failed', error_type=type(error).__name__)
-        if was_playing:
-            self.hooks.metric('interruptions', self.hooks.metric_value('interruptions') + 1)
-            self.hooks.log('playback_cancelled', reason=reason, generation=generation)
+            try:
+                if brain := self.hooks.brain():
+                    brain.cancel()
+            finally:
+                cancel_speech = getattr(self.hooks.speech(), 'cancel', None)
+                if cancel_speech:
+                    cancel_speech()
+        finally:
+            # Only CC8 can discard PCM already queued on its side.
+            try:
+                if self.connection is not None:
+                    self.hooks.event('cancel', generation=generation)
+                if workspace_changed:
+                    self.hooks.publish_workspace()
+            except (OSError, EOFError, ValueError) as error:
+                # A broken notification must still allow local resource cleanup.
+                self.hooks.log('cancel_notification_failed', error_type=type(error).__name__)
+            if was_playing:
+                self.hooks.metric('interruptions', self.hooks.metric_value('interruptions') + 1)
+                self.hooks.log('playback_cancelled', reason=reason, generation=generation)
         return generation
 
     def stop(self):

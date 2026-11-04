@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import Mock, patch
 import numpy as np
 from bridge import Bridge
-from protocol import SPEAKER
+from protocol import EVENT, SPEAKER, decode_event
 
 
 class TransportCleanupTests(unittest.TestCase):
@@ -59,6 +59,29 @@ class TransportCleanupTests(unittest.TestCase):
         aec.close.assert_called_once()
         b.playback.notify.assert_called_once()
         b.save_status.assert_called_once()
+
+    def test_provider_cancellation_error_still_sends_device_stop(self):
+        for failed in ('brain', 'speech'):
+            with self.subTest(failed=failed):
+                brain, speech = SimpleNamespace(cancel=Mock()), SimpleNamespace(cancel=Mock())
+                provider = brain if failed == 'brain' else speech
+                provider.cancel.side_effect = ValueError('fixture provider bug')
+                b = self.session(brain)
+                b.speech = speech
+                b.event = Bridge.event.__get__(b)
+                b.playback.playing = True
+                b.diagnostics.begin('announcement', b.generation)
+                generation = b.generation + 1
+                with self.assertRaisesRegex(ValueError, 'fixture provider bug'):
+                    b.cancel('streaming_stop_keyword')
+                brain.cancel.assert_called_once_with()
+                speech.cancel.assert_called_once_with()
+                packet = b.send.call_args.args[0]
+                self.assertEqual((packet.kind, packet.generation), (EVENT, generation))
+                self.assertEqual(decode_event(packet.data), {'event': 'cancel'})
+                self.assertEqual(b.generation, generation)
+                self.assertFalse(b.playback.playing)
+                self.assertEqual(b.diagnostics.report()['requests'][-1]['outcome'], 'cancelled')
 
     def test_transport_failure_at_begin_pcm_or_end_stops_output_and_keeps_stage(self):
         for phase in ('play_begin', 'speaker', 'play_end'):

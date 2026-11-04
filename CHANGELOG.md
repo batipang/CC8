@@ -1,5 +1,10 @@
 # Changelog
 
+## Backend 0.14.58 — deliver device cancellation after a provider error
+
+- Attempt both provider cancellations and send the invalidated generation to
+  CC8 even if provider cleanup raises. The device can then discard queued PCM.
+
 ## Backend 0.14.57 — corroborate synthetic dialogue response in room audio
 
 - Allow a one-shot passive measurement for a fixed local-wake QA question.
