@@ -231,6 +231,59 @@ class AsrEvaluationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 evaluate(corpus(), raw, original)
 
+    def test_pair_counts_detection_failure_as_incorrect_when_candidate_recovers(self):
+        baseline = data()
+        row = baseline['samples'][0]
+        row.update(outcome='not_detected', transcript='', fields={})
+        row.pop('intent_correct')
+        candidate = data()
+        candidate['samples'][0].update(
+            transcript='苏州下午三点',
+            fields={'place': '苏州', 'time': '15:00'},
+            intent_correct=True,
+        )
+        result = evaluate(corpus(), candidate, baseline)
+        before = result['baseline']['cases'][0]
+        self.assertFalse(before['critical_sample_annotated'])
+        self.assertFalse(before['intent_annotated'])
+        self.assertTrue(before['critical_sample_scored'])
+        self.assertTrue(before['intent_scored'])
+        group = next(
+            g for g in result['baseline']['groups'] if g['observed'] and g['distance'] == '1m'
+        )
+        self.assertEqual(group['critical_sample_exact_rate'], 0)
+        self.assertEqual(group['intent_accuracy'], 0)
+        delta = next(
+            g
+            for g in result['comparison']['deltas_candidate_minus_baseline']
+            if g['partition'] == 'acceptance'
+            and g['condition'] == 'quiet'
+            and g['distance'] == '1m'
+        )
+        self.assertEqual(delta['critical_sample_exact_rate_delta'], 1)
+        self.assertEqual(delta['critical_sample_exact_rate_paired_cases'], 1)
+        self.assertEqual(delta['intent_accuracy_delta'], 1)
+        self.assertEqual(delta['intent_accuracy_paired_cases'], 1)
+
+    def test_pair_with_unannotated_recognition_reports_only_lexical_change(self):
+        baseline, candidate = data(), data()
+        baseline['samples'][0].update(outcome='failed', transcript='', fields={})
+        for sample in (baseline['samples'][0], candidate['samples'][0]):
+            sample.pop('intent_correct')
+            sample.pop('fields')
+        result = evaluate(corpus(), candidate, baseline)
+        delta = next(
+            g
+            for g in result['comparison']['deltas_candidate_minus_baseline']
+            if g['partition'] == 'acceptance'
+            and g['condition'] == 'quiet'
+            and g['distance'] == '1m'
+        )
+        self.assertLess(delta['chinese_han_cer_delta'], 0)
+        for metric in ('critical_sample_exact_rate', 'intent_accuracy'):
+            self.assertIsNone(delta[metric + '_delta'])
+            self.assertEqual(delta[metric + '_paired_cases'], 0)
+
     def test_schema_bounds_unknown_keys_duplicates_and_budget_fail_closed(self):
         for mutate in [
             lambda d: d.update(schema=True),
