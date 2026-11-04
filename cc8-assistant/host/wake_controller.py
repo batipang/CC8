@@ -152,6 +152,8 @@ class WakeController:
             self.hooks.touch_activity()
             self.deadline = self.clock() + self.window_seconds if self.hooks.wake_mode() else None
             self.hooks.metric('local_wake_count', increment=True)
+            if keyword == 'Bumblebee':
+                self.hooks.metric('local_wake_english_count', increment=True)
             self.hooks.log('local_wake_accepted', keyword=keyword)
             self.hooks.status('listening', '我在听，请继续说')
             return True

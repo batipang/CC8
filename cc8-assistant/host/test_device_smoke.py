@@ -26,6 +26,7 @@ from device_smoke import (
     BARGE_CHECK,
     BARGE_PRIME_CHECK,
     BARGE_QUERY,
+    ENGLISH_QUESTION,
     FAST_STOP_DEVICE_METRIC,
     STOP_CHECK,
     STOP_QUERY,
@@ -121,6 +122,26 @@ class DeviceAutomationTests(unittest.TestCase):
             with self.assertRaisesRegex(CheckFailure, 'unknown_synthetic_probe'):
                 device.speak_probe(question='任意内容')
             self.assertEqual(command.call_count, 5)
+
+    def test_english_stimulus_has_fixed_voice_rate_and_question(self):
+        device = Device.__new__(Device)
+        with (
+            patch('device_smoke.resolve_voice', return_value='Daniel (English UK)') as resolve,
+            patch('device_smoke.subprocess.run') as command,
+        ):
+            device.speak_probe(question=ENGLISH_QUESTION, english=True)
+        resolve.assert_called_once_with('Daniel')
+        self.assertEqual(
+            command.call_args.args[0],
+            [
+                '/usr/bin/say',
+                '-v',
+                'Daniel (English UK)',
+                '-r',
+                '155',
+                'Bumblebee, what is three plus five?',
+            ],
+        )
         with (
             patch('device_smoke.resolve_voice', side_effect=ValueError),
             patch('device_smoke.subprocess.run') as command,
@@ -2124,16 +2145,20 @@ class DeviceAutomationTests(unittest.TestCase):
             run.acoustic_probe()
         device.speak_probe.assert_not_called()
 
-    def acoustic_fixture(self, rows, *, awake=False, before=(), tasks=None):
+    def acoustic_fixture(self, rows, *, awake=False, before=(), tasks=None, english_wake=False):
         run, device, health, now = self.fixture(
-            capture=True, standby=not awake, acoustic=not awake, awake_dialogue=awake
+            capture=True,
+            standby=not awake,
+            acoustic=not awake,
+            awake_dialogue=awake,
+            english_wake=english_wake,
         )
         health['microphone_active'] = True
         health['waiting_for_wake'] = True
         health['local_wake_ready'] = True
         spoken = [False]
 
-        def speak(*, question):
+        def speak(*, question, english=False):
             spoken[0] = True
 
         def status():
@@ -2166,6 +2191,93 @@ class DeviceAutomationTests(unittest.TestCase):
         device.status.side_effect = status
         run.request = request
         return run, device, health, now
+
+    def test_english_plan_is_explicit_and_never_contacts_device(self):
+        for mode in (['--awake-dialogue'], ['--standby', '--acoustic']):
+            output = io.StringIO()
+            with patch('device_smoke.Device') as device, redirect_stdout(output):
+                self.assertEqual(
+                    main(['--runtime-root', '/unused', '--capture', '--english-wake', *mode]),
+                    0,
+                )
+                device.assert_not_called()
+            plan = json.loads(output.getvalue())
+            self.assertFalse(plan['execute'])
+            self.assertEqual(plan['wake_language'], 'en')
+            self.assertEqual(plan['minimum_backend_version'], '0.14.67')
+
+    def test_english_wake_old_backend_and_missing_counter_stop_before_device_access(self):
+        from dataclasses import replace
+        from release_info import RELEASE
+
+        for manifest in (replace(RELEASE, backend_version='0.14.66'), RELEASE):
+            health = dict(
+                bridge_version=manifest.backend_version,
+                protocol_version=manifest.protocol_version,
+                release_id=manifest.release_id,
+                runtime_instance='test',
+                local_wake_count=0,
+            )
+            with (
+                self.subTest(version=manifest.backend_version),
+                patch('device_smoke.load_release', return_value=manifest),
+                patch('device_smoke.rpc', return_value=health),
+                patch('device_smoke.Device') as device,
+                redirect_stderr(io.StringIO()),
+                self.assertRaises(SystemExit) as stopped,
+            ):
+                main(
+                    [
+                        '--runtime-root',
+                        str(Path.cwd()),
+                        '--capture',
+                        '--awake-dialogue',
+                        '--english-wake',
+                        '--execute',
+                    ]
+                )
+            self.assertEqual(stopped.exception.code, 2)
+            device.assert_not_called()
+
+    def test_english_wake_requires_new_english_hit_and_matching_spoken_question(self):
+        for mode, title, delta, error in (
+            ('awake', 'What is three plus five?', (1, 1), None),
+            ('standby', "Bumble-bee, what's 3 + 5?", (1, 1), None),
+            ('awake', 'What is three plus five?', (1, 0), 'synthetic_english_wake_not_confirmed'),
+            ('awake', 'What is three plus five?', (0, 0), 'synthetic_english_wake_not_confirmed'),
+            ('awake', 'What is three plus five?', (2, 2), 'english_wake_counter_delta_invalid'),
+            ('awake', 'What is three plus six?', (1, 1), 'synthetic_stimulus_not_confirmed'),
+            ('awake', 'What is -3 + 5?', (1, 1), 'synthetic_stimulus_not_confirmed'),
+        ):
+            with self.subTest(mode=mode, title=title, delta=delta):
+                awake = mode == 'awake'
+                run, device, health, now = self.acoustic_fixture(
+                    lambda _: [self.acoustic_row()],
+                    awake=awake,
+                    english_wake=True,
+                    tasks=[{'generation': 8, 'status': 'completed', 'title': title}],
+                )
+                health.update(local_wake_count=20, local_wake_english_count=12)
+                original_speak = device.speak_probe.side_effect
+
+                def speak(**options):
+                    original_speak(**options)
+                    health['local_wake_count'] += delta[0]
+                    health['local_wake_english_count'] += delta[1]
+
+                device.speak_probe.side_effect = speak
+                if error:
+                    with self.assertRaisesRegex(CheckFailure, error):
+                        run.acoustic_probe(awake=awake)
+                else:
+                    run.acoustic_probe(awake=awake)
+                    self.assertEqual(now[0], POST_DIALOGUE_SECONDS)
+                    evidence = run.acoustic_evidence
+                    self.assertEqual(evidence['english_wake_detections'], 1)
+                    self.assertEqual(evidence['local_wake_detections'], 1)
+                    self.assertTrue(evidence['recognized_stimulus_matches'])
+                    self.assertNotIn(title, json.dumps(evidence))
+                device.speak_probe.assert_called_once_with(question=ENGLISH_QUESTION, english=True)
 
     def test_awake_dialogue_runs_before_home_without_waiting_for_black_screen(self):
         old = self.acoustic_row(request_id='old')
