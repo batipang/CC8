@@ -66,6 +66,7 @@ class PlaybackController:
     def __init__(self, hooks: PlaybackHooks):
         self.hooks = hooks
         self.playing = False
+        self.begin_pending = False
         self.completed = set()
         self.done = threading.Condition()
         self.last_spoken = ''
@@ -91,6 +92,7 @@ class PlaybackController:
         with self.publication_lock:
             was_playing = self.playing
             self.playing = False
+            self.begin_pending = False
             self.playout_probe.clear()
             return was_playing
 
@@ -195,6 +197,7 @@ class PlaybackController:
                         self.hooks.diagnostics().mark(generation, 'playback_done')
                         self.completed = {generation}
                         self.playing = False
+                        self.begin_pending = False
                         self.last_audio_end = time.monotonic()
                     self.done.notify_all()
         elif name in ('playback_paused', 'playback_resumed'):
@@ -258,11 +261,12 @@ class PlaybackController:
 
     def pause_for_voice(self):
         # A tentative pause retains generation; confirmed speech cancels later.
-        with self.hooks.lock:
+        with self.hooks.lock, self.publication_lock:
             if (
                 not self.device_can_pause
                 or not self.hooks.active()
-                or (not self.playing)
+                or not self.playing
+                or self.begin_pending
                 or self.pause_state
                 or (time.monotonic() < self.pause_cooldown)
             ):
@@ -398,6 +402,7 @@ class PlaybackController:
                 if not self.hooks.valid(generation):
                     return False
                 self.playing = True
+                self.begin_pending = True
                 self.last_spoken = text
                 self.spoken.append((time.monotonic(), text))
                 self.playback_serial += 1
@@ -422,6 +427,11 @@ class PlaybackController:
                 report_audio_clock=request_clock,
                 timings=timing.rows() if timing else [],
             )
+            with self.publication_lock:
+                if not self.hooks.valid(generation) or playback_id != self.playback_serial:
+                    return False
+                # Only now can an ordered pause reach the new device player.
+                self.begin_pending = False
             if timing:
                 timing.publish = lambda rows: (
                     self.output_event(

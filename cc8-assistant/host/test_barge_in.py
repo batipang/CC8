@@ -269,6 +269,61 @@ class BargeInTests(unittest.TestCase):
         self.assertFalse(b.playback.playing)
         self.assertFalse(any(e['event'] == 'playback_resume' for e in self.events(b)))
 
+    def test_pause_waits_until_the_clause_begin_is_sent(self):
+        b = self.bridge()
+        b.playback.playing = False
+        generation = b.generation
+        before_begin, allow_begin = threading.Event(), threading.Event()
+        before_pcm, allow_pcm = threading.Event(), threading.Event()
+        event, send = b.event, b.send
+        results = []
+
+        def send_event(name, **fields):
+            if name == 'play_begin':
+                before_begin.set()
+                allow_begin.wait(2)
+            event(name, **fields)
+            if name == 'play_end':
+                b.on_event({'event': 'play_done', 'generation': generation})
+
+        def send_packet(packet):
+            if packet.kind == SPEAKER:
+                before_pcm.set()
+                allow_pcm.wait(2)
+            send(packet)
+
+        b.event = send_event
+        b.send = send_packet
+        thread = threading.Thread(
+            target=lambda: results.append(
+                b.play_stream(iter([np.ones(320, dtype=np.int16)]), 'test', generation)
+            ),
+            daemon=True,
+        )
+        thread.start()
+        try:
+            self.assertTrue(before_begin.wait(1))
+            self.assertIsNone(b.pause_for_voice())
+            self.assertIsNone(b.playback.pause_state)
+            self.assertEqual(self.events(b), [])
+            allow_begin.set()
+            self.assertTrue(before_pcm.wait(1))
+            token = b.pause_for_voice()
+            self.assertIsNotNone(token)
+            b.resume_after_rejection(token, generation)
+        finally:
+            allow_begin.set()
+            allow_pcm.set()
+            if b.playback.pause_state:
+                b.cancel('test_cleanup')
+            thread.join(3)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(results, [True])
+        self.assertEqual(
+            [event['event'] for event in self.events(b)],
+            ['play_begin', 'playback_pause', 'playback_resume', 'play_end'],
+        )
+
     def test_no_old_pcm_is_sent_while_paused(self):
         b = self.bridge()
         b.pause_for_voice()
