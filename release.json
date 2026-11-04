@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "p0-device-pause-receipts-20261104.1",
+  "release_id": "p0-device-pause-timing-20261104.1",
   "backend": {
-    "version": "0.14.42"
+    "version": "0.14.43"
   },
   "assistant": {
-    "version": "0.9.20",
-    "version_code": 55,
+    "version": "0.9.22",
+    "version_code": 57,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {

@@ -7,14 +7,21 @@ import unittest
 import numpy as np
 
 import test_capture_evidence as fixture
+from diagnostic_run import DiagnosticRun, receipt
+from protocol import EVENT, Packet
 from test_pause_preservation import Span
 
 
 class BargeReceiptTests(unittest.TestCase):
-    def paused_endpoint(self):
+    def paused_endpoint(self, *, version=None):
         b, frame, _ = fixture.CaptureDiagnosticsTests().endpoint()
-        b.playback.device_can_pause = True
+        ready = dict(capture_active=True, supports_playback_pause=True)
+        if version is not None:
+            ready['playback_pause_applied_version'] = version
+        b.on_packet(Packet.event('device_ready', b.session.generation, **ready))
         b.capture.endpoint.vad = Span(12)
+        credible = iter([False] * 4 + [True] * 9)
+        b.capture.endpoint.near_speech.feed = lambda *_: (True, next(credible, True))
         for index in range(12):
             b.capture.endpoint.consume(replace(frame, nanos=frame.nanos + index * 10_000_000))
         key = b.capture.endpoint.voice_trace
@@ -24,6 +31,57 @@ class BargeReceiptTests(unittest.TestCase):
         b.recognition.queue.get_nowait()
         self.assertIsNone(b.capture.endpoint.voice_trace)
         return b, frame, key, token, generation
+
+    def test_applied_receipt_uses_trigger_frame_after_asr_handoff(self):
+        for version, elapsed_ns, gate, expected in (
+            (1, 32_500_000, 'accepted', 32.5),
+            (1, 32_500_000, 'echo_text', 32.5),
+            (1, -1, 'accepted', None),
+            (1, 60_000_000_001, 'accepted', None),
+            (None, 32_500_000, 'accepted', None),
+            (2, 32_500_000, 'accepted', None),
+        ):
+            with self.subTest(version=version, elapsed_ns=elapsed_ns, gate=gate):
+                b, frame, key, token, generation = self.paused_endpoint(version=version)
+                b.diagnostics.gate(key, gate)
+                run = DiagnosticRun()
+                before = b.diagnostics.report()
+                run.ingest(dict(before, requests=[]))
+                run.ingest(before)
+                stamp = frame.nanos + 40_000_000 + elapsed_ns
+                b.on_packet(
+                    Packet(
+                        EVENT,
+                        generation,
+                        data=json.dumps(
+                            dict(
+                                event='playback_paused',
+                                generation=generation,
+                                token=token,
+                                nanos=stamp,
+                            )
+                        ).encode(),
+                    )
+                )
+                run.ingest(b.diagnostics.report())
+                report = run.report()
+                row = next(r for r in report['requests'] if r['request_id'] == key)
+                self.assertIn('pause_ack', row['stages'])
+                self.assertEqual(row.get('device_pause_from_trigger_ms'), expected)
+                latency = report['summary']['latencies']['device_pause_from_trigger_ms']
+                self.assertEqual(
+                    latency['samples'], int(expected is not None and gate == 'accepted')
+                )
+                if latency['samples']:
+                    self.assertEqual(latency['p95'], expected)
+                    with self.assertRaises(ValueError):
+                        run.ingest(
+                            dict(before, requests=[dict(row, device_pause_from_trigger_ms=1)])
+                        )
+                    with self.assertRaises(ValueError):
+                        receipt(dict(row, device_pause_from_trigger_ms=True))
+                    with self.assertRaises(ValueError):
+                        receipt(dict(row, stages={'pause_request': 1}))
 
     def test_ack_after_queue_handoff_enriches_only_the_original_rejected_trace(self):
         b, _, key, token, generation = self.paused_endpoint()

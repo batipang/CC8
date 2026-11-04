@@ -137,6 +137,7 @@ def validate_device_event(value: object) -> JsonObject:
         'playout_receipt_version': 32,
         'render_clock_report_version': 32,
         'playback_done_id_version': 32,
+        'playback_pause_applied_version': 32,
     }
     if name == 'capture_gap':
         if ('epoch' in value) != ('sequence' in value):

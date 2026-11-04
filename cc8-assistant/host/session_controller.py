@@ -283,7 +283,11 @@ class SessionController:
 
     def ready(self, j):
         self.hooks.visual().update_peer(j)
-        self.hooks.playback().set_pause_capability(bool(j.get('supports_playback_pause')))
+        self.hooks.playback().set_pause_capability(
+            bool(j.get('supports_playback_pause')),
+            applied_receipt=type(j.get('playback_pause_applied_version')) is int
+            and j['playback_pause_applied_version'] == 1,
+        )
         self.hooks.playback().set_playout_capability(
             type(j.get('playout_receipt_version')) is int and j['playout_receipt_version'] == 1
         )
