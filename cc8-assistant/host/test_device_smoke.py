@@ -2011,6 +2011,11 @@ class DeviceAutomationTests(unittest.TestCase):
     def test_interruption_probe_requires_new_pause_and_replacement_receipts(self):
         for case, expected in (
             ('valid', None),
+            ('valid_stop', None),
+            ('missing_stop', 'interruption_device_stop_not_confirmed'),
+            ('wrong_stop_generation', 'interruption_device_stop_not_confirmed'),
+            ('wrong_stop_cancel_generation', 'interruption_device_stop_not_confirmed'),
+            ('invalid_stop_id', 'interruption_device_stop_not_confirmed'),
             ('early_voice', 'interruption_voice_before_stimulus'),
             ('no_playout', 'interruption_playout_not_observed'),
             ('completed_announcement', 'interruption_announcement_not_cancelled'),
@@ -2036,6 +2041,8 @@ class DeviceAutomationTests(unittest.TestCase):
                     phase='speaking',
                     playback_paused=False,
                 )
+                if case.endswith('_stop') or '_stop_' in case:
+                    d['test_playback_stop_supported'] = True
                 old = self.acoustic_row(request_id='old')
                 announcement = {
                     'request_id': 'announcement-id',
@@ -2076,6 +2083,15 @@ class DeviceAutomationTests(unittest.TestCase):
                         if case == 'transcript_content':
                             transcript['text'] = 'content must never enter a report'
                         d['test_interruption_transcript'] = transcript
+                    if d.get('test_playback_stop_supported') is True and case != 'missing_stop':
+                        d['test_playback_stop'] = {
+                            'generation': 19 if case == 'wrong_stop_generation' else 20,
+                            'cancel_generation': 22
+                            if case == 'wrong_stop_cancel_generation'
+                            else 21,
+                            'playback_id': True if case == 'invalid_stop_id' else 678901,
+                            'nanos': 9876543210,
+                        }
                     if case == 'rejected_pause':
                         rows.append(self.rejected_candidate(stages={'pause_request': 25}))
                     if case == 'lost_capture':
@@ -2104,6 +2120,12 @@ class DeviceAutomationTests(unittest.TestCase):
                     self.assertTrue(evidence['replacement_completed'])
                     self.assertIs(evidence['transcript_matches_stimulus'], True)
                     self.assertNotIn('announcement-id', json.dumps(evidence))
+                    if case == 'valid_stop':
+                        self.assertIs(evidence['device_stop_applied'], True)
+                        self.assertNotIn('9876543210', json.dumps(evidence))
+                        self.assertNotIn('678901', json.dumps(evidence))
+                    else:
+                        self.assertNotIn('device_stop_applied', evidence)
                 else:
                     with self.assertRaisesRegex(CheckFailure, expected):
                         run.interruption_probe()
