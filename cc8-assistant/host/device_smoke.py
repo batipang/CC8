@@ -21,6 +21,7 @@ from private_output import PrivateOutput, private_directory
 from release_info import load_release
 from mac_voice import resolve_voice, __file__ as voice_source
 from diagnostics import MAX_CONFIRMED_PLAYBACK_CLAUSES, MAX_DEVICE_PAUSE_MS
+from diagnostic_run import receipt
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPONENT = 'com.happyhome.cc8assistant/.MainActivity'
@@ -67,6 +68,7 @@ ALL_ROUTE_LOSS_REQUEST = {'operation': 'transport_all_test'}
 WAKE_SELF_CHECK = 'self_playback_does_not_wake'
 POST_DIALOGUE_SECONDS = 20
 STANDBY_SECONDS = 900
+PAIRED_PLAYOUT_MIN_BACKEND = '0.14.50'
 SMOKE_OPTIONS = (
     'capture',
     'standby',
@@ -200,6 +202,32 @@ def classify_voice_records(rows):
             category = 'invalid'
         groups[category].append(row)
     return groups
+
+
+def response_playout_timing(row):
+    if row is None:
+        return {'status': 'missing'}
+    stages = row['stages']
+    if not {'confirmed_playout_ack', 'confirmed_playback_done'}.intersection(stages):
+        return {'status': 'missing'}
+    try:
+        clean = receipt(row)
+    except ValueError:
+        return {'status': 'malformed'}
+    stages = clean['stages']
+    end = stages.get('utterance_end')
+    ack = stages['confirmed_playout_ack']
+    if end is None:
+        return {'status': 'missing'}
+    if end > ack or clean.get('gate') != 'accepted' or clean['generation'] is None:
+        return {'status': 'malformed'}
+    return {
+        'status': 'observed',
+        'utterance_end_ms': end,
+        'confirmed_playout_ack_ms': ack,
+        'confirmed_playback_done_ms': stages['confirmed_playback_done'],
+        'utterance_to_confirmed_playout_ack_ms': round(ack - end, 1),
+    }
 
 
 def objects(text, marker):
@@ -1114,7 +1142,18 @@ class SmokeRun:
             ]
             groups = classify_voice_records(rows)
             admitted, rejected = groups['admitted'], groups['rejected']
-            # Keep only fixed stage counts, never request IDs, transcripts,
+            completed = next(
+                (
+                    r
+                    for r in admitted
+                    if r.get('outcome') == 'completed'
+                    and r.get('task_outcome') == 'completed'
+                    and {'wake_detected', 'asr_end', 'brain_start', 'playout_ack', 'playback_done'}
+                    <= set(r.get('stages', {}))
+                ),
+                None,
+            )
+            # Keep only fixed counts and timing, never request IDs, transcripts,
             # provider text or audio. A completed task is not a played answer.
             self.acoustic_evidence = {
                 'new_voice_requests': len(rows),
@@ -1130,6 +1169,7 @@ class SmokeRun:
                 'completed_requests': sum(r.get('outcome') == 'completed' for r in rows),
                 'cancelled_requests': sum(r.get('outcome') == 'cancelled' for r in rows),
                 'completed_tasks': sum(r.get('task_outcome') == 'completed' for r in rows),
+                'response_playout_timing': response_playout_timing(completed),
                 'stage_counts': {
                     stage: sum(stage in r.get('stages', {}) for r in rows)
                     for stage in (
@@ -1164,13 +1204,7 @@ class SmokeRun:
                 ),
                 'synthetic_voice_request_not_completed',
             )
-            return any(
-                r.get('outcome') == 'completed'
-                and r.get('task_outcome') == 'completed'
-                and {'wake_detected', 'asr_end', 'brain_start', 'playout_ack', 'playback_done'}
-                <= set(r.get('stages', {}))
-                for r in admitted
-            )
+            return completed is not None
 
         response_seconds = min(120, response_deadline - self.clock())
         require(response_seconds > 0, 'acoustic_probe_capture_budget_insufficient')
@@ -1629,19 +1663,21 @@ def run_device_suite(make_run, save):
                 != [(name, 'passed') for name in phase['expected_checks']]
             ):
                 phase.update(state='failed', reason='suite_phase_evidence_incomplete')
-            if phase['state'] == 'passed' and 'awake_dialogue' in options:
+            if phase['state'] == 'passed' and (
+                'awake_dialogue' in options or 'acoustic' in options
+            ):
                 evidence = result.get('acoustic_evidence')
-                quiet = (
-                    evidence.get('post_playback_quiet_seconds')
-                    if isinstance(evidence, dict)
-                    else None
-                )
-                if (
+                evidence = evidence if isinstance(evidence, dict) else {}
+                quiet = evidence.get('post_playback_quiet_seconds')
+                timing = evidence.get('response_playout_timing')
+                if 'awake_dialogue' in options and (
                     type(quiet) not in (int, float)
                     or not isfinite(quiet)
                     or quiet < POST_DIALOGUE_SECONDS
                 ):
                     phase.update(state='failed', reason='suite_awake_dialogue_quiet_incomplete')
+                elif not isinstance(timing, dict) or timing.get('status') != 'observed':
+                    phase.update(state='failed', reason='suite_response_playout_timing_incomplete')
         if phase['state'] != 'passed':
             suite['state'] = phase['state']
             save(suite)
@@ -1766,6 +1802,7 @@ def main(argv=None):
                 'execute': False,
                 'capture': True,
                 'full_p0_acceptance': False,
+                'minimum_backend_version': PAIRED_PLAYOUT_MIN_BACKEND,
             }
         else:
             plan = {
@@ -1798,6 +1835,12 @@ def main(argv=None):
         )
         instance = health.get('runtime_instance')
         if args.p0_device_suite:
+            if tuple(map(int, manifest.backend_version.split('.'))) < tuple(
+                map(int, PAIRED_PLAYOUT_MIN_BACKEND.split('.'))
+            ):
+                parser.exit(
+                    2, f'固定设备验收批次需要后台 {PAIRED_PLAYOUT_MIN_BACKEND} 或更新版本。\n'
+                )
             require(
                 isinstance(instance, str)
                 and bool(instance)

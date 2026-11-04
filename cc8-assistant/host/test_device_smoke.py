@@ -214,6 +214,7 @@ class DeviceAutomationTests(unittest.TestCase):
             query.assert_not_called()
         plan = json.loads(output.getvalue())
         self.assertFalse(plan['full_p0_acceptance'])
+        self.assertEqual(plan['minimum_backend_version'], '0.14.50')
         phases = plan['phases']
         self.assertEqual(len(phases), 6)
         self.assertIn(ACTIVE_HANDOVER_CHECK, phases[0]['checks'])
@@ -246,6 +247,8 @@ class DeviceAutomationTests(unittest.TestCase):
             'source_changed',
             'missing_awake_quiet',
             'short_awake_quiet',
+            'missing_awake_timing',
+            'malformed_standby_timing',
         ):
             with self.subTest(case=case):
                 runs, saves = [], []
@@ -271,12 +274,18 @@ class DeviceAutomationTests(unittest.TestCase):
                             index == 1 and case == 'missing_cleanup'
                         ),
                     }
-                    if 'awake_dialogue' in options and case != 'missing_awake_quiet':
-                        report['acoustic_evidence'] = {
-                            'post_playback_quiet_seconds': 2
-                            if case == 'short_awake_quiet'
-                            else POST_DIALOGUE_SECONDS,
-                        }
+                    if {'awake_dialogue', 'acoustic'} & options:
+                        evidence = report['acoustic_evidence'] = {}
+                        if case != 'missing_awake_quiet':
+                            evidence['post_playback_quiet_seconds'] = (
+                                2 if case == 'short_awake_quiet' else POST_DIALOGUE_SECONDS
+                            )
+                        if not (case == 'missing_awake_timing' and index == 2):
+                            evidence['response_playout_timing'] = {
+                                'status': 'malformed'
+                                if case == 'malformed_standby_timing' and index == 3
+                                else 'observed',
+                            }
                     run.run.side_effect = lambda: checkpoint(report) or report
                     return run
 
@@ -289,19 +298,54 @@ class DeviceAutomationTests(unittest.TestCase):
                     self.assertEqual(len(runs), len(P0_DEVICE_PHASES))
                     self.assertEqual(result['state'], 'passed')
                 else:
-                    attempted = 3 if case.endswith('_awake_quiet') else 2
+                    attempted = (
+                        4
+                        if case == 'malformed_standby_timing'
+                        else 3
+                        if case.endswith(('_awake_quiet', '_awake_timing'))
+                        else 2
+                    )
                     self.assertEqual(len(runs), attempted)
                     self.assertTrue(
                         all(row['state'] == 'not_run' for row in result['phases'][attempted:])
                     )
                     self.assertNotEqual(result['state'], 'passed')
-                    if attempted == 3:
+                    if case.endswith('_awake_quiet'):
                         self.assertEqual(
                             result['phases'][2]['reason'], 'suite_awake_dialogue_quiet_incomplete'
+                        )
+                    if case.endswith('_timing'):
+                        self.assertEqual(
+                            result['phases'][attempted - 1]['reason'],
+                            'suite_response_playout_timing_incomplete',
                         )
                 if case == 'source_changed':
                     runs[1].run.assert_not_called()
                     self.assertEqual(result['phases'][1]['reason'], 'suite_source_changed')
+
+    def test_fixed_suite_rejects_legacy_backend_before_device_access(self):
+        from dataclasses import replace
+        from release_info import RELEASE
+
+        legacy = replace(RELEASE, backend_version='0.14.49')
+        health = dict(
+            bridge_version=legacy.backend_version,
+            protocol_version=legacy.protocol_version,
+            release_id=legacy.release_id,
+            runtime_instance='test',
+        )
+        with (
+            patch('device_smoke.load_release', return_value=legacy),
+            patch('device_smoke.rpc', return_value=health),
+            patch('device_smoke.Device') as device,
+            patch('device_smoke.private_directory') as output,
+            redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit) as stopped,
+        ):
+            main(['--runtime-root', str(Path.cwd()), '--capture', '--p0-device-suite', '--execute'])
+        self.assertEqual(stopped.exception.code, 2)
+        device.assert_not_called()
+        output.assert_not_called()
 
     def test_suite_keeps_one_runtime_lock_and_rejects_instance_change(self):
         import device_smoke
@@ -1848,6 +1892,48 @@ class DeviceAutomationTests(unittest.TestCase):
         self.assertEqual(evidence['completed_tasks'], 1)
         self.assertEqual(evidence['stage_counts']['playback_done'], 1)
         self.assertNotIn('PRIVATE', json.dumps(evidence))
+
+    def test_acoustic_probe_reports_only_the_fresh_completed_response_pair(self):
+        for case in ('observed', 'malformed', 'missing'):
+            with self.subTest(case=case):
+                row = self.acoustic_row(
+                    request_id='a' * 32,
+                    generation=8,
+                    scenario='qa',
+                    error=None,
+                    gate='accepted',
+                    confirmed_playback_clauses=1,
+                )
+                del row['text']
+                row['stages'].update(utterance_end=100, playout_ack=150, playback_done=200)
+                if case != 'missing':
+                    row['stages'].update(
+                        confirmed_playout_ack=300,
+                        confirmed_playback_done=250 if case == 'malformed' else 450,
+                    )
+                prior = self.acoustic_row(request_id='before')
+                run, device, _, _ = self.acoustic_fixture(
+                    lambda _: [prior, row], awake=True, before=(prior,)
+                )
+                run.acoustic_probe(awake=True)
+                device.speak_probe.assert_called_once()
+                evidence = run.report('passed')['acoustic_evidence']
+                timing = evidence['response_playout_timing']
+                self.assertEqual(timing['status'], case)
+                if case == 'observed':
+                    self.assertEqual(
+                        timing,
+                        dict(
+                            status='observed',
+                            utterance_end_ms=100,
+                            confirmed_playout_ack_ms=300,
+                            confirmed_playback_done_ms=450,
+                            utterance_to_confirmed_playout_ack_ms=200,
+                        ),
+                    )
+                else:
+                    self.assertEqual(timing, {'status': case})
+                self.assertNotIn('a' * 32, json.dumps(evidence))
 
     def test_acoustic_cancelled_narration_is_not_a_completed_answer(self):
         row = self.acoustic_row(outcome='cancelled')
