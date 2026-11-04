@@ -285,11 +285,13 @@ class PlaybackController:
             if not state:
                 break
             if time.monotonic() - state['started'] > 20:
-                # A newer owner request may have cancelled this generation while
-                # the timeout was being checked. Never cancel that new request.
+                # Rejection can resume playback or give another pause ownership
+                # within this generation while the timeout is being checked.
                 with self.hooks.lock:
                     if not self.hooks.valid(generation):
                         break
+                    if self.pause_state is not state:
+                        continue
                     self.hooks.cancel_session('barge_in_timeout')
                     self.hooks.status('listening', '插话识别超时，已停止旧播报')
                 break
