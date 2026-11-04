@@ -24,6 +24,8 @@ from device_smoke import (
     BARGE_CHECK,
     BARGE_PRIME_CHECK,
     BARGE_QUERY,
+    STOP_CHECK,
+    STOP_QUERY,
     WAKE_SELF_CHECK,
     WAKE_SELF_TEXT,
     CheckFailure,
@@ -104,11 +106,13 @@ class DeviceAutomationTests(unittest.TestCase):
             self.assertEqual(command.call_args.args[0][1:3], ['-v', 'Tingting (Chinese CN)'])
             device.speak_probe(interruption=True)
             self.assertEqual(command.call_args.args[0][-1], BARGE_QUERY)
+            device.speak_probe(stop=True)
+            self.assertEqual(command.call_args.args[0][-1], STOP_QUERY)
             device.speak_probe(question=QA_LATENCY_QUESTIONS[-1])
             self.assertEqual(command.call_args.args[0][-1], '大黄蜂，六加五等于几？')
             with self.assertRaisesRegex(CheckFailure, 'unknown_synthetic_probe'):
                 device.speak_probe(question='任意内容')
-            self.assertEqual(command.call_count, 3)
+            self.assertEqual(command.call_count, 4)
         with (
             patch('device_smoke.resolve_voice', side_effect=ValueError),
             patch('device_smoke.subprocess.run') as command,
@@ -1882,6 +1886,127 @@ class DeviceAutomationTests(unittest.TestCase):
                 'maintenance_reopen_keeps_microphone_off',
             ],
         )
+
+    def test_synthetic_stop_dry_plan_and_capability_gate(self):
+        output = io.StringIO()
+        with patch('device_smoke.Device') as mock, redirect_stdout(output):
+            self.assertEqual(
+                main(['--runtime-root', '/unused', '--capture', '--synthetic-stop']), 0
+            )
+            mock.assert_not_called()
+        plan = json.loads(output.getvalue())
+        self.assertTrue(plan['synthetic_stop'])
+        self.assertEqual(plan['checks'][-4:-2], [BARGE_PRIME_CHECK, STOP_CHECK])
+        run, device, _, _ = self.fixture(capture=True, synthetic_stop=True)
+        result = run.run()
+        self.assertEqual(
+            result['checks'][-1]['reason'], 'device_playback_stop_evidence_unsupported'
+        )
+        device.status.return_value[0]['test_playback_stop_supported'] = True
+        result = run.run()
+        self.assertEqual(result['checks'][-1]['reason'], 'backend_fast_stop_evidence_unsupported')
+        device.open.assert_not_called()
+        device.speak_probe.assert_not_called()
+
+    def test_synthetic_stop_requires_one_local_hit_and_no_cloud_or_new_turn(self):
+        for case, failure in (
+            ('ok', None),
+            ('no_hit', 'fast_stop_not_confirmed'),
+            ('preexisting_hit', 'fast_stop_count_unexpected'),
+            ('double_hit', 'fast_stop_count_unexpected'),
+            ('cloud', 'fast_stop_reached_cloud_asr'),
+            ('new_turn', 'fast_stop_unexpected_voice_turn'),
+            ('wrong_cancel', 'interruption_device_stop_not_confirmed'),
+        ):
+            with self.subTest(case=case), patch('device_smoke.ThreadPoolExecutor') as executor:
+                run, device, health, now = self.fixture(capture=True, synthetic_stop=True)
+                health.update(
+                    microphone_active=True,
+                    waiting_for_wake=False,
+                    fast_stop_ready=True,
+                    fast_stop_count=12,
+                    voice_asr_attempts=5,
+                )
+                device_status = device.status.return_value[0]
+                device_status.update(
+                    microphone_active=True,
+                    test_capture_limit_ms=run.capture_limit_ms,
+                    test_capture_remaining_ms=210000,
+                    test_playback_stop_supported=True,
+                    playback_paused=False,
+                )
+                announcement = dict(
+                    request_id='announcement-private',
+                    origin='announcement',
+                    generation=20,
+                    outcome=None,
+                    stages={'playout_ack': 0},
+                )
+                rows = []
+
+                def submit(_request, payload):
+                    self.assertEqual(payload, {'text': BARGE_ANNOUNCEMENT})
+                    rows.append(announcement)
+                    health['playing'] = True
+                    device_status.update(announcement_active=True, phase='speaking')
+                    if case == 'preexisting_hit':
+                        health['fast_stop_count'] += 1
+                    reply = Mock()
+                    reply.result.return_value = {'status': 'interrupted'}
+                    return reply
+
+                def stimulus(*, stop):
+                    self.assertIs(stop, True)
+                    announcement['outcome'] = 'cancelled'
+                    health['playing'] = False
+                    health['fast_stop_count'] += {'no_hit': 0, 'double_hit': 2}.get(case, 1)
+                    health['voice_asr_attempts'] += int(case == 'cloud')
+                    device_status.update(
+                        announcement_active=False,
+                        test_playback_stop={
+                            'generation': 20,
+                            'playback_id': 938471,
+                            'cancel_generation': 22 if case == 'wrong_cancel' else 21,
+                            'nanos': 1829374650,
+                        },
+                    )
+                    rows.append(
+                        dict(
+                            request_id='partial',
+                            origin='voice',
+                            generation=None,
+                            outcome='cancelled',
+                            gate='stale',
+                            stages={'voice_detected': 0},
+                        )
+                    )
+                    if case == 'new_turn':
+                        rows.append(self.acoustic_row(request_id='new-voice'))
+
+                def request(payload):
+                    if payload == {'operation': 'health'}:
+                        return dict(health)
+                    self.assertEqual(payload, {'operation': 'diagnostics'})
+                    return {'requests': rows}
+
+                run.request = request
+                device.speak_probe.side_effect = stimulus
+                executor.return_value.__enter__.return_value.submit.side_effect = submit
+                if failure:
+                    with self.assertRaisesRegex(CheckFailure, failure):
+                        run.interruption_probe()
+                else:
+                    run.interruption_probe()
+                    evidence = run.report('passed')['barge_evidence']
+                    self.assertEqual(evidence['fast_stop_detections'], 1)
+                    self.assertTrue(evidence['device_stop_applied'])
+                    self.assertEqual(evidence['admitted_voice_requests'], 0)
+                    self.assertEqual(now[0], 20)
+                    self.assertNotIn('1829374650', json.dumps(evidence))
+                if case == 'preexisting_hit':
+                    device.speak_probe.assert_not_called()
+                else:
+                    device.speak_probe.assert_called_once_with(stop=True)
 
     def test_self_playback_plan_and_capability_gate(self):
         output = io.StringIO()

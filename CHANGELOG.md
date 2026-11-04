@@ -1,5 +1,10 @@
 # Changelog
 
+## Backend 0.14.59 — automate the local stop-command check
+
+- Expose the local stop detector's availability and hit count. Require one
+  fresh hit and the device's applied stop receipt in the opt-in test.
+
 ## Assistant 0.9.32 — observe an applied player stop during test capture
 
 - Record a stop for the active route and player only after Android AudioTrack

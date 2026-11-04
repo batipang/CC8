@@ -41,6 +41,7 @@ BARGE_ANNOUNCEMENT = (
     '看见河面映出了云朵和树梢。它把篮子放在大石头上，坐下来听水声，等朋友们一起回家。'
 )
 BARGE_QUERY = '换个问题，三加五等于几？'
+STOP_QUERY = '停一下'
 ACOUSTIC_QUESTION = QA_LATENCY_QUESTIONS[0]
 WAKE_SELF_TEXT = {
     'zh': '大黄蜂正在播报。现在只检查设备自己的声音。',
@@ -67,6 +68,7 @@ LEADING_ACOUSTIC_CHECK = 'leading_playback_acoustic_evidence'
 AWAKE_DIALOGUE_CHECK = 'synthetic_awake_dialogue'
 BARGE_PRIME_CHECK = 'synthetic_awake_prerequisite_for_interruption'
 BARGE_CHECK = 'synthetic_acoustic_interruption'
+STOP_CHECK = 'synthetic_acoustic_stop'
 ACTIVE_HANDOVER_CHECK = 'active_capture_logical_handover'
 ALL_ROUTE_LOSS_CHECK = 'capture_stops_during_all_route_loss'
 ALL_ROUTE_LOSS_REQUEST = {'operation': 'transport_all_test'}
@@ -82,6 +84,7 @@ SMOKE_OPTIONS = (
     'acoustic',
     'awake_dialogue',
     'synthetic_barge',
+    'synthetic_stop',
     'wake_self_playback',
     'active_handover',
     'all_route_loss',
@@ -413,15 +416,20 @@ class Device:
     def prepare_speech_probe(self):
         return resolve_voice('Tingting')
 
-    def speak_probe(self, *, interruption=False, question=ACOUSTIC_QUESTION):
+    def speak_probe(self, *, interruption=False, stop=False, question=ACOUSTIC_QUESTION):
         require(question in QA_LATENCY_QUESTIONS, 'unknown_synthetic_probe')
         voice = self.prepare_speech_probe()
+        phrase = ACOUSTIC_WAKE + '，' + question
+        if interruption:
+            phrase = BARGE_QUERY
+        if stop:
+            phrase = STOP_QUERY
         subprocess.run(
             [
                 '/usr/bin/say',
                 '-v',
                 voice,
-                BARGE_QUERY if interruption else ACOUSTIC_WAKE + '，' + question,
+                phrase,
             ],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -452,6 +460,7 @@ class SmokeRun:
         qa_question=ACOUSTIC_QUESTION,
         response_acoustic_evidence=False,
         synthetic_barge=False,
+        synthetic_stop=False,
         wake_self_playback=False,
         active_handover=False,
         all_route_loss=False,
@@ -472,6 +481,8 @@ class SmokeRun:
         self.qa_question = qa_question
         self.response_acoustic_evidence = response_acoustic_evidence
         self.synthetic_barge = synthetic_barge
+        self.synthetic_stop = synthetic_stop
+        self.interruption_enabled = synthetic_barge or synthetic_stop
         self.wake_self_playback = wake_self_playback
         self.active_handover = active_handover
         self.active_handover_evidence = None
@@ -542,7 +553,7 @@ class SmokeRun:
             'capture_tests_enabled': self.capture,
             'standby_enabled': self.standby,
             'synthetic_acoustic_probe_enabled': (
-                self.acoustic or self.awake_dialogue or self.synthetic_barge
+                self.acoustic or self.awake_dialogue or self.interruption_enabled
             ),
             'awake_dialogue_enabled': self.awake_dialogue,
             'multi_clause_evidence': self.multi_clause_evidence,
@@ -589,7 +600,7 @@ class SmokeRun:
             self.checkpoint(self.report('running'))
 
     def preflight(self):
-        if self.acoustic or self.awake_dialogue or self.synthetic_barge:
+        if self.acoustic or self.awake_dialogue or self.interruption_enabled:
             self.device.prepare_speech_probe()
         h = self.health()
         if self.multi_clause or self.wake_self_playback:
@@ -635,13 +646,20 @@ class SmokeRun:
             or device.get('test_interruption_transcript_supported') is True,
             'device_interruption_transcript_unsupported',
         )
-        require(
-            not self.synthetic_barge
-            or self.expected_apk is None
-            or self.expected_apk[1] < STOP_RECEIPT_MIN_APK_CODE
-            or device.get('test_playback_stop_supported') is True,
-            'device_playback_stop_evidence_unsupported',
-        )
+        if self.synthetic_stop or (
+            self.synthetic_barge
+            and self.expected_apk is not None
+            and self.expected_apk[1] >= STOP_RECEIPT_MIN_APK_CODE
+        ):
+            require(
+                device.get('test_playback_stop_supported') is True,
+                'device_playback_stop_evidence_unsupported',
+            )
+        if self.synthetic_stop:
+            require(
+                h.get('fast_stop_ready') is True and type(h.get('fast_stop_count')) is int,
+                'backend_fast_stop_evidence_unsupported',
+            )
         require(
             not self.capture_clock_required
             or device.get('capture_clock_evidence_supported') is True,
@@ -653,7 +671,7 @@ class SmokeRun:
             device.get('vision_active') is False and ui.get('camera_open') is False, 'camera_busy'
         )
         require(ui.get('wake_checked') is True or not self.standby, 'standby_requires_wake_mode')
-        if self.awake_dialogue or self.synthetic_barge:
+        if self.awake_dialogue or self.interruption_enabled:
             require(ui.get('wake_checked') is True, 'awake_dialogue_requires_wake_mode')
         if self.wake_self_playback:
             require(ui.get('wake_checked') is True, 'wake_self_playback_requires_wake_mode')
@@ -663,7 +681,7 @@ class SmokeRun:
             require(ui.get('wake_checked') is True, 'all_route_loss_requires_wake_mode')
         if (
             self.awake_dialogue
-            or self.synthetic_barge
+            or self.interruption_enabled
             or self.multi_clause
             or self.wake_self_playback
             or self.active_handover
@@ -1045,7 +1063,7 @@ class SmokeRun:
     def capture_limit_ms(self):
         if self.standby:
             return 1200000
-        return 300000 if self.synthetic_barge else 180000
+        return 300000 if self.interruption_enabled else 180000
 
     def start_capture(self):
         limit = self.capture_limit_ms
@@ -1568,6 +1586,16 @@ class SmokeRun:
             'post_playback_quiet_seconds': 0,
         }
         self.barge_evidence = evidence
+        stop_only = self.synthetic_stop
+        if stop_only:
+            require(stop_supported, 'device_playback_stop_evidence_unsupported')
+            before_stop = health.get('fast_stop_count')
+            before_asr = health.get('voice_asr_attempts')
+            require(
+                health.get('fast_stop_ready') is True
+                and all(type(count) is int and count >= 0 for count in (before_stop, before_asr)),
+                'backend_fast_stop_evidence_unsupported',
+            )
 
         def observe():
             health = active_health()
@@ -1577,7 +1605,20 @@ class SmokeRun:
             seen.update(ids)
             announcements = [r for r in rows if r.get('origin') == 'announcement']
             voices = [r for r in rows if r.get('origin') == 'voice']
-            groups = classify_voice_records(voices)
+            # The stop detector can discard the VAD trace for the same
+            # phrase. Accept one such trace only before ASR or admission.
+            partial = [
+                row
+                for row in voices
+                if stop_only
+                and evidence['stimulus_played']
+                and row.get('gate') == 'stale'
+                and row.get('outcome') == 'cancelled'
+                and all(row.get(key) is None for key in ('generation', 'error', 'task_outcome'))
+                and isinstance(row.get('stages'), dict)
+                and not {'asr_start', 'asr_end', 'brain_start'} & row.get('stages', {}).keys()
+            ]
+            groups = classify_voice_records([row for row in voices if row not in partial])
             admitted = groups['admitted']
             announcement = announcements[0] if len(announcements) == 1 else {}
             replacement = admitted[0] if len(admitted) == 1 else {}
@@ -1621,6 +1662,21 @@ class SmokeRun:
             )
             require(not groups['invalid'] and len(admitted) <= 1, 'interruption_unexpected_voice')
             require(not evidence['rejected_pause_requests'], 'interruption_rejected_voice_paused')
+            if stop_only:
+                current_stop = health.get('fast_stop_count')
+                require(
+                    health.get('fast_stop_ready') is True
+                    and type(current_stop) is int
+                    and 0 <= current_stop - before_stop <= int(evidence['stimulus_played']),
+                    'fast_stop_count_unexpected',
+                )
+                evidence['fast_stop_detections'] = current_stop - before_stop
+                require(
+                    type(health.get('voice_asr_attempts')) is int
+                    and health['voice_asr_attempts'] == before_asr,
+                    'fast_stop_reached_cloud_asr',
+                )
+                require(not admitted and len(partial) <= 1, 'fast_stop_unexpected_voice_turn')
             return health, announcement, replacement
 
         def started():
@@ -1645,14 +1701,24 @@ class SmokeRun:
             )
             if ready:
                 announcement_generation = announcement.get('generation')
+                require(
+                    type(announcement_generation) is int and announcement_generation > 0,
+                    'interruption_announcement_generation_missing',
+                )
             return ready
 
         def completed():
-            _, announcement, replacement = observe()
+            health, announcement, replacement = observe()
             require(
                 announcement.get('outcome') in (None, 'cancelled'),
                 'interruption_announcement_not_cancelled',
             )
+            if stop_only:
+                return (
+                    evidence['announcement_cancelled']
+                    and evidence['fast_stop_detections'] == 1
+                    and health.get('playing') is False
+                )
             require(
                 replacement.get('outcome') in (None, 'completed') and not replacement.get('error'),
                 'interruption_replacement_failed',
@@ -1665,52 +1731,66 @@ class SmokeRun:
             reply = pool.submit(self.request, {'text': BARGE_ANNOUNCEMENT})
             self.wait(started, 25, 'interruption_playout_not_observed')
             evidence['announcement_started'] = True
-            self.device.speak_probe(interruption=True)
+            if stop_only:
+                self.device.speak_probe(stop=True)
+            else:
+                self.device.speak_probe(interruption=True)
             evidence['stimulus_played'] = True
             self.checkpoint(self.report('running'))
-            remaining = min(75, deadline - self.clock() - POST_DIALOGUE_SECONDS - 5)
+            remaining = min(
+                12 if stop_only else 75, deadline - self.clock() - POST_DIALOGUE_SECONDS - 5
+            )
             require(remaining > 0, 'interruption_capture_budget_insufficient')
-            replacement = self.wait(completed, remaining, 'interruption_replacement_not_confirmed')
+            failure = (
+                'fast_stop_not_confirmed' if stop_only else 'interruption_replacement_not_confirmed'
+            )
+            replacement = self.wait(completed, remaining, failure)
             require(
                 reply.result(timeout=5).get('status') == 'interrupted',
                 'interruption_announcement_receipt_invalid',
             )
         require(
-            evidence['device_pause_from_trigger_ms'] is not None,
+            stop_only or evidence['device_pause_from_trigger_ms'] is not None,
             'interruption_pause_timing_missing',
         )
         quiet_started = self.clock()
         while self.clock() - quiet_started < POST_DIALOGUE_SECONDS:
             self.sleep(min(0.5, POST_DIALOGUE_SECONDS - (self.clock() - quiet_started)))
-            require(completed(), 'interruption_replacement_not_confirmed')
+            require(completed(), failure)
             evidence['post_playback_quiet_seconds'] = round(self.clock() - quiet_started, 3)
         require(not evidence['pending_voice_candidates'], 'interruption_unresolved_voice')
         d, ui = self.device.status()
         self.capture_status((d, ui))
-        transcript = d.get('test_interruption_transcript')
-        require(
-            isinstance(transcript, dict)
-            and set(transcript) == {'generation', 'matched'}
-            and type(transcript['generation']) is int
-            and transcript['generation'] == replacement['generation']
-            and type(transcript['matched']) is bool,
-            'interruption_transcript_receipt_missing',
-        )
-        evidence['transcript_matches_stimulus'] = transcript['matched']
-        require(transcript['matched'], 'interruption_transcript_mismatch')
+        if not stop_only:
+            transcript = d.get('test_interruption_transcript')
+            require(
+                isinstance(transcript, dict)
+                and set(transcript) == {'generation', 'matched'}
+                and type(transcript['generation']) is int
+                and transcript['generation'] == replacement['generation']
+                and type(transcript['matched']) is bool,
+                'interruption_transcript_receipt_missing',
+            )
+            evidence['transcript_matches_stimulus'] = transcript['matched']
+            require(transcript['matched'], 'interruption_transcript_mismatch')
         if stop_supported:
+            cancel_generation = (
+                announcement_generation + 1 if stop_only else replacement['generation']
+            )
             stop = d.get('test_playback_stop')
             valid_stop = (
                 isinstance(stop, dict)
                 and set(stop) == {'generation', 'playback_id', 'cancel_generation', 'nanos'}
                 and all(type(value) is int and value > 0 for value in stop.values())
                 and stop['generation'] == announcement_generation
-                and stop['cancel_generation'] == replacement['generation']
+                and stop['cancel_generation'] == cancel_generation
             )
             evidence['device_stop_applied'] = valid_stop
             require_evidence(valid_stop, 'interruption_device_stop_not_confirmed')
         require(
-            ui.get('screen_sleeping') is False and d.get('playback_paused') is False,
+            ui.get('screen_sleeping') is False
+            and d.get('playback_paused') is False
+            and (not stop_only or d.get('announcement_active') is False),
             'interruption_device_not_ready_after_response',
         )
 
@@ -1778,14 +1858,17 @@ class SmokeRun:
                     self.check(ACTIVE_HANDOVER_CHECK, self.active_capture_handover)
                 if self.wake_self_playback:
                     self.check(WAKE_SELF_CHECK, self.wake_self_probe)
-                if self.awake_dialogue or self.synthetic_barge:
-                    quiet_seconds = 2 if self.synthetic_barge else POST_DIALOGUE_SECONDS
+                if self.awake_dialogue or self.interruption_enabled:
+                    quiet_seconds = 2 if self.interruption_enabled else POST_DIALOGUE_SECONDS
                     self.check(
-                        BARGE_PRIME_CHECK if self.synthetic_barge else AWAKE_DIALOGUE_CHECK,
+                        BARGE_PRIME_CHECK if self.interruption_enabled else AWAKE_DIALOGUE_CHECK,
                         lambda: self.acoustic_probe(awake=True, quiet_seconds=quiet_seconds),
                     )
-                if self.synthetic_barge:
-                    self.check(BARGE_CHECK, self.interruption_probe)
+                if self.interruption_enabled:
+                    self.check(
+                        STOP_CHECK if self.synthetic_stop else BARGE_CHECK,
+                        self.interruption_probe,
+                    )
                 self.check(CHECKS[5], self.home)
                 self.check(CHECKS[6], self.maintenance_open)
                 if self.all_route_loss:
@@ -1812,6 +1895,7 @@ class SmokeRun:
 def planned_checks(options):
     if 'latency_sample' in options:
         return [*CHECKS[:2], CHECKS[4], AWAKE_DIALOGUE_CHECK, *CHECKS[5:7]]
+    interruption = {'synthetic_barge', 'synthetic_stop'} & options
     return (
         [*CHECKS[:2], MULTI_CLAUSE_CHECK if 'multi_clause' in options else CHECKS[2], CHECKS[3]]
         + (
@@ -1823,11 +1907,11 @@ def planned_checks(options):
             + ([ACTIVE_HANDOVER_CHECK] if 'active_handover' in options else [])
             + ([WAKE_SELF_CHECK] if 'wake_self_playback' in options else [])
             + (
-                [BARGE_PRIME_CHECK if 'synthetic_barge' in options else AWAKE_DIALOGUE_CHECK]
-                if {'awake_dialogue', 'synthetic_barge'} & options
+                [BARGE_PRIME_CHECK if interruption else AWAKE_DIALOGUE_CHECK]
+                if interruption or 'awake_dialogue' in options
                 else []
             )
-            + ([BARGE_CHECK] if 'synthetic_barge' in options else [])
+            + ([STOP_CHECK if 'synthetic_stop' in options else BARGE_CHECK] if interruption else [])
             + list(CHECKS[5:7])
             + ([ALL_ROUTE_LOSS_CHECK] if 'all_route_loss' in options else [])
             if 'capture' in options
@@ -1988,6 +2072,11 @@ def main(argv=None):
         help='Use one fixed Mac speech stimulus to interrupt a verified ongoing CC8 announcement',
     )
     parser.add_argument(
+        '--synthetic-stop',
+        action='store_true',
+        help='Verify a fixed local stop word and device stop without a new voice request',
+    )
+    parser.add_argument(
         '--wake-self-playback',
         action='store_true',
         help='Check that fixed Chinese and English CC8 announcements cannot wake the local detector',
@@ -2047,8 +2136,16 @@ def main(argv=None):
         parser.error('--awake-dialogue requires --capture and a separate run from --standby')
     if args.synthetic_barge and (not args.capture or args.standby):
         parser.error('--synthetic-barge requires --capture and a separate run from --standby')
+    if args.synthetic_stop and (
+        not args.capture or args.standby or args.synthetic_barge or args.awake_dialogue
+    ):
+        parser.error('--synthetic-stop requires --capture and a separate speech check')
     if args.wake_self_playback and (
-        not args.capture or args.standby or args.awake_dialogue or args.synthetic_barge
+        not args.capture
+        or args.standby
+        or args.awake_dialogue
+        or args.synthetic_barge
+        or args.synthetic_stop
     ):
         parser.error(
             '--wake-self-playback requires --capture and a separate run from speech or standby probes'
