@@ -3,8 +3,8 @@
 Default I/O is fake and offline. Explicit loopback TLS uses a verified temporary
 certificate and fixed failures, never owner credentials or remote providers.
 Explicit local stdio uses a fixed peer, never a Codex installation.
-UI recovery never plays audio. The business fixture additionally checks local
-ASR/TTS recovery requests in memory.
+UI recovery never plays audio. Both TLS fixtures check local ASR/TTS recovery
+requests in memory.
 """
 
 from dataclasses import dataclass, replace
@@ -137,7 +137,6 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
         config = load_config(root=folder, environ={})
         tls = None
         factory = FaultSession
-        business = http_fixture == 'loopback_business'
         if http_fixture != 'fake':
             from tools.qa_http import LoopbackHTTP, RECOVERY_TEXT, RECOVERY_PCM
 
@@ -148,7 +147,7 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
                 LoopbackHTTP(
                     lambda: state.case,
                     requested,
-                    business=business,
+                    business=http_fixture == 'loopback_business',
                     recovering=lambda: state.recovery,
                 )
             )
@@ -292,7 +291,7 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
             state.recovery = True
             packets.clear()
             recovery_wire_requests = 0
-            if business and case.stage in ('asr', 'tts'):
+            if tls is not None and case.stage in ('asr', 'tts'):
                 if case.stage == 'asr':
                     recovered = recognizer.recognize(audio) == RECOVERY_TEXT
                 else:

@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "p0-wake-only-punctuation-20261104.1",
+  "release_id": "p0-proxy-connect-deadline-20261105.1",
   "backend": {
-    "version": "0.14.51"
+    "version": "0.14.56"
   },
   "assistant": {
-    "version": "0.9.30",
-    "version_code": 65,
+    "version": "0.9.31",
+    "version_code": 67,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {

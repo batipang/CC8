@@ -15,12 +15,13 @@ import stat
 import subprocess
 import sys
 import time
+import unicodedata
 import uuid
 
 from private_output import PrivateOutput, private_directory
 from release_info import load_release
 from mac_voice import resolve_voice, __file__ as voice_source
-from diagnostics import MAX_CONFIRMED_PLAYBACK_CLAUSES, MAX_DEVICE_PAUSE_MS
+from diagnostics import INTERVALS, MAX_CONFIRMED_PLAYBACK_CLAUSES, MAX_DEVICE_PAUSE_MS, percentiles
 from diagnostic_run import receipt
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -37,6 +38,8 @@ BARGE_ANNOUNCEMENT = (
     '看见河面映出了云朵和树梢。它把篮子放在大石头上，坐下来听水声，等朋友们一起回家。'
 )
 BARGE_QUERY = '换个问题，三加五等于几？'
+ACOUSTIC_WAKE = '大黄蜂'
+ACOUSTIC_QUESTION = '一加一等于几？'
 WAKE_SELF_TEXT = {
     'zh': '大黄蜂正在播报。现在只检查设备自己的声音。',
     'en': 'Bumblebee is speaking. This is a playback check.',
@@ -105,6 +108,12 @@ P0_DEVICE_PHASES = (
     ('standby_2', ('capture', 'standby', 'acoustic')),
     ('standby_3', ('capture', 'standby', 'acoustic')),
 )
+QA_LATENCY_PHASES = tuple(
+    (f'qa_{index:02}', ('capture', 'awake_dialogue', 'latency_sample')) for index in range(1, 31)
+)
+QA_STAGE_METRICS = ('utterance_to_asr_ms', 'brain_first_clause_ms', 'tts_first_pcm_ms')
+QA_ENDPOINT_METRIC = 'device_vad_tail_ms'
+QA_PLAYOUT_METRIC = 'utterance_to_confirmed_playout_ack_ms'
 
 
 class CheckFailure(RuntimeError):
@@ -230,6 +239,26 @@ def response_playout_timing(row):
     }
 
 
+def qa_stage_latencies(row):
+    try:
+        clean = receipt(row)
+    except ValueError:
+        return {}
+    if clean['scenario'] != 'qa':
+        return {}
+    stages = clean['stages']
+    result = {
+        name: round(stages[end] - stages[start], 1)
+        for name in QA_STAGE_METRICS
+        for start, end in (INTERVALS[name],)
+        if start in stages and end in stages and stages[end] >= stages[start]
+    }
+    capture = clean.get('capture', {})
+    if QA_ENDPOINT_METRIC in capture:
+        result[QA_ENDPOINT_METRIC] = capture[QA_ENDPOINT_METRIC]
+    return result
+
+
 def objects(text, marker):
     # dumpsys also contains captions and OEM details. Return only the requested
     # JSON object in memory; the report builder never copies these objects.
@@ -240,11 +269,40 @@ def objects(text, marker):
     return value
 
 
+def matches_acoustic_question(workspace, generation):
+    tasks = workspace.get('tasks')
+    if (
+        workspace.get('ok') is not True
+        or type(generation) is not int
+        or not 0 <= generation < 2**32
+        or not isinstance(tasks, list)
+    ):
+        return False
+    matches = [
+        task
+        for task in tasks
+        if isinstance(task, dict)
+        and type(task.get('generation')) is int
+        and task['generation'] == generation
+    ]
+    if len(matches) != 1 or matches[0].get('status') != 'completed':
+        return False
+    title = matches[0].get('title')
+    if not isinstance(title, str) or len(title) > 80:
+        return False
+    text = ''.join(unicodedata.normalize('NFKC', title).split()).rstrip('。?!.,，')
+    if text.startswith(ACOUSTIC_WAKE):
+        text = text[len(ACOUSTIC_WAKE) :].lstrip(',，:：')
+    text = text.replace('一', '1').replace('+', '加').replace('=', '等于')
+    return text == '1加1等于几'
+
+
 def rpc(path, request, timeout=5):
-    # This test client deliberately has no camera, task or arbitrary tool route.
+    # Workspace status is read-only. The test client cannot create tasks via IPC.
     allowed = (
         {'operation': 'health'},
         {'operation': 'diagnostics'},
+        {'operation': 'workspace_status'},
         {'operation': 'transport_status'},
     )
     require(
@@ -341,7 +399,7 @@ class Device:
                 '/usr/bin/say',
                 '-v',
                 voice,
-                BARGE_QUERY if interruption else '大黄蜂，一加一等于几？',
+                BARGE_QUERY if interruption else ACOUSTIC_WAKE + '，' + ACOUSTIC_QUESTION,
             ],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -368,6 +426,7 @@ class SmokeRun:
         standby=False,
         acoustic=False,
         awake_dialogue=False,
+        latency_sample=False,
         synthetic_barge=False,
         wake_self_playback=False,
         active_handover=False,
@@ -385,6 +444,7 @@ class SmokeRun:
         self.device, self.request = device, request
         self.capture, self.standby, self.acoustic = capture, standby, acoustic
         self.awake_dialogue = awake_dialogue
+        self.latency_sample = latency_sample
         self.synthetic_barge = synthetic_barge
         self.wake_self_playback = wake_self_playback
         self.active_handover = active_handover
@@ -400,6 +460,7 @@ class SmokeRun:
         self.capture_clock_required = capture_clock_evidence
         self.leading_acoustic_evidence = leading_acoustic_evidence
         self.capture_clock_evidence = None
+        self.capture_start_failure = None
         self.playback_probe_evidence = None
         self.clock, self.sleep, self.checkpoint = clock, sleep, checkpoint
         self.started = clock()
@@ -473,6 +534,7 @@ class SmokeRun:
             'standby_evidence': self.standby_evidence,
             'playback_probe_evidence': self.playback_probe_evidence,
             'capture_clock_evidence': self.capture_clock_evidence,
+            'capture_start_failure': self.capture_start_failure,
         }
 
     def check(self, name, action, *, continue_if_unconfirmed=False):
@@ -950,14 +1012,49 @@ class SmokeRun:
     def start_capture(self):
         limit = self.capture_limit_ms
         self.device.open(True, capture_limit_ms=limit)
-        self.wait(lambda: self.health().get('microphone_active') is True, 15, 'capture_not_started')
-        self.wait(lambda: self.health().get('calibrating') is False, 25, 'calibration_not_finished')
-        h = self.health()
-        require(
-            h.get('microphone_active') is True and h.get('local_wake_ready') is True,
-            'wake_capture_not_ready',
+        try:
+            self.wait(
+                lambda: self.health().get('microphone_active') is True, 15, 'capture_not_started'
+            )
+            self.wait(
+                lambda: self.health().get('calibrating') is False, 25, 'calibration_not_finished'
+            )
+            h = self.health()
+            require(
+                h.get('microphone_active') is True and h.get('local_wake_ready') is True,
+                'wake_capture_not_ready',
+            )
+            return self.capture_status()
+        except RuntimeChanged:
+            raise
+        except (CheckFailure, OSError, ValueError, subprocess.SubprocessError):
+            self.record_capture_start_failure()
+            raise
+
+    def record_capture_start_failure(self):
+        # Read both sides before Home or a maintenance open can change the
+        # evidence. Missing evidence cannot overwrite the original failure.
+        evidence = dict.fromkeys(
+            ('host_microphone_active', 'device_microphone_active', 'device_phase')
         )
-        return self.capture_status()
+        self.capture_start_failure = evidence
+        try:
+            host = self.health().get('microphone_active')
+            if type(host) is bool:
+                evidence['host_microphone_active'] = host
+        except RuntimeChanged:
+            return
+        except (CheckFailure, OSError, ValueError, subprocess.SubprocessError):
+            pass
+        try:
+            device, _ = self.device.status()
+        except (CheckFailure, OSError, ValueError, subprocess.SubprocessError):
+            return
+        active, phase = device.get('microphone_active'), device.get('phase')
+        if type(active) is bool:
+            evidence['device_microphone_active'] = active
+        if phase in ('calibrating', 'error', 'idle', 'listening', 'speaking', 'thinking'):
+            evidence['device_phase'] = phase
 
     def capture_status(self, status=None):
         limit = self.capture_limit_ms
@@ -1037,13 +1134,26 @@ class SmokeRun:
 
     def home(self):
         self.device.home()
-        self.wait(
-            lambda: self.health().get('microphone_active') is False, 15, 'home_did_not_stop_capture'
-        )
-        before = self.health().get('mic_frames')
+
+        def stopped():
+            host = self.health()
+            if host.get('microphone_active') is not False:
+                return None
+            device, _ = self.device.status()
+            if device.get('microphone_active') is not False:
+                return None
+            frames = host.get('mic_frames'), device.get('mic_frames')
+            require(
+                all(type(count) is int and count >= 0 for count in frames),
+                'home_microphone_frame_count_missing',
+            )
+            return frames
+
+        before = self.wait(stopped, 15, 'home_did_not_stop_capture')
         self.sleep(2)
-        require(self.health().get('microphone_active') is False, 'home_restarted_capture')
-        require(self.health().get('mic_frames') == before, 'home_microphone_frames_increasing')
+        after = stopped()
+        require(after is not None, 'home_restarted_capture')
+        require(before == after, 'home_microphone_frames_increasing')
 
     def idle(self):
         began = self.clock()
@@ -1126,6 +1236,7 @@ class SmokeRun:
         self.device.speak_probe()
 
         admitted_id = None
+        recognized_stimulus_matches = None
 
         def received():
             nonlocal admitted_id
@@ -1169,7 +1280,13 @@ class SmokeRun:
                 'completed_requests': sum(r.get('outcome') == 'completed' for r in rows),
                 'cancelled_requests': sum(r.get('outcome') == 'cancelled' for r in rows),
                 'completed_tasks': sum(r.get('task_outcome') == 'completed' for r in rows),
+                'recognized_stimulus_matches': recognized_stimulus_matches,
                 'response_playout_timing': response_playout_timing(completed),
+                **(
+                    {'qa_stage_latencies_ms': qa_stage_latencies(completed)}
+                    if self.latency_sample and completed is not None
+                    else {}
+                ),
                 'stage_counts': {
                     stage: sum(stage in r.get('stages', {}) for r in rows)
                     for stage in (
@@ -1204,11 +1321,19 @@ class SmokeRun:
                 ),
                 'synthetic_voice_request_not_completed',
             )
-            return completed is not None
+            return completed
 
         response_seconds = min(120, response_deadline - self.clock())
         require(response_seconds > 0, 'acoustic_probe_capture_budget_insufficient')
-        self.wait(received, response_seconds, 'synthetic_acoustic_chain_not_confirmed')
+        completed = self.wait(received, response_seconds, 'synthetic_acoustic_chain_not_confirmed')
+        matched = matches_acoustic_question(
+            self.request({'operation': 'workspace_status'}), completed.get('generation')
+        )
+        self.health()
+        recognized_stimulus_matches = matched
+        self.acoustic_evidence['recognized_stimulus_matches'] = recognized_stimulus_matches
+        self.checkpoint(self.report('running'))
+        require(recognized_stimulus_matches, 'synthetic_stimulus_not_confirmed')
         # An immediate cleanup could hide a post-answer echo turn. Keep one
         # bounded observation window. An extra admitted dialogue fails, while
         # a transient candidate must resolve and a rejected pause must resume.
@@ -1540,8 +1665,9 @@ class SmokeRun:
         try:
             self.check(CHECKS[0], self.preflight)
             self.check(CHECKS[1], self.maintenance_open)
-            self.check(MULTI_CLAUSE_CHECK if self.multi_clause else CHECKS[2], self.playback)
-            self.check(CHECKS[3], self.handover)
+            if not self.latency_sample:
+                self.check(MULTI_CLAUSE_CHECK if self.multi_clause else CHECKS[2], self.playback)
+                self.check(CHECKS[3], self.handover)
             if self.capture:
                 device_status = self.check(CHECKS[4], self.start_capture)
                 if self.capture_clock_required:
@@ -1598,6 +1724,8 @@ class SmokeRun:
 
 
 def planned_checks(options):
+    if 'latency_sample' in options:
+        return [*CHECKS[:2], CHECKS[4], AWAKE_DIALOGUE_CHECK, *CHECKS[5:7]]
     return (
         [*CHECKS[:2], MULTI_CLAUSE_CHECK if 'multi_clause' in options else CHECKS[2], CHECKS[3]]
         + (
@@ -1624,23 +1752,31 @@ def planned_checks(options):
     )
 
 
-def run_device_suite(make_run, save):
+def run_device_suite(make_run, save, *, qa_latency=False):
+    planned = QA_LATENCY_PHASES if qa_latency else P0_DEVICE_PHASES
     phases = [
         dict(name=name, state='not_run', expected_checks=planned_checks(set(options)))
-        for name, options in P0_DEVICE_PHASES
+        for name, options in planned
     ]
     suite = dict(
         schema=1,
-        scope='fixed_device_suite',
+        scope='synthetic_qa_latency' if qa_latency else 'fixed_device_suite',
         state='running',
         phases=phases,
         full_p0_acceptance=False,
         physical_usb_unplug_tested=False,
         human_accuracy_asserted=False,
     )
+    if qa_latency:
+        suite['audible_onset_measured'] = False
+        suite['latencies_ms'] = {
+            name: percentiles([])
+            for name in (*QA_STAGE_METRICS, QA_ENDPOINT_METRIC, QA_PLAYOUT_METRIC)
+        }
+    samples = []
     save(suite)
     source = None
-    for phase, (_, options) in zip(phases, P0_DEVICE_PHASES):
+    for phase, (_, options) in zip(phases, planned):
         phase['state'] = 'running'
 
         def checkpoint(report, phase=phase):
@@ -1678,6 +1814,27 @@ def run_device_suite(make_run, save):
                     phase.update(state='failed', reason='suite_awake_dialogue_quiet_incomplete')
                 elif not isinstance(timing, dict) or timing.get('status') != 'observed':
                     phase.update(state='failed', reason='suite_response_playout_timing_incomplete')
+                elif evidence.get('recognized_stimulus_matches') is not True:
+                    phase.update(state='failed', reason='suite_synthetic_stimulus_not_confirmed')
+                elif qa_latency:
+                    stages = evidence.get('qa_stage_latencies_ms')
+                    if (
+                        not isinstance(stages, dict)
+                        or set(stages) - {QA_ENDPOINT_METRIC} != set(QA_STAGE_METRICS)
+                        or any(
+                            type(value) not in (int, float) or not 0 <= value <= 604800000
+                            for value in (*stages.values(), timing.get(QA_PLAYOUT_METRIC))
+                        )
+                    ):
+                        phase.update(state='failed', reason='suite_qa_stage_timing_incomplete')
+                    else:
+                        samples.append({**stages, QA_PLAYOUT_METRIC: timing[QA_PLAYOUT_METRIC]})
+                        suite['latencies_ms'] = {
+                            name: percentiles(
+                                [sample[name] for sample in samples if name in sample]
+                            )
+                            for name in suite['latencies_ms']
+                        }
         if phase['state'] != 'passed':
             suite['state'] = phase['state']
             save(suite)
@@ -1699,10 +1856,16 @@ def main(argv=None):
         action='store_true',
         help='Explicitly enable bounded foreground mic lifecycle tests',
     )
-    parser.add_argument(
+    batches = parser.add_mutually_exclusive_group()
+    batches.add_argument(
         '--p0-device-suite',
         action='store_true',
         help='Run fixed device checks and three separate standby cycles with one runtime lock',
+    )
+    batches.add_argument(
+        '--qa-latency-suite',
+        action='store_true',
+        help='Sample 30 fixed synthetic QA responses with matched playback receipts',
     )
     parser.add_argument(
         '--standby',
@@ -1766,8 +1929,9 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
     options = {key for key in SMOKE_OPTIONS if getattr(args, key)}
-    if args.p0_device_suite and options != {'capture'}:
-        parser.error('--p0-device-suite requires --capture and accepts no individual check flags')
+    batch = args.p0_device_suite or args.qa_latency_suite
+    if batch and options != {'capture'}:
+        parser.error('Device batches require --capture and accept no individual check flags')
     if args.standby and not args.capture or args.acoustic and not args.standby:
         parser.error('--standby requires --capture; --acoustic requires --standby')
     if args.awake_dialogue and (not args.capture or args.standby):
@@ -1793,11 +1957,13 @@ def main(argv=None):
     if args.leading_acoustic_evidence and not args.playback_evidence:
         parser.error('--leading-acoustic-evidence requires --playback-evidence')
     if not args.execute:
-        if args.p0_device_suite:
+        if batch:
             plan = {
                 'phases': [
                     dict(name=name, checks=planned_checks(set(flags)))
-                    for name, flags in P0_DEVICE_PHASES
+                    for name, flags in (
+                        QA_LATENCY_PHASES if args.qa_latency_suite else P0_DEVICE_PHASES
+                    )
                 ],
                 'execute': False,
                 'capture': True,
@@ -1834,7 +2000,7 @@ def main(argv=None):
             'runtime_source_version_mismatch',
         )
         instance = health.get('runtime_instance')
-        if args.p0_device_suite:
+        if batch:
             if tuple(map(int, manifest.backend_version.split('.'))) < tuple(
                 map(int, PAIRED_PLAYOUT_MIN_BACKEND.split('.'))
             ):
@@ -1857,7 +2023,7 @@ def main(argv=None):
             elif payload == {'operation': 'playback_probe'}:
                 timeout = 25
             result = rpc(socket_path, payload, timeout)
-            if args.p0_device_suite and payload == {'operation': 'health'}:
+            if batch and payload == {'operation': 'health'}:
                 if not (
                     result.get('runtime_instance') == instance
                     and result.get('release_id') == manifest.release_id
@@ -1885,10 +2051,10 @@ def main(argv=None):
                 'unsafe_test_lock',
             )
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            if args.p0_device_suite:
+            if batch:
                 request({'operation': 'health'})
             name = (
-                ('device-suite-' if args.p0_device_suite else 'device-')
+                ('device-suite-' if batch else 'device-')
                 + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-')
                 + uuid.uuid4().hex[:8]
                 + '.json'
@@ -1901,7 +2067,7 @@ def main(argv=None):
                             **value,
                             'backend_version': health.get('bridge_version'),
                             'protocol_version': health.get('protocol_version'),
-                            **({'release_id': manifest.release_id} if args.p0_device_suite else {}),
+                            **({'release_id': manifest.release_id} if batch else {}),
                         }
                     )
 
@@ -1919,22 +2085,22 @@ def main(argv=None):
                 print('自动设备检查已开始；结果仅保存状态，不留录音、图像或对话正文。', flush=True)
                 keep_awake = None
                 try:
-                    if (args.standby or args.p0_device_suite) and sys.platform == 'darwin':
+                    if (args.standby or batch) and sys.platform == 'darwin':
                         keep_awake = subprocess.Popen(
                             ['/usr/bin/caffeinate', '-i', '-w', str(os.getpid())],
                             stdin=subprocess.DEVNULL,
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                         )
-                    if args.p0_device_suite:
-                        result = run_device_suite(make_run, save)
+                    if batch:
+                        result = run_device_suite(make_run, save, qa_latency=args.qa_latency_suite)
                     else:
                         result = make_run(options, save).run()
                 finally:
                     if keep_awake is not None and keep_awake.poll() is None:
                         keep_awake.terminate()
                         keep_awake.wait(timeout=5)
-                if args.p0_device_suite:
+                if batch:
                     summary = {
                         'state': result['state'],
                         'phases': [
@@ -1942,6 +2108,8 @@ def main(argv=None):
                             for phase in result['phases']
                         ],
                     }
+                    if args.qa_latency_suite:
+                        summary['latencies_ms'] = result['latencies_ms']
                 else:
                     summary = {
                         key: result[key]

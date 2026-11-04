@@ -93,6 +93,7 @@ class VoiceSession {
  final Object captureResourceLock=new Object(),routeLock=new Object();
  volatile boolean foreground=true,recording,announcement,textSession;
  volatile int epoch,minimumGeneration;
+ volatile long routeEpoch=2;
  volatile long micFrames,renderFrames;
  volatile float inputLevel;
  volatile String phase="idle";
@@ -104,6 +105,8 @@ class VoiceSession {
  final AtomicInteger packets=new AtomicInteger();
  int visionCancels,playbackCancels;
  boolean isConnected(){return true;}
+ boolean currentRoute(long route){return route==routeEpoch;}
+ void rejectForTest(Object id,long route){rejectCapture(id,route);}
  void cancelVision(){visionCancels++;}
  void cancelPlayback(){playbackCancels++;}
  void send(JSONObject event){events.add(event);}
@@ -112,6 +115,8 @@ class VoiceSession {
  static class Listener {
   final List<Boolean> microphones=new CopyOnWriteArrayList<>();
   final AtomicInteger errors=new AtomicInteger();
+  final AtomicInteger rejected=new AtomicInteger(-1);
+  void captureRejected(int stoppedEpoch){rejected.set(stoppedEpoch);}
   void microphone(boolean active){microphones.add(active);}
   void playback(boolean active){}
   void state(String phase,String value){if("error".equals(phase))errors.incrementAndGet();}
@@ -137,6 +142,30 @@ public final class CaptureCheck {
  public static void main(String[] args)throws Exception {
   test=args[0];VoiceSession s=new VoiceSession();
   try {
+   if("rejected_capture".equals(test)){
+    s.startMicrophone();
+    yes(AudioRecord.entered.await(3,TimeUnit.SECONDS),"capture did not start");
+    String rejectedId=s.captureWindow.id;
+    int rejectedEpoch=s.epoch;
+    yes(s.events.stream().anyMatch(j->"session_start".equals(j.data.get("event"))&&
+       rejectedId.equals(j.data.get("capture_id"))),"capture ID did not enter the wire");
+    s.rejectForTest(rejectedId,1);
+    s.rejectForTest(Boolean.TRUE,2);
+    yes(s.recording&&s.listener.rejected.get()==-1,"invalid rejection stopped capture");
+    s.rejectForTest(rejectedId,2);
+    yes(!s.recording&&s.captureWindow==null,"matching rejection did not stop capture");
+    yes(s.listener.rejected.get()==rejectedEpoch+1&&s.captureRejectionCurrent(rejectedEpoch+1),
+        "current rejection did not publish error ownership");
+    yes(AudioRecord.created.get(0).released.await(3,TimeUnit.SECONDS),"hardware was not released");
+    yes(s.events.stream().filter(j->"session_stop".equals(j.data.get("event"))&&
+        Integer.valueOf(rejectedEpoch).equals(j.data.get("epoch"))).count()==1,
+        "missing or duplicate device stop");
+    s.startMicrophone();
+    yes(s.recording&&!s.captureWindow.id.equals(rejectedId),"fresh capture reused ID");
+    s.rejectForTest(rejectedId,2);
+    yes(s.recording&&!s.captureRejectionCurrent(rejectedEpoch+1),"old rejection affected new capture");
+    return;
+   }
    if("interruption_transcript".equals(test)){
     CaptureWindow normal=new CaptureWindow(0,100);
     normal.observeTranscript(1,5,args[1],101);
@@ -314,6 +343,9 @@ class CaptureWindowTests(unittest.TestCase):
                 'void startMicrophone()',
                 'void startMicrophone(long testLimitMs)',
                 'void stopMicrophone()',
+                'private boolean stopMicrophone(CaptureWindow expected)',
+                'private void rejectCapture(Object captureId, long route)',
+                'boolean captureRejectionCurrent(int stoppedEpoch)',
             )
         )
         (path / 'CaptureCheck.java').write_text(HARDWARE.replace('METHODS', methods))
@@ -367,6 +399,9 @@ class CaptureWindowTests(unittest.TestCase):
             timeout=12,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_rejection_stops_only_the_owned_capture_and_releases_hardware(self):
+        self.check_worker('rejected_capture')
 
     def test_capture_expires_and_releases_without_any_host_or_ui_callback(self):
         self.check_worker('bounded')

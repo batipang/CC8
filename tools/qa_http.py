@@ -144,7 +144,7 @@ class LoopbackHTTP:
             if lines[0] != b'POST ' + route + b' HTTP/1.1':
                 raise ValueError('fixture_stage_route_mismatch')
             phase = headers.get(b'x-cc8-qa-phase')
-            if phase not in ((b'fault', b'recovery') if self.business else (b'fault',)):
+            if phase not in (b'fault', b'recovery'):
                 raise ValueError('fixture_unknown_phase')
             length = int(headers.get(b'content-length', b'-1'))
             if not 0 < length <= 65536:

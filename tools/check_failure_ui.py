@@ -79,7 +79,7 @@ def corpus_identity(fixtures):
         digest.update(fixture['expected_message'].encode())
         digest.update(fixture.get('http_fixture', 'fake').encode())
         digest.update(str(fixture.get('wire_requests', 0)).encode())
-        if fixture.get('http_fixture') == 'loopback_business':
+        if fixture.get('http_fixture', 'fake') != 'fake':
             digest.update(str(fixture['recovery_wire_requests']).encode())
         if fixture.get('dot_fixture') == 'local_stdio':
             digest.update(b'local_stdio')

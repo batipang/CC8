@@ -1462,6 +1462,15 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   }
 
   @Override
+  public void captureRejected(int stoppedEpoch) {
+    runOnUiThread(
+        () -> {
+          if (!foreground || !session.captureRejectionCurrent(stoppedEpoch)) return;
+          applyState("error", "Mac 未能启动语音处理，麦克风已关闭。请点击开始语音重试。");
+        });
+  }
+
+  @Override
   public void microphone(boolean value) {
     runOnUiThread(
         () -> {

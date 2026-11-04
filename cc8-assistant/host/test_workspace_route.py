@@ -20,6 +20,7 @@ SESSION_INTERFACES = r"""
   boolean foreground=true,recording,visual,announcement,textSession,receiverRegistered;
   boolean dotChatSupported,savedTasksSupported;
   int epoch,minimumGeneration,lifecycle,requests;
+  CaptureWindow captureWindow;
   volatile long routeEpoch;
   Link activeLink,usbLink,wifiLink;
   Socket socket;DataOutputStream output;ServerSocket server;
@@ -42,7 +43,8 @@ SESSION_INTERFACES = r"""
   boolean closed,ready;int ticket;String kind;
   Socket connection;DataOutputStream out;
   Link(String name){kind=name;}
-  void event(JSONObject data){}void close(){closed=true;}
+  final List<JSONObject> events=new ArrayList<>();
+  void event(JSONObject data){events.add(data);}void close(){closed=true;}
  }
  static class Wire{
   static final int EVENT=1;
@@ -111,6 +113,20 @@ SCENARIOS = r"""
     yes(c.tasksData.length()==0&&c.taskResultUnconfirmed,"New activation must clear old task state even without a false callback");
     c.snapshot(0,task("completed"));c.drain();
     yes(c.workspaceRevision==0&&"completed".equals(c.tasksData.optJSONObject(0).optString("status")),"New route accepts its own low revision and true completion");break;
+   }
+   case "capture_rebind_id":{
+    s.recording=true;s.epoch=7;s.captureWindow=new CaptureWindow(0,0);
+    Link backup=new Link("wifi");
+    activate(c,backup);
+    yes(backup.events.size()==2,"new active link did not receive ready and rebind");
+    JSONObject ready=backup.events.get(0),rebind=backup.events.get(1);
+    yes(Integer.valueOf(1).equals(ready.values.get("capture_reject_version")),
+        "capture rejection capability missing");
+    yes("session_rebind".equals(rebind.optString("event"))
+        &&s.captureWindow.id.equals(rebind.optString("capture_id"))
+        &&Integer.valueOf(7).equals(rebind.values.get("epoch")),
+        "new active link lost capture identity");
+    break;
    }
    case "inactive_source":{
     activate(c,new Link("wifi"));c.drain();c.snapshot(0);c.drain();
@@ -212,7 +228,16 @@ class WorkspaceRouteTests(unittest.TestCase):
         test.write_text(harness)
         cls.java = java_bin()
         compiled = subprocess.run(
-            [str(cls.java / 'javac'), '-encoding', 'UTF-8', '-d', str(cls.folder), str(test)],
+            [
+                str(cls.java / 'javac'),
+                '-encoding',
+                'UTF-8',
+                '-d',
+                str(cls.folder),
+                str(JAVA / 'CaptureWindow.java'),
+                str(JAVA / 'CaptureClockStats.java'),
+                str(test),
+            ],
             capture_output=True,
             text=True,
             timeout=30,
@@ -234,6 +259,9 @@ class WorkspaceRouteTests(unittest.TestCase):
             timeout=10,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_backup_activation_rebinds_the_exact_current_capture_id(self):
+        self.scenario('capture_rebind_id')
 
     def test_packet_parsed_after_loss_is_rejected(self):
         self.scenario('late_loss')

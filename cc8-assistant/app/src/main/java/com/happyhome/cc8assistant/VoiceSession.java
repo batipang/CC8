@@ -30,6 +30,8 @@ final class VoiceSession {
 
     void microphone(boolean active);
 
+    void captureRejected(int stoppedEpoch);
+
     void playback(boolean active);
 
     void heard(String text);
@@ -290,8 +292,13 @@ final class VoiceSession {
       if (!foreground || next.closed || next.ticket != lifecycle) return;
       next.ready = true;
       boolean changed = activeLink != next;
-      boolean captureWasActive = recording;
-      int captureEpoch = epoch;
+      final CaptureWindow currentCapture;
+      final int captureEpoch;
+      synchronized (this) {
+        currentCapture = recording ? captureWindow : null;
+        captureEpoch = epoch;
+      }
+      boolean captureWasActive = currentCapture != null;
       if (changed) {
         // A reused USB Link after Wi-Fi is still a new activation. Invalidate
         // queued workspace callbacks before publishing this route's ready state.
@@ -325,12 +332,14 @@ final class VoiceSession {
       Wire.put(hello, "protocol", BuildConfig.CC8_PROTOCOL);
       Wire.put(hello, "sample_rate", 16000);
       Wire.put(hello, "capture_active", captureWasActive);
+      Wire.put(hello, "capture_reject_version", 1);
       Wire.put(hello, "wake_mode", wakeMode);
       next.event(hello);
       if (captureWasActive) {
         JSONObject rebound = Wire.event("session_rebind");
         Wire.put(rebound, "capture_active", true);
         Wire.put(rebound, "epoch", captureEpoch);
+        Wire.put(rebound, "capture_id", currentCapture.id);
         Wire.put(rebound, "source", 7);
         Wire.put(rebound, "sample_rate", 16000);
         Wire.put(rebound, "render_gain", .35);
@@ -500,6 +509,8 @@ final class VoiceSession {
                 recording ? "listening" : "idle", j.optString("message", "Mac 已连接，点击开始语音"));
           }
         }
+      } else if ("capture_rejected".equals(event)) {
+        rejectCapture(j.opt("capture_id"), route);
       } else if ("screen_sleep".equals(event)) {
         if (recording) listener.screen(true);
       } else if ("screen_wake".equals(event)) {
@@ -985,8 +996,8 @@ final class VoiceSession {
     }
   }
 
-  @SuppressLint(
-      "MissingPermission") // Only MainActivity's authorized foreground opening or Start action may
+  @SuppressLint("MissingPermission") // Only MainActivity's authorized foreground opening or Start
+  // action may
   // call; checked again here.
   void startMicrophone() {
     startMicrophone(0);
@@ -1068,8 +1079,10 @@ final class VoiceSession {
                                       Math.min(
                                           1000, window.remaining(SystemClock.elapsedRealtime())));
                                 }
-                                // Stop only this worker's hardware, never a replacement
-                                // recording. This also unblocks a stalled native read.
+                                // Stop only this worker's hardware,
+                                // never a replacement
+                                // recording. This also unblocks a
+                                // stalled native read.
                                 if (recording
                                     && epoch == mine
                                     && !window.allows(SystemClock.elapsedRealtime()))
@@ -1077,7 +1090,8 @@ final class VoiceSession {
                               } catch (InterruptedException interrupted) {
                                 Thread.currentThread().interrupt();
                               } catch (RuntimeException alreadyReleased) {
-                                // The epoch owner may already have closed this record.
+                                // The epoch owner may already have
+                                // closed this record.
                               }
                             },
                             "cc8-test-capture-timeout");
@@ -1086,6 +1100,7 @@ final class VoiceSession {
                   }
                   JSONObject began = Wire.event("session_start");
                   Wire.put(began, "epoch", mine);
+                  Wire.put(began, "capture_id", window.id);
                   Wire.put(began, "source", 7);
                   Wire.put(began, "sample_rate", 16000);
                   Wire.put(began, "render_gain", .35);
@@ -1194,21 +1209,40 @@ final class VoiceSession {
         .start();
   }
 
+  private void rejectCapture(Object captureId, long route) {
+    synchronized (routeLock) {
+      CaptureWindow window = captureWindow;
+      if (!foreground || !currentRoute(route) || window == null || !window.id.equals(captureId))
+        return;
+      int rejectedEpoch = epoch;
+      if (stopMicrophone(window)) listener.captureRejected(rejectedEpoch + 1);
+    }
+  }
+
+  boolean captureRejectionCurrent(int stoppedEpoch) {
+    return foreground && !recording && epoch == stoppedEpoch;
+  }
+
   void stopMicrophone() {
+    stopMicrophone(null);
+  }
+
+  private boolean stopMicrophone(CaptureWindow expected) {
     // 先推进 epoch 再停止硬件，使阻塞 read 返回后的旧帧无法进入新会话。
     final int stoppedEpoch;
     final AudioRecord r;
     synchronized (this) {
+      if (expected != null && captureWindow != expected) return false;
       stoppedEpoch = epoch++;
       recording = false;
       captureWindow = null;
       r = recorder;
       recorder = null;
+      phase = expected == null ? "idle" : "error";
     }
     announcement = false;
     listener.playback(false);
     inputLevel = 0;
-    phase = "idle";
     if (r != null)
       try {
         r.stop();
@@ -1219,6 +1253,7 @@ final class VoiceSession {
     JSONObject stopped = Wire.event("session_stop");
     Wire.put(stopped, "epoch", stoppedEpoch);
     send(stopped);
+    return true;
   }
 
   private synchronized void cancelPlayback() {

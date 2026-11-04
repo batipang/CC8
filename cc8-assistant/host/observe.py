@@ -41,7 +41,7 @@ def default_output():
 
 
 @contextmanager
-def protect_window(address):
+def protect_window(address, *, exclusive=False):
     directory = address.parent
     if address.name != 'announce.sock' or directory.name != 'voice-runtime':
         # External health fixtures have no corresponding automation directory.
@@ -67,8 +67,8 @@ def protect_window(address):
                 or info.st_nlink != 1
             ):
                 raise OSError('Unsafe automation lock')
-            # Mutating QA takes an exclusive lease on this same file.
-            fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            mode = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+            fcntl.flock(lock, mode | fcntl.LOCK_NB)
             yield True
     finally:
         os.close(fd)
