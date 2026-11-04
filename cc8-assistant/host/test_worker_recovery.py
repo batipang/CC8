@@ -52,7 +52,7 @@ class WorkerRecoveryTests(unittest.TestCase):
         disconnected = threading.Event()
         answered = threading.Event()
         b.playback.playing = True
-        b.playback.pause_state = {
+        b.playback.pause.pause_state = {
             'token': 1,
             'generation': b.session.generation,
             'started': time.monotonic(),

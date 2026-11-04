@@ -21,6 +21,7 @@ REPRODUCTION = textwrap.dedent("""
     bridge.send = lambda packet: None
     bridge.log = lambda *args, **fields: None
     owner = getattr(bridge, 'playback', bridge)
+    pause_owner = getattr(owner, 'pause', owner)
     generation = bridge.session.generation
     ready = threading.Event()
     deadline_read = threading.Event()
@@ -41,7 +42,7 @@ REPRODUCTION = textwrap.dedent("""
 
     def event(name, **fields):
         if name == 'play_end':
-            owner.pause_state = Paused(token=1, generation=generation,
+            pause_owner.pause_state = Paused(token=1, generation=generation,
                                        started=time.monotonic() - 21)
     bridge.event = event
 

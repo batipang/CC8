@@ -120,7 +120,7 @@ class BargeReceiptTests(unittest.TestCase):
         for delay_first_pause in (False, True):
             with self.subTest(delay_first_pause=delay_first_pause):
                 b, _, _ = fixture.CaptureDiagnosticsTests().endpoint()
-                b.playback.device_can_pause = True
+                b.playback.set_pause_capability(True)
                 generation = b.generation
                 timeline = b.capture.echo.timeline
                 timeline.add(generation, 0, 1_000_000_000, np.ones(3200))
@@ -142,7 +142,7 @@ class BargeReceiptTests(unittest.TestCase):
                     receipt('playback_paused', first, 1020)
                 b.resume_after_rejection(first, generation)
                 # Force the host interleaving without depending on wall time.
-                b.playback.pause_cooldown = 0
+                b.playback.pause.pause_cooldown = 0
                 second_key = b.diagnostics.begin('voice')
                 b.capture.endpoint.voice_trace = second_key
                 second = b.pause_for_voice()
@@ -183,13 +183,13 @@ class BargeReceiptTests(unittest.TestCase):
 
     def test_pending_receipts_are_bounded_and_new_ack_retires_older_tokens(self):
         b, _, _ = fixture.CaptureDiagnosticsTests().endpoint()
-        b.playback.device_can_pause = True
+        b.playback.set_pause_capability(True)
         b.log = lambda *_args, **_fields: None
         generation = b.generation
         timeline = b.capture.echo.timeline
         tokens = []
         for _ in range(9):
-            b.playback.pause_cooldown = 0
+            b.playback.pause.pause_cooldown = 0
             token = b.pause_for_voice()
             self.assertIsNotNone(token)
             tokens.append(token)
@@ -209,7 +209,7 @@ class BargeReceiptTests(unittest.TestCase):
 
     def test_delayed_pause_publication_cannot_pause_new_owner(self):
         b, _, _ = fixture.CaptureDiagnosticsTests().endpoint()
-        b.playback.device_can_pause = True
+        b.playback.set_pause_capability(True)
         b.capture.endpoint.voice_trace = b.diagnostics.begin('voice')
         original = b.diagnostics.mark
         entered, release = threading.Event(), threading.Event()
