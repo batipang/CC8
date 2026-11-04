@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-dot-unconfirmed-start-20261104.1",
+  "release_id": "p0-pause-after-player-begin-20261104.1",
   "backend": {
-    "version": "0.14.34"
+    "version": "0.14.35"
   },
   "assistant": {
     "version": "0.9.18",
