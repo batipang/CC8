@@ -129,6 +129,55 @@ class MeasurementTests(unittest.TestCase):
                 self.assertEqual(result['summary']['samples'], 0)
                 self.assertNotIn('SECRET', path.read_text() + printed)
 
+    def test_changed_backend_instance_or_version_preserves_only_the_original_run(self):
+        original = {'bridge_version': '0.14.40', 'runtime_instance': 'a' * 32}
+        for replacement in (
+            {**original, 'runtime_instance': 'b' * 32},
+            {**original, 'bridge_version': '0.14.41'},
+            {},
+        ):
+            with self.subTest(replacement=replacement), tempfile.TemporaryDirectory() as folder:
+                path = Path(folder) / 'run.json'
+                book = TraceBook()
+                first = {'health': original, **book.report()}
+                ident = book.begin('text', 101)
+                book.finish(ident, 'completed')
+                second = {'health': original, **book.report()}
+                other = TraceBook()
+                other.finish(other.begin('text', 102), 'completed')
+                snapshots = iter((first, second, {'health': replacement, **other.report()}))
+                code, _ = self.execute(self.args(path), lambda *a, **k: next(snapshots))
+
+                result = json.loads(path.read_text())
+                self.assertEqual(code, 2)
+                self.assertEqual(result['capture']['state'], 'runtime_changed')
+                self.assertEqual(result['capture']['backend_version'], '0.14.40')
+                self.assertTrue(result['capture']['runtime_bound'])
+                self.assertEqual(result['coverage']['polls'], 2)
+                self.assertEqual([row['request_id'] for row in result['requests']], [ident])
+                self.assertNotIn(original['runtime_instance'], path.read_text())
+
+    def test_expected_version_requires_verifiable_source_and_rejects_wrong_version(self):
+        for health, expected_state in (
+            (
+                {'bridge_version': '0.14.39', 'runtime_instance': 'a' * 32},
+                'backend_version_mismatch',
+            ),
+            ({'bridge_version': '0.14.40'}, 'runtime_unconfirmed'),
+            ({'bridge_version': '0.14.40', 'runtime_instance': 'SECRET'}, 'invalid_snapshot'),
+        ):
+            with self.subTest(state=expected_state), tempfile.TemporaryDirectory() as folder:
+                path = Path(folder) / 'run.json'
+                args = self.args(path)
+                args.expect_backend = '0.14.40'
+                payload = {'health': health, **TraceBook().report()}
+                code, _ = self.execute(args, lambda *a, **k: payload)
+                result = json.loads(path.read_text())
+                self.assertEqual(code, 2)
+                self.assertEqual(result['capture']['state'], expected_state)
+                self.assertEqual(result['coverage']['polls'], 0)
+                self.assertNotIn('SECRET', path.read_text())
+
     def test_interrupt_saves_completed_receipts_and_returns_cancelled(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'run.json'
@@ -218,7 +267,19 @@ class MeasurementTests(unittest.TestCase):
                                 book.dot_stage(ident, 'dot_context_ready', at, False)
                                 book.finish(ident, 'completed')
                             peer.sendall(
-                                (json.dumps({'ok': True, **book.report()}) + '\n').encode()
+                                (
+                                    json.dumps(
+                                        {
+                                            'ok': True,
+                                            'health': {
+                                                'bridge_version': '0.14.40',
+                                                'runtime_instance': 'a' * 32,
+                                            },
+                                            **book.report(),
+                                        }
+                                    )
+                                    + '\n'
+                                ).encode()
                             )
                 except OSError:
                     if not stop.is_set():
@@ -242,6 +303,8 @@ class MeasurementTests(unittest.TestCase):
                         '0.05',
                         '--socket',
                         str(path),
+                        '--expect-backend',
+                        '0.14.40',
                         '--output',
                         str(output),
                     ],
@@ -261,6 +324,7 @@ class MeasurementTests(unittest.TestCase):
             self.assertEqual(errors, [])
             self.assertFalse(worker.is_alive())
             self.assertEqual(json.loads(output.read_text())['summary']['samples'], 1)
+            self.assertTrue(json.loads(output.read_text())['capture']['runtime_bound'])
             self.assertEqual(
                 json.loads(output.read_text())['dot_contexts']['thread']['new']['samples'], 1
             )
