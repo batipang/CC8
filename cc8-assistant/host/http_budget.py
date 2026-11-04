@@ -92,6 +92,7 @@ class BudgetSocket:
     def __init__(self, peer, budget):
         self.peer, self.budget = peer, budget
         self.requested_timeout = peer.gettimeout()
+        self.connect_deadline = None
         self._io_refs, self._closed = 0, False
 
     def __getattr__(self, name):
@@ -99,11 +100,18 @@ class BudgetSocket:
 
     def settimeout(self, value):
         self.requested_timeout = value
-        self.peer.settimeout(limited_timeout(value, self.budget.remaining()))
+        self.peer.settimeout(self.io_timeout(self.budget.remaining()))
+
+    def io_timeout(self, remaining):
+        if self.connect_deadline is not None:
+            remaining = min(remaining, self.connect_deadline - self.budget.clock())
+            if remaining <= 0:
+                raise TimeoutError('Proxy connection deadline exhausted')
+        return limited_timeout(self.requested_timeout, remaining)
 
     def call(self, operation, *args):
         with self.budget.io(nested=True) as left:
-            self.peer.settimeout(limited_timeout(self.requested_timeout, left))
+            self.peer.settimeout(self.io_timeout(left))
             return getattr(self.peer, operation)(*args)
 
     def recv(self, *args):
@@ -185,12 +193,26 @@ class BudgetAdapter(HTTPAdapter):
             def connect(self):
                 with budget.io(nested=True) as left:
                     self.timeout = limited_timeout(self.timeout, left)
-                    super().connect()
+                    self._connect_deadline = budget.clock() + self.timeout
+                    self._tunnel_socket = None
+                    try:
+                        super().connect()
+                        if budget.clock() >= self._connect_deadline:
+                            raise TimeoutError('Connection deadline exhausted')
+                    finally:
+                        if self._tunnel_socket is not None:
+                            self._tunnel_socket.connect_deadline = None
+                            self._tunnel_socket = None
                     self.sock = budget.wrap(self.sock)
 
             def _tunnel(self):
                 self.sock = budget.wrap(self.sock)
-                return super()._tunnel()
+                self._tunnel_socket = self.sock
+                self.sock.connect_deadline = self._connect_deadline
+                super()._tunnel()
+                # Native TLS inherits the raw socket timeout. Re-arm it even
+                # when CONNECT's entire reply was read in one buffered call.
+                self.sock.settimeout(self.sock.requested_timeout)
 
         class Pool(original):
             ConnectionCls = Connection
