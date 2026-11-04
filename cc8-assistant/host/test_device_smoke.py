@@ -29,6 +29,9 @@ from device_smoke import (
     MULTI_CLAUSE_TEXT,
     P0_DEVICE_PHASES,
     POST_DIALOGUE_SECONDS,
+    QA_LATENCY_PHASES,
+    QA_PLAYOUT_METRIC,
+    QA_STAGE_METRICS,
     RuntimeChanged,
     SmokeRun,
     main,
@@ -329,6 +332,70 @@ class DeviceAutomationTests(unittest.TestCase):
                 if case == 'source_changed':
                     runs[1].run.assert_not_called()
                     self.assertEqual(result['phases'][1]['reason'], 'suite_source_changed')
+
+    def test_qa_latency_dry_plan_has_thirty_samples_and_no_device_operations(self):
+        output = io.StringIO()
+        with (
+            patch('device_smoke.Device') as device,
+            patch('device_smoke.rpc') as request,
+            redirect_stdout(output),
+        ):
+            self.assertEqual(
+                main(['--runtime-root', '/unused', '--capture', '--qa-latency-suite']), 0
+            )
+            device.assert_not_called()
+            request.assert_not_called()
+        plan = json.loads(output.getvalue())
+        self.assertFalse(plan['execute'])
+        self.assertEqual(len(plan['phases']), 30)
+        self.assertEqual(plan['phases'][0]['name'], 'qa_01')
+        self.assertEqual(plan['phases'][-1]['name'], 'qa_30')
+        self.assertNotIn('logical_wifi_handover', plan['phases'][0]['checks'])
+        self.assertNotIn('announcement_and_playout', plan['phases'][0]['checks'])
+
+    def test_qa_latency_batch_counts_only_complete_samples_and_never_retries(self):
+        for fail_at in (None, 4):
+            runs = []
+
+            def make_run(options, checkpoint):
+                self.assertEqual(options, set(QA_LATENCY_PHASES[0][1]))
+                index = len(runs) + 1
+                stages = dict.fromkeys(QA_STAGE_METRICS, 100)
+                if index == fail_at:
+                    stages.pop(QA_STAGE_METRICS[0])
+                report = {
+                    'state': 'passed',
+                    'checks': [dict(name=name, state='passed') for name in planned_checks(options)],
+                    'cleanup_microphone_off_verified': True,
+                    'acoustic_evidence': {
+                        'post_playback_quiet_seconds': 20,
+                        'recognized_stimulus_matches': True,
+                        'qa_stage_latencies_ms': stages,
+                        'response_playout_timing': {
+                            'status': 'observed',
+                            QA_PLAYOUT_METRIC: 100 * index,
+                        },
+                    },
+                }
+                run = Mock(source_sha256='source', speech_source_sha256='voice')
+                run.run.side_effect = lambda: checkpoint(report) or report
+                runs.append(run)
+                return run
+
+            result = run_device_suite(make_run, lambda _: None, qa_latency=True)
+            self.assertFalse(result['audible_onset_measured'])
+            self.assertFalse(result['full_p0_acceptance'])
+            self.assertEqual(result['scope'], 'synthetic_qa_latency')
+            self.assertEqual(len(runs), fail_at or 30)
+            stats = result['latencies_ms'][QA_PLAYOUT_METRIC]
+            if fail_at:
+                self.assertEqual(result['state'], 'failed')
+                self.assertEqual(result['phases'][3]['reason'], 'suite_qa_stage_timing_incomplete')
+                self.assertTrue(all(phase['state'] == 'not_run' for phase in result['phases'][4:]))
+                self.assertEqual(stats, {'samples': 3, 'p50': 200, 'p95': 290})
+            else:
+                self.assertEqual(result['state'], 'passed')
+                self.assertEqual(stats, {'samples': 30, 'p50': 1550, 'p95': 2855})
 
     def test_fixed_suite_rejects_legacy_backend_before_device_access(self):
         from dataclasses import replace
@@ -1981,6 +2048,48 @@ class DeviceAutomationTests(unittest.TestCase):
                 else:
                     self.assertEqual(timing, {'status': case})
                 self.assertNotIn('a' * 32, json.dumps(evidence))
+
+    def test_qa_latency_phase_uses_fresh_voice_stages_and_skips_extra_playback(self):
+        for scenario in ('qa', 'tool'):
+            with self.subTest(scenario=scenario):
+                row = self.acoustic_row(
+                    request_id='a' * 32,
+                    scenario=scenario,
+                    error=None,
+                    gate='accepted',
+                    confirmed_playback_clauses=1,
+                )
+                del row['text']
+                row['stages'].update(
+                    utterance_end=0,
+                    asr_end=5,
+                    brain_start=10,
+                    first_clause=30,
+                    tts_start=32,
+                    first_pcm=35,
+                    playout_ack=50,
+                    playback_done=60,
+                    confirmed_playout_ack=50,
+                    confirmed_playback_done=60,
+                )
+                run, device, _, _ = self.acoustic_fixture(lambda _: [row], awake=True)
+                run.latency_sample = True
+                for name in ('preflight', 'maintenance_open', 'start_capture', 'home', 'cleanup'):
+                    setattr(run, name, Mock())
+                run.playback, run.handover = Mock(), Mock()
+                result = run.run()
+                self.assertEqual(result['state'], 'passed')
+                self.assertEqual(
+                    [check['name'] for check in result['checks']],
+                    planned_checks(set(QA_LATENCY_PHASES[0][1])),
+                )
+                self.assertEqual(
+                    result['acoustic_evidence']['qa_stage_latencies_ms'],
+                    dict(zip(QA_STAGE_METRICS, (5, 20, 3))) if scenario == 'qa' else {},
+                )
+                run.handover.assert_not_called()
+                run.playback.assert_not_called()
+                device.speak_probe.assert_called_once_with()
 
     def test_acoustic_cancelled_narration_is_not_a_completed_answer(self):
         row = self.acoustic_row(outcome='cancelled')
