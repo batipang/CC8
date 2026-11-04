@@ -112,12 +112,11 @@ class ObservationRun:
         self.gaps = 0
         self.clock_discontinuities = 0
         self.uptime_discontinuities = 0
-        self.last_wall = None
-        self.last_elapsed = None
+        # Callers supply both clocks relative to the start of this window.
+        self.last_wall = 0
+        self.last_elapsed = 0
 
-    def add(self, payload, elapsed, wall_elapsed, *, error=None):
-        if len(self.rows) >= self.limit:
-            raise ValueError('Observation capacity reached')
+    def _clock_breaks(self, elapsed, wall_elapsed):
         number(elapsed, 10**8)
         if (
             type(wall_elapsed) not in (int, float)
@@ -125,17 +124,21 @@ class ObservationRun:
             or abs(wall_elapsed) > 10**8
         ):
             raise ValueError('Invalid wall-clock sample')
+        gap = elapsed - self.last_elapsed
+        if gap < 0:
+            raise ValueError('Non-monotonic observation')
+        tolerance = max(5, 3 * self.interval)
+        return gap > tolerance, abs(wall_elapsed - self.last_wall - gap) > tolerance
+
+    def add(self, payload, elapsed, wall_elapsed, *, error=None):
+        if len(self.rows) >= self.limit:
+            raise ValueError('Observation capacity reached')
+        gap, clock_break = self._clock_breaks(elapsed, wall_elapsed)
         instance, sample = (None, None) if error else health_sample(payload)
         if error not in (None, 'ipc_unavailable', 'invalid_health', 'backend_version_mismatch'):
             raise ValueError('Invalid observation error')
-        if self.last_elapsed is not None:
-            gap = elapsed - self.last_elapsed
-            if gap < 0:
-                raise ValueError('Non-monotonic observation')
-            if gap > max(5, 3 * self.interval):
-                self.gaps += 1
-            if abs(wall_elapsed - self.last_wall - gap) > max(5, 3 * self.interval):
-                self.clock_discontinuities += 1
+        self.gaps += gap
+        self.clock_discontinuities += clock_break
         row = {
             'elapsed_seconds': round(elapsed, 3),
             'wall_elapsed_seconds': round(wall_elapsed, 3),
@@ -181,7 +184,12 @@ class ObservationRun:
         self.rows.append(row)
         self.last_elapsed, self.last_wall = elapsed, wall_elapsed
 
-    def report(self):
+    def report(self, *, end=None):
+        # The final sleep can cross a deadline before another health poll runs.
+        # Account for its coverage without adding a synthetic health sample.
+        final_gap, final_clock_break = (
+            self._clock_breaks(*end) if end is not None else (False, False)
+        )
         rows = deepcopy(self.rows)
         successful = [row for row in rows if row['error'] is None]
         grouped = {}
@@ -212,8 +220,8 @@ class ObservationRun:
                 for row in successful
             ),
             'disconnected_polls': sum(not row['connected'] for row in successful),
-            'poll_gaps': self.gaps,
-            'wall_clock_discontinuities': self.clock_discontinuities,
+            'poll_gaps': self.gaps + final_gap,
+            'wall_clock_discontinuities': self.clock_discontinuities + final_clock_break,
             'uptime_discontinuities': self.uptime_discontinuities,
             'segments': [
                 {
