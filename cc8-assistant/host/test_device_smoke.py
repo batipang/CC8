@@ -97,7 +97,7 @@ class DeviceAutomationTests(unittest.TestCase):
                 'transport': 'usb',
                 'test_capture_limit_supported': True,
             },
-            {'camera_open': False, 'wake_checked': True},
+            {'camera_open': False, 'wake_checked': True, 'screen_sleeping': False},
         )
         health = {
             'ok': True,
@@ -409,7 +409,7 @@ class DeviceAutomationTests(unittest.TestCase):
         device.home.assert_not_called()
 
     def arm_fixture_capture(self, run, device, health):
-        health.update(microphone_active=True, local_wake_ready=True)
+        health.update(microphone_active=True, local_wake_ready=True, waiting_for_wake=True)
         device.status.return_value[0].update(
             microphone_active=True,
             test_capture_limit_ms=run.capture_limit_ms,
@@ -744,10 +744,10 @@ class DeviceAutomationTests(unittest.TestCase):
             run.handover()
 
     def test_standby_cannot_accept_an_already_black_screen_as_15_minutes(self):
-        run, device, _, _ = self.fixture(capture=True, standby=True)
+        run, device, health, _ = self.fixture(capture=True, standby=True)
         run.start_capture = Mock()
-        run.health = lambda: {'microphone_active': True, 'connected': True}
-        d, ui = device.status.return_value
+        self.arm_fixture_capture(run, device, health)
+        _, ui = device.status.return_value
         ui['screen_sleeping'] = True
         with self.assertRaisesRegex(CheckFailure, 'too_early'):
             run.idle()
@@ -868,7 +868,7 @@ class DeviceAutomationTests(unittest.TestCase):
     def test_real_idle_waits_full_duration(self):
         run, device, health, now = self.fixture(capture=True, standby=True)
         run.start_capture = Mock()
-        health['microphone_active'] = True
+        self.arm_fixture_capture(run, device, health)
         original = device.status.return_value
         device.status.side_effect = lambda: (
             dict(original[0]),
@@ -878,11 +878,75 @@ class DeviceAutomationTests(unittest.TestCase):
         self.assertGreaterEqual(now[0], 900)
         self.assertLess(now[0], 906)
         self.assertFalse(run.report('passed')['full_p0_acceptance'])
+        self.assertEqual(
+            run.report('passed')['standby_evidence'],
+            {
+                'last_awake_seconds': 895,
+                'black_screen_poll_started_seconds': 900,
+                'first_black_screen_seconds': 900,
+            },
+        )
+
+    def test_standby_rejects_black_screen_seen_at_895_seconds(self):
+        run, device, health, now = self.fixture(capture=True, standby=True)
+        run.start_capture = Mock()
+        self.arm_fixture_capture(run, device, health)
+        d, ui = device.status.return_value
+        device.status.side_effect = lambda: (d, {**ui, 'screen_sleeping': now[0] >= 895})
+        with self.assertRaisesRegex(CheckFailure, 'idle_black_screen_too_early'):
+            run.idle()
+        self.assertEqual(
+            run.report('failed')['standby_evidence']['first_black_screen_seconds'], 895
+        )
+
+    def test_standby_rejects_expired_device_lease_even_if_host_still_reports_capture(self):
+        run, device, health, now = self.fixture(capture=True, standby=True)
+        run.start_capture = Mock()
+        self.arm_fixture_capture(run, device, health)
+        d, ui = device.status.return_value
+
+        def status():
+            asleep = now[0] >= 900
+            return (
+                {**d, 'test_capture_remaining_ms': 0 if asleep else 1000000},
+                {**ui, 'screen_sleeping': asleep},
+            )
+
+        device.status.side_effect = status
+        with self.assertRaisesRegex(CheckFailure, 'device_test_capture_limit_not_active'):
+            run.idle()
+
+    def test_standby_requires_observed_awake_state_even_after_wait_budget(self):
+        run, device, health, now = self.fixture(capture=True, standby=True)
+        self.arm_fixture_capture(run, device, health)
+        run.start_capture = lambda: now.__setitem__(0, 901)
+        device.status.return_value[1]['screen_sleeping'] = True
+        with self.assertRaisesRegex(CheckFailure, 'idle_awake_state_unobserved'):
+            run.idle()
+
+    def test_standby_rejects_a_black_screen_poll_that_crosses_900_seconds(self):
+        run, device, health, now = self.fixture(capture=True, standby=True)
+        run.start_capture = Mock()
+        self.arm_fixture_capture(run, device, health)
+        d, ui = device.status.return_value
+
+        def status():
+            if now[0] == 895:
+                now[0] += 6
+                return d, {**ui, 'screen_sleeping': True}
+            return d, ui
+
+        device.status.side_effect = status
+        with self.assertRaisesRegex(CheckFailure, 'idle_black_screen_too_early'):
+            run.idle()
+        evidence = run.report('failed')['standby_evidence']
+        self.assertEqual(evidence['black_screen_poll_started_seconds'], 895)
+        self.assertEqual(evidence['first_black_screen_seconds'], 901)
 
     def test_idle_timeout_is_bounded(self):
-        run, _, health, now = self.fixture(capture=True, standby=True)
+        run, device, health, now = self.fixture(capture=True, standby=True)
         run.start_capture = Mock()
-        health['microphone_active'] = True
+        self.arm_fixture_capture(run, device, health)
         with self.assertRaisesRegex(CheckFailure, 'idle_black_screen_timeout'):
             run.idle()
         self.assertGreaterEqual(now[0], 970)
@@ -894,12 +958,26 @@ class DeviceAutomationTests(unittest.TestCase):
             run.acoustic_probe()
         device.speak_probe.assert_not_called()
 
+    def test_standby_probe_cannot_speak_after_the_device_capture_lease_expires(self):
+        run, device, _, _ = self.acoustic_fixture(lambda _: [])
+        status = device.status.side_effect
+
+        def expired():
+            d, ui = status()
+            return {**d, 'test_capture_remaining_ms': 0}, ui
+
+        device.status.side_effect = expired
+        with self.assertRaisesRegex(CheckFailure, 'device_test_capture_limit_not_active'):
+            run.acoustic_probe()
+        device.speak_probe.assert_not_called()
+
     def acoustic_fixture(self, rows, *, awake=False, before=()):
         run, device, health, now = self.fixture(
             capture=True, standby=not awake, acoustic=not awake, awake_dialogue=awake
         )
         health['microphone_active'] = True
         health['waiting_for_wake'] = True
+        health['local_wake_ready'] = True
         spoken = [False]
 
         def speak():
@@ -911,8 +989,8 @@ class DeviceAutomationTests(unittest.TestCase):
                     'foreground': True,
                     'microphone_active': True,
                     'vision_active': False,
-                    'test_capture_limit_ms': 180000,
-                    'test_capture_remaining_ms': 150000,
+                    'test_capture_limit_ms': run.capture_limit_ms,
+                    'test_capture_remaining_ms': 150000 if awake else 220000,
                 },
                 {'camera_open': False, 'screen_sleeping': not awake and not spoken[0]},
             )
@@ -985,9 +1063,7 @@ class DeviceAutomationTests(unittest.TestCase):
                 else:
                     row['stages'].pop('playout_ack')
                 run, device, _, now = self.acoustic_fixture(lambda _: [row], awake=True)
-                run.require_idle_probe_capture = Mock(
-                    return_value={'test_capture_remaining_ms': 50000}
-                )
+                run.capture_status = Mock(return_value={'test_capture_remaining_ms': 50000})
                 with self.assertRaisesRegex(CheckFailure, 'synthetic_acoustic_chain_not_confirmed'):
                     run.acoustic_probe(awake=True)
                 self.assertEqual(now[0], 25)
