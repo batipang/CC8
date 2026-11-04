@@ -182,6 +182,15 @@ USB 激活失败由尝试激活的通道处理。即使触发路由复查的是 
 
 APK 0.9.32（code 69）为合成插话验收增加 `test_playback_stop` 设备回执。它只在显式限时收音中可见，记录停止的播放器代次和 ID、取消代次，以及 Android 完成 AudioTrack 暂停和清队列后的单调时钟。收音到期、退出或换通道后，旧回执不可读。无播放器、未建立 AudioTrack 或调用异常时不产生回执。测试将旧播报和替代回答与回执核对，报告只写 `device_stop_applied`。这里确认的是播放器操作应用时刻，声学停声仍需独立测量。当前候选尚未部署。
 
+### 固定合成停止词
+
+```sh
+./cc8 verify-device --runtime-root /absolute/live/workspace --capture --synthetic-stop
+./cc8 verify-device --runtime-root /absolute/live/workspace --capture --synthetic-stop --execute
+```
+
+独立用例要求后台 0.14.59 的本地停止检测能力和 APK 0.9.32 的停播回执。固定问答唤醒后，确认 CC8 正在播报，再由 Mac 播放一次“停一下”。通过条件包括恰好一次新的本地命中、旧播报取消、同代播放器确认停播，且从新播报开始到停播后 20 秒内无新增云端 ASR 请求或准入对话。报告仅保存计数、布尔值和观察时长，结束沿用双端停采检查。此处检查本地命令及播放器行为，普通音量真人停止指令与声学停声延迟仍单独验收。
+
 准入依据是gate=accepted、绑定generation、brain_start或任务回执，任何一个成立就不能用“拒绝候选”标签隐藏额外对话。只有无准入证据、明确rejected且门控为empty/echo_text/echo_render/weak_near/wake_closed的候选可单列；未知、错误、stale/cancelled不会被忽略。候选可在20秒窗口内完成分类，已确认的暂停还须有resume_ack。计数保留真实暂停，自动问答完成不等于纯播报没有误暂停，P0-04仍独立验收。
 
 2026-11-04的0.14.17首轮实机在第九项按两条原始voice记录提前失败。独立数字诊断证明一个准入问题已播完，另一条generation=null、echo_text/rejected，无大脑或任务，暂停后恢复。原失败和缺失的播后20秒观察保留，未重放刺激或把原轮次改成通过。候选统计的离线修复不改变音频门槛、APK、模型或运行后台；新检查器实机仍须另行验证。
