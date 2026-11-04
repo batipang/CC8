@@ -1,8 +1,12 @@
 from pathlib import Path
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
+from unittest.mock import Mock, patch
+
+import numpy as np
 
 from caption_timing import CaptionTiming
 from voice_tools import VoiceTools
@@ -38,8 +42,8 @@ class TimingTests(unittest.TestCase):
 
 
 class IdleTests(unittest.TestCase):
-    def bridge(self):
-        b = Bridge(None, None)
+    def bridge(self, wake_detector=None):
+        b = Bridge(None, None, wake_detector=wake_detector)
         b.session.active = True
         b.session.connection = object()
         b.session.last_interaction = time.monotonic() - 901
@@ -91,6 +95,66 @@ class IdleTests(unittest.TestCase):
         b.session.active = False
         b.idle_tick()
         self.assertFalse(b.session.screen_sleeping)
+
+    def test_idle_does_not_close_while_speech_is_forming_or_waiting_in_queue(self):
+        for work in ('speech', 'recognition', 'response'):
+            with self.subTest(work=work):
+                b = self.bridge()
+                if work == 'speech':
+                    b.capture.endpoint.vad.talking = True
+                    b.idle_tick()
+                else:
+                    with patch.object(getattr(b, work).queue, 'empty', return_value=False):
+                        b.idle_tick()
+                self.assertTrue(b.session.awake)
+                self.assertFalse(b.session.screen_sleeping)
+                self.assertNotIn('screen_sleep', b.events)
+
+    def test_local_wake_cannot_be_overwritten_by_an_idle_decision(self):
+        b = self.bridge(wake_detector=Mock(**{'feed.return_value': 'Bumblebee'}))
+        b.session.awake = False
+        b.session.wake = True
+        decided, proceed = threading.Event(), threading.Event()
+        original = b.session.set_awake
+        errors = []
+
+        def set_awake(value):
+            if not value:
+                decided.set()
+                if not proceed.wait(2):
+                    raise TimeoutError('standby test did not release the decision')
+            original(value)
+
+        def idle_tick():
+            try:
+                b.idle_tick()
+            except Exception as error:
+                errors.append(error)
+
+        accepted = None
+        with patch.object(b.session, 'set_awake', side_effect=set_awake):
+            timer = threading.Thread(target=idle_tick, daemon=True)
+            timer.start()
+            try:
+                self.assertTrue(decided.wait(2))
+                # If the decision escaped the guard, place a valid wake
+                # immediately before the timer applies that stale decision.
+                if b.guard.acquire(blocking=False):
+                    try:
+                        accepted = b.wake.feed(np.zeros(160), b.generation)
+                    finally:
+                        b.guard.release()
+            finally:
+                proceed.set()
+                timer.join(2)
+        self.assertFalse(timer.is_alive())
+        self.assertEqual(errors, [])
+        if accepted is None:
+            accepted = b.wake.feed(np.zeros(160), b.generation)
+        self.assertTrue(accepted)
+        self.assertTrue(b.session.awake)
+        self.assertFalse(b.session.screen_sleeping)
+        self.assertEqual(b.events, ['screen_sleep', 'screen_wake', 'status'])
 
     def test_device_wake_receipt_resets_standby_state_and_timer(self):
         b = self.bridge()
