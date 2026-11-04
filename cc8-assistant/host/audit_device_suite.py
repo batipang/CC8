@@ -21,6 +21,7 @@ from device_smoke import (
 )
 from private_output import read_private_json
 from qa_speech import SCENARIO_DIGESTS
+from soak_background import valid_background
 
 VERSION = r'[0-9]{1,8}(?:\.[0-9]{1,8}){2}'
 SOURCE_DIGEST = r'[a-f0-9]{64}'
@@ -73,6 +74,7 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
     qa_latency = scope == 'synthetic_qa_latency'
     interruption = scope == 'synthetic_interruption_latency'
     echo_soak = scope == ECHO_SOAK_SCOPE
+    background = data.get('background')
     extended = data.get('extended_voice_evidence', False)
     room_latency = data.get('response_acoustic_evidence', False)
     scenario = data.get('latency_scenario', 'qa')
@@ -90,6 +92,7 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
             and tuple(map(int, backend.split('.')))
             < tuple(map(int, ECHO_SOAK_MIN_BACKEND.split('.')))
         )
+        or (background is not None and (not echo_soak or not valid_background(background)))
         or (room_latency and not qa_latency)
         or not isinstance(scenario, str)
         or scenario not in SCENARIO_DIGESTS
@@ -199,6 +202,7 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
         latency_scenario=scenario,
         interruption=interruption,
         echo_soak=echo_soak,
+        background=background,
     )
     result['completed_phases'] = sum(p['state'] == 'passed' for p in reviewed['phases'])
     if reviewed['state'] != 'passed':
@@ -212,6 +216,8 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
         return {**result, 'reason': 'report_not_completed'}
     if echo_soak:
         result['echo_soak_totals'] = reviewed['echo_soak_totals']
+        if background is not None:
+            result['background'] = background
     if qa_latency or interruption:
         result['latencies_ms'] = reviewed['latencies_ms']
         if scenario != 'qa':
