@@ -77,7 +77,7 @@ class WireRpc(FakeRpc, CodexRpc):
             return FakeRpc.request(self, method, params, timeout)
         self.calls.append((method, params))
         if self.approval:
-            self.approval_seen.set()
+            self._record_approval({'params': {'threadId': THREAD, 'turnId': TURN}})
         wire = b''.join((json.dumps(row) + '\n').encode() for row in self.wire_events)
         self.process = SimpleNamespace(stdout=io.BytesIO(wire))
         CodexRpc._read(self)

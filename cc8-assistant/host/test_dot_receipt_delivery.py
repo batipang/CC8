@@ -305,7 +305,7 @@ class ReceiptDeliveryTests(unittest.TestCase):
     def test_approval_empty_final_and_listener_delivery_error_keep_classification(self):
         rpc, updates = ReceivingRpc(), []
         _, stream = self.suspended(rpc, updates)
-        rpc.approval_seen.set()
+        rpc._record_approval({'params': {'threadId': 'voice-thread', 'turnId': 'stream-turn'}})
         rpc.complete('')
         with self.assertRaises(DotApprovalRequired):
             list(stream)
