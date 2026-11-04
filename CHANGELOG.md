@@ -1,5 +1,10 @@
 # Changelog
 
+## Backend 0.14.61 — separate web and local tool latency samples
+
+- Add fixed public web lookups and read-only local calculations to the
+  synthetic timing suite. Require evidence of the intended route.
+
 ## Assistant 0.9.34 — record when stop updates the playback visuals
 
 - In bounded capture tests, associate the first cleared caption, progress and

@@ -14,7 +14,7 @@ from session_ports import EventSink, MetricSink
 from echo_pipeline import EchoPipeline
 from endpoint_pipeline import EndpointPipeline
 from playback_evidence import PlaybackEvidence, Probe
-from qa_speech import QUESTIONS, normalize_question
+from qa_speech import ALL_QUESTIONS, normalize_question
 
 
 @dataclass(frozen=True)
@@ -81,7 +81,7 @@ class CapturePipeline:
         return owner
 
     def arm_response_probe(self, case):
-        if type(case) is not int or not 1 <= case <= len(QUESTIONS):
+        if type(case) is not int or not 1 <= case <= len(ALL_QUESTIONS):
             raise ValueError('Invalid public QA case')
         if (
             not self.hooks.active()
@@ -93,7 +93,7 @@ class CapturePipeline:
         self.response_probe = ResponseAcoustic(
             token,
             self.hooks.epoch(),
-            normalize_question(QUESTIONS[case - 1]),
+            normalize_question(ALL_QUESTIONS[case - 1]),
             time.monotonic() + 120,
         )
         return token
