@@ -1,6 +1,7 @@
 """Automation fails closed and restores capture; fixtures never contact hardware."""
 
 from contextlib import redirect_stdout, redirect_stderr
+import fcntl
 import io
 import json
 from pathlib import Path
@@ -24,10 +25,13 @@ from device_smoke import (
     CheckFailure,
     Device,
     MULTI_CLAUSE_TEXT,
+    P0_DEVICE_PHASES,
     SmokeRun,
     main,
     objects,
+    planned_checks,
     rpc,
+    run_device_suite,
     summarize_capture_clock,
     valid_leading_evidence,
 )
@@ -177,6 +181,8 @@ class DeviceAutomationTests(unittest.TestCase):
             ['--synthetic-barge'],
             ['--capture', '--standby', '--synthetic-barge'],
             ['--wake-self-playback'],
+            ['--p0-device-suite'],
+            ['--capture', '--p0-device-suite', '--active-handover'],
             ['--active-handover'],
             ['--all-route-loss'],
             ['--capture', '--standby', '--all-route-loss'],
@@ -189,6 +195,169 @@ class DeviceAutomationTests(unittest.TestCase):
                 with self.assertRaises(SystemExit), patch('device_smoke.Device') as device:
                     main(['--runtime-root', '/unused', *flags])
                 device.assert_not_called()
+
+    def test_fixed_device_suite_has_three_distinct_standby_cycles(self):
+        output = io.StringIO()
+        with (
+            patch('device_smoke.Device') as device,
+            patch('device_smoke.rpc') as query,
+            redirect_stdout(output),
+        ):
+            self.assertEqual(
+                main(['--runtime-root', '/unused', '--capture', '--p0-device-suite']), 0
+            )
+            device.assert_not_called()
+            query.assert_not_called()
+        plan = json.loads(output.getvalue())
+        self.assertFalse(plan['full_p0_acceptance'])
+        phases = plan['phases']
+        self.assertEqual(len(phases), 5)
+        self.assertIn(ACTIVE_HANDOVER_CHECK, phases[0]['checks'])
+        self.assertIn(ALL_ROUTE_LOSS_CHECK, phases[0]['checks'])
+        self.assertIn(WAKE_SELF_CHECK, phases[0]['checks'])
+        self.assertIn(BARGE_CHECK, phases[1]['checks'])
+        for index, phase in enumerate(phases[2:], start=1):
+            self.assertEqual(phase['name'], f'standby_{index}')
+            self.assertEqual(
+                phase['checks'][-2:],
+                [
+                    'real_idle_black_screen',
+                    'synthetic_acoustic_wake_and_response',
+                ],
+            )
+
+    def test_device_suite_does_not_retry_or_accept_missing_checks_and_cleanup(self):
+        for case in (
+            'passed',
+            'failed',
+            'interrupted',
+            'cleanup_unconfirmed',
+            'missing_check',
+            'missing_cleanup',
+            'source_changed',
+        ):
+            with self.subTest(case=case):
+                runs, saves = [], []
+
+                def make_run(options, checkpoint):
+                    index = len(runs)
+                    run = Mock(
+                        source_sha256='changed'
+                        if index == 1 and case == 'source_changed'
+                        else 'source',
+                        speech_source_sha256='speech',
+                    )
+                    runs.append(run)
+                    expected = planned_checks(options)
+                    if case == 'missing_check' and index == 1:
+                        expected.pop()
+                    report = {
+                        'state': case
+                        if index == 1 and case in ('failed', 'interrupted', 'cleanup_unconfirmed')
+                        else 'passed',
+                        'checks': [dict(name=name, state='passed') for name in expected],
+                        'cleanup_microphone_off_verified': not (
+                            index == 1 and case == 'missing_cleanup'
+                        ),
+                    }
+                    run.run.side_effect = lambda: checkpoint(report) or report
+                    return run
+
+                result = run_device_suite(
+                    make_run, lambda value: saves.append(json.loads(json.dumps(value)))
+                )
+                self.assertEqual(saves[-1], result)
+                self.assertFalse(result['full_p0_acceptance'])
+                if case == 'passed':
+                    self.assertEqual(len(runs), len(P0_DEVICE_PHASES))
+                    self.assertEqual(result['state'], 'passed')
+                else:
+                    self.assertEqual(len(runs), 2)
+                    self.assertEqual(
+                        [row['state'] for row in result['phases'][2:]], ['not_run'] * 3
+                    )
+                    self.assertNotEqual(result['state'], 'passed')
+                if case == 'source_changed':
+                    runs[1].run.assert_not_called()
+                    self.assertEqual(result['phases'][1]['reason'], 'suite_source_changed')
+
+    def test_suite_keeps_one_runtime_lock_and_rejects_instance_change(self):
+        import device_smoke
+        from release_info import RELEASE
+
+        snapshot = dict(
+            ok=True,
+            bridge_version=RELEASE.backend_version,
+            protocol_version=RELEASE.protocol_version,
+            release_id=RELEASE.release_id,
+            runtime_instance='first-private-instance',
+        )
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder)
+            calls = []
+
+            def query(_path, payload, _timeout=5):
+                self.assertEqual(payload, {'operation': 'health'})
+                return dict(
+                    snapshot,
+                    runtime_instance='new-instance'
+                    if len(calls) == 2
+                    else snapshot['runtime_instance'],
+                )
+
+            def smoke(device, request, checkpoint, expected_apk, **options):
+                calls.append(device)
+                with (directory / 'automation-test.lock').open('rb') as other:
+                    with self.assertRaises(BlockingIOError):
+                        fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                run = Mock(source_sha256='source', speech_source_sha256='speech')
+
+                def run_phase():
+                    try:
+                        request({'operation': 'health'})
+                    except CheckFailure as error:
+                        return dict(state='failed', checks=[{'reason': str(error)}])
+                    return dict(
+                        state='passed',
+                        cleanup_microphone_off_verified=True,
+                        checks=[
+                            dict(name=name, state='passed') for name in planned_checks(set(options))
+                        ],
+                    )
+
+                run.run.side_effect = run_phase
+                return run
+
+            with (
+                patch('device_smoke.rpc', side_effect=query),
+                patch('device_smoke.private_directory', return_value=directory),
+                patch('device_smoke.Device') as device,
+                patch('device_smoke.SmokeRun', side_effect=smoke),
+                patch('device_smoke.sys.platform', 'linux'),
+                redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(
+                    main(
+                        [
+                            '--runtime-root',
+                            str(device_smoke.ROOT),
+                            '--capture',
+                            '--p0-device-suite',
+                            '--execute',
+                        ]
+                    ),
+                    2,
+                )
+                device.assert_called_once()
+            self.assertEqual(len(calls), 2)
+            self.assertIs(calls[0], calls[1])
+            report = next(directory.glob('device-suite-*.json')).read_text()
+            self.assertNotIn('first-private-instance', report)
+            result = json.loads(report)
+            self.assertEqual(
+                result['phases'][1]['report']['checks'][0]['reason'], 'suite_runtime_changed'
+            )
+            self.assertEqual(result['phases'][2]['state'], 'not_run')
 
     def test_awake_dialogue_plan_never_calls_device_and_is_separate_from_standby(self):
         plan_output = io.StringIO()

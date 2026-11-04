@@ -65,6 +65,41 @@ ALL_ROUTE_LOSS_REQUEST = {'operation': 'transport_all_test'}
 WAKE_SELF_CHECK = 'self_playback_does_not_wake'
 POST_DIALOGUE_SECONDS = 20
 STANDBY_SECONDS = 900
+SMOKE_OPTIONS = (
+    'capture',
+    'standby',
+    'acoustic',
+    'awake_dialogue',
+    'synthetic_barge',
+    'wake_self_playback',
+    'active_handover',
+    'all_route_loss',
+    'multi_clause',
+    'playback_evidence',
+    'clock_evidence',
+    'capture_clock_evidence',
+    'leading_acoustic_evidence',
+)
+P0_DEVICE_PHASES = (
+    (
+        'transport_and_self_wake',
+        ('capture', 'multi_clause', 'active_handover', 'wake_self_playback', 'all_route_loss'),
+    ),
+    (
+        'interruption_and_playback',
+        (
+            'capture',
+            'synthetic_barge',
+            'capture_clock_evidence',
+            'playback_evidence',
+            'clock_evidence',
+            'leading_acoustic_evidence',
+        ),
+    ),
+    ('standby_1', ('capture', 'standby', 'acoustic')),
+    ('standby_2', ('capture', 'standby', 'acoustic')),
+    ('standby_3', ('capture', 'standby', 'acoustic')),
+)
 
 
 class CheckFailure(RuntimeError):
@@ -1503,6 +1538,78 @@ class SmokeRun:
         return self.report(state)
 
 
+def planned_checks(options):
+    return (
+        [*CHECKS[:2], MULTI_CLAUSE_CHECK if 'multi_clause' in options else CHECKS[2], CHECKS[3]]
+        + (
+            [CHECKS[4]]
+            + ([CAPTURE_CLOCK_CHECK] if 'capture_clock_evidence' in options else [])
+            + ([CHECKS[9]] if 'playback_evidence' in options else [])
+            + ([RENDER_CLOCK_CHECK] if 'clock_evidence' in options else [])
+            + ([LEADING_ACOUSTIC_CHECK] if 'leading_acoustic_evidence' in options else [])
+            + ([ACTIVE_HANDOVER_CHECK] if 'active_handover' in options else [])
+            + ([WAKE_SELF_CHECK] if 'wake_self_playback' in options else [])
+            + ([AWAKE_DIALOGUE_CHECK] if {'awake_dialogue', 'synthetic_barge'} & options else [])
+            + ([BARGE_CHECK] if 'synthetic_barge' in options else [])
+            + list(CHECKS[5:7])
+            + ([ALL_ROUTE_LOSS_CHECK] if 'all_route_loss' in options else [])
+            if 'capture' in options
+            else []
+        )
+        + ([CHECKS[7]] if 'standby' in options else [])
+        + ([CHECKS[8]] if 'acoustic' in options else [])
+    )
+
+
+def run_device_suite(make_run, save):
+    phases = [
+        dict(name=name, state='not_run', expected_checks=planned_checks(set(options)))
+        for name, options in P0_DEVICE_PHASES
+    ]
+    suite = dict(
+        schema=1,
+        scope='fixed_device_suite',
+        state='running',
+        phases=phases,
+        full_p0_acceptance=False,
+        physical_usb_unplug_tested=False,
+        human_accuracy_asserted=False,
+    )
+    save(suite)
+    source = None
+    for phase, (_, options) in zip(phases, P0_DEVICE_PHASES):
+        phase['state'] = 'running'
+
+        def checkpoint(report, phase=phase):
+            phase['report'] = report
+            save(suite)
+
+        save(suite)
+        run = make_run(set(options), checkpoint)
+        if source is None:
+            source = (run.source_sha256, run.speech_source_sha256)
+        if (run.source_sha256, run.speech_source_sha256) != source:
+            phase.update(state='failed', reason='suite_source_changed')
+        else:
+            result = run.run()
+            phase['report'] = result
+            phase['state'] = result['state']
+            if phase['state'] == 'passed' and (
+                result['cleanup_microphone_off_verified'] is not True
+                or [(row['name'], row['state']) for row in result['checks']]
+                != [(name, 'passed') for name in phase['expected_checks']]
+            ):
+                phase.update(state='failed', reason='suite_phase_evidence_incomplete')
+        if phase['state'] != 'passed':
+            suite['state'] = phase['state']
+            save(suite)
+            return suite
+        save(suite)
+    suite['state'] = 'passed'
+    save(suite)
+    return suite
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--runtime-root', type=Path, required=True)
@@ -1513,6 +1620,11 @@ def main(argv=None):
         '--capture',
         action='store_true',
         help='Explicitly enable bounded foreground mic lifecycle tests',
+    )
+    parser.add_argument(
+        '--p0-device-suite',
+        action='store_true',
+        help='Run fixed device checks and three separate standby cycles with one runtime lock',
     )
     parser.add_argument(
         '--standby',
@@ -1575,6 +1687,9 @@ def main(argv=None):
         help='Require corroboration of the leading blocks of the fixed speaker phrase',
     )
     args = parser.parse_args(argv)
+    options = {key for key in SMOKE_OPTIONS if getattr(args, key)}
+    if args.p0_device_suite and options != {'capture'}:
+        parser.error('--p0-device-suite requires --capture and accepts no individual check flags')
     if args.standby and not args.capture or args.acoustic and not args.standby:
         parser.error('--standby requires --capture; --acoustic requires --standby')
     if args.awake_dialogue and (not args.capture or args.standby):
@@ -1599,40 +1714,28 @@ def main(argv=None):
         parser.error('--capture-clock-evidence requires --capture')
     if args.leading_acoustic_evidence and not args.playback_evidence:
         parser.error('--leading-acoustic-evidence requires --playback-evidence')
-    plan = {
-        'checks': [*CHECKS[:2], MULTI_CLAUSE_CHECK if args.multi_clause else CHECKS[2], CHECKS[3]]
-        + (
-            [CHECKS[4]]
-            + ([CAPTURE_CLOCK_CHECK] if args.capture_clock_evidence else [])
-            + ([CHECKS[9]] if args.playback_evidence else [])
-            + ([RENDER_CLOCK_CHECK] if args.clock_evidence else [])
-            + ([LEADING_ACOUSTIC_CHECK] if args.leading_acoustic_evidence else [])
-            + ([ACTIVE_HANDOVER_CHECK] if args.active_handover else [])
-            + ([WAKE_SELF_CHECK] if args.wake_self_playback else [])
-            + ([AWAKE_DIALOGUE_CHECK] if args.awake_dialogue or args.synthetic_barge else [])
-            + ([BARGE_CHECK] if args.synthetic_barge else [])
-            + list(CHECKS[5:7])
-            + ([ALL_ROUTE_LOSS_CHECK] if args.all_route_loss else [])
-            if args.capture
-            else []
-        )
-        + ([CHECKS[7]] if args.standby else [])
-        + ([CHECKS[8]] if args.acoustic else []),
-        'execute': args.execute,
-        'capture': args.capture,
-        'awake_dialogue': args.awake_dialogue,
-        'synthetic_barge': args.synthetic_barge,
-        'wake_self_playback': args.wake_self_playback,
-        'active_handover': args.active_handover,
-        'all_route_loss': args.all_route_loss,
-        'multi_clause': args.multi_clause,
-        'playback_evidence': args.playback_evidence,
-        'clock_evidence': args.clock_evidence,
-        'capture_clock_evidence': args.capture_clock_evidence,
-        'leading_acoustic_evidence': args.leading_acoustic_evidence,
-        'full_p0_acceptance': False,
-    }
     if not args.execute:
+        if args.p0_device_suite:
+            plan = {
+                'phases': [
+                    dict(name=name, checks=planned_checks(set(flags)))
+                    for name, flags in P0_DEVICE_PHASES
+                ],
+                'execute': False,
+                'capture': True,
+                'full_p0_acceptance': False,
+            }
+        else:
+            plan = {
+                'checks': planned_checks(options),
+                'execute': False,
+                **{
+                    key: getattr(args, key)
+                    for key in SMOKE_OPTIONS
+                    if key not in ('standby', 'acoustic')
+                },
+                'full_p0_acceptance': False,
+            }
         print(json.dumps(plan, ensure_ascii=False, indent=2))
         return 0
     try:
@@ -1651,6 +1754,35 @@ def main(argv=None):
             and health['protocol_version'] == manifest.protocol_version,
             'runtime_source_version_mismatch',
         )
+        instance = health.get('runtime_instance')
+        if args.p0_device_suite:
+            require(
+                isinstance(instance, str)
+                and bool(instance)
+                and health.get('release_id') == manifest.release_id,
+                'suite_runtime_identity_unconfirmed',
+            )
+
+        def request(payload):
+            timeout = 5
+            if payload.get('text') in WAKE_SELF_TEXT.values():
+                timeout = WAKE_SELF_TIMEOUT
+            elif 'text' in payload:
+                timeout = 125
+            elif payload == {'operation': 'playback_probe'}:
+                timeout = 25
+            result = rpc(socket_path, payload, timeout)
+            if args.p0_device_suite and payload == {'operation': 'health'}:
+                require(
+                    result.get('runtime_instance') == instance
+                    and result.get('release_id') == manifest.release_id
+                    and result.get('bridge_version') == manifest.backend_version
+                    and type(result.get('protocol_version')) is int
+                    and result['protocol_version'] == manifest.protocol_version,
+                    'suite_runtime_changed',
+                )
+            return result
+
         folder = private_directory(
             private_directory(ROOT / 'device-access/private') / 'device-checks'
         )
@@ -1668,8 +1800,10 @@ def main(argv=None):
                 'unsafe_test_lock',
             )
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if args.p0_device_suite:
+                request({'operation': 'health'})
             name = (
-                'device-'
+                ('device-suite-' if args.p0_device_suite else 'device-')
                 + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-')
                 + uuid.uuid4().hex[:8]
                 + '.json'
@@ -1682,65 +1816,53 @@ def main(argv=None):
                             **value,
                             'backend_version': health.get('bridge_version'),
                             'protocol_version': health.get('protocol_version'),
+                            **({'release_id': manifest.release_id} if args.p0_device_suite else {}),
                         }
                     )
 
-                run = SmokeRun(
-                    Device(),
-                    lambda p: rpc(
-                        socket_path,
-                        p,
-                        WAKE_SELF_TIMEOUT
-                        if p.get('text') in WAKE_SELF_TEXT.values()
-                        else 125
-                        if 'text' in p
-                        else 25
-                        if p == {'operation': 'playback_probe'}
-                        else 5,
-                    ),
-                    capture=args.capture,
-                    standby=args.standby,
-                    acoustic=args.acoustic,
-                    awake_dialogue=args.awake_dialogue,
-                    synthetic_barge=args.synthetic_barge,
-                    wake_self_playback=args.wake_self_playback,
-                    active_handover=args.active_handover,
-                    all_route_loss=args.all_route_loss,
-                    multi_clause=args.multi_clause,
-                    playback_evidence=args.playback_evidence,
-                    clock_evidence=args.clock_evidence,
-                    capture_clock_evidence=args.capture_clock_evidence,
-                    leading_acoustic_evidence=args.leading_acoustic_evidence,
-                    checkpoint=save,
-                    expected_apk=(manifest.assistant.version, manifest.assistant.version_code),
-                )
+                device = Device()
+
+                def make_run(enabled, checkpoint):
+                    return SmokeRun(
+                        device,
+                        request,
+                        checkpoint=checkpoint,
+                        expected_apk=(manifest.assistant.version, manifest.assistant.version_code),
+                        **dict.fromkeys(enabled, True),
+                    )
+
                 print('自动设备检查已开始；结果仅保存状态，不留录音、图像或对话正文。', flush=True)
                 keep_awake = None
                 try:
-                    if args.standby and sys.platform == 'darwin':
+                    if (args.standby or args.p0_device_suite) and sys.platform == 'darwin':
                         keep_awake = subprocess.Popen(
                             ['/usr/bin/caffeinate', '-i', '-w', str(os.getpid())],
                             stdin=subprocess.DEVNULL,
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                         )
-                    result = run.run()
+                    if args.p0_device_suite:
+                        result = run_device_suite(make_run, save)
+                    else:
+                        result = make_run(options, save).run()
                 finally:
                     if keep_awake is not None and keep_awake.poll() is None:
                         keep_awake.terminate()
                         keep_awake.wait(timeout=5)
-                print(
-                    json.dumps(
-                        {
-                            'state': result['state'],
-                            'checks': result['checks'],
-                            'cleanup_microphone_off_verified': result[
-                                'cleanup_microphone_off_verified'
-                            ],
-                        },
-                        ensure_ascii=False,
-                    )
-                )
+                if args.p0_device_suite:
+                    summary = {
+                        'state': result['state'],
+                        'phases': [
+                            {key: phase[key] for key in ('name', 'state')}
+                            for phase in result['phases']
+                        ],
+                    }
+                else:
+                    summary = {
+                        key: result[key]
+                        for key in ('state', 'checks', 'cleanup_microphone_off_verified')
+                    }
+                print(json.dumps(summary, ensure_ascii=False))
                 print(output.path)
                 return 0 if result['state'] == 'passed' else 2
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
