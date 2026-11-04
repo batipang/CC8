@@ -137,6 +137,41 @@ class ServiceTests(unittest.TestCase):
                 json.loads((Path(folder) / 'supervisor.json').read_text())['phase'], 'stopped'
             )
 
+    def test_stop_during_runtime_preflight_does_not_spawn_worker(self):
+        for trigger in ('marker', 'signal'):
+            with self.subTest(trigger=trigger), tempfile.TemporaryDirectory() as folder:
+                private = Path(folder)
+                marker = private / 'enabled.json'
+                atomic_private_json(marker, {'enabled': True})
+                read_enabled = service.enabled
+                with (
+                    patch.object(service, 'PRIVATE', private),
+                    patch.object(service, 'ENABLED', marker),
+                    patch.object(service, 'PLIST', private / 'unused.plist'),
+                    patch.object(service, 'enabled', side_effect=lambda: read_enabled(marker)),
+                    patch.object(service, 'read_pid', return_value=None),
+                ):
+                    supervisor = service.Supervisor()
+
+                    def stop_during_preflight(_root):
+                        if trigger == 'marker':
+                            service.disable()
+                        else:
+                            supervisor.stop.set()
+
+                    with (
+                        patch.object(
+                            service, 'ensure_available', side_effect=stop_during_preflight
+                        ) as preflight,
+                        patch.object(supervisor, 'start_child') as spawn,
+                    ):
+                        supervisor.run()
+                    preflight.assert_called_once()
+                    spawn.assert_not_called()
+                self.assertEqual(
+                    json.loads((private / 'supervisor.json').read_text())['phase'], 'stopped'
+                )
+
     def test_other_checkout_blocks_supervisor_without_spawning_or_stopping_it(self):
         from runtime_guard import RuntimeConflict
 

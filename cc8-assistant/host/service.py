@@ -188,6 +188,10 @@ class Supervisor:
                         if self.stop.wait(30):
                             break
                         continue
+                    # Ownership checks can take time. Honor a disable or
+                    # shutdown received while the preflight was in progress.
+                    if not enabled() or self.stop.is_set():
+                        break
                     self.start_child()
                 started = time.monotonic()
                 bad_health = 0
