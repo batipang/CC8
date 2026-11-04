@@ -1,6 +1,6 @@
 """Automation fails closed and restores capture; fixtures never contact hardware."""
 
-from contextlib import redirect_stdout, redirect_stderr
+from contextlib import nullcontext, redirect_stdout, redirect_stderr
 import fcntl
 import io
 import json
@@ -557,6 +557,38 @@ class DeviceAutomationTests(unittest.TestCase):
             [p['name'] for p in plan['phases']], ['self_playback_1', 'self_playback_2']
         )
 
+    def test_background_soak_dry_plan_keeps_path_private_and_never_opens_it(self):
+        with (
+            patch('device_smoke.Background.load') as load,
+            patch('device_smoke.Device') as device,
+            patch('device_smoke.rpc') as request,
+            redirect_stdout(io.StringIO()) as output,
+        ):
+            self.assertEqual(
+                main(
+                    [
+                        '--runtime-root',
+                        '/unused',
+                        '--capture',
+                        '--self-playback-soak',
+                        '--background-scenario',
+                        'tv',
+                        '--background-wav',
+                        '/unused/private-fixture.wav',
+                        '--background-sha256',
+                        'c' * 64,
+                    ]
+                ),
+                0,
+            )
+        load.assert_not_called()
+        device.assert_not_called()
+        request.assert_not_called()
+        self.assertNotIn('private-fixture.wav', output.getvalue())
+        self.assertEqual(
+            json.loads(output.getvalue())['background'], {'kind': 'tv', 'sha256': 'c' * 64}
+        )
+
     def test_self_playback_soak_checks_new_receipts_and_never_retries(self):
         for case, expected in (
             ('quiet', None),
@@ -566,6 +598,8 @@ class DeviceAutomationTests(unittest.TestCase):
             ('fast_stop', 'echo_soak_unexpected_voice'),
             ('wrong_receipt', 'echo_soak_playback_unconfirmed'),
             ('lost_window', 'echo_soak_receipt_window_lost'),
+            ('background_ended', 'echo_soak_background_ended'),
+            ('background_played', None),
         ):
             with self.subTest(case=case), patch('device_smoke.ECHO_SOAK_SECONDS', 8):
                 run, device, health, now = self.fixture(capture=True, echo_soak=True)
@@ -630,6 +664,12 @@ class DeviceAutomationTests(unittest.TestCase):
                     return {'status': 'completed', 'characters': len(BARGE_ANNOUNCEMENT)}
 
                 run.request = request
+                if case.startswith('background_'):
+                    run.background = Mock(receipt={'kind': 'low-noise', 'sha256': 'b' * 64})
+                    active = Mock(return_value=True)
+                    if case == 'background_ended':
+                        active.side_effect = [True, True, False]
+                    run.background.play.return_value = nullcontext(active)
                 if expected:
                     with self.assertRaisesRegex(CheckFailure, expected):
                         run.self_playback_soak()
@@ -642,6 +682,11 @@ class DeviceAutomationTests(unittest.TestCase):
                     self.assertEqual(
                         run.echo_soak_evidence['device_resumes'], int(case == 'recovered')
                     )
+                    if case == 'background_played':
+                        self.assertEqual(run.echo_soak_evidence['background_observed_seconds'], 8)
+                        self.assertEqual(
+                            run.echo_soak_evidence['background'], run.background.receipt
+                        )
                 device.speak_probe.assert_not_called()
 
     def test_interruption_batch_dry_plan_never_contacts_device_or_backend(self):

@@ -21,7 +21,14 @@ from device_smoke import (
 
 
 def saved_suite(
-    *, qa=False, extended=False, scenario='qa', interruption=False, fail_at=None, echo_soak=False
+    *,
+    qa=False,
+    extended=False,
+    scenario='qa',
+    interruption=False,
+    fail_at=None,
+    echo_soak=False,
+    background=None,
 ):
     index = 0
 
@@ -80,6 +87,10 @@ def saved_suite(
                 'device_resumes': pauses,
                 'admitted_voice_requests': 0,
             }
+        if background is not None:
+            report['echo_soak_evidence'].update(
+                background=background, background_observed_seconds=902
+            )
         if 'synthetic_barge' in options:
             report['barge_evidence'] = {
                 'device_stop_applied': True,
@@ -118,6 +129,7 @@ def saved_suite(
         latency_scenario=scenario,
         interruption=interruption,
         echo_soak=echo_soak,
+        background=background,
     )
     backend = '0.14.60' if scenario == 'qa' else '0.14.62'
     if echo_soak:
@@ -182,6 +194,19 @@ class AuditDeviceSuiteTests(unittest.TestCase):
         self.assertEqual(bad['state'], 'failed')
         self.assertEqual(bad['phases'][1]['reason'], 'suite_echo_soak_false_pause_limit')
         data['phases'][0]['report']['echo_soak_evidence']['elapsed_seconds'] = 899
+        self.assertEqual(audit(data)['reason'], 'suite_echo_soak_evidence_incomplete')
+
+    def test_background_report_requires_matching_fixture_and_full_player_coverage(self):
+        background = {'kind': 'tv', 'sha256': 'c' * 64}
+        data = saved_suite(echo_soak=True, background=background)
+        reviewed = audit(data)
+        self.assertTrue(reviewed['verified'])
+        self.assertEqual(reviewed['background'], background)
+        evidence = data['phases'][0]['report']['echo_soak_evidence']
+        evidence['background_observed_seconds'] = 1
+        self.assertEqual(audit(data)['reason'], 'suite_echo_soak_evidence_incomplete')
+        evidence['background_observed_seconds'] = 902
+        evidence['background'] = {**background, 'kind': 'low-noise'}
         self.assertEqual(audit(data)['reason'], 'suite_echo_soak_evidence_incomplete')
 
     def test_interruption_audit_recomputes_separate_metrics_and_rejects_incomplete_pair(self):
