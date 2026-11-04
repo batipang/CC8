@@ -1,5 +1,7 @@
 """Fault verification gates are exercised without touching launchd or devices."""
 
+from contextlib import redirect_stderr, redirect_stdout
+import io
 import json
 import os
 from pathlib import Path
@@ -9,11 +11,19 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from types import SimpleNamespace
 
 from device_smoke import CheckFailure
-from service_smoke import LiveService, RecoveryRun, SupervisorRecoveryRun, process_rows
+from service_smoke import (
+    LiveService,
+    RecoveryRun,
+    SleepRecoveryRun,
+    SupervisorRecoveryRun,
+    mac_sleep_clocks,
+    main,
+    process_rows,
+)
 
 
 class Clock:
@@ -54,6 +64,105 @@ class Service:
 
 
 class RecoveryTests(unittest.TestCase):
+    def test_sleep_plan_is_read_only_and_separate_from_fault_injection(self):
+        output = io.StringIO()
+        with patch('service_smoke.Device') as device, redirect_stdout(output):
+            self.assertEqual(main(['--runtime-root', '/unused', '--observe-sleep']), 0)
+            device.assert_not_called()
+        plan = json.loads(output.getvalue())
+        self.assertEqual(plan['scope'], 'observed_mac_system_sleep')
+        self.assertFalse(plan['forces_sleep'])
+        for flags in (
+            ['--observe-sleep', '--fault', 'backend'],
+            ['--observe-sleep', '--cycles', '2'],
+            ['--sleep-wait', '10'],
+            ['--observe-sleep', '--sleep-wait', '9'],
+        ):
+            with (
+                self.subTest(flags=flags),
+                redirect_stderr(io.StringIO()),
+                self.assertRaises(SystemExit),
+            ):
+                main(['--runtime-root', '/unused', *flags])
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'macOS raw clocks')
+    def test_macos_sleep_clock_samples_both_kernel_clocks(self):
+        instant, low, high = mac_sleep_clocks()
+        self.assertGreater(instant, 0)
+        self.assertLessEqual(low, high)
+        self.assertLessEqual(high - low, 0.011)
+
+    def test_sleep_witness_requires_suspend_idle_runtime_and_stable_recovery(self):
+        for case, reason in (
+            ('valid', None),
+            ('no_sleep', 'resume_sleep_not_observed'),
+            ('new_instance', 'resume_runtime_or_activity_changed'),
+            ('new_request', 'resume_runtime_or_activity_changed'),
+            ('unstable', 'resume_service_not_stable'),
+            ('extra_sleep', 'resume_additional_sleep_observed'),
+        ):
+            with self.subTest(case=case), redirect_stdout(io.StringIO()):
+                fake = Clock()
+
+                def clocks():
+                    offset = 15 if fake.now >= 2 and case != 'no_sleep' else 0
+                    if case == 'extra_sleep' and fake.now >= 5:
+                        offset += 5
+                    return fake.now + offset, offset - 0.001, offset
+
+                service = Mock()
+                baseline = dict(
+                    pid=20, instance='private-runtime', mic_frames=10, requests=frozenset()
+                )
+                service.supervisor_sample.return_value = baseline
+                second = baseline
+                if case == 'new_instance':
+                    second = dict(baseline, instance='new-runtime')
+                elif case == 'new_request':
+                    second = dict(baseline, requests={'private-new-request'})
+                service.resume_sample.side_effect = [
+                    None,
+                    second,
+                    None if case == 'unstable' else baseline,
+                ]
+                checkpoints = []
+                runner = SleepRecoveryRun(
+                    service,
+                    30,
+                    clock=clocks,
+                    sleep=fake.sleep,
+                    checkpoint=lambda report: checkpoints.append(dict(report)),
+                    usb_reader=lambda _: (
+                        SimpleNamespace(serial='private-serial', location=8),
+                        None,
+                        None,
+                    ),
+                )
+                result = runner.run()
+                self.assertEqual(checkpoints[-1], result)
+                self.assertNotIn('private-', json.dumps(result))
+                if reason:
+                    self.assertEqual(result['reason'], reason)
+                    self.assertFalse(result['recovery_verified'])
+                else:
+                    self.assertEqual(result['state'], 'passed')
+                    self.assertEqual(result['minimum_sleep_seconds'], 14.999)
+                    self.assertEqual(result['unready_samples_after_resume'], 1)
+                    self.assertEqual(result['post_resume_ready_observed_seconds'], 1)
+                service.crash.assert_not_called()
+                service.crash_supervisor.assert_not_called()
+
+    def test_resume_never_targets_a_different_usb_identity(self):
+        service = LiveService.__new__(LiveService)
+        unexpected = SimpleNamespace(serial='other', location=9)
+        with (
+            patch('service_smoke.read_usb', return_value=(unexpected, None, None)),
+            patch('service_smoke.Device') as device,
+        ):
+            with self.assertRaisesRegex(CheckFailure, 'resume_usb_identity_changed'):
+                service.resume_sample(('original', 9))
+            device.assert_not_called()
+
     def live_fixture(self):
         service = LiveService.__new__(LiveService)
         service.root = Path('/test/project')

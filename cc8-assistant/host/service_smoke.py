@@ -1,4 +1,4 @@
-"""Explicit managed-backend crash checks; plan only unless --execute is supplied."""
+"""Explicit managed-backend crash and sleep checks; default invocation only plans."""
 
 import argparse
 from datetime import datetime, timezone
@@ -14,12 +14,14 @@ import shlex
 import signal
 import stat
 import subprocess
+import sys
 import time
 import uuid
 
 from device_smoke import CheckFailure, Device, ROOT, require, rpc
 from private_output import PrivateOutput, private_directory
 from release_info import load_release
+from usb_handover import read_usb
 
 
 def process_rows(text, root, uid):
@@ -88,7 +90,7 @@ class LiveService:
         require(len(pids) == 1, 'launchd_pid_missing_or_ambiguous')
         return int(pids[0])
 
-    def sample(self):
+    def sample(self, *, include_activity=False):
         enabled = json.loads(self.read_private(self.private / 'service-enabled.json'))
         require(enabled.get('enabled') is True, 'owner_service_stopped')
         agent = plistlib.loads(self.read_private(self.plist))
@@ -175,7 +177,42 @@ class LiveService:
             ),
             'device_source_version_mismatch',
         )
-        return {'pid': pid, 'instance': instance, 'mic_frames': health.get('mic_frames')}
+        snapshot = {'pid': pid, 'instance': instance, 'mic_frames': health.get('mic_frames')}
+        if include_activity:
+            require(
+                health.get('release_id') == self.release.release_id,
+                'resume_release_identity_changed',
+            )
+            if d.get('connected') is not True or d.get('transport') != 'usb':
+                return None
+            starts = ui.get('auto_voice_start_attempts')
+            require(
+                ui.get('auto_voice_pending') is False and type(starts) is int and starts >= 0,
+                'resume_device_auto_voice_not_idle',
+            )
+            counters = ('mic_frames', 'render_frames', 'voice_asr_attempts', 'local_wake_count')
+            require(
+                all(type(health.get(key)) is int and health[key] >= 0 for key in counters),
+                'resume_audio_counters_unavailable',
+            )
+            ids = [row.get('request_id') for row in requests]
+            require(
+                len(ids) <= 128
+                and all(isinstance(ident, str) and ident for ident in ids)
+                and len(set(ids)) == len(ids),
+                'resume_request_window_unavailable',
+            )
+            require(
+                type(d.get('mic_frames')) is int and d['mic_frames'] >= 0,
+                'resume_device_mic_counter_unavailable',
+            )
+            snapshot.update(
+                **{key: health[key] for key in counters if key != 'mic_frames'},
+                device_mic_frames=d['mic_frames'],
+                device_auto_voice_starts=starts,
+                requests=frozenset(ids),
+            )
+        return snapshot
 
     def crash(self, previous):
         # Re-sample all idle/ownership gates immediately before signalling. A
@@ -192,9 +229,9 @@ class LiveService:
         )
         os.kill(previous['pid'], signal.SIGKILL)
 
-    def supervisor_sample(self, *, ready_after=None, previous=None):
+    def supervisor_sample(self, *, ready_after=None, previous=None, include_activity=False):
         try:
-            snapshot = self.sample()
+            snapshot = self.sample(include_activity=True) if include_activity else self.sample()
         except CheckFailure as error:
             if (
                 str(error) != 'backend_not_supervisor_child'
@@ -247,6 +284,32 @@ class LiveService:
     def crash_supervisor(self, previous):
         require(self.supervisor_sample() == previous, 'runtime_changed_before_fault')
         os.kill(previous['supervisor_pid'], signal.SIGKILL)
+
+    def resume_sample(self, expected_usb):
+        before, _, _ = read_usb(3)
+        if before is None:
+            return None
+        require(
+            (before.serial, before.location) == expected_usb,
+            'resume_usb_identity_changed',
+        )
+        try:
+            device = Device()
+        except (OSError, RuntimeError, subprocess.SubprocessError):
+            # The same USB device can appear before its engineering shell.
+            return None
+        after, _, _ = read_usb(3)
+        if before != after:
+            return None
+        self.device = device
+        try:
+            return self.supervisor_sample(include_activity=True)
+        except CheckFailure as error:
+            if str(error) != 'usb_target_changed':
+                raise
+            return None
+        except (OSError, RuntimeError, subprocess.SubprocessError):
+            return None
 
 
 class RecoveryRun:
@@ -395,20 +458,145 @@ class SupervisorRecoveryRun(RecoveryRun):
         )
 
 
+def mac_sleep_clocks():
+    require(
+        sys.platform == 'darwin' and hasattr(time, 'CLOCK_UPTIME_RAW'),
+        'resume_mac_clocks_unavailable',
+    )
+    for _ in range(3):
+        awake_before = time.clock_gettime_ns(time.CLOCK_UPTIME_RAW)
+        continuous = time.clock_gettime_ns(time.CLOCK_MONOTONIC_RAW)
+        awake_after = time.clock_gettime_ns(time.CLOCK_UPTIME_RAW)
+        if 0 <= awake_after - awake_before <= 10_000_000:
+            # Bracket the offset with two awake-clock reads. Scheduler delays
+            # cannot inflate the lower bound of a genuine sleep interval.
+            return (
+                continuous / 1e9,
+                (continuous - awake_after) / 1e9,
+                (continuous - awake_before) / 1e9,
+            )
+    raise CheckFailure('resume_mac_clock_sample_unstable')
+
+
+class SleepRecoveryRun:
+    def __init__(
+        self,
+        service,
+        seconds,
+        *,
+        clock=mac_sleep_clocks,
+        sleep=time.sleep,
+        checkpoint=lambda value: None,
+        usb_reader=read_usb,
+    ):
+        self.service, self.seconds = service, seconds
+        self.clock, self.sleep, self.checkpoint = clock, sleep, checkpoint
+        self.usb_reader = usb_reader
+
+    def run(self):
+        report = {
+            'schema': 1,
+            'scope': 'observed_mac_system_sleep',
+            'state': 'running',
+            'wait_seconds': self.seconds,
+            'minimum_sleep_seconds': None,
+            'post_resume_ready_observed_seconds': None,
+            'unready_samples_after_resume': 0,
+            'same_runtime_and_idle_audio_verified': False,
+            'recovery_verified': False,
+            'starts_capture': False,
+            'opens_ui': False,
+            'full_p0_acceptance': False,
+            'automation_source_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        }
+        self.checkpoint(report)
+        try:
+            _, old_low, old_high = self.clock()
+            usb, _, _ = self.usb_reader(3)
+            require(usb is not None, 'resume_usb_baseline_missing')
+            identity = (usb.serial, usb.location)
+            baseline = self.service.supervisor_sample(include_activity=True)
+            require(baseline is not None, 'preflight_service_not_ready')
+            require(self.usb_reader(3)[0] == usb, 'resume_usb_baseline_changed')
+            now, low, high = self.clock()
+            require(
+                low <= old_high + 0.01 and high >= old_low - 0.01, 'resume_sleep_crossed_baseline'
+            )
+            deadline = now + self.seconds
+            print('正在只读等待 Mac 睡眠和唤醒。', flush=True)
+            while True:
+                now, low, high = self.clock()
+                require(now < deadline, 'resume_sleep_not_observed')
+                if low - old_high >= 5:
+                    report['minimum_sleep_seconds'] = round(low - old_high, 3)
+                    self.checkpoint(report)
+                    break
+                self.sleep(min(1, deadline - now))
+
+            resumed, sleep_high = now, high
+            ready_deadline = resumed + 90
+            while True:
+                ready = self.service.resume_sample(identity)
+                now, low, _ = self.clock()
+                require(low <= sleep_high + 0.01, 'resume_additional_sleep_observed')
+                require(now <= ready_deadline, 'resume_service_not_ready')
+                if ready is not None:
+                    require(ready == baseline, 'resume_runtime_or_activity_changed')
+                    break
+                report['unready_samples_after_resume'] += 1
+                self.checkpoint(report)
+                self.sleep(min(1, ready_deadline - now))
+            report['post_resume_ready_observed_seconds'] = round(now - resumed, 3)
+            self.sleep(3)
+            require(self.service.resume_sample(identity) == baseline, 'resume_service_not_stable')
+            now, low, _ = self.clock()
+            require(low <= sleep_high + 0.01, 'resume_additional_sleep_observed')
+            require(now <= ready_deadline, 'resume_service_not_ready')
+            report.update(
+                state='passed', same_runtime_and_idle_audio_verified=True, recovery_verified=True
+            )
+        except KeyboardInterrupt:
+            report['state'] = 'interrupted'
+        except CheckFailure as error:
+            report.update(state='failed', reason=str(error))
+        except Exception:
+            report.update(state='failed', reason='resume_test_operation_failed')
+        self.checkpoint(report)
+        return report
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--runtime-root', type=Path, required=True)
-    parser.add_argument('--cycles', type=int, default=10, choices=range(1, 11))
-    parser.add_argument('--fault', choices=('backend', 'supervisor'), default='backend')
+    parser.add_argument('--cycles', type=int, choices=range(1, 11))
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--fault', choices=('backend', 'supervisor'), default='backend')
+    mode.add_argument('--observe-sleep', action='store_true')
+    parser.add_argument('--sleep-wait', type=int, metavar='SECONDS')
     parser.add_argument('--execute', action='store_true')
     args = parser.parse_args(argv)
+    if args.observe_sleep and args.cycles is not None:
+        parser.error('--observe-sleep waits for one transition and does not use --cycles')
+    if args.sleep_wait is not None and (
+        not args.observe_sleep or not 10 <= args.sleep_wait <= 3600
+    ):
+        parser.error('--sleep-wait requires --observe-sleep and accepts 10–3600 seconds')
+    cycles = args.cycles if args.cycles is not None else 10
+    sleep_wait = args.sleep_wait if args.sleep_wait is not None else 900
     if not args.execute:
         print(
             json.dumps(
                 {
                     'execute': False,
-                    'cycles': args.cycles,
-                    'fault': 'owned_' + args.fault + '_sigkill',
+                    **(
+                        {
+                            'scope': 'observed_mac_system_sleep',
+                            'wait_seconds': sleep_wait,
+                            'forces_sleep': False,
+                        }
+                        if args.observe_sleep
+                        else {'cycles': cycles, 'fault': 'owned_' + args.fault + '_sigkill'}
+                    ),
                     'starts_capture': False,
                     'opens_ui': False,
                     'full_p0_acceptance': False,
@@ -417,6 +605,8 @@ def main(argv=None):
         )
         return 0
     try:
+        if args.observe_sleep:
+            mac_sleep_clocks()
         require(
             args.runtime_root.is_absolute() and args.runtime_root.resolve() == args.runtime_root,
             'runtime_root_must_be_real_absolute',
@@ -459,17 +649,21 @@ def main(argv=None):
                         }
                     )
 
-                runner = SupervisorRecoveryRun if args.fault == 'supervisor' else RecoveryRun
-                result = runner(service, args.cycles, checkpoint=save).run()
-                print(
-                    json.dumps(
-                        {
-                            'state': result['state'],
-                            'cycles': len(result['checks']),
-                            'recovery_verified': result['recovery_verified'],
-                        }
-                    )
-                )
+                if args.observe_sleep:
+                    result = SleepRecoveryRun(service, sleep_wait, checkpoint=save).run()
+                    summary = {
+                        key: result[key]
+                        for key in ('state', 'minimum_sleep_seconds', 'recovery_verified')
+                    }
+                else:
+                    runner = SupervisorRecoveryRun if args.fault == 'supervisor' else RecoveryRun
+                    result = runner(service, cycles, checkpoint=save).run()
+                    summary = {
+                        'state': result['state'],
+                        'cycles': len(result['checks']),
+                        'recovery_verified': result['recovery_verified'],
+                    }
+                print(json.dumps(summary))
                 print(output.path)
                 return 0 if result['state'] == 'passed' else 2
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
