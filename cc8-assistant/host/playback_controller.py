@@ -201,7 +201,12 @@ class PlaybackController:
                     self.hooks.complete_clock_report(
                         generation, clock_id, event.get('render_clock'), clock_frames
                     )
-                    self.hooks.diagnostics().mark(generation, 'playback_done')
+                    confirmed = (
+                        type(clock_id) is int
+                        and type(played) is int
+                        and self.playout_probe.observed(generation, clock_id)
+                    )
+                    self.hooks.diagnostics().playback_done(generation, confirmed=confirmed)
                     self.completed = {generation}
                     self.playing = False
                     self.begin_pending = False

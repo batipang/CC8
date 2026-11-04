@@ -9,7 +9,7 @@ import numpy as np
 
 from announce import Announcement, AnnouncementServer, validate_text
 from bridge import Bridge
-from protocol import receive, SPEAKER, EVENT
+from protocol import receive, SPEAKER, EVENT, Packet
 from test_runtime import Fragmented
 
 
@@ -55,6 +55,74 @@ class AnnouncementTests(unittest.TestCase):
         self.assertTrue(any(p.kind == SPEAKER for p in b.session.connection.packets))
         self.assertIsNone(b.announcements.generation)
         self.assertFalse(any(e['event'] == 'session_start' for e in events))
+        row = b.diagnostics_report()['requests'][-1]
+        self.assertNotIn('confirmed_playback_clauses', row)
+
+    def test_two_clauses_require_matched_playout_and_framed_completion(self):
+        for missing in (None, 'start', 'frames'):
+            with self.subTest(missing=missing):
+                b = self.bridge()
+                b.playback.set_playout_capability(True)
+                b.playback.set_completion_capability(True)
+                begins = []
+
+                def inject(name, generation, playback_id, **fields):
+                    payload = dict(
+                        event=name, generation=generation, playback_id=playback_id, **fields
+                    )
+                    b.on_packet(Packet(EVENT, b.session.epoch, data=json.dumps(payload).encode()))
+
+                class Loopback:
+                    def sendall(self, raw):
+                        packet = receive(Fragmented(raw))
+                        if packet.kind == SPEAKER:
+                            current = begins[-1]
+                            if len(begins) == 2:
+                                self.progress(begins[0], packet)
+                            if len(begins) == 1 or missing != 'start':
+                                self.progress(current, packet)
+                                self.progress(current, packet)
+                        elif packet.kind == EVENT:
+                            event = json.loads(packet.data)
+                            if event['event'] == 'play_begin':
+                                begins.append(event)
+                            if event['event'] == 'play_end':
+                                ident = begins[-1]['playback_id']
+                                if len(begins) == 2:
+                                    inject(
+                                        'play_done', packet.generation, ident - 1, played_frames=320
+                                    )
+                                inject('play_done', packet.generation, ident, played_frames=319)
+                                fields = (
+                                    {}
+                                    if len(begins) == 2 and missing == 'frames'
+                                    else {'played_frames': 320}
+                                )
+                                inject('play_done', packet.generation, ident, **fields)
+                                inject('play_done', packet.generation, ident, **fields)
+
+                    def progress(self, begin, packet):
+                        inject(
+                            'playout_progress',
+                            packet.generation,
+                            begin['playback_id'],
+                            first_signal_frame=0,
+                            played_frames=160,
+                            accepted_frames=320,
+                            nanos=1,
+                        )
+
+                b.session.connection = Loopback()
+                self.assertTrue(b.health()['clause_receipts_supported'])
+                job = b.announce('测试' * 66)
+                self.assertTrue(job.done.wait(2))
+                self.assertEqual(job.result, 'completed')
+                self.assertFalse(b.session.active)
+                self.assertEqual([len(row['text']) for row in begins], [120, 12])
+                self.assertEqual(len({row['playback_id'] for row in begins}), 2)
+                rows = b.diagnostics_report()['requests']
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(rows[0]['confirmed_playback_clauses'], 2 if missing is None else 1)
 
     def test_cancelled_announcement_cannot_resume_audio(self):
         b = self.bridge(interrupt=True)

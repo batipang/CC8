@@ -65,3 +65,7 @@ class PlayoutReceipt:
     def expected_frames(self, generation: int, playback_id: int) -> int | None:
         with self.lock:
             return self.maximum if self.identity == (generation, playback_id) else None
+
+    def observed(self, generation: int, playback_id: int) -> bool:
+        with self.lock:
+            return self.identity == (generation, playback_id) and self.received

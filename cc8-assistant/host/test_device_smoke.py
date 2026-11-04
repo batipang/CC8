@@ -15,6 +15,7 @@ from unittest.mock import Mock, patch
 from device_smoke import (
     CheckFailure,
     Device,
+    MULTI_CLAUSE_TEXT,
     SmokeRun,
     main,
     objects,
@@ -789,6 +790,80 @@ class DeviceAutomationTests(unittest.TestCase):
         run.sleep = sleep
         run.playback()
         device.status.assert_called()
+
+    def test_multi_clause_plan_has_no_capture_and_uses_separate_check(self):
+        output = io.StringIO()
+        with redirect_stdout(output), patch('device_smoke.Device') as device:
+            self.assertEqual(main(['--runtime-root', '/nonexistent', '--multi-clause']), 0)
+            device.assert_not_called()
+        plan = json.loads(output.getvalue())
+        self.assertFalse(plan['capture'])
+        self.assertIn('multi_clause_announcement_and_playout', plan['checks'])
+        self.assertNotIn('announcement_and_playout', plan['checks'])
+
+    def test_multi_clause_legacy_runtime_refuses_before_any_device_open(self):
+        run, device, _, _ = self.fixture(multi_clause=True)
+        result = run.run()
+        self.assertEqual(result['checks'][0]['reason'], 'clause_receipts_unsupported')
+        device.open.assert_not_called()
+
+    def test_multi_clause_requires_exactly_two_confirmed_clauses_and_no_capture(self):
+        self.assertTrue(120 < len(MULTI_CLAUSE_TEXT) <= 240)
+        for count, extra_frames in ((2, False), (None, False), (1, False), (2, True)):
+            with self.subTest(count=count, extra_frames=extra_frames):
+                run, device, health, _ = self.fixture(multi_clause=True)
+                device.status.return_value[1].update(
+                    caption_progress_overlap=False,
+                    halo_status_overlap=False,
+                    caption_line_visible=True,
+                )
+                submitted = threading.Event()
+                ui_polled = threading.Event()
+                sends = []
+
+                def request(payload):
+                    if 'text' in payload:
+                        sends.append(payload['text'])
+                        self.assertTrue(ui_polled.wait(1))
+                        if extra_frames:
+                            health['mic_frames'] += 1
+                        return {'status': 'completed', 'characters': len(payload['text'])}
+                    if payload.get('operation') == 'diagnostics':
+                        if not sends:
+                            return {'requests': []}
+                        return {
+                            'requests': [
+                                {
+                                    'request_id': 'PRIVATE_ID',
+                                    'origin': 'announcement',
+                                    'outcome': 'completed',
+                                    'stages': {'playout_ack': 10, 'playback_done': 20},
+                                    'confirmed_playback_clauses': count,
+                                }
+                            ]
+                        }
+                    # Start idle, then present the playback UI until sampled.
+                    playing = submitted.is_set()
+                    submitted.set()
+                    return {**health, 'playing': playing}
+
+                run.request = request
+                run.sleep = lambda _: (ui_polled.set(), time.sleep(0.001))
+                if extra_frames:
+                    with self.assertRaisesRegex(CheckFailure, 'multi_clause_capture_changed'):
+                        run.playback()
+                elif count != 2:
+                    with self.assertRaisesRegex(
+                        CheckFailure, 'multi_clause_receipts_not_confirmed'
+                    ):
+                        run.playback()
+                else:
+                    run.playback()
+                    report = run.report('passed')
+                    self.assertEqual(report['multi_clause_evidence']['confirmed_clauses'], 2)
+                    self.assertNotIn('PRIVATE_ID', json.dumps(report))
+                self.assertEqual(sends, [MULTI_CLAUSE_TEXT])
+                device.status.assert_called()
 
     def test_real_idle_waits_full_duration(self):
         run, device, health, now = self.fixture(capture=True, standby=True)

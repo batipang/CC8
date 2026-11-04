@@ -1,5 +1,12 @@
 # Changelog
 
+## Backend 0.14.41 — playback receipts for each clause
+
+- Count clauses whose validated playout and completion receipts identify the same playback.
+  Preserve existing first-stage timing and compatibility with older device receipts.
+- Add `verify-device --multi-clause` for a fixed two-clause announcement with
+  continuous microphone-off checks and a bounded private receipt summary.
+
 ## Local wake research — phase-matched warmup pair
 
 - Complete 2400 fixed trials across original/patched native extensions, four

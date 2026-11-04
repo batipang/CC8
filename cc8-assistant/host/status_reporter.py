@@ -77,6 +77,7 @@ class StatusReporter:
 
     def health(self):
         state = self.hooks.session()
+        playback = self.hooks.playback()
         # 白名单输出就绪位，不导出 metrics 内可能存在的自检文字和用户内容。
         return {
             'ok': True,
@@ -87,10 +88,13 @@ class StatusReporter:
             'runtime_instance': self.instance,
             'resources': self.resources.sample(),
             'model_ready': True,
-            'playout_receipt_supported': self.hooks.playback().device_can_report_playout,
+            'playout_receipt_supported': playback.device_can_report_playout,
+            'clause_receipts_supported': (
+                playback.device_can_report_playout and playback.device_can_report_completion
+            ),
             'playback_evidence_supported': True,
             'leading_acoustic_evidence_supported': True,
-            'render_clock_evidence_supported': self.hooks.playback().device_can_report_clock,
+            'render_clock_evidence_supported': playback.device_can_report_clock,
             'local_wake_ready': self.hooks.wake().ready,
             'waiting_for_wake': state.active
             and not self.hooks.calibration().active

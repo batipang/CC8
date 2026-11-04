@@ -10,6 +10,7 @@ from diagnostics import (
     OUTCOMES,
     STAGES,
     DOT_CONTEXT_FIELDS,
+    MAX_CONFIRMED_PLAYBACK_CLAUSES,
     summarize_requests,
     summarize_dot_contexts,
 )
@@ -43,6 +44,7 @@ ROW_FIELDS = frozenset(
         'dot_context_reused',
         'capture',
         'gate',
+        'confirmed_playback_clauses',
     )
 )
 
@@ -107,6 +109,15 @@ def receipt(value):
         if not enum(value['active_stage'], ERROR_STAGES):
             raise ValueError('Invalid diagnostic active stage')
         result['active_stage'] = value['active_stage']
+    if 'confirmed_playback_clauses' in value:
+        count = value['confirmed_playback_clauses']
+        if (
+            type(count) is not int
+            or not 1 <= count <= MAX_CONFIRMED_PLAYBACK_CLAUSES
+            or not {'playout_ack', 'playback_done'} <= clean_stages.keys()
+        ):
+            raise ValueError('Invalid confirmed playback clause count')
+        result['confirmed_playback_clauses'] = count
     if 'turn_id' in value:
         turn = value['turn_id']
         if not isinstance(turn, str) or not re.fullmatch('[A-Za-z0-9_-]{1,80}', turn):
@@ -195,6 +206,10 @@ class DiagnosticRun:
                 for name, elapsed in old['stages'].items():
                     if row['stages'].get(name) != elapsed:
                         raise ValueError('Conflicting diagnostic stage')
+                old_count = old.get('confirmed_playback_clauses', 0)
+                count = row.get('confirmed_playback_clauses', 0)
+                if count < old_count or old['outcome'] is not None and count != old_count:
+                    raise ValueError('Conflicting confirmed playback clause count')
             updates[ident] = row
         if len(self.rows.keys() | updates.keys()) > self.limit:
             raise RunCapacityError('Diagnostic run capacity reached')

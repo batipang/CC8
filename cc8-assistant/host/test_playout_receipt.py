@@ -215,6 +215,31 @@ class PlayoutReceiptTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             run.ingest(snapshot)
 
+    def test_confirmed_clauses_accumulate_then_stay_fixed_at_terminal_outcome(self):
+        book = TraceBook()
+        run = DiagnosticRun()
+        run.ingest(book.report())
+        book.begin('announcement', 1)
+        book.mark(1, 'playout_ack')
+        book.playback_done(1, confirmed=True)
+        run.ingest(book.report())
+        book.playback_done(1, confirmed=True)
+        book.finish(1, 'completed')
+        run.ingest(book.report())
+        for invalid in (None, True, 1, 3, 65536):
+            with self.subTest(invalid=invalid):
+                snapshot = book.report()
+                row = snapshot['requests'][0]
+                if invalid is None:
+                    del row['confirmed_playback_clauses']
+                else:
+                    row['confirmed_playback_clauses'] = invalid
+                with self.assertRaises(ValueError):
+                    run.ingest(snapshot)
+        book.playback_done(1, confirmed=True)
+        self.assertEqual(book.report()['requests'][0]['confirmed_playback_clauses'], 2)
+        self.assertEqual(run.report()['requests'][0]['confirmed_playback_clauses'], 2)
+
     def test_cancel_during_probe_publication_cannot_leave_old_identity(self):
         b = self.session()
         b.playback.set_playout_capability(True)
