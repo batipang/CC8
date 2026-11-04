@@ -19,7 +19,7 @@ from device_smoke import (
 )
 
 
-def saved_suite(*, qa=False, extended=False):
+def saved_suite(*, qa=False, extended=False, scenario='qa'):
     index = 0
 
     def make_run(options, _checkpoint, **_kwargs):
@@ -69,6 +69,7 @@ def saved_suite(*, qa=False, extended=False):
                     'confirmed_playback_done_ms': 100 + response,
                     QA_PLAYOUT_METRIC: response,
                 },
+                'latency_scenario': scenario,
                 'qa_stage_latencies_ms': dict.fromkeys(QA_STAGE_METRICS, response),
                 'response_acoustic_timing': {
                     'status': 'observed',
@@ -80,9 +81,15 @@ def saved_suite(*, qa=False, extended=False):
         )
 
     data = run_device_suite(
-        make_run, lambda _: None, qa_latency=qa, response_acoustic=qa, extended_voice=extended
+        make_run,
+        lambda _: None,
+        qa_latency=qa,
+        response_acoustic=qa,
+        extended_voice=extended,
+        latency_scenario=scenario,
     )
-    return {**data, 'backend_version': '0.14.60', 'protocol_version': 2}
+    backend = '0.14.60' if scenario == 'qa' else '0.14.61'
+    return {**data, 'backend_version': backend, 'protocol_version': 2}
 
 
 class AuditDeviceSuiteTests(unittest.TestCase):
@@ -105,6 +112,26 @@ class AuditDeviceSuiteTests(unittest.TestCase):
             reviewed['latencies_ms'][ACOUSTIC_RESPONSE_METRIC],
             {'samples': 30, 'p50': 155, 'p95': 285.5},
         )
+
+    def test_routed_latency_rejects_a_mixed_corpus_or_receipt(self):
+        data = saved_suite(qa=True, scenario='web')
+        reviewed = audit(data)
+        self.assertTrue(reviewed['verified'])
+        self.assertEqual(reviewed['latency_scenario'], 'web')
+        with self.assertRaisesRegex(ValueError, 'Invalid suite mode'):
+            audit({**data, 'backend_version': '0.14.60'})
+        data['latency_scenario'] = 'tool'
+        with self.assertRaisesRegex(ValueError, 'Invalid suite mode'):
+            audit(data)
+        data['latency_scenario'] = 'web'
+        evidence = data['phases'][1]['report']['acoustic_evidence']
+        for route in ('tool', None):
+            with self.subTest(route=route):
+                evidence['latency_scenario'] = route
+                reviewed = audit(data)
+                self.assertFalse(reviewed['verified'])
+                self.assertEqual(reviewed['reason'], 'suite_latency_scenario_unconfirmed')
+                self.assertEqual(reviewed['completed_phases'], 1)
 
     def test_claims_cannot_cover_missing_evidence_or_mix_runs(self):
         for case, reason in (
