@@ -69,6 +69,31 @@ class AuditObservationTests(unittest.TestCase):
         self.assertTrue(result['window_verified'])
         self.assertEqual(result['uptime_offset_span_seconds'], 5.1)
 
+    def test_cumulative_resources_cannot_go_backwards_within_one_process(self):
+        report = observation()
+        report['samples'][100]['peak_rss_bytes'] -= 1
+        report['samples'][200]['cpu_seconds'] -= 0.01
+        result = audit(report, BACKEND)
+        self.assertFalse(result['window_verified'])
+        self.assertIn('cumulative_resource_regression', result['reasons'])
+        self.assertEqual(
+            result['cumulative_resource_regressions'], {'peak_rss_bytes': 1, 'cpu_seconds': 1}
+        )
+        self.assertEqual(result['gauges'], {})
+
+    def test_current_resources_may_go_down_and_new_process_counters_may_reset(self):
+        report = observation()
+        row = report['samples'][-1]
+        for field in ('rss_bytes', 'python_threads', 'open_fds'):
+            row[field] -= 1
+        self.assertTrue(audit(report, BACKEND)['window_verified'])
+
+        row.update(segment=2, peak_rss_bytes=100, cpu_seconds=0.1)
+        report['observed_runtime_segments'] = 2
+        result = audit(report, BACKEND)
+        self.assertIn('single_runtime_not_confirmed', result['reasons'])
+        self.assertEqual(result['cumulative_resource_regressions'], {})
+
     def test_short_running_wrong_version_and_coarse_schedule_each_block_acceptance(self):
         for key, value, reason in (
             ('elapsed_seconds', DURATION - 1, 'window_shorter_than_72_hours'),

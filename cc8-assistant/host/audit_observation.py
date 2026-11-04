@@ -1,6 +1,7 @@
 """Audit one saved 72-hour observation without querying or changing the runtime."""
 
 import argparse
+from collections import Counter
 import json
 from pathlib import Path
 import re
@@ -13,6 +14,7 @@ MAX_BYTES = 8 * 1024**2
 # A poll can spend up to 5 s in IPC before its receipt is timestamped.
 # Leave 0.2 s for scheduling and timestamp rounding.
 MAX_POLL_OVERHEAD_SECONDS = 5.2
+CUMULATIVE_GAUGES = ('peak_rss_bytes', 'cpu_seconds')
 NO_CLAIMS = (
     'contains_content',
     'device_capture_started',
@@ -68,6 +70,8 @@ def audit(report, backend):
     segments, successful, errors = set(), [], {}
     last_uptime = {}
     uptime_offsets = {}
+    last_cumulative = {}
+    cumulative_regressions = Counter()
 
     def check_time(elapsed, wall, *, first=False):
         nonlocal previous_elapsed, previous_wall, cadence_gaps, max_gap
@@ -119,6 +123,14 @@ def audit(report, backend):
             if value is not None:
                 number(value, maximum)
                 require(name == 'cpu_seconds' or type(value) is int)
+        if segment is not None:
+            for name in CUMULATIVE_GAUGES:
+                value = row.get(name)
+                if value is not None:
+                    key = segment, name
+                    if value < last_cumulative.get(key, 0):
+                        cumulative_regressions[name] += 1
+                    last_cumulative[key] = value
         counts['resource_coverage_incomplete_polls'] += segment is None or any(
             row.get(name) is None for name in GAUGES
         )
@@ -137,6 +149,8 @@ def audit(report, backend):
     uptime_span = max((high - low for low, high in uptime_offsets.values()), default=0)
     if uptime_span > MAX_POLL_OVERHEAD_SECONDS:
         reasons.append('uptime_clock_mismatch')
+    if cumulative_regressions:
+        reasons.append('cumulative_resource_regression')
 
     # Retain usable trends only for a single process with complete gauge coverage.
     gauges = (
@@ -144,6 +158,7 @@ def audit(report, backend):
         if segments == {1}
         and not counts['resource_coverage_incomplete_polls']
         and uptime_span <= MAX_POLL_OVERHEAD_SECONDS
+        and not cumulative_regressions
         else {}
     )
     return {
@@ -156,6 +171,7 @@ def audit(report, backend):
         'uptime_offset_span_seconds': round(uptime_span, 3),
         'sample_cadence_gaps': cadence_gaps,
         'max_sample_gap_seconds': round(max_gap, 3),
+        'cumulative_resource_regressions': dict(cumulative_regressions),
         'errors': errors,
         'counts': counts,
         'reasons': reasons,
