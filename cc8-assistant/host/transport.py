@@ -311,6 +311,7 @@ class TransportHub:
         self.guard = threading.RLock()
         self.stop = threading.Event()
         self.usb_disabled_until = 0.0
+        self.all_disabled_until = 0.0
         self.switches = 0
         self.auth_failures = 0
         self.server: socket.socket | None = None
@@ -347,6 +348,9 @@ class TransportHub:
             if self.stop.is_set():
                 channel.close()
                 raise RuntimeError('Transport hub is closed')
+            if time.monotonic() < self.all_disabled_until:
+                channel.close()
+                raise RuntimeError('Transport test outage')
             previous = self.channels.get(kind)
             if previous and not previous.closed:
                 previous.close()
@@ -365,7 +369,7 @@ class TransportHub:
                 continue
             except OSError:
                 break
-            if not private_ipv4(peer[0]):
+            if time.monotonic() < self.all_disabled_until or not private_ipv4(peer[0]):
                 raw.close()
                 continue
             # Bound expensive unauthenticated handshakes. One paired device.
@@ -424,7 +428,7 @@ class TransportHub:
             try:
                 with self.guard:
                     channel = self.channels.get('usb')
-                allowed = time.monotonic() >= self.usb_disabled_until
+                allowed = time.monotonic() >= max(self.usb_disabled_until, self.all_disabled_until)
                 if channel and not channel.closed:
                     if not allowed or not self.usb_present():
                         channel.close()
@@ -456,6 +460,8 @@ class TransportHub:
     def preferred(self) -> Channel | None:
         # socket 连通不等于已就绪；只从可用通道中优先选 USB，否则选 Wi-Fi。
         with self.guard:
+            if time.monotonic() < self.all_disabled_until:
+                return None
             for kind in CHANNEL_PRIORITY:
                 channel = self.channels.get(kind)
                 if kind == 'usb' and time.monotonic() < self.usb_disabled_until:
@@ -467,6 +473,8 @@ class TransportHub:
     def selected(self, channel: Channel | None) -> bool:
         # 明确激活/备用角色，防止两路同时处理音频；配对配置只经 USB 下发。
         with self.guard:
+            if channel is not None and time.monotonic() < self.all_disabled_until:
+                return False
             others = list(self.channels.values())
         for other in others:
             if other is not channel and other.ready and not other.closed:
@@ -495,6 +503,7 @@ class TransportHub:
 
     def diagnostics(self) -> JsonObject:
         with self.guard:
+            now = time.monotonic()
             return {
                 'transport': self.active.kind if self.active and not self.active.closed else 'none',
                 'usb_ready': bool(
@@ -509,16 +518,34 @@ class TransportHub:
                 ),
                 'transport_switches': self.switches,
                 'lan_auth_failures': self.auth_failures,
-                'usb_test_suppressed': time.monotonic() < self.usb_disabled_until,
+                'usb_test_suppressed': now < max(self.usb_disabled_until, self.all_disabled_until),
+                'all_routes_test_suppressed': now < self.all_disabled_until,
             }
 
     def suppress_usb_for_test(self, seconds: int | float) -> JsonObject:
         if type(seconds) not in (int, float) or not 1 <= seconds <= 60:
             raise ValueError('USB test suppression must be 1–60 seconds')
-        self.usb_disabled_until = time.monotonic() + seconds
         with self.guard:
+            now = time.monotonic()
+            if now < self.all_disabled_until:
+                raise RuntimeError('Transport test outage already active')
+            self.usb_disabled_until = now + seconds
             channel = self.channels.get('usb')
         if channel:
+            channel.close()
+        return {'ok': True, 'seconds': seconds}
+
+    def suppress_all_for_test(self) -> JsonObject:
+        seconds = 10
+        with self.guard:
+            now = time.monotonic()
+            if self.stop.is_set() or now < max(self.all_disabled_until, self.usb_disabled_until):
+                raise RuntimeError('Transport test outage unavailable')
+            self.all_disabled_until = now + seconds
+            # Close the standby peer before the active one so neither can serve
+            # as a lasting fallback during the controlled outage.
+            channels = sorted(self.channels.values(), key=lambda channel: channel is self.active)
+        for channel in channels:
             channel.close()
         return {'ok': True, 'seconds': seconds}
 

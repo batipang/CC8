@@ -99,6 +99,10 @@ class AnnouncementServer:
                         result = self.bridge.transport_hub.suppress_usb_for_test(
                             request.get('seconds', 15)
                         )
+                    elif request.get('operation') == 'transport_all_test':
+                        if request != {'operation': 'transport_all_test'}:
+                            raise ValueError('Transport outage accepts no arguments')
+                        result = self.bridge.transport_hub.suppress_all_for_test()
                     elif request.get('operation') == 'camera_snapshot':
                         result = self.snapshot(connection, request)
                     elif request.get('operation') == 'playback_probe':

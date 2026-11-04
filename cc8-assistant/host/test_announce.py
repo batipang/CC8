@@ -5,6 +5,7 @@ import stat
 import tempfile
 import threading
 import unittest
+from unittest.mock import Mock
 import numpy as np
 
 from announce import Announcement, AnnouncementServer, validate_text
@@ -174,6 +175,28 @@ class AnnouncementTests(unittest.TestCase):
             finally:
                 server.close()
             self.assertFalse(path.exists())
+
+    def test_owner_outage_command_has_no_user_controlled_arguments(self):
+        bridge = Mock()
+        bridge.transport_hub.suppress_all_for_test.return_value = {'ok': True, 'seconds': 10}
+        server = AnnouncementServer(bridge, Path('/unused'))
+        for payload, expected in (
+            ({'operation': 'transport_all_test', 'seconds': 60}, {'status': 'invalid_request'}),
+            (
+                {'operation': 'transport_all_test', 'text': 'unexpected'},
+                {'status': 'invalid_request'},
+            ),
+            ({'operation': 'transport_all_test'}, {'ok': True, 'seconds': 10}),
+        ):
+            with self.subTest(payload=payload):
+                reader, writer = socket.socketpair()
+                with writer:
+                    self.assertTrue(server.slots.acquire(blocking=False))
+                    writer.sendall((json.dumps(payload) + '\n').encode())
+                    server.handle(reader)
+                    self.assertEqual(json.loads(writer.recv(4096)), expected)
+        bridge.transport_hub.suppress_all_for_test.assert_called_once_with()
+        bridge.announce.assert_not_called()
 
     def test_live_device_status_is_not_blocked_by_a_running_announcement(self):
         job = Announcement(1, 'test')
