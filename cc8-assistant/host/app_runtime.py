@@ -40,6 +40,24 @@ class BackendDependencies:
     announcement_server: Callable[..., object]
 
 
+def reconcile_transport(bridge, hub):
+    preferred = hub.preferred()
+    if preferred is hub.active and preferred is bridge.session.connection:
+        return False
+    if preferred is not hub.active and not hub.selected(preferred):
+        # Keep the working route and its session if the new route failed.
+        return True
+    try:
+        bridge.change_transport(preferred)
+    except (OSError, EOFError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+        if preferred is not None:
+            preferred.close()
+        bridge.log('transport_bind_failed', error_type=type(error).__name__)
+    else:
+        bridge.save_status()
+    return True
+
+
 def run_backend(dependencies: BackendDependencies):
     parser = argparse.ArgumentParser(description=dependencies.description)
     parser.add_argument('--brain', choices=['minimax', 'echo'], default='minimax')
@@ -174,12 +192,7 @@ def run_backend(dependencies: BackendDependencies):
                 kind, channel, packet = hub.events.get(timeout=0.25)
             except queue.Empty:
                 kind = channel = packet = None
-            preferred = hub.preferred()
-            if preferred is not hub.active:
-                bridge.change_transport(preferred)
-                hub.selected(preferred)
-                bridge.save_status()
-            elif kind == 'up' and channel is not hub.active:
+            if not reconcile_transport(bridge, hub) and kind == 'up' and channel is not hub.active:
                 channel.event('transport_standby')
             if kind in ('up', 'down'):
                 bridge.save_status()

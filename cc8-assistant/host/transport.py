@@ -464,10 +464,8 @@ class TransportHub:
                     return channel
         return None
 
-    def selected(self, channel: Channel | None) -> None:
+    def selected(self, channel: Channel | None) -> bool:
         # 明确激活/备用角色，防止两路同时处理音频；配对配置只经 USB 下发。
-        self.active = channel
-        self.switches += 1
         with self.guard:
             others = list(self.channels.values())
         for other in others:
@@ -485,12 +483,15 @@ class TransportHub:
                 # This failure belongs to the selected route, regardless of
                 # which channel's queued event triggered the reevaluation.
                 channel.close()
-                return
+                return False
+        self.active = channel
+        self.switches += 1
         self.log(
             'transport_selected',
             transport=channel.kind if channel else 'none',
             switches=self.switches,
         )
+        return True
 
     def diagnostics(self) -> JsonObject:
         with self.guard:
