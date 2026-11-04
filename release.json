@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-route-receipts-20261105.1",
+  "release_id": "p0-self-playback-soak-20261105.1",
   "backend": {
-    "version": "0.14.62"
+    "version": "0.14.63"
   },
   "assistant": {
     "version": "0.9.34",

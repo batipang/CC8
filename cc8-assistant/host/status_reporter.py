@@ -119,6 +119,8 @@ class StatusReporter:
             'voice_asr_attempts': metrics.get('voice_asr_attempts', 0),
             'fast_stop_ready': endpoint.fast_stop is not None,
             'fast_stop_count': metrics.get('fast_stop_count', 0),
+            'barge_in_pauses': metrics.get('barge_in_pauses', 0),
+            'barge_in_resumed': metrics.get('barge_in_resumed', 0),
             'fast_stop_timing_supported': True,
             'fast_stop_observation': (
                 {'cancel_generation': stop[0], 'detecting_frame_nanos': stop[1]}
