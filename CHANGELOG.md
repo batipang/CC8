@@ -1,5 +1,11 @@
 # Changelog
 
+## Backend 0.14.55 — measure trailing capture before voice endpoint
+
+- Record the device capture interval between the last frame marked voiced and
+  utterance handoff when the frame clock is contiguous. Summarize accepted
+  utterances separately from host ASR and playout timings.
+
 ## Backend 0.14.54 — pass the remaining connection timeout to TLS
 
 - Recompute the socket timeout after TCP connects so the first TLS handshake

@@ -7,7 +7,7 @@ import re
 import threading
 import time
 import uuid
-from capture_evidence import validate as validate_capture, DECISIONS
+from capture_evidence import validate as validate_capture, DECISIONS, VAD_TAIL
 from operation_failure import OperationFailure, ClassifiedFailure, STAGES as ERROR_STAGES
 
 DOT_STAGES = frozenset(
@@ -134,6 +134,13 @@ def summarize_requests(samples):
             row['device_pause_from_trigger_ms']
             for row in samples
             if row.get('gate') == 'accepted' and 'device_pause_from_trigger_ms' in row
+        ]
+    )
+    latencies[VAD_TAIL] = percentiles(
+        [
+            row['capture'][VAD_TAIL]
+            for row in samples
+            if row.get('gate') == 'accepted' and VAD_TAIL in row.get('capture', {})
         ]
     )
     return {
