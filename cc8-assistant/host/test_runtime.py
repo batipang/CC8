@@ -947,6 +947,10 @@ class FastStopTests(unittest.TestCase):
         b.recognition.queue.put((b.session.generation, np.ones(RATE)))
         self.assertTrue(started.wait(1))
         b.apply_fast_stop('停一下', 10_000_000_000)
+        self.assertEqual(
+            b.health()['fast_stop_observation'],
+            {'cancel_generation': b.session.generation, 'detecting_frame_nanos': 10_000_000_000},
+        )
         release.set()
         time.sleep(0.1)
         transcripts = [
@@ -955,6 +959,8 @@ class FastStopTests(unittest.TestCase):
             if json.loads(p.data).get('event') == 'transcript'
         ]
         self.assertEqual(transcripts, ['停一下'])
+        b.capture.reset_transport('wifi')
+        self.assertIsNone(b.health()['fast_stop_observation'])
 
 
 if __name__ == '__main__':

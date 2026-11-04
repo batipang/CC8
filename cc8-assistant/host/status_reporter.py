@@ -78,6 +78,8 @@ class StatusReporter:
     def health(self):
         state = self.hooks.session()
         playback = self.hooks.playback()
+        endpoint = self.hooks.capture().endpoint
+        stop = endpoint.fast_stop_observation
         metrics = self.hooks.metrics()
         # 白名单输出就绪位，不导出 metrics 内可能存在的自检文字和用户内容。
         return {
@@ -115,8 +117,14 @@ class StatusReporter:
             'render_frames': metrics.get('render_frames', 0),
             'local_wake_count': metrics.get('local_wake_count', 0),
             'voice_asr_attempts': metrics.get('voice_asr_attempts', 0),
-            'fast_stop_ready': self.hooks.capture().endpoint.fast_stop is not None,
+            'fast_stop_ready': endpoint.fast_stop is not None,
             'fast_stop_count': metrics.get('fast_stop_count', 0),
+            'fast_stop_timing_supported': True,
+            'fast_stop_observation': (
+                {'cancel_generation': stop[0], 'detecting_frame_nanos': stop[1]}
+                if stop is not None and state.active and state.generation == stop[0]
+                else None
+            ),
         }
 
     def save_status(self):
