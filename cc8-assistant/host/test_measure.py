@@ -13,7 +13,8 @@ import threading
 import unittest
 from unittest.mock import patch
 from diagnostics import TraceBook
-from measure import run
+from diagnostic_run import DiagnosticRun
+from measure import audit_main, run
 from private_output import PrivateOutput
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -59,6 +60,106 @@ class PrivateOutputTests(unittest.TestCase):
 
 
 class MeasurementTests(unittest.TestCase):
+    def test_confirmed_voice_latency_keeps_failure_and_missing_evidence_visible(self):
+        book = DiagnosticRun()
+        before = TraceBook().report()
+        book.ingest(before)
+        stages = {
+            'utterance_end': 100,
+            'brain_start': 150,
+            'playout_ack': 350,
+            'playback_done': 650,
+        }
+        variants = [
+            {},
+            {'stages': {k: v for k, v in stages.items() if k != 'utterance_end'}},
+            {'stages': dict(stages, utterance_end=400)},
+            {'outcome': 'cancelled'},
+            {'outcome': 'failed', 'error': {'stage': 'playback', 'kind': 'timeout'}},
+            {'outcome': 'rejected', 'gate': 'wake_closed', 'generation': None},
+            {'outcome': None},
+            {'confirmed_playback_clauses': None},
+            {'task_outcome': None},
+            {'origin': 'text', 'gate': None},
+            {'scenario': 'web', 'stages': dict(stages, playout_ack=600)},
+        ]
+        rows = []
+        for index, changes in enumerate(variants, start=1):
+            row = {
+                'request_id': f'{index:032x}',
+                'origin': 'voice',
+                'scenario': 'qa',
+                'outcome': 'completed',
+                'gate': 'accepted',
+                'generation': index,
+                'task_outcome': 'completed',
+                'error': None,
+                'confirmed_playback_clauses': 1,
+                'stages': stages,
+            }
+            row.update(changes)
+            for field in ('gate', 'task_outcome', 'confirmed_playback_clauses'):
+                if row[field] is None:
+                    row.pop(field)
+            rows.append(row)
+        book.ingest(dict(before, requests=rows))
+        report = book.report()
+        coverage = report['voice_playout_coverage']
+        qa = coverage['qa']
+        self.assertEqual(qa['observed_voice_requests'], 9)
+        self.assertEqual(qa['terminal_for_rate'], 7)
+        self.assertEqual(qa['confirmed_response_rate'], 3 / 7)
+        self.assertEqual(
+            qa['outcomes'],
+            {
+                'completed_with_confirmed_playout': 3,
+                'cancelled': 1,
+                'failed': 1,
+                'rejected': 1,
+                'pending': 1,
+                'completed_without_playout_confirmation': 1,
+                'completed_without_response_receipt': 1,
+            },
+        )
+        self.assertEqual(qa['confirmed_without_valid_timing'], 2)
+        self.assertEqual(qa['utterance_to_first_playout_ack_ms'], dict(samples=1, p50=250, p95=250))
+        self.assertEqual(coverage['web']['utterance_to_first_playout_ack_ms']['p95'], 500)
+        self.assertIsNone(coverage['tool']['confirmed_response_rate'])
+        self.assertGreater(
+            report['summary']['latencies']['utterance_to_playout_ack_ms']['samples'], 1
+        )
+
+        # A historical file may lack the field or contain a stale aggregate.
+        report['voice_playout_coverage'] = {'incorrect': True}
+        report['capture'] = dict(state='partial', query_failures=2)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'prior.json'
+            with PrivateOutput(path) as output:
+                output.write(report)
+            original = path.read_bytes()
+            with redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(audit_main([str(path)]), 0)
+            result = json.loads(output.getvalue())
+            self.assertEqual(result['voice_playout_coverage'], coverage)
+            self.assertEqual(result['capture_state'], 'partial')
+            self.assertEqual(result['query_failures'], 2)
+            self.assertFalse(result['playout_ack_is_audible_onset'])
+            self.assertFalse(result['full_p0_acceptance'])
+            self.assertNotIn(rows[0]['request_id'], output.getvalue())
+            self.assertEqual(path.read_bytes(), original)
+
+    def test_saved_audit_refuses_duplicate_fields_and_untrusted_paths(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'run.json'
+            path.write_text('{"schema":1,"schema":1}')
+            path.chmod(0o600)
+            link = path.with_name('link.json')
+            link.symlink_to(path)
+            for report in (path, link):
+                with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as stopped:
+                    audit_main([str(report)])
+                self.assertEqual(stopped.exception.code, 2)
+
     def args(self, path):
         return argparse.Namespace(
             seconds=0.3,

@@ -2,12 +2,11 @@
 
 import argparse
 import json
-import os
 from pathlib import Path
 import re
-import stat
 
 from observation_run import FLAGS, GAUGES, number, trend
+from private_output import read_private_json
 
 DURATION = 72 * 3600
 MAX_BYTES = 8 * 1024**2
@@ -28,26 +27,8 @@ def require(condition):
         raise ValueError('Invalid observation report')
 
 
-def unique_object(pairs):
-    result = dict(pairs)
-    require(len(result) == len(pairs))
-    return result
-
-
 def load_report(path):
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    with os.fdopen(fd, 'rb') as stream:
-        info = os.fstat(stream.fileno())
-        require(
-            stat.S_ISREG(info.st_mode)
-            and info.st_uid == os.getuid()
-            and not info.st_mode & 0o077
-            and info.st_nlink == 1
-            and 0 < info.st_size <= MAX_BYTES
-        )
-        raw = stream.read(MAX_BYTES + 1)
-        require(len(raw) == info.st_size)
-    return json.loads(raw, object_pairs_hook=unique_object)
+    return read_private_json(path, MAX_BYTES)
 
 
 def audit(report, backend):

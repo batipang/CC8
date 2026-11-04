@@ -2,6 +2,7 @@
 
 import argparse
 from datetime import datetime, timezone
+import json
 import math
 import re
 import sys
@@ -9,8 +10,8 @@ from pathlib import Path
 import time
 import uuid
 from diagnose import PRIVATE, ROOT, query
-from diagnostic_run import DiagnosticRun, RunCapacityError
-from private_output import PrivateOutput, private_directory
+from diagnostic_run import DiagnosticRun, RunCapacityError, snapshot, voice_playout_coverage
+from private_output import PrivateOutput, private_directory, read_private_json
 
 CONDITIONS = ('unspecified', 'quiet', 'tv')
 DISTANCES = ('unspecified', '1m', '3m')
@@ -180,6 +181,54 @@ def main(argv=None):
         return run(args)
     except (OSError, ValueError, RuntimeError):
         parser.exit(2, '诊断采集未完成，请检查后台、参数及本机私有输出目录；未打开设备采集。\n')
+
+
+def audit_main(argv=None):
+    parser = argparse.ArgumentParser(
+        description='Recompute voice playback coverage from one saved run.'
+    )
+    parser.add_argument('report', type=Path)
+    args = parser.parse_args(argv)
+    try:
+        data = read_private_json(args.report, 16 * 1024**2)
+        rows = snapshot(data, limit=10000)
+        capture, coverage = data.get('capture'), data.get('coverage')
+        if (
+            not isinstance(capture, dict)
+            or not isinstance(coverage, dict)
+            or not isinstance(capture.get('state'), str)
+            or capture['state']
+            not in {
+                'running',
+                'completed',
+                'partial',
+                'cancelled',
+                'invalid_snapshot',
+                'ipc_unavailable',
+                'runtime_changed',
+                'runtime_unconfirmed',
+                'capacity_reached',
+                'backend_version_mismatch',
+            }
+            or coverage.get('complete_capture_asserted') is not False
+            or any(
+                type(value) is not int or value < 0
+                for value in (capture.get('query_failures'), coverage.get('window_discontinuities'))
+            )
+        ):
+            raise ValueError('Invalid saved measurement')
+        result = {
+            'capture_state': capture['state'],
+            'query_failures': capture['query_failures'],
+            'window_discontinuities': coverage['window_discontinuities'],
+            'playout_ack_is_audible_onset': False,
+            'full_p0_acceptance': False,
+            'voice_playout_coverage': voice_playout_coverage(rows),
+        }
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
+    except (OSError, ValueError, TypeError, RecursionError):
+        parser.exit(2, '无法复核所选私有诊断报告。\n')
 
 
 if __name__ == '__main__':
