@@ -1,6 +1,7 @@
 """Owned Codex app-server client. Ephemeral, owner-configured tools, no desktop chat injection."""
 
 from __future__ import annotations
+from collections import deque
 from dataclasses import dataclass, field
 import json
 import base64
@@ -122,6 +123,9 @@ class CodexRpc:
         self.failed = False
         self.initialized = False
         self.approval_seen = threading.Event()
+        self.approval_lock = threading.Lock()
+        self.approval_scopes = deque(maxlen=128)
+        self.approval_terminals = deque(maxlen=128)
         self.notification_lock = threading.RLock()
         self.listeners = []
 
@@ -143,6 +147,7 @@ class CodexRpc:
                 return
         elif message.get('method') == 'turn/completed':
             message = turn_completion(message)
+            self._finish_approval(message)
         # Linearize receipt admission before a speech consumer can see this
         # event. No Queue mutex is held across owner callbacks. Unsubscribe
         # waits for an in-flight admission, so generator cleanup cannot drop it.
@@ -268,10 +273,10 @@ class CodexRpc:
             threading.Thread(target=execute, daemon=True).start()
             return
         if method == 'item/permissions/requestApproval':
-            self.approval_seen.set()
+            self._record_approval(message)
             result = {'permissions': {}, 'scope': 'turn'}
         elif method.endswith('/requestApproval'):
-            self.approval_seen.set()
+            self._record_approval(message)
             result = {'decision': 'decline'}
         elif method == 'item/tool/requestUserInput':
             result = {'answers': {}}
@@ -284,6 +289,38 @@ class CodexRpc:
             )
             return
         self._send({'id': message['id'], 'result': result})
+
+    def _record_approval(self, message):
+        # Keep only bounded IDs, not commands/paths or permission contents.
+        # The reader may see a request before turn/start returns its turn ID.
+        self.approval_seen.set()
+        params = message.get('params')
+        if not isinstance(params, dict):
+            return
+        scope = (params.get('threadId'), params.get('turnId'))
+        if not all(isinstance(value, str) and 0 < len(value) <= 4096 for value in scope):
+            return
+        with self.approval_lock:
+            if scope not in self.approval_terminals and scope not in self.approval_scopes:
+                self.approval_scopes.append(scope)
+
+    def _finish_approval(self, message):
+        params = message.get('params')
+        turn = params.get('turn') if isinstance(params, dict) else None
+        if not isinstance(turn, dict):
+            return
+        scope = (params.get('threadId'), turn.get('id'))
+        if not all(isinstance(value, str) and 0 < len(value) <= 4096 for value in scope):
+            return
+        # Freeze before receipt listeners or the speech consumer run. A later
+        # request cannot retroactively become the cause of a terminal result.
+        with self.approval_lock:
+            if scope not in self.approval_terminals:
+                self.approval_terminals.append(scope)
+
+    def approval_required(self, thread_id, turn_id):
+        with self.approval_lock:
+            return (thread_id, turn_id) in self.approval_scopes
 
     def _read(self):
         try:
@@ -560,9 +597,13 @@ class DotBrain:
                 try:
                     watch.check()
                 except NoFinalAnswer:
-                    if self.rpc.approval_seen.is_set():
+                    if approval_required():
                         raise DotApprovalRequired('Codex task needs desktop approval') from None
                     raise
+
+        def approval_required():
+            lookup = getattr(self.rpc, 'approval_required', None)
+            return bool(callable(lookup) and lookup(turn.thread_id, turn.ident))
 
         def mark_stage(stage, *, at=None, reused=None):
             observed_at = self.clock() if at is None else at
@@ -748,7 +789,7 @@ class DotBrain:
                         continue
                     if value.get('status') != 'completed':
                         kind = state.failure_kind or GENERIC
-                        if kind == GENERIC and self.rpc.approval_seen.is_set():
+                        if kind == GENERIC and approval_required():
                             raise DotApprovalRequired('Codex task needs desktop approval')
                         raise DotError('Codex turn did not complete', kind=kind)
                     completed = True
@@ -761,7 +802,7 @@ class DotBrain:
             try:
                 raw_answer, answer = state.answer()
             except NoFinalAnswer:
-                if self.rpc.approval_seen.is_set():
+                if approval_required():
                     raise DotApprovalRequired('Codex task needs desktop approval') from None
                 raise
             if state.stream_id is not None:
