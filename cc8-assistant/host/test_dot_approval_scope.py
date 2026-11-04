@@ -83,6 +83,26 @@ class ApprovalScopeTests(unittest.TestCase):
     def test_current_approval_does_not_replace_specific_terminal_error(self):
         self.failure(approval(), 'quota', completion=terminal('usageLimitExceeded'))
 
+    def test_approval_after_terminal_cannot_rewrite_failure_cause(self):
+        for status in ('failed', 'completed', 'interrupted'):
+            with self.subTest(status=status):
+                rpc = ApprovalRpc([terminal(status=status), approval()])
+                with self.assertRaises(DotError) as caught:
+                    list(DotBrain(rpc).clauses('固定公开测试', []))
+                self.assertEqual(caught.exception.kind, 'provider_or_runtime')
+        rpc = ReceivingRpc()
+        rpc._send = lambda value: None
+        stream = DotBrain(rpc).clauses('固定公开测试', [])
+        try:
+            self.assertEqual(next(stream), '这是第一句。')
+            rpc.event('turn/completed', turn={'id': 'stream-turn', 'status': 'failed'})
+            rpc._server_request(approval(turn='stream-turn'))
+            with self.assertRaises(DotError) as caught:
+                list(stream)
+            self.assertEqual(caught.exception.kind, 'provider_or_runtime')
+        finally:
+            stream.close()
+
     def test_success_after_approval_stays_completed(self):
         rpc = ApprovalRpc([approval(), answer(), terminal(status='completed')])
         updates = []

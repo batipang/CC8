@@ -125,6 +125,7 @@ class CodexRpc:
         self.approval_seen = threading.Event()
         self.approval_lock = threading.Lock()
         self.approval_scopes = deque(maxlen=128)
+        self.approval_terminals = deque(maxlen=128)
         self.notification_lock = threading.RLock()
         self.listeners = []
 
@@ -146,6 +147,7 @@ class CodexRpc:
                 return
         elif message.get('method') == 'turn/completed':
             message = turn_completion(message)
+            self._finish_approval(message)
         # Linearize receipt admission before a speech consumer can see this
         # event. No Queue mutex is held across owner callbacks. Unsubscribe
         # waits for an in-flight admission, so generator cleanup cannot drop it.
@@ -299,8 +301,22 @@ class CodexRpc:
         if not all(isinstance(value, str) and 0 < len(value) <= 4096 for value in scope):
             return
         with self.approval_lock:
-            if scope not in self.approval_scopes:
+            if scope not in self.approval_terminals and scope not in self.approval_scopes:
                 self.approval_scopes.append(scope)
+
+    def _finish_approval(self, message):
+        params = message.get('params')
+        turn = params.get('turn') if isinstance(params, dict) else None
+        if not isinstance(turn, dict):
+            return
+        scope = (params.get('threadId'), turn.get('id'))
+        if not all(isinstance(value, str) and 0 < len(value) <= 4096 for value in scope):
+            return
+        # Freeze before receipt listeners or the speech consumer run. A later
+        # request cannot retroactively become the cause of a terminal result.
+        with self.approval_lock:
+            if scope not in self.approval_terminals:
+                self.approval_terminals.append(scope)
 
     def approval_required(self, thread_id, turn_id):
         with self.approval_lock:
