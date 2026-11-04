@@ -197,6 +197,41 @@ class ControllerFixtureTests(unittest.TestCase):
             check.corpus_identity([{**fixtures[0], 'error': [changed]}]),
         )
 
+    def test_local_stdio_matrix_has_real_approval_declines_and_explicit_recoveries(self):
+        # The test child talks only over stdio. A remote provider in the
+        # controller would violate this independent network guard.
+        with patch.object(
+            socket.socket, 'connect', side_effect=AssertionError('network forbidden')
+        ):
+            fixtures = qa_faults.generate(dot_fixture='local_stdio')
+        self.assertEqual(len(fixtures), 48)
+        self.assertIn('qa_dot.py', check.source_identity(dot_fixture='local_stdio'))
+        from protocol import decode_event
+
+        for row in fixtures:
+            case = row['case']
+            with self.subTest(case=case.ident):
+                self.assertEqual(row['dot_fixture'], 'local_stdio')
+                self.assertEqual(
+                    row['dot_wire_counts'],
+                    {
+                        'fault_turns': int(case.stage != 'asr'),
+                        'recovery_turns': 1,
+                        'declined_approvals': int(case.kind == 'approval_declined'),
+                    },
+                )
+                events = [decode_event(p.data) for p in row['error'] + row['recovery']]
+                self.assertNotIn('qa-injected-sensitive-body', json.dumps(events))
+        self.assertNotEqual(
+            check.corpus_identity(fixtures),
+            check.corpus_identity([{**row, 'dot_fixture': 'fake'} for row in fixtures]),
+        )
+
+    def test_invalid_dot_fixture_is_rejected_without_launching_a_process(self):
+        with patch.object(subprocess, 'Popen') as process, self.assertRaises(ValueError):
+            qa_faults.generate(dot_fixture='unknown')
+        process.assert_not_called()
+
 
 class DriverGateTests(unittest.TestCase):
     def test_listener_start_retry_is_bounded_and_never_replays_requests(self):
@@ -426,6 +461,29 @@ class DriverExecutionTests(unittest.TestCase):
             link = stack.enter_context(patch.object(check, 'Link')).return_value
             output = Mock()
             yield device, link, restore, output
+
+    def test_report_binds_the_local_stdio_counts_and_passes_mode_to_generator(self):
+        with self.driver() as (_, _, _, output):
+            counts = {'fault_turns': 0, 'recovery_turns': 1, 'declined_approvals': 0}
+            check.generate.return_value[0].update(dot_fixture='local_stdio', dot_wire_counts=counts)
+            self.assertEqual(
+                check.run(
+                    Path('/runtime'),
+                    Path('/private/qa-build.json'),
+                    1,
+                    output,
+                    dot_fixture='local_stdio',
+                ),
+                'passed',
+            )
+            check.generate.assert_called_once_with(
+                http_fixture='fake', dot_fixture='local_stdio', cases=qa_faults.CASES[:1]
+            )
+            report = output.write.call_args.args[0]
+            self.assertEqual(report['provider_dot_fixture'], 'local_stdio')
+            self.assertEqual(report['generated_dot_wire_counts'], counts)
+            check.source_identity.assert_called_once_with('fake', 'local_stdio')
+            self.assertFalse(report['real_provider_requested'])
 
     def test_success_replays_ui_then_removes_only_qa_and_restores_capture_off(self):
         with self.driver() as (device, link, restore, output):

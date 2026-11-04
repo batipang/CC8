@@ -20,13 +20,13 @@ sys.path.insert(0, str(ROOT / 'cc8-assistant/host'))
 
 if __package__:
     from .qa_variant import PACKAGE, COMPONENT, PORT, apk_metadata, safe_source, snapshot_files
-    from .qa_faults import CASES, generate
+    from .qa_faults import CASES, DOT_FIXTURES, generate
     from .qa_ui import stdout_hierarchy, status_target, dialog_close
     from .private_output import private_directory, PrivateOutput
 else:
     # Root entry imports this as tools.check_failure_ui to keep one module identity.
     from tools.qa_variant import PACKAGE, COMPONENT, PORT, apk_metadata, safe_source, snapshot_files
-    from tools.qa_faults import CASES, generate
+    from tools.qa_faults import CASES, DOT_FIXTURES, generate
     from tools.qa_ui import stdout_hierarchy, status_target, dialog_close
     from tools.private_output import private_directory, PrivateOutput
 
@@ -62,10 +62,12 @@ def private_json(path):
     return value
 
 
-def source_identity(http_fixture='fake'):
+def source_identity(http_fixture='fake', dot_fixture='fake'):
     names = ['check_failure_ui.py', 'qa_faults.py', 'qa_variant.py', 'qa_ui.py']
     if http_fixture == 'loopback_tls':
         names.append('qa_http.py')
+    if dot_fixture == 'local_stdio':
+        names.append('qa_dot.py')
     return {name: hashlib.sha256(safe_source(ROOT, 'tools/' + name)).hexdigest() for name in names}
 
 
@@ -77,6 +79,9 @@ def corpus_identity(fixtures):
         digest.update(fixture['expected_message'].encode())
         digest.update(fixture.get('http_fixture', 'fake').encode())
         digest.update(str(fixture.get('wire_requests', 0)).encode())
+        if fixture.get('dot_fixture') == 'local_stdio':
+            digest.update(b'local_stdio')
+            digest.update(json.dumps(fixture['dot_wire_counts'], sort_keys=True).encode())
         for packet in [*fixture['error'], fixture['stale_error'], *fixture['recovery']]:
             digest.update(packet.encode())
     return digest.hexdigest()
@@ -291,8 +296,18 @@ def restore(runtime, device, baseline):
     raise RuntimeError('production_restore_timeout')
 
 
-def run(runtime, receipt_path, limit, output, *, shared_staging=False, http_fixture='fake'):
+def run(
+    runtime,
+    receipt_path,
+    limit,
+    output,
+    *,
+    shared_staging=False,
+    http_fixture='fake',
+    dot_fixture='fake',
+):
     require(http_fixture in ('fake', 'loopback_tls'), 'unknown_qa_http_fixture')
+    require(dot_fixture in DOT_FIXTURES, 'unknown_qa_dot_fixture')
     from service_smoke import LiveService
     from protocol import decode_event
 
@@ -328,7 +343,15 @@ def run(runtime, receipt_path, limit, output, *, shared_staging=False, http_fixt
     service = LiveService(runtime, device.original)
     baseline = service.sample()
     require(baseline is not None, 'production_not_idle_ready')
-    fixtures = generate(http_fixture=http_fixture, cases=CASES[:limit])
+    fixtures = generate(http_fixture=http_fixture, dot_fixture=dot_fixture, cases=CASES[:limit])
+    dot_wire_counts = (
+        {
+            key: sum(f['dot_wire_counts'][key] for f in fixtures)
+            for key in ('fault_turns', 'recovery_turns', 'declined_approvals')
+        }
+        if dot_fixture == 'local_stdio'
+        else None
+    )
     rows = []
     link = None
     touched = False
@@ -338,7 +361,7 @@ def run(runtime, receipt_path, limit, output, *, shared_staging=False, http_fixt
     phase = 'signer_preflight'
     began = time.monotonic()
     started_at = datetime.now(timezone.utc).isoformat()
-    sources = source_identity(http_fixture)
+    sources = source_identity(http_fixture, dot_fixture)
     corpus = corpus_identity(fixtures)
     failure = None
     owner_rechecks = []
@@ -373,6 +396,8 @@ def run(runtime, receipt_path, limit, output, *, shared_staging=False, http_fixt
                 'provider_http_fixture': http_fixture,
                 'generated_wire_requests': sum(f.get('wire_requests', 0) for f in fixtures),
                 'dot_provider_is_fixture': True,
+                'provider_dot_fixture': dot_fixture,
+                'generated_dot_wire_counts': dot_wire_counts,
                 'provider_calls_before_ui_replay': True,
                 'audio_playback_asserted': False,
                 'physical_usb_handover_tested': False,
@@ -526,6 +551,12 @@ def main(argv=None):
         help='Fixed provider I/O: offline fake or certificate-verified loopback TLS',
     )
     parser.add_argument(
+        '--dot-fixture',
+        choices=DOT_FIXTURES,
+        default='fake',
+        help='Fixed Dot faults through an offline fake or a local JSON-RPC child',
+    )
+    parser.add_argument(
         '--shared-staging',
         action='store_true',
         help='Explicit existing shared-directory installer compatibility route; see docs/APK_INSTALL.md',
@@ -542,6 +573,7 @@ def main(argv=None):
                     'camera_used': False,
                     'real_provider_requested': False,
                     'provider_http_fixture': args.http_fixture,
+                    'provider_dot_fixture': args.dot_fixture,
                     'production_apk_changed': False,
                 }
             )
@@ -586,6 +618,7 @@ def main(argv=None):
                         output,
                         shared_staging=args.shared_staging,
                         http_fixture=args.http_fixture,
+                        dot_fixture=args.dot_fixture,
                     )
                 except BaseException:
                     if private_json(output.path).get('state') == 'preparing':
