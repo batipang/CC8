@@ -10,11 +10,10 @@ import os
 from pathlib import Path
 import plistlib
 import re
-import stat
 import subprocess
 import sys
 
-from process_lock import ProcessLease
+from process_lock import ProcessLease, read_private_bytes
 
 
 class RuntimeConflict(RuntimeError):
@@ -68,22 +67,6 @@ def active_roots():
         ) from None
 
 
-def _private_file(path, limit):
-    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
-    with os.fdopen(os.open(path, flags), 'rb') as source:
-        info = os.fstat(source.fileno())
-        if (
-            not stat.S_ISREG(info.st_mode)
-            or info.st_uid != os.getuid()
-            or stat.S_IMODE(info.st_mode) & 0o077
-        ):
-            raise OSError('Unsafe owner state')
-        value = source.read(limit + 1)
-        if len(value) > limit:
-            raise OSError('Oversized owner state')
-        return value
-
-
 def enabled_service_roots(directory=None):
     """Also reserve enabled old services while launchd is between restart attempts."""
     import json
@@ -92,7 +75,7 @@ def enabled_service_roots(directory=None):
     roots = set()
     for path in directory.glob('com.happyhome.cc8.*.plist'):
         try:
-            value = plistlib.loads(_private_file(path, 16384))
+            value = plistlib.loads(read_private_bytes(path, 16384))
             args = value.get('ProgramArguments')
             if not isinstance(args, list) or len(args) != 3 or args[2] != 'run':
                 continue
@@ -105,7 +88,7 @@ def enabled_service_roots(directory=None):
                 continue
             root = script.parents[2].resolve()
             marker = root / 'device-access/private/voice-runtime/service-enabled.json'
-            if json.loads(_private_file(marker, 1024)).get('enabled') is True:
+            if json.loads(read_private_bytes(marker, 1024)).get('enabled') is True:
                 roots.add(root)
         except (OSError, ValueError, TypeError, AttributeError, plistlib.InvalidFileException):
             continue

@@ -15,7 +15,7 @@ import time
 
 from diagnose import query
 from launch import ROOT, PRIVATE, BRIDGE, PYTHON, own_process
-from process_lock import ProcessLease, atomic_private_json
+from process_lock import ProcessLease, atomic_private_bytes, atomic_private_json, read_private_bytes
 from runtime_env import command_path
 from configuration import load_config
 from config_schema import ConfigError
@@ -50,41 +50,108 @@ def agent_payload():
     }
 
 
-def disable():
+class ServiceRegistrationError(RuntimeError):
+    pass
+
+
+def _launchctl(*args, timeout=15, check=False, capture=False):
+    return subprocess.run(
+        ['/bin/launchctl', *args],
+        stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        timeout=timeout,
+        check=check,
+    )
+
+
+def _registered(domain, target):
+    result = _launchctl('print', target, timeout=10, capture=True)
+    if result.returncode == 0:
+        return result.stdout
+    # A failed lookup also occurs when the login domain itself is unavailable.
+    _launchctl('print', domain, timeout=10, check=True)
+    return None
+
+
+def _snapshot(path, limit):
+    try:
+        return read_private_bytes(path, limit)
+    except FileNotFoundError:
+        return None
+
+
+def _restore(path, previous, *, private_parent=True):
+    if previous is None:
+        path.unlink(missing_ok=True)
+    else:
+        atomic_private_bytes(path, previous, private_parent=private_parent)
+
+
+def _rollback_install(domain, target, marker, plist, bootstrap_attempted):
+    try:
+        _restore(ENABLED, marker)
+    finally:
+        try:
+            if bootstrap_attempted:
+                current = _registered(domain, target)
+                if current is not None:
+                    path = next(
+                        (
+                            line.strip().removeprefix('path = ')
+                            for line in current.splitlines()
+                            if line.strip().startswith('path = ')
+                        ),
+                        None,
+                    )
+                    if path is None or Path(path).resolve() != PLIST.resolve():
+                        raise ServiceRegistrationError('无法核实新注册的登录任务。')
+                    _launchctl('bootout', target, check=True)
+        finally:
+            _restore(PLIST, plist, private_parent=False)
+
+
+def _disable():
     atomic_private_json(ENABLED, {'enabled': False})
     if PLIST.exists():
-        subprocess.run(
-            ['launchctl', 'bootout', f'gui/{os.getuid()}', str(PLIST)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=15,
-        )
+        _launchctl('bootout', f'gui/{os.getuid()}', str(PLIST))
+
+
+def disable():
+    with ProcessLease(PRIVATE / 'service-change.lock'):
+        _disable()
 
 
 def install():
-    ensure_available(ROOT)
-    if not PYTHON.is_file() or not BRIDGE.is_file():
-        raise RuntimeError('Voice environment missing')
-    PRIVATE.mkdir(parents=True, exist_ok=True, mode=0o700)
-    os.chmod(PRIVATE, 0o700)
-    PLIST.parent.mkdir(parents=True, exist_ok=True)
-    payload = agent_payload()
-    # 本机路径不进入仓库；plist 只包含启动位置，没有模型密钥或配对信息。
-    with PLIST.open('wb') as out:
-        plistlib.dump(payload, out)
-    os.chmod(PLIST, 0o600)
-    atomic_private_json(ENABLED, {'enabled': True})
-    result = subprocess.run(
-        ['launchctl', 'print', f'gui/{os.getuid()}/{LABEL}'],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        timeout=10,
-    )
-    if result.returncode:
-        subprocess.run(
-            ['launchctl', 'bootstrap', f'gui/{os.getuid()}', str(PLIST)], check=True, timeout=15
-        )
-    subprocess.run(['launchctl', 'kickstart', f'gui/{os.getuid()}/{LABEL}'], check=True, timeout=15)
+    with ProcessLease(PRIVATE / 'service-change.lock'):
+        ensure_available(ROOT)
+        if not PYTHON.is_file() or not BRIDGE.is_file():
+            raise ServiceRegistrationError('缺少语音运行环境。')
+        payload = plistlib.dumps(agent_payload())
+        marker = _snapshot(ENABLED, 1024)
+        plist = _snapshot(PLIST, 16384)
+        domain = f'gui/{os.getuid()}'
+        target = f'{domain}/{LABEL}'
+        try:
+            loaded = _registered(domain, target) is not None
+        except (OSError, subprocess.SubprocessError):
+            raise ServiceRegistrationError('无法访问当前用户的 launchd 登录域。') from None
+        bootstrap_attempted = False
+        try:
+            atomic_private_bytes(PLIST, payload, private_parent=False)
+            atomic_private_json(ENABLED, {'enabled': True})
+            if not loaded:
+                bootstrap_attempted = True
+                _launchctl('bootstrap', domain, str(PLIST), check=True)
+            _launchctl('kickstart', target, check=True)
+        except (OSError, subprocess.SubprocessError, KeyboardInterrupt) as error:
+            try:
+                _rollback_install(domain, target, marker, plist, bootstrap_attempted)
+            except (OSError, subprocess.SubprocessError, ServiceRegistrationError):
+                raise ServiceRegistrationError('登录任务注册失败，无法确认已完全回退。') from None
+            if isinstance(error, KeyboardInterrupt):
+                raise
+            raise ServiceRegistrationError('登录任务注册失败，已恢复先前设置。') from None
 
 
 def read_pid():
@@ -244,16 +311,22 @@ def main():
     if args.action in ('install', 'start'):
         try:
             install()
-        except (ConfigError, RuntimeConflict) as error:
+        except (ConfigError, RuntimeConflict, ServiceRegistrationError) as error:
             parser.error(str(error))
+        except OSError:
+            parser.error('无法读取登录服务设置，或另一个管理操作仍在进行。')
         print('登录后台已启用；不打开设备界面或麦克风。')
     elif args.action in ('stop', 'uninstall'):
-        disable()
-        subprocess.run(
-            [str(PYTHON), str(ROOT / 'cc8-assistant/host/launch.py'), '--stop'], check=True
-        )
-        if args.action == 'uninstall':
-            PLIST.unlink(missing_ok=True)
+        try:
+            with ProcessLease(PRIVATE / 'service-change.lock'):
+                _disable()
+                subprocess.run(
+                    [str(PYTHON), str(ROOT / 'cc8-assistant/host/launch.py'), '--stop'], check=True
+                )
+                if args.action == 'uninstall':
+                    PLIST.unlink(missing_ok=True)
+        except BlockingIOError:
+            parser.error('登录服务正在变更，请稍后重试。')
         print('后台已明确停止，崩溃恢复不会将其重新拉起。')
     elif args.action == 'status':
         try:
