@@ -149,6 +149,53 @@ class WakePipelineTests(unittest.TestCase):
                 self.assertIn('wake_detected', row['stages'])
                 self.assertIn('asr_start', row['stages'])
 
+    def test_english_name_in_either_recent_clause_cannot_wake_or_reach_asr(self):
+        for current, previous in (
+            ('Bumblebee', 'This is a new sentence.'),
+            ('Welcome', 'Bumblebee'),
+            ('bee', 'Bumble'),
+        ):
+            with self.subTest(current=current, previous=previous):
+                b, _, audio, requests, _, asr, _ = self.session('Bumblebee')
+                b.playback.playing = True
+                b.playback.last_spoken = current
+                b.playback.previous_spoken = previous
+                b.playback.previous_spoken_until = time.monotonic() + 1
+                self.frames(b)
+                self.assertFalse(b.session.awake)
+                self.assertFalse(asr.is_set())
+                self.assertEqual(audio, [])
+                self.assertEqual(requests, [])
+                self.assertEqual(b.metrics['wake_render_rejections'], 1)
+
+    def test_recent_playback_end_guards_wake_when_render_reference_is_missing(self):
+        for cue in ('大黄蜂', 'Bumblebee'):
+            with self.subTest(cue=cue):
+                b, _, audio, requests, _, asr, _ = self.session(cue)
+                b.playback.last_spoken = '我的名字是 ' + cue
+                b.playback.last_audio_end = time.monotonic()
+                self.assertIsNone(b.capture.endpoint.last_capture_render_ns)
+                self.frames(b)
+                self.assertIsNone(b.capture.endpoint.last_capture_render_ns)
+                self.assertFalse(b.session.awake)
+                self.assertFalse(asr.is_set())
+                self.assertEqual(audio, [])
+                self.assertEqual(requests, [])
+                self.assertEqual(b.metrics['wake_render_rejections'], 1)
+
+    def test_unrelated_or_expired_playback_text_does_not_block_a_new_name(self):
+        for spoken, age in (('现在是下午三点', 0), ('Bumblebee', 3.5)):
+            with self.subTest(spoken=spoken, age=age):
+                b, _, _, requests, _, _, answered = self.session(
+                    'Bumblebee', 'Bumblebee，常州属于哪个省'
+                )
+                b.playback.last_spoken = spoken
+                b.playback.last_audio_end = time.monotonic() - age
+                self.frames(b)
+                self.assertTrue(answered.wait(1))
+                self.assertEqual(requests, ['常州属于哪个省'])
+                self.assertNotIn('wake_render_rejections', b.metrics)
+
     def test_valid_queued_job_cannot_bypass_sleep_even_with_ready_detector(self):
         b, _, audio, requests, _, asr, _ = self.session('大黄蜂')
         finished = threading.Event()
