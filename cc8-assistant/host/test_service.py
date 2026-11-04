@@ -218,12 +218,100 @@ class ServiceTests(unittest.TestCase):
                 return subprocess.CompletedProcess(args, 0)
 
             with (
+                patch.object(service, 'PRIVATE', Path(folder)),
                 patch.object(service, 'ENABLED', marker),
                 patch.object(service, 'PLIST', plist),
                 patch.object(service.subprocess, 'run', side_effect=run),
             ):
                 service.disable()
             self.assertEqual(marker.stat().st_mode & 0o777, 0o600)
+
+    def test_install_rolls_back_failed_registration_without_removing_existing_job(self):
+        for fault in ('domain', 'bootstrap', 'bootstrap_timeout', 'kickstart', 'existing'):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                private = root / 'private'
+                agents = root / 'LaunchAgents'
+                agents.mkdir(mode=0o755)
+                marker, plist = private / 'enabled.json', agents / 'fixture.plist'
+                loaded = fault == 'existing'
+                previous_marker = b'{ "enabled": false }\n' if loaded else None
+                previous_plist = b'previous private plist\n' if loaded else None
+                if loaded:
+                    atomic_private_json(marker, {'enabled': False})
+                    marker.write_bytes(previous_marker)
+                    plist.write_bytes(previous_plist)
+                    plist.chmod(0o600)
+                calls = []
+                domain = f'gui/{service.os.getuid()}'
+                target = f'{domain}/{service.LABEL}'
+
+                def launchctl(command, *, check=False, **_kwargs):
+                    nonlocal loaded
+                    verb, destination, *_ = command[1:]
+                    calls.append(verb)
+                    if verb == 'print':
+                        code = int(not loaded) if destination == target else int(fault == 'domain')
+                        stdout = f'    path = {plist}\n' if loaded and destination == target else ''
+                    elif verb == 'bootstrap':
+                        self.assertTrue(service.enabled(marker))
+                        if fault == 'bootstrap_timeout':
+                            loaded = True
+                            raise subprocess.TimeoutExpired(command, 15)
+                        code = int(fault in ('domain', 'bootstrap'))
+                        loaded = code == 0
+                        stdout = ''
+                    elif verb == 'kickstart':
+                        code, stdout = 1, ''
+                    elif verb == 'bootout':
+                        self.assertEqual(destination, target)
+                        self.assertFalse(marker.exists())
+                        self.assertTrue(loaded)
+                        loaded = False
+                        code, stdout = 0, ''
+                    else:
+                        raise AssertionError('Unexpected fixture command')
+                    if code and check:
+                        raise subprocess.CalledProcessError(code, command)
+                    return subprocess.CompletedProcess(command, code, stdout)
+
+                with (
+                    patch.object(service, 'PRIVATE', private),
+                    patch.object(service, 'ENABLED', marker),
+                    patch.object(service, 'PLIST', plist),
+                    patch.object(service, 'PYTHON', Path(sys.executable)),
+                    patch.object(service, 'BRIDGE', Path(__file__)),
+                    patch.object(service, 'agent_payload', return_value={'Label': service.LABEL}),
+                    patch.object(service, 'ensure_available'),
+                    patch.object(service.subprocess, 'run', side_effect=launchctl),
+                ):
+                    with self.assertRaises((RuntimeError, subprocess.SubprocessError)):
+                        service.install()
+
+                self.assertEqual(marker.read_bytes() if marker.exists() else None, previous_marker)
+                self.assertEqual(plist.read_bytes() if plist.exists() else None, previous_plist)
+                self.assertEqual(loaded, fault == 'existing')
+                self.assertEqual(
+                    calls.count('bootout'), int(fault in ('kickstart', 'bootstrap_timeout'))
+                )
+                if fault == 'domain':
+                    self.assertEqual(calls, ['print', 'print'])
+                self.assertEqual(agents.stat().st_mode & 0o777, 0o755)
+
+    def test_disable_does_not_overwrite_marker_during_registration(self):
+        with tempfile.TemporaryDirectory() as folder:
+            private = Path(folder)
+            marker = private / 'enabled.json'
+            atomic_private_json(marker, {'enabled': True})
+            with (
+                patch.object(service, 'PRIVATE', private),
+                patch.object(service, 'ENABLED', marker),
+                patch.object(service, 'PLIST', private / 'unused.plist'),
+                ProcessLease(private / 'service-change.lock'),
+            ):
+                with self.assertRaises(BlockingIOError):
+                    service.disable()
+            self.assertTrue(service.enabled(marker))
 
 
 if __name__ == '__main__':

@@ -33,20 +33,27 @@ class ProcessLease:
             self.fd = None
 
 
-def atomic_private_json(path, value):
-    import json
+def atomic_private_bytes(path, value, *, private_parent=True):
     import tempfile
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    os.chmod(path.parent, 0o700)
+    if private_parent:
+        os.chmod(path.parent, 0o700)
     fd, temporary = tempfile.mkstemp(prefix='.' + path.name + '-', dir=path.parent)
     try:
-        with os.fdopen(fd, 'w') as out:
-            json.dump(value, out)
+        with os.fdopen(fd, 'wb') as out:
+            os.fchmod(out.fileno(), 0o600)
+            out.write(value)
             out.flush()
             os.fsync(out.fileno())
         os.replace(temporary, path)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+
+
+def atomic_private_json(path, value):
+    import json
+
+    atomic_private_bytes(path, json.dumps(value).encode())

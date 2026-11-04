@@ -61,7 +61,10 @@ def main():
         from service import enabled, disable
 
         if enabled():
-            disable()
+            try:
+                disable()
+            except BlockingIOError:
+                raise SystemExit('登录服务正在变更，请稍后重试。') from None
             managed_stop = True
     PRIVATE.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(PRIVATE, 0o700)
