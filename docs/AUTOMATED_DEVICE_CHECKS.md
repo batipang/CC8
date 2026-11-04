@@ -211,6 +211,16 @@ APK 0.9.34（code 71）在同一轮另外记录 `device_stop_to_visuals_cleared_
 
 报告固定 physical_usb_unplug_tested=false、human_accuracy_asserted=false、acoustic_latency_asserted=false、full_p0_acceptance=false。离线 fixture 验证门控、计时、旧回执排除、失败清理和脱敏；实机结果另记 VALIDATION。一轮自动通过不关闭整个 P0。
 
+### 插话与本地停止的分组采样
+
+```sh
+./cc8 verify-device --runtime-root /absolute/runtime --capture --interruption-suite
+```
+
+计划固定交替执行 15 次新问题插话与 15 次本地停止指令。长稳观察结束后，使用后台 0.14.60 和 APK code 71 或更新的版本，可加 `--execute` 跑实机。每轮独立限时收音，核实播报已开始再发出固定刺激，最后核对麦克风已停止。插话须确认旧播报停止、新问题识别匹配及同段起播和播完。停止词须确认本地恰好检测一次、未发起云 ASR、播放器实际应用停止并清除画面。两组都需满足播后 20 秒观察。
+
+三项指标分别报告样本数、P50 和 P95。新问题统计触发录音帧到设备暂停，本地停止统计检测帧到设备停播、设备停播到字幕与嘴型清除。任一轮失败即停批，不重试，保留此前合格样本。完整的批次可用 `audit-device-suite` 离线重算。固定 Mac 合成音用于回归，真人普通音量、人声起点和扬声器实际停声仍按独立矩阵验收。
+
 ## 0.14.16现场结果与检查器补强
 
 本次三轮使用补强前的检查器，每轮都实际等待15分钟，未压缩待机时间：

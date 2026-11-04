@@ -10,6 +10,7 @@ import unittest
 from audit_device_suite import audit
 from device_smoke import (
     ACOUSTIC_RESPONSE_METRIC,
+    BARGE_DEVICE_METRIC,
     FAST_STOP_DEVICE_METRIC,
     QA_PLAYOUT_METRIC,
     QA_STAGE_METRICS,
@@ -19,7 +20,7 @@ from device_smoke import (
 )
 
 
-def saved_suite(*, qa=False, extended=False, scenario='qa'):
+def saved_suite(*, qa=False, extended=False, scenario='qa', interruption=False, fail_at=None):
     index = 0
 
     def make_run(options, _checkpoint, **_kwargs):
@@ -58,17 +59,30 @@ def saved_suite(*, qa=False, extended=False, scenario='qa'):
                 FAST_STOP_DEVICE_METRIC: 140,
                 STOP_VISUAL_METRIC: 33,
             }
+        timing = {
+            'status': 'observed',
+            'utterance_end_ms': 80,
+            'confirmed_playout_ack_ms': 80 + response,
+            'confirmed_playback_done_ms': 100 + response,
+            QA_PLAYOUT_METRIC: response,
+        }
+        if 'synthetic_barge' in options:
+            report['barge_evidence'] = {
+                'device_stop_applied': True,
+                'announcement_cancelled': True,
+                'stimulus_played': True,
+                'replacement_completed': True,
+                'transcript_matches_stimulus': True,
+                'admitted_voice_requests': 1,
+                'post_playback_quiet_seconds': 20,
+                BARGE_DEVICE_METRIC: 110,
+                'response_playout_timing': timing if index != fail_at else {'status': 'missing'},
+            }
         if {'awake_dialogue', 'acoustic'} & options:
             report['acoustic_evidence'] = {
                 'recognized_stimulus_matches': True,
                 'post_playback_quiet_seconds': 20,
-                'response_playout_timing': {
-                    'status': 'observed',
-                    'utterance_end_ms': 80,
-                    'confirmed_playout_ack_ms': 80 + response,
-                    'confirmed_playback_done_ms': 100 + response,
-                    QA_PLAYOUT_METRIC: response,
-                },
+                'response_playout_timing': timing,
                 'latency_scenario': scenario,
                 'latency_route_completed': scenario != 'qa',
                 'qa_stage_latencies_ms': dict.fromkeys(QA_STAGE_METRICS, response),
@@ -88,6 +102,7 @@ def saved_suite(*, qa=False, extended=False, scenario='qa'):
         response_acoustic=qa,
         extended_voice=extended,
         latency_scenario=scenario,
+        interruption=interruption,
     )
     backend = '0.14.60' if scenario == 'qa' else '0.14.62'
     return {**data, 'backend_version': backend, 'protocol_version': 2}
@@ -138,6 +153,39 @@ class AuditDeviceSuiteTests(unittest.TestCase):
         reviewed = audit(data)
         self.assertFalse(reviewed['verified'])
         self.assertEqual(reviewed['reason'], 'suite_latency_route_incomplete')
+
+    def test_interruption_audit_recomputes_separate_metrics_and_rejects_incomplete_pair(self):
+        data = saved_suite(interruption=True)
+        self.assertEqual(data['state'], 'passed')
+        data['latencies_ms'] = {}
+        reviewed = audit(data, expect_backend='0.14.60', expect_apk_code=71)
+        self.assertTrue(reviewed['verified'])
+        self.assertEqual(reviewed['completed_phases'], 30)
+        self.assertEqual(
+            reviewed['latencies_ms'],
+            {
+                BARGE_DEVICE_METRIC: {'samples': 15, 'p50': 110, 'p95': 110},
+                FAST_STOP_DEVICE_METRIC: {'samples': 15, 'p50': 140, 'p95': 140},
+                STOP_VISUAL_METRIC: {'samples': 15, 'p50': 33, 'p95': 33},
+            },
+        )
+        timing = data['phases'][2]['report']['barge_evidence']['response_playout_timing']
+        timing['confirmed_playback_done_ms'] = 0
+        reviewed = audit(data)
+        self.assertEqual(reviewed['completed_phases'], 2)
+        self.assertEqual(reviewed['reason'], 'suite_synthetic_barge_evidence_incomplete')
+
+    def test_interruption_batch_stops_without_retry_and_preserves_complete_samples(self):
+        data = saved_suite(interruption=True, fail_at=3)
+        self.assertEqual(data['state'], 'failed')
+        self.assertEqual(
+            [phase['state'] for phase in data['phases']],
+            ['passed', 'passed', 'failed'] + ['not_run'] * 27,
+        )
+        self.assertEqual(
+            {name: stats['samples'] for name, stats in data['latencies_ms'].items()},
+            dict.fromkeys((BARGE_DEVICE_METRIC, FAST_STOP_DEVICE_METRIC, STOP_VISUAL_METRIC), 1),
+        )
 
     def test_claims_cannot_cover_missing_evidence_or_mix_runs(self):
         for case, reason in (
