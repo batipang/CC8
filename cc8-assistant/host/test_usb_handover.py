@@ -1,5 +1,7 @@
 """Bus evidence requires ordered USB registry and host route samples."""
 
+from contextlib import redirect_stderr, redirect_stdout
+import io
 import json
 from pathlib import Path
 import plistlib
@@ -8,8 +10,11 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
-from usb_handover import CheckFailure, Handover, run, topology
+from observe import protect_window
+
+from usb_handover import CheckFailure, Handover, main, run, topology
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -98,6 +103,13 @@ class WitnessTests(unittest.TestCase):
             check.sample(bus(cc8()), h, {**t, 'usb_test_suppressed': True}, 3)
         self.assertFalse(check.rows)
 
+    def test_complete_software_outage_cannot_count_as_a_physical_edge(self):
+        for flag in (True, 0, None):
+            with self.subTest(flag=flag):
+                h, t = status('wifi')
+                with self.assertRaisesRegex(CheckFailure, 'usb_software_suppression'):
+                    self.ready().sample(bus(), h, {**t, 'all_routes_test_suppressed': flag}, 2)
+
     def test_wrong_port_device_hub_or_missed_edge_is_never_counted(self):
         for replacement, reason in (
             (bus(cc8(4, serial='other')), 'usb_device_or_port_changed'),
@@ -139,14 +151,14 @@ class WitnessTests(unittest.TestCase):
 
     def test_runtime_change_or_audio_activity_stops_observation(self):
         h, t = status('wifi')
-        for patch, reason in (
+        for changes, reason in (
             ({'microphone_active': True}, 'runtime_audio_not_idle'),
             ({'playing': True}, 'runtime_audio_not_idle'),
             ({'mic_frames': 121}, 'microphone_frames_changed'),
             ({'runtime_instance': 'different'}, 'runtime_changed'),
         ):
             with self.subTest(reason=reason), self.assertRaisesRegex(CheckFailure, reason):
-                self.ready().sample(bus(), {**h, **patch}, t, 2)
+                self.ready().sample(bus(), {**h, **changes}, t, 2)
 
     def test_playback_between_idle_polls_invalidates_evidence(self):
         check = self.ready()
@@ -353,6 +365,40 @@ class WitnessTests(unittest.TestCase):
             report = json.loads(args.output.read_text())
             self.assertEqual(report['reason'], 'observation_poll_gap')
             self.assertFalse(report['completed_cycles'])
+
+    def test_managed_usb_witness_shares_the_runtime_automation_lock(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            directory = root / 'device-access/private/voice-runtime'
+            directory.mkdir(parents=True, mode=0o700)
+            address = directory / 'announce.sock'
+            output = root / 'result.json'
+            args = ['--runtime-root', str(root), '--output', str(output), '--execute']
+            with (
+                protect_window(address),
+                patch('usb_handover.sys.platform', 'darwin'),
+                patch('usb_handover.run') as witness,
+                redirect_stderr(io.StringIO()) as error,
+            ):
+                self.assertEqual(main(args), 2)
+            witness.assert_not_called()
+            self.assertIn('automation', error.getvalue())
+            self.assertFalse(output.exists())
+
+            def run_with_lock(_args):
+                with self.assertRaises(BlockingIOError), protect_window(address):
+                    self.fail('observation started during the USB witness')
+                return 0
+
+            with (
+                patch('usb_handover.sys.platform', 'darwin'),
+                patch('usb_handover.run', side_effect=run_with_lock) as witness,
+                redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(args), 0)
+            witness.assert_called_once()
+            with protect_window(address) as acquired:
+                self.assertTrue(acquired)
 
     def test_minimal_path_plan_never_needs_runtime_or_mac(self):
         result = subprocess.run(

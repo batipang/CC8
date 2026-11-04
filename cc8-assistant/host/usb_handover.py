@@ -12,6 +12,7 @@ import sys
 import time
 
 from diagnose import query
+from observe import protect_window
 from private_output import PrivateOutput
 
 CC8_MODEL = 'AILABS_S6'
@@ -117,7 +118,11 @@ class Handover:
             ),
             'runtime_audio_not_idle',
         )
-        require(transport.get('usb_test_suppressed') is False, 'usb_software_suppression')
+        require(
+            transport.get('usb_test_suppressed') is False
+            and transport.get('all_routes_test_suppressed', False) is False,
+            'usb_software_suppression',
+        )
         mic_frames, render_frames = health.get('mic_frames'), health.get('render_frames')
         switches = transport.get('transport_switches')
         require(type(mic_frames) is int and mic_frames >= 0, 'mic_counter_unavailable')
@@ -349,10 +354,19 @@ def main(argv=None):
         parser.error('Executing requires macOS and an output path in an owner-private directory')
     if not args.runtime_root.is_absolute() or args.runtime_root.resolve() != args.runtime_root:
         parser.error('Executing requires a real absolute runtime root')
+    address = args.runtime_root / 'device-access/private/voice-runtime/announce.sock'
     try:
-        result = run(args)
+        # A physical cycle would invalidate a concurrent long-run observation.
+        # Hold the same exclusive window as the device and service QA.
+        with protect_window(address, exclusive=True):
+            result = run(args)
         print(args.output)
         return result
+    except BlockingIOError:
+        print(
+            'USB handover cannot overlap an active observation or automation test.', file=sys.stderr
+        )
+        return 2
     except (OSError, ValueError):
-        print('Unable to write a private USB handover report.', file=sys.stderr)
+        print('Unable to open the private USB handover window or report.', file=sys.stderr)
         return 2
