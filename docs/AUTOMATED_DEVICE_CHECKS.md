@@ -211,6 +211,16 @@ APK 0.9.34（code 71）在同一轮另外记录 `device_stop_to_visuals_cleared_
 
 报告固定 physical_usb_unplug_tested=false、human_accuracy_asserted=false、acoustic_latency_asserted=false、full_p0_acceptance=false。离线 fixture 验证门控、计时、旧回执排除、失败清理和脱敏；实机结果另记 VALIDATION。一轮自动通过不关闭整个 P0。
 
+### 清醒状态下的纯播报误暂停观察
+
+```sh
+./cc8 verify-device --runtime-root /absolute/runtime --capture --self-playback-soak
+```
+
+后台 0.14.63 起支持。长稳观察结束后加 `--execute`，脚本先用固定问句唤醒，再连续安排公开测试短文，不需要用户说话。两个窗口各至少 15 分钟，各自从清醒状态开始，最后都确认双端停采。播报期间保持 USB 和前台，核对每次实际播完和音频计数；出现额外准入语音、误触发本地停止、丢失回执或暂停后没有恢复即失败。
+
+两段合计最多允许一次已恢复的误暂停。报告分别记录观察时间、完成播报次数、收到的播放参考采样数、暂停请求、设备暂停和恢复，不保存音频或转写正文。观察时间包含合成和播报之间的等待，播放参考采样数单列。已完成批次可用 `audit-device-suite` 复核。此模式覆盖纯播报；电视、低噪声背景和真人场景仍有独立验收。
+
 ### 插话与本地停止的分组采样
 
 ```sh
