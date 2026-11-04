@@ -19,7 +19,7 @@ from bridge import Bridge
 from capture_evidence import CaptureEvidence, validate
 from diagnostic_run import DiagnosticRun
 from diagnostics import TraceBook
-from dsp import FRAME, RATE
+from dsp import FRAME, RATE, VoiceDetector
 from echo_pipeline import CleanFrame
 from test_barge_in import Sink
 
@@ -38,7 +38,7 @@ def evidence():
     zero = np.zeros(FRAME)
     near.correlation = near.residual_correlation = 0
     result.feed(
-        CleanFrame(1, zero, zero, zero, zero),
+        CleanFrame(10_000_000, zero, zero, zero, zero),
         near,
         voiced=False,
         credible=False,
@@ -73,6 +73,7 @@ class CaptureDiagnosticsTests(unittest.TestCase):
         )
         self.assertEqual(value['raw_correlated_frames'], 1)
         self.assertEqual(value['residual_correlated_frames'], 1)
+        self.assertEqual(value['device_vad_tail_ms'], 10)
         self.assertAlmostEqual(value['raw_peak_dbfs'], -20, places=1)
         book = TraceBook()
         run = DiagnosticRun()
@@ -84,10 +85,36 @@ class CaptureDiagnosticsTests(unittest.TestCase):
         value['frames'] = 8
         report = run.report()
         self.assertEqual(report['requests'][0]['capture']['frames'], 2)
+        self.assertEqual(report['summary']['latencies']['device_vad_tail_ms']['p95'], 10)
         report['requests'][0]['capture']['frames'] = 9
         self.assertEqual(book.report()['requests'][0]['capture']['frames'], 2)
         self.assertEqual(run.report()['requests'][0]['capture']['frames'], 2)
         self.assertNotIn('array', json.dumps(run.report()))
+
+    def test_device_vad_tail_requires_contiguous_capture_and_a_voiced_frame(self):
+        for stamps, voices, expected in (
+            ([0, 10_000_000, 20_000_000], [True, False, False], 20),
+            ([0, 10_000_000, 20_000_000], [True, False, True], 0),
+            ([0, 20_000_000, 30_000_000], [True, False, True], None),
+            ([10_000_000, 10_000_000], [True, False], None),
+            ([0, 10_000_000], [False, False], None),
+        ):
+            with self.subTest(stamps=stamps, voices=voices):
+                stats = CaptureEvidence()
+                pcm = np.zeros(FRAME)
+                near = SimpleNamespace(correlation=0.0, residual_correlation=0.0)
+                for nanos, voiced in zip(stamps, voices):
+                    stats.feed(
+                        CleanFrame(nanos, pcm, pcm, pcm, pcm),
+                        near,
+                        voiced=voiced,
+                        credible=voiced,
+                        pause_requested=False,
+                    )
+                value = stats.snapshot(echo_risk=False, during_playback=False, local_wake=False)
+                self.assertEqual(value.get('device_vad_tail_ms'), expected)
+                self.assertEqual(validate(value), value)
+                self.assertNotIn('nanos', json.dumps(value))
 
     def test_aggregation_does_not_retain_frame_arrays(self):
         stats = CaptureEvidence()
@@ -139,6 +166,9 @@ class CaptureDiagnosticsTests(unittest.TestCase):
             ('raw_peak_dbfs', -121),
             ('raw_peak_dbfs', 10**1000),
             ('local_wake', 1),
+            ('device_vad_tail_ms', True),
+            ('device_vad_tail_ms', float('inf')),
+            ('device_vad_tail_ms', 13),
         ]
         for name, value in mutations:
             with self.subTest(name=name):
@@ -268,6 +298,19 @@ class CaptureDiagnosticsTests(unittest.TestCase):
         self.assertEqual(job[1].tobytes(), frame.cleaned.tobytes())
         self.assertFalse(job[4]['local_wake'])
         self.assertEqual(validate(row['capture']), row['capture'])
+
+    def test_real_endpoint_reports_elapsed_device_time_before_utterance_handoff(self):
+        bridge, frame, _ = self.endpoint()
+        endpoint = bridge.capture.endpoint
+        endpoint.vad = VoiceDetector()
+        voiced = iter([True] * VoiceDetector.ONSET_FRAMES + [False] * 80)
+        endpoint.near_speech.feed = lambda *_: (next(voiced), False)
+        for index in range(VoiceDetector.ONSET_FRAMES + 80):
+            endpoint.consume(replace(frame, nanos=frame.nanos + index * 10_000_000))
+        job = bridge.recognition.queue.get_nowait()
+        row = next(r for r in bridge.diagnostics.report()['requests'] if r['request_id'] == job[6])
+        self.assertEqual(row['capture']['device_vad_tail_ms'], 800)
+        self.assertIn('utterance_end', row['stages'])
 
     def test_transport_session_and_activity_resets_drop_partial_capture_counts(self):
         for name in ('reset_transport', 'reset_session', 'reset_voice_activity'):

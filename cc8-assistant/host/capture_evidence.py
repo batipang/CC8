@@ -17,6 +17,10 @@ COUNTS = frozenset(
 LEVELS = frozenset(('raw_peak_dbfs', 'cleaned_peak_dbfs', 'render_peak_dbfs'))
 CORRELATIONS = frozenset(('max_raw_correlation', 'max_residual_correlation'))
 FLAGS = frozenset(('echo_risk', 'during_playback', 'local_wake'))
+VAD_TAIL = 'device_vad_tail_ms'
+FIELDS = COUNTS | LEVELS | CORRELATIONS | FLAGS
+FRAME_NS = 10_000_000
+FRAME_JITTER_NS = 2_000_000
 DECISIONS = frozenset(
     (
         'accepted',
@@ -35,7 +39,7 @@ DECISIONS = frozenset(
 
 
 def validate(value):
-    if not isinstance(value, dict) or set(value) != COUNTS | LEVELS | CORRELATIONS | FLAGS:
+    if not isinstance(value, dict) or set(value) - {VAD_TAIL} != FIELDS:
         raise ValueError('Invalid capture evidence fields')
     for key in COUNTS:
         if type(value[key]) is not int or not 0 <= value[key] <= 2000:
@@ -65,6 +69,15 @@ def validate(value):
                 raise ValueError('Invalid capture measurement')
     if any(type(value[k]) is not bool for k in FLAGS):
         raise ValueError('Invalid capture flags')
+    if VAD_TAIL in value:
+        tail = value[VAD_TAIL]
+        max_tail = (frames - value['voiced_frames']) * (FRAME_NS + FRAME_JITTER_NS) / 1e6
+        if (
+            not value['voiced_frames']
+            or type(tail) not in (int, float)
+            or not 0 <= tail <= max_tail
+        ):
+            raise ValueError('Invalid device VAD tail timing')
     return dict(value)
 
 
@@ -77,6 +90,9 @@ class CaptureEvidence:
         self.level = level
         self.values = {key: 0 for key in COUNTS | CORRELATIONS}
         self.values.update({key: -120.0 for key in LEVELS})
+        self.previous_ns = None
+        self.last_voiced_ns = None
+        self.contiguous = True
 
     def feed(self, frame, near, *, voiced, credible, pause_requested):
         raw, cleaned, render = (self.level(x) for x in (frame.raw, frame.cleaned, frame.reference))
@@ -86,6 +102,12 @@ class CaptureEvidence:
         if not all(math.isfinite(x) and 0 <= x <= 1.000001 for x in correlations):
             raise ValueError('Invalid frame correlation observation')
         value = self.values
+        stamp = frame.nanos
+        if self.previous_ns is not None:
+            self.contiguous &= abs(stamp - self.previous_ns - FRAME_NS) <= FRAME_JITTER_NS
+        self.previous_ns = stamp
+        if voiced:
+            self.last_voiced_ns = stamp
         value['frames'] += 1
         value['voiced_frames'] += int(voiced)
         value['credible_frames'] += int(credible)
@@ -107,11 +129,14 @@ class CaptureEvidence:
             value[key] = max(value[key], round(min(1.0, correlation), 4))
 
     def snapshot(self, *, echo_risk, during_playback, local_wake):
-        return validate(
-            {
-                **self.values,
-                'echo_risk': bool(echo_risk),
-                'during_playback': bool(during_playback),
-                'local_wake': bool(local_wake),
-            }
-        )
+        evidence = {
+            **self.values,
+            'echo_risk': bool(echo_risk),
+            'during_playback': bool(during_playback),
+            'local_wake': bool(local_wake),
+        }
+        if self.contiguous and self.last_voiced_ns is not None:
+            # Frames have the same duration, so subtracting their start stamps
+            # also gives the interval between their ends on the capture clock.
+            evidence[VAD_TAIL] = round((self.previous_ns - self.last_voiced_ns) / 1e6, 3)
+        return validate(evidence)
