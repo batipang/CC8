@@ -33,12 +33,17 @@ class Wire {
  static void put(JSONObject j,String key,Object value){j.data.put(key,value);}
  static byte[] pcm(short[] samples,int count){return new byte[count*2];}
 }
+class Build {static class VERSION {static int SDK_INT=27;}}
+class AudioTimestamp {
+ static final int TIMEBASE_MONOTONIC=0;
+ long framePosition,nanoTime;
+}
 class AudioRecord {
- static final int STATE_INITIALIZED=1,RECORDSTATE_RECORDING=3;
+ static final int STATE_INITIALIZED=1,RECORDSTATE_RECORDING=3,SUCCESS=0;
  static final List<AudioRecord> created=new CopyOnWriteArrayList<>();
  static final CountDownLatch entered=new CountDownLatch(1),releaseOld=new CountDownLatch(1);
  final CountDownLatch stopped=new CountDownLatch(1),released=new CountDownLatch(1);
- final int index;int reads;volatile int stops;volatile boolean started;
+ final int index;int reads;volatile int timestamps;volatile int stops;volatile boolean started;
  AudioRecord(int source,int rate,int channels,int encoding,int size){index=created.size();created.add(this);}
  static int getMinBufferSize(int rate,int channels,int encoding){return 320;}
  int getState(){return STATE_INITIALIZED;}
@@ -58,7 +63,7 @@ class AudioRecord {
     if(!releaseOld.await(3,TimeUnit.SECONDS))throw new AssertionError("old read fixture timeout");
     return count;
    }
-   if("bounded".equals(test)||"crossing".equals(test)){
+   if(!"normal".equals(test)&&!"replacement".equals(test)){
     CaptureCheck.clock.addAndGet(250);
     // Let an unlimited old worker remain observable, with finite cleanup.
     if(reads>4){entered.countDown();stopped.await(3,TimeUnit.SECONDS);}
@@ -68,6 +73,11 @@ class AudioRecord {
    }
   } catch(InterruptedException error){Thread.currentThread().interrupt();return -3;}
   return count;
+ }
+ int getTimestamp(AudioTimestamp stamp,int timebase){
+  timestamps++;
+  if("timestamp_unavailable".equals(CaptureCheck.test))throw new IllegalStateException("fixture");
+  return -3;
  }
  void stop(){stops++;stopped.countDown();}
  void release(){released.countDown();}
@@ -121,7 +131,23 @@ public final class CaptureCheck {
  public static void main(String[] args)throws Exception {
   test=args[0];VoiceSession s=new VoiceSession();
   try {
-   if("invalid".equals(test)){
+   if("clock_math".equals(test)){
+    CaptureClockStats stats=new CaptureClockStats();
+    long origin=10_000_000_000L;
+    yes(stats.due(origin),"first clock poll not due");
+    stats.observe(false,0,0,origin,320,origin);
+    yes(!stats.due(origin+249_999_999),"clock poll not throttled");
+    yes(stats.due(origin+250_000_000),"clock poll suppressed");
+    stats.observe(true,320,origin+10_000_000,origin+20_000_000,640,origin);
+    stats.observe(true,320,origin+10_000_000,origin+20_000_000,640,origin);
+    stats.observe(true,319,origin+9_000_000,origin+20_000_000,640,origin);
+    stats.observe(true,640,origin+50_000_000,origin+49_999_999,640,origin);
+    stats.observe(true,640,origin+50_000_000,origin+60_000_000,640,origin);
+    yes(stats.snapshot().equals(Map.of(
+     "samples",6,"available",2,"unavailable",1,"invalid",1,"duplicate",1,
+     "discontinuities",1,"min_offset_ns",-10_000_000L,"max_offset_ns",10_000_000L)),
+     "incorrect classification, offset or data exposure");
+   } else if("invalid".equals(test)){
     for(long limit:new long[]{-1,999,1500001,Long.MAX_VALUE}){
      try{s.startMicrophone(limit);throw new AssertionError("invalid limit accepted");}
      catch(IllegalArgumentException expected){}
@@ -134,6 +160,8 @@ public final class CaptureCheck {
     yes(s.packets.get()==0&&s.captureWindow==null,"expired waiter sent audio or kept lease");
    } else if("normal".equals(test)){
     s.startMicrophone();yes(AudioRecord.entered.await(2,TimeUnit.SECONDS),"normal read fixture not entered");
+    yes(s.captureWindow.clockStats==null&&AudioRecord.created.get(0).timestamps==0,
+        "normal capture queried hardware clock");
     yes(s.recording&&s.captureWindow.limitMs==0&&clock.get()>=1800000,"normal capture gained a test timeout");
     yes(Thread.getAllStackTraces().keySet().stream().noneMatch(t->t.isAlive()&&"cc8-test-capture-timeout".equals(t.getName())),"normal capture spawned watchdog");
    } else if("replacement".equals(test)){
@@ -143,11 +171,16 @@ public final class CaptureCheck {
     yes(s.recording&&s.captureWindow!=null&&s.captureWindow.limitMs==0,"old finally or deadline changed replacement");
     yes(AudioRecord.created.get(1).stops==0,"old watchdog stopped replacement hardware");
    } else {
+    if("old_sdk".equals(test))Build.VERSION.SDK_INT=23;
     s.startMicrophone(1000);
     waitFor(()->!s.recording,"test capture did not expire independently");
     yes(AudioRecord.created.size()==1,"expected one owned hardware session");
     AudioRecord r=AudioRecord.created.get(0);yes(r.released.await(1,TimeUnit.SECONDS),"expired hardware not released");
     yes(s.recorder==null&&s.captureWindow==null,"expired resource ownership retained");
+    if("timestamp_unavailable".equals(test))yes(r.timestamps>=1&&s.packets.get()==3,
+      "timestamp exception stopped bounded audio or was not exercised");
+    if("old_sdk".equals(test))yes(r.timestamps==0&&s.packets.get()==3,
+      "pre-24 device queried unsupported timestamp");
     waitFor(()->s.events.stream().anyMatch(e->"session_stop".equals(e.data.get("event"))),"capture end callback missing");
     yes(s.listener.errors.get()==0,"normal test expiry became a recording error");
     yes(s.listener.microphones.equals(Arrays.asList(true,false)),"missing capture end callback");
@@ -262,6 +295,7 @@ class CaptureWindowTests(unittest.TestCase):
                     '-d',
                     str(path / package),
                     str(JAVA / 'CaptureWindow.java'),
+                    str(JAVA / 'CaptureClockStats.java'),
                     str(JAVA / 'OpenVoiceGate.java'),
                     str(path / source_name),
                 ],
@@ -303,6 +337,15 @@ class CaptureWindowTests(unittest.TestCase):
 
     def test_default_capture_has_no_limit_or_watchdog(self):
         self.check_worker('normal')
+
+    def test_capture_clock_uses_only_plausible_advancing_anchors(self):
+        self.check_worker('clock_math')
+
+    def test_capture_clock_unavailable_does_not_stop_audio(self):
+        self.check_worker('timestamp_unavailable')
+
+    def test_capture_clock_guard_keeps_pre_api_24_audio_working(self):
+        self.check_worker('old_sdk')
 
     def test_expired_old_worker_cannot_stop_or_clear_new_normal_capture(self):
         self.check_worker('replacement')

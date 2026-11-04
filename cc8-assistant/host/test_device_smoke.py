@@ -12,7 +12,15 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 
-from device_smoke import CheckFailure, Device, SmokeRun, main, objects, rpc
+from device_smoke import (
+    CheckFailure,
+    Device,
+    SmokeRun,
+    main,
+    objects,
+    rpc,
+    summarize_capture_clock,
+)
 
 
 class DeviceAutomationTests(unittest.TestCase):
@@ -127,6 +135,7 @@ class DeviceAutomationTests(unittest.TestCase):
                     '--capture',
                     '--standby',
                     '--acoustic',
+                    '--capture-clock-evidence',
                 ],
                 env={'PATH': '/usr/bin:/bin'},
                 capture_output=True,
@@ -136,6 +145,7 @@ class DeviceAutomationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             plan = json.loads(result.stdout)
             self.assertFalse(plan['execute'])
+            self.assertTrue(plan['capture_clock_evidence'])
             self.assertEqual(len(plan['checks']), 9)
             self.assertFalse(missing.exists())
         with patch('device_smoke.Device') as device, patch('device_smoke.rpc') as query:
@@ -145,7 +155,12 @@ class DeviceAutomationTests(unittest.TestCase):
             query.assert_not_called()
 
     def test_capture_options_cannot_be_enabled_implicitly(self):
-        for flags in (['--standby'], ['--acoustic'], ['--capture', '--acoustic']):
+        for flags in (
+            ['--standby'],
+            ['--acoustic'],
+            ['--capture', '--acoustic'],
+            ['--capture-clock-evidence'],
+        ):
             with self.subTest(flags=flags), redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit), patch('device_smoke.Device') as device:
                     main(['--runtime-root', '/unused', *flags])
@@ -283,6 +298,73 @@ class DeviceAutomationTests(unittest.TestCase):
         self.assertEqual(result['checks'][0]['reason'], 'backend_playback_evidence_unsupported')
         device.open.assert_not_called()
         device.home.assert_not_called()
+
+    def test_capture_clock_requirement_refuses_old_apk_before_capture(self):
+        run, device, _, _ = self.fixture(capture=True, capture_clock_evidence=True)
+        result = run.run()
+        self.assertEqual(result['state'], 'failed')
+        self.assertEqual(result['checks'][0]['reason'], 'device_capture_clock_evidence_unsupported')
+        device.open.assert_not_called()
+        device.home.assert_not_called()
+
+    def test_capture_clock_requires_valid_advancing_hardware_receipts(self):
+        report = {
+            'samples': 4,
+            'available': 2,
+            'unavailable': 1,
+            'invalid': 0,
+            'duplicate': 1,
+            'discontinuities': 0,
+            'min_offset_ns': -10_000_000,
+            'max_offset_ns': 10_000_000,
+        }
+        for value, expected in (
+            (None, 'missing'),
+            ({**report, 'samples': 5}, 'malformed'),
+            ({**report, 'available': True}, 'malformed'),
+            ({**report, 'max_offset_ns': -11_000_000}, 'malformed'),
+            ({**report, 'min_offset_ns': -2_000_000_001}, 'malformed'),
+            ({**report, 'unexpected': 'device data'}, 'malformed'),
+            ({**report, 'invalid': 1, 'duplicate': 0}, 'unconfirmed'),
+            ({**report, 'discontinuities': 1, 'duplicate': 0}, 'unconfirmed'),
+            ({**report, 'available': 1, 'unavailable': 2}, 'unconfirmed'),
+            (report, 'observed'),
+        ):
+            with self.subTest(expected=expected, value=value):
+                evidence = summarize_capture_clock(value)
+                self.assertEqual(evidence['status'], expected)
+                if expected == 'malformed':
+                    self.assertEqual(evidence, {'status': 'malformed'})
+
+    def test_bounded_capture_saves_numeric_evidence_even_if_clock_unavailable(self):
+        run, device, health, _ = self.fixture(capture=True, capture_clock_evidence=True)
+        health.update(microphone_active=True, local_wake_ready=True)
+        sample = {
+            'samples': 6,
+            'available': 0,
+            'unavailable': 6,
+            'invalid': 0,
+            'duplicate': 0,
+            'discontinuities': 0,
+        }
+        device.status.return_value[0].update(
+            microphone_active=True,
+            test_capture_limit_ms=180000,
+            test_capture_remaining_ms=170000,
+            capture_clock_evidence=sample,
+        )
+        with self.assertRaisesRegex(CheckFailure, 'capture_clock_provenance_unconfirmed'):
+            run.start_capture()
+        self.assertEqual(
+            run.report('failed')['capture_clock_evidence'],
+            {
+                'status': 'unconfirmed',
+                **sample,
+            },
+        )
+        sample.update(available=2, unavailable=4, min_offset_ns=0, max_offset_ns=10)
+        run.start_capture()
+        self.assertEqual(run.report('passed')['capture_clock_evidence']['status'], 'observed')
 
     def test_clock_requirement_refuses_old_apk_before_capture(self):
         run, device, health, _ = self.fixture(

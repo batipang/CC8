@@ -9,11 +9,19 @@
 ./cc8 verify-device --runtime-root /absolute/live/workspace --execute
 # 明确启用前台开麦、Home 停采、维护重开保持关闭
 ./cc8 verify-device --runtime-root /absolute/live/workspace --execute --capture
+# 在相同限时开麦窗口内，追加录音时钟检查
+./cc8 verify-device --runtime-root /absolute/live/workspace --execute --capture --capture-clock-evidence
 # 追加真实 15 分钟待机，黑屏后由 Mac 播放合成问句
 ./cc8 verify-device --runtime-root /absolute/live/workspace --execute --capture --standby --acoustic
 ```
 
 runtime-root 指**实际运行目录**。现场为 `/Volumes/AI/Codex/CC8-P0`，冻结运行源码1ab67a0：后台0.14.17 / 保留原签名APK0.9.13 code48；实际部署与验收范围见 [CURRENT_DEPLOYMENT](CURRENT_DEPLOYMENT.md)。自动检查脚本可来自另一份已验证源码；报告中的脚本摘要与受测后台版本分别记录。深层候选目录曾超出 macOS Unix socket 路径限制，已改为短路径并重新创建独立 venv。
+
+## 录音时钟证据
+
+从候选 APK 0.9.16 code51 起，`--capture-clock-evidence` 可在已有前台限时录音中读取 Android [AudioRecord.getTimestamp](https://developer.android.com/reference/android/media/AudioRecord#getTimestamp(android.media.AudioTimestamp,int)) 的单调时钟锚点。正常语音不执行这项采样。`--capture-clock-evidence` 需要同时指定 `--capture`，也可与播放时钟检查组合。设备未声明支持时，预检在打开应用或播报前失败。
+
+工具在校准结束后读取本轮统计。至少两个帧位置和时间都递增的锚点才算观测到证据。重复锚点和接口暂不可用单独计数。越界和倒退使该次检查失败。报告只保存计数和偏移范围。偏移为同一帧的 Android 采集管线时间减去现有麦克风包时间，正值表示 Android 锚点更晚。缺少可用锚点时没有偏移字段。该偏移用于量化读缓冲推算的差异，实际麦克风到扬声器的声学延迟仍需独立验证。现有录音包时钟、回声消除与限时关麦路径沿用原行为。
 
 ## 门控与动作
 

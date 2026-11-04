@@ -49,6 +49,30 @@ def require(condition, reason):
         raise CheckFailure(reason)
 
 
+def summarize_capture_clock(value):
+    """Keep only bounded numeric evidence from the current device capture window."""
+    if value is None:
+        return {'status': 'missing'}
+    counters = ('samples', 'available', 'unavailable', 'invalid', 'duplicate', 'discontinuities')
+    offsets = ('min_offset_ns', 'max_offset_ns')
+    if not isinstance(value, dict) or any(
+        type(value.get(k)) is not int or not 0 <= value[k] <= 6100 for k in counters
+    ):
+        return {'status': 'malformed'}
+    if value['samples'] != sum(value[k] for k in counters[1:]):
+        return {'status': 'malformed'}
+    fields = counters + offsets if value['available'] else counters
+    if set(value) != set(fields):
+        return {'status': 'malformed'}
+    if value['available'] and (
+        any(type(value[k]) is not int for k in offsets)
+        or not -2000000000 <= value[offsets[0]] <= value[offsets[1]] <= 2000000000
+    ):
+        return {'status': 'malformed'}
+    observed = value['available'] >= 2 and not (value['invalid'] or value['discontinuities'])
+    return {'status': 'observed' if observed else 'unconfirmed', **{k: value[k] for k in fields}}
+
+
 def classify_voice_records(rows):
     """A VAD trace exists before admission; never equate it with a dialogue."""
     rejected_gates = ('empty', 'echo_text', 'echo_render', 'weak_near', 'wake_closed')
@@ -206,6 +230,7 @@ class SmokeRun:
         acoustic=False,
         playback_evidence=False,
         clock_evidence=False,
+        capture_clock_evidence=False,
         clock=time.monotonic,
         sleep=time.sleep,
         checkpoint=lambda value: None,
@@ -215,6 +240,8 @@ class SmokeRun:
         self.capture, self.standby, self.acoustic = capture, standby, acoustic
         self.playback_evidence = playback_evidence
         self.clock_evidence = clock_evidence
+        self.capture_clock_required = capture_clock_evidence
+        self.capture_clock_evidence = None
         self.playback_probe_evidence = None
         self.clock, self.sleep, self.checkpoint = clock, sleep, checkpoint
         self.started = clock()
@@ -267,6 +294,7 @@ class SmokeRun:
             'full_p0_acceptance': False,
             'acoustic_evidence': self.acoustic_evidence,
             'playback_probe_evidence': self.playback_probe_evidence,
+            'capture_clock_evidence': self.capture_clock_evidence,
         }
 
     def check(self, name, action):
@@ -314,6 +342,11 @@ class SmokeRun:
         require(
             not self.capture or device.get('test_capture_limit_supported') is True,
             'device_test_capture_limit_unsupported',
+        )
+        require(
+            not self.capture_clock_required
+            or device.get('capture_clock_evidence_supported') is True,
+            'device_capture_clock_evidence_unsupported',
         )
         require(device.get('foreground') is True, 'assistant_not_foreground')
         require(device.get('microphone_active') is False, 'device_microphone_already_active')
@@ -419,6 +452,13 @@ class SmokeRun:
             d.get('microphone_active') is True and ui.get('camera_open') is False,
             'device_capture_state_invalid',
         )
+
+        if self.capture_clock_required:
+            self.capture_clock_evidence = summarize_capture_clock(d.get('capture_clock_evidence'))
+            require(
+                self.capture_clock_evidence['status'] == 'observed',
+                'capture_clock_provenance_unconfirmed',
+            )
 
     def playback_probe(self):
         h = self.health()
@@ -668,6 +708,11 @@ def main(argv=None):
         action='store_true',
         help='Also require opt-in presentation-clock provenance from a supporting APK',
     )
+    parser.add_argument(
+        '--capture-clock-evidence',
+        action='store_true',
+        help='Require Android recording-clock evidence from the bounded capture window',
+    )
     args = parser.parse_args(argv)
     if args.standby and not args.capture or args.acoustic and not args.standby:
         parser.error('--standby requires --capture; --acoustic requires --standby')
@@ -675,6 +720,8 @@ def main(argv=None):
         parser.error('--playback-evidence requires --capture')
     if args.clock_evidence and not args.playback_evidence:
         parser.error('--clock-evidence requires --playback-evidence')
+    if args.capture_clock_evidence and not args.capture:
+        parser.error('--capture-clock-evidence requires --capture')
     plan = {
         'checks': list(CHECKS[:4])
         + (
@@ -688,6 +735,7 @@ def main(argv=None):
         'capture': args.capture,
         'playback_evidence': args.playback_evidence,
         'clock_evidence': args.clock_evidence,
+        'capture_clock_evidence': args.capture_clock_evidence,
         'full_p0_acceptance': False,
     }
     if not args.execute:
@@ -755,6 +803,7 @@ def main(argv=None):
                     acoustic=args.acoustic,
                     playback_evidence=args.playback_evidence,
                     clock_evidence=args.clock_evidence,
+                    capture_clock_evidence=args.capture_clock_evidence,
                     checkpoint=save,
                     expected_apk=(manifest.assistant.version, manifest.assistant.version_code),
                 )

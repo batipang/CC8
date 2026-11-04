@@ -5,6 +5,7 @@ final class CaptureWindow {
   static final long MIN_TEST_MS = 1000, MAX_TEST_MS = 1500000;
   final long limitMs;
   private final long deadline;
+  final CaptureClockStats clockStats;
 
   static long requested(boolean supplied, Object value) {
     if (!supplied) return 0;
@@ -17,6 +18,7 @@ final class CaptureWindow {
     if (now < 0 || (limit != 0 && (limit < MIN_TEST_MS || limit > MAX_TEST_MS)))
       throw new IllegalArgumentException("Invalid capture window");
     limitMs = limit;
+    clockStats = limit == 0 ? null : new CaptureClockStats();
     deadline = limit == 0 ? 0 : now + limit;
     if (limit != 0 && deadline < now)
       throw new IllegalArgumentException("Capture deadline overflow");

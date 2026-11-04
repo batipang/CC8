@@ -1073,6 +1073,11 @@ final class VoiceSession {
                     if (!recording || !foreground || epoch != mine) return;
                     send(began);
                   }
+                  CaptureClockStats clockStats = window.clockStats;
+                  AudioTimestamp captureStamp =
+                      clockStats != null && Build.VERSION.SDK_INT >= 24
+                          ? new AudioTimestamp()
+                          : null;
                   short[] chunk = new short[320];
                   while (recording
                       && foreground
@@ -1104,6 +1109,28 @@ final class VoiceSession {
                         origin + micFrames * 1000000000L / 16000,
                         Wire.pcm(chunk, count));
                     micFrames += count;
+                    if (captureStamp != null
+                        && Build.VERSION.SDK_INT >= 24
+                        && recording
+                        && epoch == mine
+                        && window.allows(SystemClock.elapsedRealtime())
+                        && clockStats.due(System.nanoTime())) {
+                      boolean success;
+                      try {
+                        success =
+                            record.getTimestamp(captureStamp, AudioTimestamp.TIMEBASE_MONOTONIC)
+                                == AudioRecord.SUCCESS;
+                      } catch (RuntimeException unavailable) {
+                        success = false;
+                      }
+                      clockStats.observe(
+                          success,
+                          captureStamp.framePosition,
+                          captureStamp.nanoTime,
+                          System.nanoTime(),
+                          micFrames,
+                          origin);
+                    }
                   }
                 } catch (Exception error) {
                   if (recording
@@ -1221,6 +1248,15 @@ final class VoiceSession {
         j,
         "test_capture_remaining_ms",
         recording && window != null ? window.remaining(SystemClock.elapsedRealtime()) : 0);
+    boolean captureClockSupported = Build.VERSION.SDK_INT >= 24;
+    Wire.put(j, "capture_clock_evidence_supported", captureClockSupported);
+    if (captureClockSupported
+        && recording
+        && window != null
+        && window.clockStats != null
+        && window.allows(SystemClock.elapsedRealtime())) {
+      Wire.put(j, "capture_clock_evidence", new JSONObject(window.clockStats.snapshot()));
+    }
     Wire.put(j, "announcement_active", announcement);
     Wire.put(j, "vision_active", isVisual());
     Wire.put(j, "mic_frames", micFrames);
