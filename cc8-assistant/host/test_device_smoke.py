@@ -250,6 +250,7 @@ class DeviceAutomationTests(unittest.TestCase):
             'short_awake_quiet',
             'missing_awake_timing',
             'malformed_standby_timing',
+            'missing_awake_stimulus',
         ):
             with self.subTest(case=case):
                 runs, saves = [], []
@@ -277,6 +278,8 @@ class DeviceAutomationTests(unittest.TestCase):
                     }
                     if {'awake_dialogue', 'acoustic'} & options:
                         evidence = report['acoustic_evidence'] = {}
+                        if not (case == 'missing_awake_stimulus' and index == 2):
+                            evidence['recognized_stimulus_matches'] = True
                         if case != 'missing_awake_quiet':
                             evidence['post_playback_quiet_seconds'] = (
                                 2 if case == 'short_awake_quiet' else POST_DIALOGUE_SECONDS
@@ -303,7 +306,7 @@ class DeviceAutomationTests(unittest.TestCase):
                         4
                         if case == 'malformed_standby_timing'
                         else 3
-                        if case.endswith(('_awake_quiet', '_awake_timing'))
+                        if case.endswith(('_awake_quiet', '_awake_timing', '_awake_stimulus'))
                         else 2
                     )
                     self.assertEqual(len(runs), attempted)
@@ -319,6 +322,10 @@ class DeviceAutomationTests(unittest.TestCase):
                         self.assertEqual(
                             result['phases'][attempted - 1]['reason'],
                             'suite_response_playout_timing_incomplete',
+                        )
+                    if case == 'missing_awake_stimulus':
+                        self.assertEqual(
+                            result['phases'][2]['reason'], 'suite_synthetic_stimulus_not_confirmed'
                         )
                 if case == 'source_changed':
                     runs[1].run.assert_not_called()
@@ -1563,7 +1570,7 @@ class DeviceAutomationTests(unittest.TestCase):
             run.acoustic_probe()
         device.speak_probe.assert_not_called()
 
-    def acoustic_fixture(self, rows, *, awake=False, before=()):
+    def acoustic_fixture(self, rows, *, awake=False, before=(), tasks=None):
         run, device, health, now = self.fixture(
             capture=True, standby=not awake, acoustic=not awake, awake_dialogue=awake
         )
@@ -1590,6 +1597,13 @@ class DeviceAutomationTests(unittest.TestCase):
         def request(p):
             if p == {'operation': 'health'}:
                 return dict(health)
+            if p == {'operation': 'workspace_status'}:
+                return {
+                    'ok': True,
+                    'tasks': tasks
+                    if tasks is not None
+                    else [{'generation': 8, 'status': 'completed', 'title': '１＋一 等于几？'}],
+                }
             self.assertEqual(p, {'operation': 'diagnostics'})
             # Existing success must never count as a fresh spoken response.
             return {'requests': rows(now[0]) if spoken[0] else list(before)}
@@ -1931,6 +1945,7 @@ class DeviceAutomationTests(unittest.TestCase):
         return {
             'request_id': 'PRIVATE_REQUEST_ID',
             'origin': 'voice',
+            'generation': 8,
             'outcome': 'completed',
             'task_outcome': 'completed',
             'stages': dict.fromkeys(
@@ -1950,8 +1965,29 @@ class DeviceAutomationTests(unittest.TestCase):
         self.assertIsInstance(evidence, dict)
         self.assertEqual(evidence['post_playback_quiet_seconds'], 20)
         self.assertEqual(evidence['completed_tasks'], 1)
+        self.assertTrue(evidence['recognized_stimulus_matches'])
         self.assertEqual(evidence['stage_counts']['playback_done'], 1)
         self.assertNotIn('PRIVATE', json.dumps(evidence))
+
+    def test_acoustic_probe_rejects_unmatched_or_ambiguous_workspace_receipts(self):
+        match = {'generation': 8, 'status': 'completed', 'title': '一加一等于几？'}
+        for tasks in (
+            [dict(match, title='PRIVATE_OTHER_QUESTION')],
+            [dict(match, title='1加-1等于几')],
+            [dict(match, generation=7)],
+            [dict(match, status='running')],
+            [match, match],
+        ):
+            with self.subTest(tasks=tasks):
+                run, device, _, _ = self.acoustic_fixture(
+                    lambda _: [self.acoustic_row()], awake=True, tasks=tasks
+                )
+                with self.assertRaisesRegex(CheckFailure, 'synthetic_stimulus_not_confirmed'):
+                    run.acoustic_probe(awake=True)
+                evidence = run.report('failed')['acoustic_evidence']
+                self.assertFalse(evidence['recognized_stimulus_matches'])
+                self.assertNotIn('PRIVATE', json.dumps(evidence))
+                device.speak_probe.assert_called_once_with()
 
     def test_acoustic_probe_reports_only_the_fresh_completed_response_pair(self):
         for case in ('observed', 'malformed', 'missing'):
