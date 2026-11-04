@@ -19,7 +19,7 @@ from web_search import SpeechClauses, now, public_url
 from vision import jpeg_dimensions
 from runtime_env import command_path, runtime_environment
 from rpc_pipe import RpcPipeWriter, deadline_after
-from rpc_process import child_exited, close_owned_group
+from rpc_process import close_guardian, start_guardian
 from dot_errors import GENERIC, error_notice, turn_completion
 from dot_receipt import (
     DotError as DotError,
@@ -114,6 +114,8 @@ class CodexRpc:
         self.popen = popen
         self.process = None
         self.lifecycle_lock = threading.Lock()
+        self.guardian = None
+        self.guardian_ending = threading.Event()
         self.lock = threading.Lock()
         self.writer = RpcPipeWriter()
         self.pending = {}
@@ -158,20 +160,28 @@ class CodexRpc:
 
     def start(self):
         with self.lifecycle_lock:
-            if self.failed or (self.process is not None and child_exited(self.process)):
+            if self.failed or self.guardian_ending.is_set():
+                self.failed = True
                 raise DotError('Codex process is no longer connected', kind='transport_or_io')
             if self.process is not None:
                 return
-            self.process = self.popen(
+            self.process, self.guardian = start_guardian(
+                self.popen,
                 self.command or codex_command(),
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
                 cwd=ROOT,
-                bufsize=0,
-                start_new_session=True,
                 env=runtime_environment(),
             )
+            lifetime = self.guardian
+
+        def observe_guardian():
+            try:
+                lifetime.recv(1)
+            except OSError:
+                pass
+            finally:
+                # The stdout reader still owns delivery of already queued
+                # terminal receipts and its normal disconnect notification.
+                self.guardian_ending.set()
 
         def drain():
             while self.process.stderr.read(8192):
@@ -179,6 +189,7 @@ class CodexRpc:
 
         threading.Thread(target=drain, daemon=True).start()
         threading.Thread(target=self._read, daemon=True).start()
+        threading.Thread(target=observe_guardian, daemon=True).start()
         self.request(
             'initialize',
             {
@@ -193,7 +204,7 @@ class CodexRpc:
         )
         self.notify('initialized', {})
         with self.lifecycle_lock:
-            self.initialized = not self.failed
+            self.initialized = not self.failed and not self.guardian_ending.is_set()
 
     def _send(self, value, *, deadline=None):
         if deadline is None:
@@ -378,8 +389,9 @@ class CodexRpc:
         with self.lifecycle_lock:
             self._disconnect()
             self.initialized = False
-            if self.process is not None:
-                close_owned_group(self.process)
+            guardian, self.guardian = self.guardian, None
+            if not close_guardian(self.process, guardian):
+                self.failure_reason = 'guardian_cleanup_unconfirmed'
 
 
 @dataclass
