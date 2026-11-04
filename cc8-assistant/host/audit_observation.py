@@ -10,9 +10,9 @@ from private_output import read_private_json
 
 DURATION = 72 * 3600
 MAX_BYTES = 8 * 1024**2
-# Uptime is sampled during a bounded 5 s IPC query. The observer timestamps
-# its receipt afterwards; allow another 0.2 s for timestamp rounding.
-MAX_UPTIME_OFFSET_SPAN = 5.2
+# A poll can spend up to 5 s in IPC before its receipt is timestamped.
+# Leave 0.2 s for scheduling and timestamp rounding.
+MAX_POLL_OVERHEAD_SECONDS = 5.2
 NO_CLAIMS = (
     'contains_content',
     'device_capture_started',
@@ -63,27 +63,34 @@ def audit(report, backend):
         0,
     )
     previous_elapsed = previous_wall = 0
+    cadence_gaps = max_gap = 0
     tolerance = max(5, 3 * interval)
     segments, successful, errors = set(), [], {}
     last_uptime = {}
     uptime_offsets = {}
 
-    def check_time(elapsed, wall):
-        nonlocal previous_elapsed, previous_wall
+    def check_time(elapsed, wall, *, first=False):
+        nonlocal previous_elapsed, previous_wall, cadence_gaps, max_gap
         require(previous_elapsed <= elapsed <= end)
         gap = elapsed - previous_elapsed
+        # The first query starts immediately. Later reads include the sleep
+        # interval plus one query. Keep the old three-period gap as a separate
+        # clock/suspend diagnostic so older summaries remain comparable.
+        gap_limit = (0 if first else interval) + MAX_POLL_OVERHEAD_SECONDS
+        max_gap = max(max_gap, gap)
+        cadence_gaps += round(gap, 3) > gap_limit
         # Each stored timestamp is rounded to milliseconds. Treat a value
         # near the limit conservatively rather than rounding a gap away.
         counts['poll_gaps'] += gap >= tolerance - 0.001
         counts['wall_clock_discontinuities'] += abs(wall - previous_wall - gap) >= tolerance - 0.002
         previous_elapsed, previous_wall = elapsed, wall
 
-    for row in rows:
+    for index, row in enumerate(rows):
         require(type(row) is dict and 'error' in row)
         elapsed = number(row.get('elapsed_seconds'), 10**8)
         wall = row.get('wall_elapsed_seconds')
         require(type(wall) in (int, float) and -(10**8) <= wall <= 10**8)
-        check_time(elapsed, wall)
+        check_time(elapsed, wall, first=index == 0)
         error = row['error']
         if error is not None:
             require(error in ('ipc_unavailable', 'invalid_health', 'backend_version_mismatch'))
@@ -125,8 +132,10 @@ def audit(report, backend):
     if report.get('polls') != len(rows) or report.get('successful_polls') != len(successful):
         reasons.append('poll_totals_inconsistent')
     reasons.extend(name for name, count in counts.items() if count or report.get(name) != 0)
+    if cadence_gaps:
+        reasons.append('sample_cadence_gaps')
     uptime_span = max((high - low for low, high in uptime_offsets.values()), default=0)
-    if uptime_span > MAX_UPTIME_OFFSET_SPAN:
+    if uptime_span > MAX_POLL_OVERHEAD_SECONDS:
         reasons.append('uptime_clock_mismatch')
 
     # Retain usable trends only for a single process with complete gauge coverage.
@@ -134,7 +143,7 @@ def audit(report, backend):
         {field: trend(successful, field) for field in GAUGES}
         if segments == {1}
         and not counts['resource_coverage_incomplete_polls']
-        and uptime_span <= MAX_UPTIME_OFFSET_SPAN
+        and uptime_span <= MAX_POLL_OVERHEAD_SECONDS
         else {}
     )
     return {
@@ -145,6 +154,8 @@ def audit(report, backend):
         'successful_polls': len(successful),
         'elapsed_seconds': end,
         'uptime_offset_span_seconds': round(uptime_span, 3),
+        'sample_cadence_gaps': cadence_gaps,
+        'max_sample_gap_seconds': round(max_gap, 3),
         'errors': errors,
         'counts': counts,
         'reasons': reasons,

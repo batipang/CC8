@@ -84,6 +84,43 @@ class AuditObservationTests(unittest.TestCase):
                 self.assertFalse(result['window_verified'])
                 self.assertIn(reason, result['reasons'])
 
+    def test_lost_poll_cannot_pass_under_the_legacy_three_interval_tolerance(self):
+        report = observation()
+        del report['samples'][100]
+        report['polls'] -= 1
+        report['successful_polls'] -= 1
+        result = audit(report, BACKEND)
+        self.assertFalse(result['window_verified'])
+        self.assertEqual(result['counts']['poll_gaps'], 0)
+        self.assertEqual(result['sample_cadence_gaps'], 1)
+        self.assertEqual(result['max_sample_gap_seconds'], 120)
+        self.assertIn('sample_cadence_gaps', result['reasons'])
+
+    def test_cadence_allows_bounded_query_time_and_reports_excess_delay(self):
+        for delay in (5.1, 7):
+            with self.subTest(delay=delay):
+                report = observation()
+                row = report['samples'][100]
+                for field in ('elapsed_seconds', 'wall_elapsed_seconds', 'uptime_seconds'):
+                    row[field] += delay
+                result = audit(report, BACKEND)
+                self.assertEqual(result['window_verified'], delay <= 5.2)
+                self.assertEqual(result['sample_cadence_gaps'], int(delay > 5.2))
+                self.assertEqual(result['max_sample_gap_seconds'], 60 + delay)
+
+    def test_missing_first_sample_and_late_terminal_checkpoint_are_distinct_gaps(self):
+        report = observation()
+        del report['samples'][0]
+        report['polls'] -= 1
+        report['successful_polls'] -= 1
+        report['observation']['elapsed_seconds'] += 8
+        report['observation']['wall_elapsed_seconds'] += 8
+        result = audit(report, BACKEND)
+        self.assertFalse(result['window_verified'])
+        self.assertEqual(result['counts']['poll_gaps'], 0)
+        self.assertEqual(result['sample_cadence_gaps'], 2)
+        self.assertEqual(result['max_sample_gap_seconds'], 68)
+
     def test_old_writer_terminal_gap_and_clock_jump_are_found_from_raw_times(self):
         report = observation()
         report['observation']['elapsed_seconds'] += 180
