@@ -13,6 +13,9 @@ import unittest
 from unittest.mock import Mock, patch
 
 from device_smoke import (
+    BARGE_ANNOUNCEMENT,
+    BARGE_CHECK,
+    BARGE_QUERY,
     CheckFailure,
     Device,
     MULTI_CLAUSE_TEXT,
@@ -78,6 +81,8 @@ class DeviceAutomationTests(unittest.TestCase):
             device.speak_probe()
             resolve.assert_called_once_with('Tingting')
             self.assertEqual(command.call_args.args[0][1:3], ['-v', 'Tingting (Chinese CN)'])
+            device.speak_probe(interruption=True)
+            self.assertEqual(command.call_args.args[0][-1], BARGE_QUERY)
         with (
             patch('device_smoke.resolve_voice', side_effect=ValueError),
             patch('device_smoke.subprocess.run') as command,
@@ -164,6 +169,8 @@ class DeviceAutomationTests(unittest.TestCase):
             ['--capture', '--acoustic'],
             ['--awake-dialogue'],
             ['--capture', '--standby', '--awake-dialogue'],
+            ['--synthetic-barge'],
+            ['--capture', '--standby', '--synthetic-barge'],
             ['--capture-clock-evidence'],
             ['--capture', '--leading-acoustic-evidence'],
         ):
@@ -1032,6 +1039,148 @@ class DeviceAutomationTests(unittest.TestCase):
         )
         device.speak_probe.assert_called_once_with()
         run.cleanup.assert_called_once()
+
+    def test_synthetic_barge_dry_plan_has_no_side_effects(self):
+        output = io.StringIO()
+        with (
+            patch('device_smoke.Device') as device,
+            patch('device_smoke.rpc') as query,
+            redirect_stdout(output),
+        ):
+            self.assertEqual(
+                main(['--runtime-root', '/unused', '--capture', '--synthetic-barge']), 0
+            )
+            device.assert_not_called()
+            query.assert_not_called()
+        plan = json.loads(output.getvalue())
+        self.assertTrue(plan['synthetic_barge'])
+        self.assertEqual(
+            plan['checks'][-4:],
+            [
+                'synthetic_awake_dialogue',
+                BARGE_CHECK,
+                'home_stops_capture',
+                'maintenance_reopen_keeps_microphone_off',
+            ],
+        )
+
+    def test_barge_failure_runs_existing_capture_cleanup(self):
+        run, device, _, _ = self.fixture(capture=True, synthetic_barge=True)
+        calls = Mock()
+        for operation in (
+            'preflight',
+            'maintenance_open',
+            'playback',
+            'handover',
+            'start_capture',
+            'acoustic_probe',
+            'interruption_probe',
+            'home',
+            'cleanup',
+        ):
+            setattr(run, operation, getattr(calls, operation))
+        calls.interruption_probe.side_effect = CheckFailure('interruption_pause_timing_missing')
+        report = run.run()
+        self.assertEqual(report['state'], 'failed')
+        self.assertEqual(report['checks'][-1]['name'], BARGE_CHECK)
+        calls.acoustic_probe.assert_called_once_with(awake=True, quiet_seconds=2)
+        calls.home.assert_not_called()
+        self.assertEqual(
+            [call[0] for call in calls.mock_calls][-3:],
+            ['acoustic_probe', 'interruption_probe', 'cleanup'],
+        )
+        device.speak_probe.assert_not_called()
+
+    def test_interruption_probe_requires_new_pause_and_replacement_receipts(self):
+        for case, expected in (
+            ('valid', None),
+            ('early_voice', 'interruption_voice_before_stimulus'),
+            ('no_playout', 'interruption_playout_not_observed'),
+            ('completed_announcement', 'interruption_announcement_not_cancelled'),
+            ('wrong_generation', 'interruption_replacement_not_confirmed'),
+            ('no_timing', 'interruption_pause_timing_missing'),
+            ('rejected_pause', 'interruption_rejected_voice_paused'),
+            ('extra_voice', 'interruption_unexpected_voice'),
+            ('lost_capture', 'interruption_capture_or_usb_lost'),
+        ):
+            with self.subTest(case=case), patch('device_smoke.ThreadPoolExecutor') as executor:
+                run, device, health, now = self.fixture(capture=True, synthetic_barge=True)
+                health.update(microphone_active=True, waiting_for_wake=False)
+                d, ui = device.status.return_value
+                d.update(
+                    microphone_active=True,
+                    test_capture_limit_ms=run.capture_limit_ms,
+                    test_capture_remaining_ms=210000,
+                    announcement_active=True,
+                    phase='speaking',
+                    playback_paused=False,
+                )
+                old = self.acoustic_row(request_id='old')
+                announcement = {
+                    'request_id': 'announcement-id',
+                    'origin': 'announcement',
+                    'generation': 20,
+                    'outcome': None,
+                    'stages': {} if case == 'no_playout' else {'playout_ack': 0},
+                }
+                voice = self.acoustic_row(request_id='new')
+                voice.update(gate='accepted', generation=20 if case == 'wrong_generation' else 21)
+                voice['stages'].update(pause_request=20, pause_ack=40)
+                if case != 'no_timing':
+                    voice['device_pause_from_trigger_ms'] = 35.5
+                rows = [old]
+
+                def submit(_request, payload):
+                    self.assertEqual(payload, {'text': BARGE_ANNOUNCEMENT})
+                    health['playing'] = True
+                    rows.append(announcement)
+                    if case == 'early_voice':
+                        rows.append(voice)
+                    reply = Mock()
+                    reply.result.return_value = {'status': 'interrupted'}
+                    return reply
+
+                def stimulus(**kwargs):
+                    self.assertEqual(kwargs, {'interruption': True})
+                    health['playing'] = False
+                    announcement['outcome'] = (
+                        'completed' if case == 'completed_announcement' else 'cancelled'
+                    )
+                    rows.append(voice)
+                    if case == 'rejected_pause':
+                        rows.append(self.rejected_candidate(stages={'pause_request': 25}))
+                    if case == 'lost_capture':
+                        health['microphone_active'] = False
+
+                def request(payload):
+                    if payload == {'operation': 'health'}:
+                        return dict(health)
+                    self.assertEqual(payload, {'operation': 'diagnostics'})
+                    extra = (
+                        [self.acoustic_row(request_id='extra')]
+                        if (case == 'extra_voice' and now[0] > 2)
+                        else []
+                    )
+                    return {'requests': rows + extra}
+
+                executor.return_value.__enter__.return_value.submit.side_effect = submit
+                device.speak_probe.side_effect = stimulus
+                run.request = request
+                if expected is None:
+                    run.interruption_probe()
+                    self.assertEqual(now[0], 20)
+                    evidence = run.report('passed')['barge_evidence']
+                    self.assertEqual(evidence['device_pause_from_trigger_ms'], 35.5)
+                    self.assertEqual(evidence['post_playback_quiet_seconds'], 20)
+                    self.assertTrue(evidence['replacement_completed'])
+                    self.assertNotIn('announcement-id', json.dumps(evidence))
+                else:
+                    with self.assertRaisesRegex(CheckFailure, expected):
+                        run.interruption_probe()
+                if case in ('early_voice', 'no_playout'):
+                    device.speak_probe.assert_not_called()
+                else:
+                    device.speak_probe.assert_called_once_with(interruption=True)
 
     def test_awake_dialogue_rejects_unready_wake_or_capture_before_speaking(self):
         for case in ('wake', 'short_budget', 'pending'):
