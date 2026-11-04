@@ -173,6 +173,10 @@ class Handover:
             if device is not None:
                 require(device.entry == self.last_entry, 'usb_detach_not_observed')
                 require(switches == self.usb_switches, 'route_switched_without_bus_edge')
+                require(
+                    route == 'usb' and transport.get('wifi_ready') is True,
+                    'idle_usb_or_wifi_not_ready',
+                )
                 return False
             self.current = row = {'usb_absent_s': round(elapsed, 3)}
         if 'usb_returned_s' in row:
@@ -207,6 +211,7 @@ class Handover:
                 require(switches == self.wifi_switches, 'unexpected_route_switches')
             elif route == 'usb':
                 require(switches == self.wifi_switches + 1, 'unexpected_route_switches')
+                require(transport.get('wifi_ready') is True, 'wifi_backup_not_ready_after_usb')
                 row['usb_selected_s'] = round(elapsed, 3)
                 row['route_switches'] = switches - self.usb_switches
                 self.rows.append(row)
@@ -230,7 +235,7 @@ def run(
     state = Handover()
     socket = args.runtime_root / 'device-access/private/voice-runtime/announce.sock'
     previous = (started, wall())
-    polls, unstable_polls = 0, 0
+    polls, unstable_bus_polls, unstable_route_polls = 0, 0, 0
     outcome, reason = 'running', None
     stamp = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     with PrivateOutput(args.output) as output:
@@ -247,7 +252,8 @@ def run(
                     'requested_seconds': args.seconds,
                     'elapsed_seconds': round(clock() - started, 3),
                     'polls': polls,
-                    'unstable_bus_polls': unstable_polls,
+                    'unstable_bus_polls': unstable_bus_polls,
+                    'unstable_route_polls': unstable_route_polls,
                     'completed_cycles': state.rows,
                     'in_progress_cycle': state.current,
                     'baseline_confirmed': state.identity is not None,
@@ -268,8 +274,9 @@ def run(
             checkpoint = started + 10
             while True:
                 bus = read_bus(budget())
-                h = request(socket, operation='health', timeout=budget())
+                health_before = request(socket, operation='health', timeout=budget())
                 t = request(socket, operation='transport_status', timeout=budget())
+                health_after = request(socket, operation='health', timeout=budget())
                 bus_after = read_bus(budget())
                 now, wall_now = clock(), wall()
                 require(
@@ -278,21 +285,30 @@ def run(
                     and now <= deadline,
                     'observation_poll_gap',
                 )
+                # Each owner RPC is independent. Bind the transport response
+                # to one live instance and an unchanged idle audio snapshot.
+                runtime_before, frames_before, _ = state.validate_runtime(health_before, t)
+                runtime_after, frames_after, _ = state.validate_runtime(health_after, t)
+                require(runtime_before == runtime_after, 'runtime_changed')
+                require(frames_before == frames_after, 'runtime_audio_changed_during_probe')
                 completed = False
                 stable_bus = bus == bus_after
-                if stable_bus:
+                stable_route = (health_before.get('connected'), health_before.get('transport')) == (
+                    health_after.get('connected'),
+                    health_after.get('transport'),
+                )
+                if stable_bus and stable_route:
                     previous = (now, wall_now)
                     polls += 1
-                    completed = state.sample(bus, h, t, now - started)
+                    completed = state.sample(bus, health_after, t, now - started)
                 else:
-                    # An edge crossed the probe window. Keep polling, but do
-                    # not attach either host reading to an uncertain bus state.
-                    unstable_polls += 1
-                    state.validate_runtime(h, t)
+                    # Do not attach a route receipt to an uncertain sample.
+                    unstable_bus_polls += not stable_bus
+                    unstable_route_polls += not stable_route
                 if len(state.rows) == args.cycles:
                     outcome = 'passed'
                     break
-                if (polls == 1 and stable_bus) or completed or now >= checkpoint:
+                if (polls == 1 and stable_bus and stable_route) or completed or now >= checkpoint:
                     save()
                     checkpoint = now + 10
                 sleep(min(INTERVAL, max(0, deadline - clock())))
