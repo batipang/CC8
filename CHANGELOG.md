@@ -1,5 +1,11 @@
 # Changelog
 
+## Backend 0.14.47 — integrated P0 device-test candidate
+
+- Include the separated device-event and playback-pause owners in one
+  candidate with the six-phase device suite and runtime-aware cleanup.
+- Keep assistant 0.9.30 / code 65 and protocol 2 for this candidate.
+
 ## Backend 0.14.46 — bound MiniMax search retries
 
 - Retry read-only MiniMax search at most once on HTTP 502, 503 or 504 without

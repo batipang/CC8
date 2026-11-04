@@ -1,6 +1,8 @@
 # 版本、构建回执与源码快照
 
-最新实机候选已固定到 `p0-candidate-20261103.1` / `cdfa4c2`：后台0.14.5、APK0.9.3/code38、协议2。原签名双APK均在干净该提交构建，`record --tag p0-candidate-20261103.1 --output artifacts/releases/p0-candidate-20261103.1.json` 与verify通过，tag已推送；device_acceptance仍为not_asserted。实际部署、恢复准备与自动验收范围见 [CURRENT_DEPLOYMENT](CURRENT_DEPLOYMENT.md)。下文旧候选/命令保留历史依据，不替代最新状态。
+当前 P0 集成候选为 `p0-integrated-20261104.1`，后台 0.14.47、助手 APK 0.9.30／code 65、协议 2。它包含 MiniMax 只读搜索重试、设备事件和插话暂停职责拆分、六轮实机验收及后台实例变化时的收尾保护。构建和回执按此版本的干净提交核验。实际部署和候选验收计划分别记录。[当前部署](CURRENT_DEPLOYMENT.md) · [自动验收](AUTOMATIC_TESTING_STATUS.md)
+
+历史候选 `p0-candidate-20261103.1` 对应 `cdfa4c2`、后台 0.14.5、APK 0.9.3／code 38。该版本原签名双 APK 的 `record --tag` 和 `verify` 已通过，源码 tag 已推送。下文旧候选与命令保留各自的历史范围。
 
 根目录 `release.json` 是独立组件版本与兼容关系的唯一来源。`release_info.py` 做有界/重复字段/类型/范围校验，后台 health / status 读取其版本；两个 Gradle 工程和构建脚本读取同一清单，APK 的 versionName / versionCode 不再各写一份。助手 BuildConfig.CC8_PROTOCOL 与后台握手兼容检查也来自清单。
 

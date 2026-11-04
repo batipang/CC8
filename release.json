@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-search-retry-20261104.1",
+  "release_id": "p0-integrated-20261104.1",
   "backend": {
-    "version": "0.14.46"
+    "version": "0.14.47"
   },
   "assistant": {
     "version": "0.9.30",
