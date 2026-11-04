@@ -65,6 +65,7 @@ class RecognitionHooks:
     enqueue_response: Callable[[Reply], None]
     failure: FailureSink
     resume_rejected: Callable[[int | None, int], None]
+    bind_response_probe: Callable[[str, int, int | None], None] = lambda *_: None
 
 
 STOP_COMMANDS = frozenset(
@@ -320,6 +321,10 @@ class RecognitionWorker:
                     if visual_request(text):
                         self.hooks.begin_visual(text, 'voice')
                     else:
+                        if evidence and evidence.get('local_wake') is True:
+                            self.hooks.bind_response_probe(
+                                text, generation, evidence.get('input_end_ns')
+                            )
                         self.hooks.enqueue_response(Reply(generation, text))
             except Exception as e:
                 decision = 'error'

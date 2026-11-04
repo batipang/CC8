@@ -15,6 +15,8 @@
 ./cc8 verify-device --runtime-root /absolute/live/workspace --execute --capture --capture-clock-evidence
 # 在屏幕已亮时测试本地唤醒、问答和播完后的回声；单独一轮，无需等待黑屏
 ./cc8 verify-device --runtime-root /absolute/live/workspace --execute --capture --awake-dialogue
+# 追加同回合的设备时钟与室内声音对照，使用支持此能力的候选后台
+./cc8 verify-device --runtime-root /absolute/live/workspace --execute --capture --awake-dialogue --response-acoustic-evidence
 # 追加真实 15 分钟待机，黑屏后由 Mac 播放合成问句
 ./cc8 verify-device --runtime-root /absolute/live/workspace --execute --capture --standby --acoustic
 ```
@@ -36,6 +38,10 @@ runtime-root 指**实际运行目录**。现场为 `/Volumes/AI/Codex/CC8-P0`，
 清醒和待机问答在播完后还读取一次本机任务回执。只接受与新语音请求代次相同、唯一且已完成的任务，核对其识别标题为固定的“一加一等于几”。允许等价的数字、加号、等号和格式差异，以及保留固定唤醒词“大黄蜂”。历史实机识别出现过保留前缀的情况，仍须逐字核对剩下的问句。任务标题仅在内存中比较，报告只写 `recognized_stimulus_matches`，固定批次要求该字段为 `true`。这一项核对指定问句的识别归属，答案正确性及真人准确率另行验证。
 
 这条用例与 `--standby` 分轮执行，共用当前实际运行目录的自动测试锁。它验证亮屏时的一次合成语音链路。黑屏唤醒、问句正文准确率、真人与远场仍各自验收。
+
+后台 0.14.57 起，独立的清醒测试可以显式加上 `--response-acoustic-evidence`。探针只在已开启的限时收音中等待固定公开问句，最多等 120 秒。确认本地唤醒和识别问句后才启动声音对照，录放样本仅在内存中保留，最多 20 秒。探针沿用正在运行的回声消除和识别流程。退出收音或切换通道时清理探针。缺失证据或回答代次不一致时检查失败。
+
+报告的 `last_voiced_to_confirmed_output_block_ms` 使用设备时钟，记录最后一个连续有声输入帧的结束与第一个通过录放相关性确认的 20 毫秒输出块之间的间隔。这个数据受人声活动判定、录音时钟和房间声学影响，报告仍保留 `acoustic_latency_asserted: false`。报告只保存数值和状态。
 
 ## 同回合多段播报
 

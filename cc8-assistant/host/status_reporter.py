@@ -95,6 +95,7 @@ class StatusReporter:
             ),
             'playback_evidence_supported': True,
             'leading_acoustic_evidence_supported': True,
+            'response_acoustic_evidence_supported': True,
             'render_clock_evidence_supported': playback.device_can_report_clock,
             'local_wake_ready': self.hooks.wake().ready,
             'waiting_for_wake': state.active

@@ -15,6 +15,7 @@ from unittest.mock import Mock, patch
 
 from device_smoke import (
     ACOUSTIC_QUESTION,
+    ACOUSTIC_RESPONSE_METRIC,
     ACTIVE_HANDOVER_CHECK,
     ALL_ROUTE_LOSS_CHECK,
     ALL_ROUTE_LOSS_REQUEST,
@@ -1725,6 +1726,44 @@ class DeviceAutomationTests(unittest.TestCase):
         )
         device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
         run.cleanup.assert_called_once()
+
+    def test_awake_response_acoustic_timing_requires_the_completed_generation(self):
+        token = 'e' * 32
+        for generation in (8, 9):
+            with self.subTest(generation=generation):
+                run, device, _, _ = self.acoustic_fixture(
+                    lambda _: [self.acoustic_row()], awake=True
+                )
+                run.response_acoustic_evidence = True
+                fixture_request = run.request
+
+                def request(payload):
+                    if payload == {'operation': 'response_probe_arm', 'case': 1}:
+                        device.speak_probe.assert_not_called()
+                        return {'status': 'armed', 'token': token}
+                    if payload == {'operation': 'response_probe_result', 'token': token}:
+                        device.speak_probe.assert_called_once()
+                        return {
+                            'status': 'observed',
+                            'generation': generation,
+                            ACOUSTIC_RESPONSE_METRIC: 720,
+                        }
+                    return fixture_request(payload)
+
+                run.request = request
+                if generation == 8:
+                    run.acoustic_probe(awake=True)
+                    expected = {'status': 'observed', ACOUSTIC_RESPONSE_METRIC: 720}
+                else:
+                    with self.assertRaisesRegex(
+                        CheckFailure, 'response_acoustic_timing_unconfirmed'
+                    ):
+                        run.acoustic_probe(awake=True)
+                    expected = {'status': 'unconfirmed'}
+                report = run.report('passed' if generation == 8 else 'failed')
+                self.assertEqual(report['acoustic_evidence']['response_acoustic_timing'], expected)
+                self.assertFalse(report['acoustic_latency_asserted'])
+                self.assertNotIn(token, json.dumps(report))
 
     def test_synthetic_barge_dry_plan_has_no_side_effects(self):
         output = io.StringIO()

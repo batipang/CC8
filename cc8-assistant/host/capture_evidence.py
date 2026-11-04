@@ -140,3 +140,8 @@ class CaptureEvidence:
             # also gives the interval between their ends on the capture clock.
             evidence[VAD_TAIL] = round((self.previous_ns - self.last_voiced_ns) / 1e6, 3)
         return validate(evidence)
+
+    def last_voiced_end(self):
+        if self.contiguous and self.last_voiced_ns is not None:
+            return self.last_voiced_ns + FRAME_NS
+        return None
