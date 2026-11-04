@@ -115,6 +115,8 @@ class StatusReporter:
             'render_frames': metrics.get('render_frames', 0),
             'local_wake_count': metrics.get('local_wake_count', 0),
             'voice_asr_attempts': metrics.get('voice_asr_attempts', 0),
+            'fast_stop_ready': self.hooks.capture().endpoint.fast_stop is not None,
+            'fast_stop_count': metrics.get('fast_stop_count', 0),
         }
 
     def save_status(self):
