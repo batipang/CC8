@@ -428,6 +428,11 @@ class SmokeRun:
             'device_test_capture_limit_unsupported',
         )
         require(
+            not self.synthetic_barge
+            or device.get('test_interruption_transcript_supported') is True,
+            'device_interruption_transcript_unsupported',
+        )
+        require(
             not self.capture_clock_required
             or device.get('capture_clock_evidence_supported') is True,
             'device_capture_clock_evidence_unsupported',
@@ -886,6 +891,7 @@ class SmokeRun:
             'announcement_cancelled': False,
             'replacement_completed': False,
             'device_pause_from_trigger_ms': None,
+            'transcript_matches_stimulus': None,
             'admitted_voice_requests': 0,
             'rejected_pause_requests': 0,
             'pending_voice_candidates': 0,
@@ -977,7 +983,9 @@ class SmokeRun:
                 replacement.get('outcome') in (None, 'completed') and not replacement.get('error'),
                 'interruption_replacement_failed',
             )
-            return evidence['announcement_cancelled'] and evidence['replacement_completed']
+            if evidence['announcement_cancelled'] and evidence['replacement_completed']:
+                return replacement
+            return None
 
         with ThreadPoolExecutor(max_workers=1) as pool:
             reply = pool.submit(self.request, {'text': BARGE_ANNOUNCEMENT})
@@ -988,7 +996,7 @@ class SmokeRun:
             self.checkpoint(self.report('running'))
             remaining = min(75, deadline - self.clock() - POST_DIALOGUE_SECONDS - 5)
             require(remaining > 0, 'interruption_capture_budget_insufficient')
-            self.wait(completed, remaining, 'interruption_replacement_not_confirmed')
+            replacement = self.wait(completed, remaining, 'interruption_replacement_not_confirmed')
             require(
                 reply.result(timeout=5).get('status') == 'interrupted',
                 'interruption_announcement_receipt_invalid',
@@ -1005,6 +1013,17 @@ class SmokeRun:
         require(not evidence['pending_voice_candidates'], 'interruption_unresolved_voice')
         d, ui = self.device.status()
         self.capture_status((d, ui))
+        transcript = d.get('test_interruption_transcript')
+        require(
+            isinstance(transcript, dict)
+            and set(transcript) == {'generation', 'matched'}
+            and type(transcript['generation']) is int
+            and transcript['generation'] == replacement['generation']
+            and type(transcript['matched']) is bool,
+            'interruption_transcript_receipt_missing',
+        )
+        evidence['transcript_matches_stimulus'] = transcript['matched']
+        require(transcript['matched'], 'interruption_transcript_mismatch')
         require(
             ui.get('screen_sleeping') is False and d.get('playback_paused') is False,
             'interruption_device_not_ready_after_response',
