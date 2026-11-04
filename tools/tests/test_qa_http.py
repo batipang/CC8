@@ -17,10 +17,13 @@ from tools.qa_http import LoopbackHTTP
 
 
 class HTTPFixtureTests(unittest.TestCase):
-    def test_real_tls_full_matrix_has_one_wire_request_per_asr_or_tts_failure(self):
-        rows = generate(http_fixture='loopback_tls')
+    def test_tls_and_dot_stdio_run_together_without_extra_provider_requests(self):
+        rows = generate(http_fixture='loopback_tls', dot_fixture='local_stdio')
         self.assertEqual(len(rows), 48)
         self.assertEqual(sum(row['wire_requests'] for row in rows), 30)
+        self.assertEqual(sum(row['dot_wire_counts']['fault_turns'] for row in rows), 33)
+        self.assertEqual(sum(row['dot_wire_counts']['recovery_turns'] for row in rows), 48)
+        self.assertEqual(sum(row['dot_wire_counts']['declined_approvals'] for row in rows), 3)
         self.assertEqual(
             Counter(row['case'].stage for row in rows), {'asr': 15, 'brain': 18, 'tts': 15}
         )
@@ -134,6 +137,8 @@ class HTTPFixtureTests(unittest.TestCase):
                     str(absent),
                     '--http-fixture',
                     'loopback_tls',
+                    '--dot-fixture',
+                    'local_stdio',
                 ],
                 env={'PATH': '/usr/bin:/bin'},
                 capture_output=True,
@@ -145,6 +150,7 @@ class HTTPFixtureTests(unittest.TestCase):
             plan = json.loads(result.stdout)
             self.assertFalse(plan['execute'])
             self.assertEqual(plan['provider_http_fixture'], 'loopback_tls')
+            self.assertEqual(plan['provider_dot_fixture'], 'local_stdio')
             self.assertFalse(plan['real_provider_requested'])
             self.assertFalse(absent.exists())
 

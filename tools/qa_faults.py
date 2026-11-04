@@ -2,6 +2,7 @@
 
 Default I/O is fake and offline. Explicit loopback TLS uses a verified temporary
 certificate and fixed failures, never owner credentials or remote providers.
+Explicit local stdio uses a fixed peer, never a Codex installation.
 Recovery is UI-only: synthesis/playback is bypassed and never scored as audio.
 """
 
@@ -15,6 +16,7 @@ import tempfile
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+DOT_FIXTURES = ('fake', 'local_stdio')
 KINDS = ('timeout', 'rate_limit', 'quota', 'credential_or_permission', 'transport_or_io')
 
 
@@ -37,9 +39,11 @@ CASES = tuple(
 )
 
 
-def generate(*, http_fixture='fake', cases=CASES):
+def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
     if http_fixture not in ('fake', 'loopback_tls'):
         raise ValueError('Unknown QA HTTP fixture')
+    if dot_fixture not in DOT_FIXTURES:
+        raise ValueError('Unknown QA Dot fixture')
     if (
         not isinstance(cases, tuple)
         or not 1 <= len(cases) <= len(CASES)
@@ -178,8 +182,17 @@ def generate(*, http_fixture='fake', cases=CASES):
                     raise AssertionError('Fixture emitted unexpected audio')
                 packets.append(packet)
 
+        fake_dot = FakeDot()
+        local_dot = None
+        if dot_fixture == 'local_stdio':
+            from tools.qa_dot import LocalDot
+
+            local_dot = LocalDot(folder)
+            stack.callback(local_dot.close)
         with patch.object(bridge, 'PRIVATE', folder), patch('threading.Thread.start'):
-            b = bridge.Bridge(Speech(), BrainRouter(FakeDot(), FakeDot()))
+            b = bridge.Bridge(
+                Speech(), BrainRouter(fake_dot, local_dot.brain if local_dot else fake_dot)
+            )
         b.session.connection = Recorder()
         b.log = lambda *args, **kwargs: None
         b.save_status = lambda: None
@@ -235,7 +248,10 @@ def generate(*, http_fixture='fake', cases=CASES):
                 raise AssertionError('Fixture diagnostic mismatch')
             expected_http = 0 if case.stage == 'brain' else 1
             expected_brain = 0 if case.stage == 'asr' else 1
-            if (state.http_calls, state.brain_calls) != (expected_http, expected_brain):
+            fault_turns = (
+                local_dot.counts()[case.ident + ':fault'] if local_dot else state.brain_calls
+            )
+            if (state.http_calls, fault_turns) != (expected_http, expected_brain):
                 raise AssertionError('Unexpected provider request/retry')
             wire_requests = tls.count(case.ident) if tls is not None else 0
             if tls is not None and wire_requests != expected_http:
@@ -259,6 +275,20 @@ def generate(*, http_fixture='fake', cases=CASES):
                 or b.session.text_generation is not None
             ):
                 raise AssertionError('Recovery did not complete')
+            dot_counts = {}
+            if local_dot:
+                observed = local_dot.counts()
+                dot_counts = {
+                    'fault_turns': observed[case.ident + ':fault'],
+                    'recovery_turns': observed[case.ident + ':recovery'],
+                    'declined_approvals': observed[case.ident + ':declined'],
+                }
+                if dot_counts != {
+                    'fault_turns': expected_brain,
+                    'recovery_turns': 1,
+                    'declined_approvals': int(case.kind == 'approval_declined'),
+                }:
+                    raise AssertionError('Unexpected Dot stdio request/recovery or approval')
             rows.append(
                 {
                     'case': case,
@@ -269,8 +299,14 @@ def generate(*, http_fixture='fake', cases=CASES):
                     'expected_message': feedback(case.stage, case.kind).message,
                     'provider_requests': expected_http + expected_brain,
                     'http_fixture': http_fixture,
+                    'dot_fixture': dot_fixture,
+                    'dot_wire_counts': dot_counts,
                     'wire_requests': wire_requests,
                 }
             )
+        if local_dot and sum(local_dot.counts().values()) != sum(
+            sum(row['dot_wire_counts'].values()) for row in rows
+        ):
+            raise AssertionError('Unexpected extra Dot stdio request')
         transport.cancel()
         return rows
