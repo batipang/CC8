@@ -1,5 +1,10 @@
 # Changelog
 
+## Assistant 0.9.34 — record when stop updates the playback visuals
+
+- In bounded capture tests, associate the first cleared caption, progress and
+  mouth animation update with the same player stop and device clock.
+
 ## Backend 0.14.60 — time the stop command on the device clock
 
 - Pair the capture frame that triggered the local stop detector with the

@@ -79,6 +79,7 @@ PAIRED_PLAYOUT_MIN_BACKEND = '0.14.50'
 RESPONSE_ACOUSTIC_MIN_BACKEND = '0.14.57'
 EXTENDED_VOICE_MIN_BACKEND = '0.14.60'
 STOP_RECEIPT_MIN_APK_CODE = 69
+STOP_VISUAL_MIN_APK_CODE = 71
 SMOKE_OPTIONS = (
     'capture',
     'standby',
@@ -132,6 +133,8 @@ QA_PLAYOUT_METRIC = 'utterance_to_confirmed_playout_ack_ms'
 ACOUSTIC_RESPONSE_METRIC = 'last_voiced_to_confirmed_output_block_ms'
 FAST_STOP_DEVICE_METRIC = 'detecting_frame_to_device_stop_ms'
 MAX_FAST_STOP_DEVICE_MS = 20000
+STOP_VISUAL_METRIC = 'device_stop_to_visuals_cleared_ms'
+MAX_STOP_VISUAL_MS = 2000
 
 
 class CheckFailure(RuntimeError):
@@ -665,6 +668,11 @@ class SmokeRun:
                 'device_playback_stop_evidence_unsupported',
             )
         if self.synthetic_stop:
+            if self.expected_apk is not None and self.expected_apk[1] >= STOP_VISUAL_MIN_APK_CODE:
+                require(
+                    device.get('test_stop_visual_timing_supported') is True,
+                    'device_stop_visual_timing_unsupported',
+                )
             require(
                 h.get('fast_stop_ready') is True
                 and h.get('fast_stop_timing_supported') is True
@@ -1818,6 +1826,23 @@ class SmokeRun:
                     'fast_stop_device_timing_out_of_range',
                 )
                 evidence[FAST_STOP_DEVICE_METRIC] = round(elapsed_ns / 1e6, 3)
+                if d.get('test_stop_visual_timing_supported') is True or (
+                    self.expected_apk is not None
+                    and self.expected_apk[1] >= STOP_VISUAL_MIN_APK_CODE
+                ):
+                    visuals = d.get('test_stop_visual_timing')
+                    require_evidence(
+                        isinstance(visuals, dict)
+                        and set(visuals) == {'cancel_generation', 'nanos'}
+                        and type(visuals['cancel_generation']) is int
+                        and visuals['cancel_generation'] == cancel_generation
+                        and type(visuals['nanos']) is int
+                        and 0 <= visuals['nanos'] - stop['nanos'] <= MAX_STOP_VISUAL_MS * 1000000,
+                        'fast_stop_visual_timing_unconfirmed',
+                    )
+                    evidence[STOP_VISUAL_METRIC] = round(
+                        (visuals['nanos'] - stop['nanos']) / 1e6, 3
+                    )
         require(
             ui.get('screen_sleeping') is False
             and d.get('playback_paused') is False
@@ -2020,6 +2045,8 @@ def run_device_suite(
                 phase.update(state='failed', reason='suite_phase_evidence_incomplete')
             if phase['state'] == 'passed' and 'synthetic_stop' in options:
                 stop = result.get('barge_evidence')
+                apk = result.get('expected_apk_code')
+                visuals_required = type(apk) is int and apk >= STOP_VISUAL_MIN_APK_CODE
                 if not (
                     isinstance(stop, dict)
                     and stop.get('device_stop_applied') is True
@@ -2031,6 +2058,11 @@ def run_device_suite(
                     and stop['stop_cloud_asr_attempts'] == 0
                     and type(stop.get(FAST_STOP_DEVICE_METRIC)) in (int, float)
                     and 0 <= stop[FAST_STOP_DEVICE_METRIC] <= MAX_FAST_STOP_DEVICE_MS
+                    and (
+                        not visuals_required
+                        or type(stop.get(STOP_VISUAL_METRIC)) in (int, float)
+                        and 0 <= stop[STOP_VISUAL_METRIC] <= MAX_STOP_VISUAL_MS
+                    )
                     and type(stop.get('admitted_voice_requests')) is int
                     and stop['admitted_voice_requests'] == 0
                     and type(stop.get('post_playback_quiet_seconds')) in (int, float)
