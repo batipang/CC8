@@ -1974,6 +1974,8 @@ class DeviceAutomationTests(unittest.TestCase):
         for tasks in (
             [dict(match, title='PRIVATE_OTHER_QUESTION')],
             [dict(match, title='1加-1等于几')],
+            [dict(match, title='大黄蜂，1加-1等于几')],
+            [dict(match, title='大黄蜂帮我查一加一等于几')],
             [dict(match, generation=7)],
             [dict(match, status='running')],
             [match, match],
@@ -1988,6 +1990,15 @@ class DeviceAutomationTests(unittest.TestCase):
                 self.assertFalse(evidence['recognized_stimulus_matches'])
                 self.assertNotIn('PRIVATE', json.dumps(evidence))
                 device.speak_probe.assert_called_once_with()
+
+    def test_acoustic_probe_accepts_a_retained_fixed_wake_prefix(self):
+        tasks = [{'generation': 8, 'status': 'completed', 'title': '大黄蜂，１＋１等于几？'}]
+        run, device, _, _ = self.acoustic_fixture(
+            lambda _: [self.acoustic_row()], awake=True, tasks=tasks
+        )
+        run.acoustic_probe(awake=True)
+        self.assertTrue(run.report('passed')['acoustic_evidence']['recognized_stimulus_matches'])
+        device.speak_probe.assert_called_once_with()
 
     def test_acoustic_probe_reports_only_the_fresh_completed_response_pair(self):
         for case in ('observed', 'malformed', 'missing'):
