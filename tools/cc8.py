@@ -438,6 +438,10 @@ def main():
         from check_wake import main as wake_main
 
         return wake_main(sys.argv[2:])
+    if sys.argv[1:2] == ['watch-handover']:
+        from usb_handover import main as handover_main
+
+        return handover_main(sys.argv[2:])
     if sys.argv[1:2] == ['verify-device']:
         from device_smoke import main as device_main
 
@@ -483,6 +487,7 @@ def main():
     commands.add_parser(
         'verify-local-speech', help='Plan or explicitly check Chinese wake and stop keywords'
     )
+    commands.add_parser('watch-handover', help='Observe USB bus changes and idle route selection')
     commands.add_parser('verify-device', help='Plan or explicitly run bounded CC8 hardware checks')
     commands.add_parser('verify-failure-ui', help='Plan or check isolated CC8 error/recovery UI')
     commands.add_parser(
