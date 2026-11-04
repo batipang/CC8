@@ -20,6 +20,7 @@ from web_search import SpeechClauses, now, public_url
 from vision import jpeg_dimensions
 from runtime_env import command_path, runtime_environment
 from rpc_pipe import RpcPipeWriter, deadline_after
+from dot_errors import GENERIC, error_notice, turn_completion
 from dot_receipt import (
     DotError as DotError,
     DotApprovalRequired as DotApprovalRequired,
@@ -136,6 +137,12 @@ class CodexRpc:
         return remove
 
     def _receive(self, message):
+        if message.get('method') == 'error':
+            message = error_notice(message)
+            if message is None:
+                return
+        elif message.get('method') == 'turn/completed':
+            message = turn_completion(message)
         # Linearize receipt admission before a speech consumer can see this
         # event. No Queue mutex is held across owner callbacks. Unsubscribe
         # waits for an in-flight admission, so generator cleanup cannot drop it.
@@ -260,10 +267,11 @@ class CodexRpc:
 
             threading.Thread(target=execute, daemon=True).start()
             return
-        self.approval_seen.set()
         if method == 'item/permissions/requestApproval':
+            self.approval_seen.set()
             result = {'permissions': {}, 'scope': 'turn'}
         elif method.endswith('/requestApproval'):
+            self.approval_seen.set()
             result = {'decision': 'decline'}
         elif method == 'item/tool/requestUserInput':
             result = {'answers': {}}
@@ -296,7 +304,7 @@ class CodexRpc:
                 else:
                     method = message.get('method')
                     params = message.get('params') or {}
-                    relevant = method in ('turn/completed', 'item/agentMessage/delta') or (
+                    relevant = method in ('turn/completed', 'item/agentMessage/delta', 'error') or (
                         method in ('item/started', 'item/completed')
                         and (params.get('item') or {}).get('type')
                         in (
@@ -739,9 +747,10 @@ class DotBrain:
                     if value.get('id') != turn.ident:
                         continue
                     if value.get('status') != 'completed':
-                        if self.rpc.approval_seen.is_set():
+                        kind = state.failure_kind or GENERIC
+                        if kind == GENERIC and self.rpc.approval_seen.is_set():
                             raise DotApprovalRequired('Codex task needs desktop approval')
-                        raise DotError('Codex turn did not complete')
+                        raise DotError('Codex turn did not complete', kind=kind)
                     completed = True
                     break
             if not completed:

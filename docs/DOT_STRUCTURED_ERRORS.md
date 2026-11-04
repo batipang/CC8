@@ -1,0 +1,38 @@
+# Dot失败原因的结构化分类
+
+后台0.14.22软件候选，不改APK/协议。当前运行后台仍为0.14.20／原签名code49，独立72小时观察继续；本批不部署、不改模型/技能/权限/音色，不开麦或相机。
+
+## 问题与修正
+
+旧客户端在收到失败的`turn/completed`后，丢弃`turn.error.codexErrorInfo`，统一报“Dot没有完成请求”；接收器也过滤了独立`error`通知。因此真实额度、限流、授权和连接原因无法到达既有分类指引，虽然直接抛固定异常的测试能通过。
+
+本机Codex CLI0.166.0用`app-server generate-json-schema --experimental`导出协议，对照[官方App Server错误说明](https://learn.chatgpt.com/docs/app-server#errors)。本批只解释已核对的结构化字段，不从错误message、additionalDetails、URL或任意正文猜分类：
+
+| 结构化信息 | 既有错误类别 |
+| --- | --- |
+| `rateLimitExceeded` | 服务限流 |
+| `usageLimitExceeded` | 服务额度不足 |
+| `unauthorized` | 凭证或服务权限不可用 |
+| 已知HTTP变体中的整数401/403、402、408/504 | 分别归凭证/权限、额度、超时 |
+| 三种连接/流断开变体没有HTTP状态 | 连接或本机读写失败 |
+| 未知、畸形、其他状态或只有HTTP429 | 通用服务失败，保持原因未确定 |
+
+已知HTTP变体限于`httpConnectionFailed`、`responseStreamConnectionFailed`、`responseStreamDisconnected`、`responseTooManyFailedAttempts`；最后一种缺状态只知道重试耗尽，不猜网络原因。布尔、字符串或浮点HTTP状态不当作整数，范围外或冲突变体回退通用类别。仅HTTP429可能是速率或账单/额度限制，[官方错误指南](https://developers.openai.com/api/docs/guides/error-codes)要求检查更具体的原因；没有明确枚举时不猜二者之一。RPC请求级别的任意error.data形状没有得到schema保证，本批保留其原有通用错误路径。
+
+## 回合隔离与隐私
+
+独立error通知只保留有界thread/turn ID、严格布尔willRetry和白名单错误信息。仅同一thread/turn、willRetry=false的最近通知能在最终原因确实缺失/null时补充提示；通知本身不把任务写成失败，willRetry=true清掉旧提示并继续等待。最终失败若已携带未知、畸形或仅HTTP429等不足细分的原因，保持通用分类，不借用之前的额度等提示；未知源值固定为other，不保留任意原文。完成或中断不继承旧错误，终态后迟到通知无效。旧回合、畸形通知和超长ID不进入新提示。
+
+error通知和回合完成事件在进入事件队列及ACK前通知缓存时，丢弃错误正文/附加详情，只保留固定安全message和允许的枚举/数字；冻结副本不会被原事件后续修改污染。这不声称改造了所有RPC响应等待缓存。诊断、任务回执和既有UI只收到固定stage/kind及恢复指引，不展示提供方原文或凭据。不会增加重试、调用模型或重复交办未知副作用；Dot服务自身标记的重试不被客户端误报为已完成或最终失败。
+
+明确终态类别优先于本回合曾出现审批的通用fallback；没有明确类别且确已拒绝审批时，仍显示“本次未执行/当前没有待批准请求”，不伪造授权按钮或自动批准。只有实际拒绝的审批请求设置该标志；普通不支持的方法或未支持的输入请求不再冒充审批拒绝。完成任务与停止播报的原有区分保持。
+
+## 验证与范围
+
+最终十二项测试包含实际JSON-RPC接收/分发、ACK前通知、双ID/旧通知/重试与终态优先、未知/坏类型、错误正文脱敏、实际审批标志和真实Bridge/ResponseWorker反馈。已知终态矩阵每类三次，断管变体及HTTP边界分别覆盖；三次真实本机stdio子进程还验证拆分JSON、通知先于ACK、一次turn及结束进程/线程清理，子进程只实现固定协议，无模型、网络或工具执行。
+
+同一最终测试文件对2408b96基线复现99处断言失败、零fixture error；候选十二项全部通过。前期10/11项证明分别保留，随后增加真实stdio、按官方429歧义收紧判定并修正误记审批，没有覆盖或改写旧记录。最终私有证明`dot-errors-red-green-reviewed.json`绑定三个实现文件与测试摘要；协议四份文件摘要另保存在本机schema来源记录中，原始报告不入Git。
+
+最终完整本地23项installer、815项host（4项私人录音opt-in跳过）、112项tooling及15项Java通过，固定质量检查通过。根目录/最小PATH执行全部十二项及标准库CLI默认计划也通过；CI按实际PR及main结果另核对。
+
+这些证明固定协议及控制器路径，不等于真实云端额度故障、实体屏幕或完整P0-06验收。运行组合保持，现有48组隔离UI结果按各自版本保存，不合并冒充本版云端/音频测试。
