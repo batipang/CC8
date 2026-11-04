@@ -106,6 +106,14 @@ stdout 只输出报告的绝对路径，提示写 stderr。退出 0 表示采集
 
 使用含 0.14.55 断句计时的主机和诊断工具时，批次另报 `device_vad_tail_ms`。它只统计收音时钟连续且有声帧可定位的样本。旧后台或不连续的帧不补零，也不影响已验证的其他阶段。该项不加到声学出声时延中。[断句时间的定义](VOICE_GATE_OBSERVATIONS.md#capture已收尾句子的数值摘要)
 
+后台 0.14.57 及以上可为同一批次加入室内声学对照。
+
+```sh
+./cc8 verify-device --runtime-root /absolute/runtime --capture --qa-latency-suite --response-acoustic-evidence --execute
+```
+
+每轮按公开题库编号启用一次探针。报告单独给出设备时钟上“最后一个有声输入帧结束到首个确认的 20 毫秒输出块”的样本数、P50 和 P95。缺测或与该轮回答对不上时，报告保留此前通过的样本并停批，完成状态需要 30 轮全部通过。这个指标与起播回执分开，仍受声学环境和有声帧判定影响。报告保留 `audible_onset_measured: false`，真人实测仍单独验收。
+
 ### 离线复核既有报告
 
 ```sh
