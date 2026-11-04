@@ -636,7 +636,13 @@ final class VoiceSession {
           listener.state(phase, j.optString("message"));
         }
       } else if ("transcript".equals(event)) {
-        if (recording) listener.heard(j.optString("text"));
+        if (recording && p.generation >= minimumGeneration && currentRoute(route)) {
+          String text = j.optString("text");
+          CaptureWindow window = captureWindow;
+          if (window != null)
+            window.observeTranscript(route, p.generation, text, SystemClock.elapsedRealtime());
+          listener.heard(text);
+        }
       } else if ("announcement_begin".equals(event)) {
         if (foreground && p.generation >= minimumGeneration && statusFeedback.begin(p.generation)) {
           announcement = true;
@@ -1256,6 +1262,17 @@ final class VoiceSession {
     Wire.put(j, "microphone_active", recording);
     CaptureWindow window = captureWindow;
     Wire.put(j, "test_capture_limit_supported", true);
+    Wire.put(j, "test_interruption_transcript_supported", true);
+    if (recording && window != null) {
+      CaptureWindow.TranscriptEvidence evidence =
+          window.transcriptEvidence(routeEpoch, SystemClock.elapsedRealtime());
+      if (evidence != null) {
+        JSONObject receipt = new JSONObject();
+        Wire.put(receipt, "generation", evidence.generation);
+        Wire.put(receipt, "matched", evidence.matched);
+        Wire.put(j, "test_interruption_transcript", receipt);
+      }
+    }
     Wire.put(j, "test_capture_limit_ms", recording && window != null ? window.limitMs : 0);
     Wire.put(
         j,

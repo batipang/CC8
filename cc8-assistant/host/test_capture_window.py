@@ -7,6 +7,7 @@ import unittest
 
 from test_interrupted_task_notice import method
 from tools.java_toolchain import java_bin
+from device_smoke import BARGE_QUERY
 
 ROOT = Path(__file__).resolve().parents[2]
 JAVA = ROOT / 'cc8-assistant/app/src/main/java/com/happyhome/cc8assistant'
@@ -136,6 +137,32 @@ public final class CaptureCheck {
  public static void main(String[] args)throws Exception {
   test=args[0];VoiceSession s=new VoiceSession();
   try {
+   if("interruption_transcript".equals(test)){
+    CaptureWindow normal=new CaptureWindow(0,100);
+    normal.observeTranscript(1,5,args[1],101);
+    yes(normal.transcriptEvidence(1,101)==null,"ordinary capture recorded a test receipt");
+    CaptureWindow window=new CaptureWindow(1000,100);
+    window.observeTranscript(1,5,args[1],101);
+    yes(window.transcriptEvidence(1,102).matched,"fixed synthetic sentence did not match");
+    window.observeTranscript(1,5,"三加六等于多少？",102);
+    yes(window.transcriptEvidence(1,102).matched,"replayed generation rewrote the receipt");
+    window.observeTranscript(1,6,"换个问题，三减五等于几？",103);
+    yes(!window.transcriptEvidence(1,103).matched,"wrong operator matched");
+    window.observeTranscript(1,7,"三加五等于几？我要继续聊天。",104);
+    yes(!window.transcriptEvidence(1,104).matched,"extra sentence matched");
+    window.observeTranscript(1,8,"３＋５＝多少？",105);
+    yes(window.transcriptEvidence(1,105).matched,"equivalent digit form did not match");
+    yes(window.transcriptEvidence(2,105)==null,"previous route receipt remained visible");
+    window.observeTranscript(2,1,"三加六等于几？",106);
+    window.observeTranscript(1,100,args[1],107);
+    CaptureWindow.TranscriptEvidence proof=window.transcriptEvidence(2,107);
+    yes(proof.generation==1&&!proof.matched,"old route rewrote new route receipt");
+    window.observeTranscript(2,2,args[1],1100);
+    yes(window.transcriptEvidence(2,1100)==null,"expired capture reported a receipt");
+    yes(new CaptureWindow(1000,1100).transcriptEvidence(2,1100)==null,
+        "new capture inherited a transcript receipt");
+    return;
+   }
    if("clock_math".equals(test)){
     CaptureClockStats stats=new CaptureClockStats();
     long origin=10_000_000_000L;
@@ -325,7 +352,7 @@ class CaptureWindowTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.folder.cleanup()
 
-    def check_worker(self, case):
+    def check_worker(self, case, *args):
         result = subprocess.run(
             [
                 str(self.java / 'java'),
@@ -333,6 +360,7 @@ class CaptureWindowTests(unittest.TestCase):
                 str(Path(self.folder.name) / 'worker'),
                 'com.happyhome.cc8assistant.CaptureCheck',
                 case,
+                *args,
             ],
             capture_output=True,
             text=True,
@@ -357,6 +385,9 @@ class CaptureWindowTests(unittest.TestCase):
 
     def test_capture_clock_uses_only_plausible_advancing_anchors(self):
         self.check_worker('clock_math')
+
+    def test_bounded_capture_correlates_the_public_interruption_transcript(self):
+        self.check_worker('interruption_transcript', BARGE_QUERY)
 
     def test_capture_clock_unavailable_does_not_stop_audio(self):
         self.check_worker('timestamp_unavailable')

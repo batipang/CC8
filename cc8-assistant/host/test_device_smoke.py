@@ -1091,6 +1091,15 @@ class DeviceAutomationTests(unittest.TestCase):
         )
         device.speak_probe.assert_not_called()
 
+    def test_barge_refuses_older_apk_before_opening_or_speaking(self):
+        run, device, _, _ = self.fixture(capture=True, synthetic_barge=True)
+        result = run.run()
+        self.assertEqual(
+            result['checks'][-1]['reason'], 'device_interruption_transcript_unsupported'
+        )
+        device.open.assert_not_called()
+        device.speak_probe.assert_not_called()
+
     def test_interruption_probe_requires_new_pause_and_replacement_receipts(self):
         for case, expected in (
             ('valid', None),
@@ -1102,6 +1111,10 @@ class DeviceAutomationTests(unittest.TestCase):
             ('rejected_pause', 'interruption_rejected_voice_paused'),
             ('extra_voice', 'interruption_unexpected_voice'),
             ('lost_capture', 'interruption_capture_or_usb_lost'),
+            ('wrong_transcript', 'interruption_transcript_mismatch'),
+            ('stale_transcript', 'interruption_transcript_receipt_missing'),
+            ('transcript_content', 'interruption_transcript_receipt_missing'),
+            ('missing_transcript', 'interruption_transcript_receipt_missing'),
         ):
             with self.subTest(case=case), patch('device_smoke.ThreadPoolExecutor') as executor:
                 run, device, health, now = self.fixture(capture=True, synthetic_barge=True)
@@ -1147,6 +1160,14 @@ class DeviceAutomationTests(unittest.TestCase):
                         'completed' if case == 'completed_announcement' else 'cancelled'
                     )
                     rows.append(voice)
+                    if case != 'missing_transcript':
+                        transcript = {
+                            'generation': 20 if case == 'stale_transcript' else 21,
+                            'matched': case != 'wrong_transcript',
+                        }
+                        if case == 'transcript_content':
+                            transcript['text'] = 'content must never enter a report'
+                        d['test_interruption_transcript'] = transcript
                     if case == 'rejected_pause':
                         rows.append(self.rejected_candidate(stages={'pause_request': 25}))
                     if case == 'lost_capture':
@@ -1173,10 +1194,13 @@ class DeviceAutomationTests(unittest.TestCase):
                     self.assertEqual(evidence['device_pause_from_trigger_ms'], 35.5)
                     self.assertEqual(evidence['post_playback_quiet_seconds'], 20)
                     self.assertTrue(evidence['replacement_completed'])
+                    self.assertIs(evidence['transcript_matches_stimulus'], True)
                     self.assertNotIn('announcement-id', json.dumps(evidence))
                 else:
                     with self.assertRaisesRegex(CheckFailure, expected):
                         run.interruption_probe()
+                    evidence = run.report('failed')['barge_evidence']
+                    self.assertNotIn('content must never enter a report', json.dumps(evidence))
                 if case in ('early_voice', 'no_playout'):
                     device.speak_probe.assert_not_called()
                 else:

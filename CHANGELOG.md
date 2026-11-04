@@ -1,5 +1,11 @@
 # Changelog
 
+## Assistant 0.9.24 — verify the synthetic interruption transcript
+
+- During explicitly bounded device tests, record whether the received transcript
+  matches the fixed interruption query. The test requires a match from its new
+  response generation. The device reports only a boolean and generation.
+
 ## Assistant 0.9.22 / Backend 0.14.43 — device pause timing
 
 - Record estimated microphone trigger frame to applied Android pause latency

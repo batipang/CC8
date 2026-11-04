@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "p0-device-pause-timing-20261104.1",
+  "release_id": "p0-interruption-transcript-20261104.1",
   "backend": {
     "version": "0.14.43"
   },
   "assistant": {
-    "version": "0.9.22",
-    "version_code": 57,
+    "version": "0.9.24",
+    "version_code": 59,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {
