@@ -221,6 +221,16 @@ APK 0.9.34（code 71）在同一轮另外记录 `device_stop_to_visuals_cleared_
 
 两段合计最多允许一次已恢复的误暂停。报告分别记录观察时间、完成播报次数、收到的播放参考采样数、暂停请求、设备暂停和恢复，不保存音频或转写正文。观察时间包含合成和播报之间的等待，播放参考采样数单列。已完成批次可用 `audit-device-suite` 复核。此模式覆盖纯播报；电视、低噪声背景和真人场景仍有独立验收。
 
+可用同一套流程分别跑电视或低噪声背景。准备一段有权使用、至少 17 分 30 秒且不超过 44 MiB 的 16 kHz 单声道 PCM16 WAV，保持 Mac 的输出设备和音量固定。两组用各自的素材和摘要。
+
+```sh
+./cc8 verify-device --runtime-root /absolute/runtime --capture --self-playback-soak \
+  --background-scenario tv --background-wav /absolute/tv.wav \
+  --background-sha256 <sha256>
+```
+
+低噪声组用 `--background-scenario low-noise`。默认只显示计划，添加 `--execute` 后才读取并校验音频，由 Mac 在每段开始时播放。播放器提前退出即失败，结束或普通中断会停止播放器并清理临时副本。强制杀死测试进程时，播放器仍受 17 分 30 秒播放上限约束。背景音部分只记录场景、SHA-256 和播放器存活覆盖时间。实际出声、现场分贝和素材是否代表真实电视环境仍需独立确认。
+
 ### 插话与本地停止的分组采样
 
 ```sh

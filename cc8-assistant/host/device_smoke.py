@@ -2,6 +2,7 @@
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from datetime import datetime, timezone
 import fcntl
 import hashlib
@@ -28,6 +29,7 @@ from diagnostics import (
     percentiles,
 )
 from diagnostic_run import receipt
+from soak_background import Background, KINDS as BACKGROUND_KINDS, valid_background
 from qa_speech import QUESTIONS as QA_LATENCY_QUESTIONS
 from qa_speech import WAKE as ACOUSTIC_WAKE
 from qa_speech import ALL_QUESTIONS, SCENARIO_DIGESTS, SCENARIO_QUESTIONS, normalize_question
@@ -499,6 +501,7 @@ class SmokeRun:
         synthetic_stop=False,
         wake_self_playback=False,
         echo_soak=False,
+        background=None,
         active_handover=False,
         all_route_loss=False,
         multi_clause=False,
@@ -523,6 +526,7 @@ class SmokeRun:
         self.interruption_enabled = synthetic_barge or synthetic_stop
         self.wake_self_playback = wake_self_playback
         self.echo_soak = echo_soak
+        self.background = background
         self.echo_soak_evidence = None
         self.active_handover = active_handover
         self.active_handover_evidence = None
@@ -1615,6 +1619,11 @@ class SmokeRun:
         return {key: health[key] for key in ECHO_SOAK_COUNTERS}
 
     def self_playback_soak(self):
+        context = self.background.play() if self.background else nullcontext(lambda: True)
+        with context as background_active:
+            self.observe_self_playback(background_active)
+
+    def observe_self_playback(self, background_active):
         def snapshot():
             health = self.health()
             require(
@@ -1633,6 +1642,7 @@ class SmokeRun:
             require(all(value >= 0 for value in changes.values()), 'echo_soak_counter_regressed')
             return changes
 
+        require(background_active(), 'echo_soak_background_ended')
         baseline = snapshot()
         rows = self.diagnostic_requests()
         require(
@@ -1649,7 +1659,11 @@ class SmokeRun:
             'render_samples': 0,
             'admitted_voice_requests': 0,
         }
+        if self.background:
+            evidence['background'] = self.background.receipt
+            evidence['background_observed_seconds'] = 0
         while self.clock() - began < ECHO_SOAK_SECONDS:
+            require(background_active(), 'echo_soak_background_ended')
             device = self.capture_status()
             require(
                 device['test_capture_remaining_ms'] >= 135000,
@@ -1674,11 +1688,14 @@ class SmokeRun:
             evidence['device_pauses'] += len(paused)
             evidence['device_resumes'] += resumed
             evidence['admitted_voice_requests'] += len(groups['admitted'])
+            require(background_active(), 'echo_soak_background_ended')
             evidence.update(
                 elapsed_seconds=round(self.clock() - began, 3),
                 pause_requests=totals['barge_in_pauses'],
                 render_samples=totals['render_frames'],
             )
+            if self.background:
+                evidence['background_observed_seconds'] = evidence['elapsed_seconds']
             self.checkpoint(self.report('running'))
             require(
                 len(new) == len(announcements) + len(voices)
@@ -2169,6 +2186,7 @@ def run_device_suite(
     latency_scenario='qa',
     interruption=False,
     echo_soak=False,
+    background=None,
 ):
     planned = device_suite_phases(
         qa_latency=qa_latency,
@@ -2217,6 +2235,8 @@ def run_device_suite(
             name: percentiles(values) for name, values in interruption_samples.items()
         }
     if echo_soak:
+        if background is not None:
+            suite['background'] = background
         suite['echo_soak_totals'] = dict.fromkeys(
             (
                 'elapsed_seconds',
@@ -2401,6 +2421,11 @@ def run_device_suite(
                 == evidence['device_resumes']
                 and type(evidence.get('admitted_voice_requests')) is int
                 and evidence['admitted_voice_requests'] == 0
+                and evidence.get('background') == background
+                and (
+                    background is None
+                    or evidence.get('background_observed_seconds') == evidence['elapsed_seconds']
+                )
             ):
                 phase.update(state='failed', reason='suite_echo_soak_evidence_incomplete')
             else:
@@ -2450,6 +2475,9 @@ def main(argv=None):
         action='store_true',
         help='Observe two timed awake self-playback windows without external speech',
     )
+    parser.add_argument('--background-scenario', choices=BACKGROUND_KINDS)
+    parser.add_argument('--background-wav', type=Path)
+    parser.add_argument('--background-sha256')
     parser.add_argument(
         '--latency-scenario',
         choices=tuple(SCENARIO_QUESTIONS),
@@ -2539,6 +2567,17 @@ def main(argv=None):
         or args.interruption_suite
         or args.self_playback_soak
     )
+    background_receipt = None
+    if any((args.background_scenario, args.background_wav, args.background_sha256)):
+        background_receipt = {'kind': args.background_scenario, 'sha256': args.background_sha256}
+        if (
+            not args.self_playback_soak
+            or args.background_wav is None
+            or not valid_background(background_receipt)
+        ):
+            parser.error(
+                'Background playback requires --self-playback-soak and all background flags'
+            )
     if args.extended_voice_evidence and not args.p0_device_suite:
         parser.error('--extended-voice-evidence requires --p0-device-suite')
     if args.latency_scenario != 'qa' and not args.qa_latency_suite:
@@ -2615,6 +2654,8 @@ def main(argv=None):
                     plan['response_acoustic_evidence'] = True
             if args.self_playback_soak:
                 plan['self_playback_seconds_per_phase'] = ECHO_SOAK_SECONDS
+                if background_receipt is not None:
+                    plan['background'] = background_receipt
             if args.interruption_suite:
                 plan['minimum_apk_code'] = STOP_VISUAL_MIN_APK_CODE
             if args.extended_voice_evidence:
@@ -2635,6 +2676,12 @@ def main(argv=None):
         print(json.dumps(plan, ensure_ascii=False, indent=2))
         return 0
     try:
+        background = None
+        if background_receipt is not None:
+            require(sys.platform == 'darwin', 'echo_soak_background_requires_macos')
+            background = Background.load(
+                args.background_wav, args.background_scenario, args.background_sha256
+            )
         runtime = args.runtime_root
         require(
             runtime.is_absolute() and runtime.resolve() == runtime,
@@ -2754,6 +2801,7 @@ def main(argv=None):
                         checkpoint=checkpoint,
                         qa_question=qa_question,
                         latency_scenario=args.latency_scenario,
+                        background=background,
                         response_acoustic_evidence=(
                             args.response_acoustic_evidence
                             or 'response_acoustic_evidence' in enabled
@@ -2782,6 +2830,7 @@ def main(argv=None):
                             latency_scenario=args.latency_scenario,
                             interruption=args.interruption_suite,
                             echo_soak=args.self_playback_soak,
+                            background=background_receipt,
                         )
                     else:
                         result = make_run(options, save).run()
@@ -2799,6 +2848,8 @@ def main(argv=None):
                     }
                     if args.self_playback_soak:
                         summary['echo_soak_totals'] = result['echo_soak_totals']
+                        if background_receipt is not None:
+                            summary['background'] = background_receipt
                     if args.qa_latency_suite or args.interruption_suite:
                         summary['latencies_ms'] = result['latencies_ms']
                         if args.latency_scenario != 'qa':
