@@ -1,5 +1,10 @@
 # Changelog
 
+## Backend 0.14.56 — bound proxy CONNECT and origin TLS together
+
+- Keep the original connection deadline through CONNECT headers and the TLS
+  handshake with the origin, then release it for the response read phase.
+
 ## Backend 0.14.55 — measure trailing capture before voice endpoint
 
 - Record the device capture interval between the last frame marked voiced and

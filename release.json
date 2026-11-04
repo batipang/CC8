@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-voice-endpoint-timing-20261105.1",
+  "release_id": "p0-proxy-connect-deadline-20261105.1",
   "backend": {
-    "version": "0.14.55"
+    "version": "0.14.56"
   },
   "assistant": {
     "version": "0.9.31",
