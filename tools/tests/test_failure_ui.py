@@ -318,6 +318,7 @@ class DriverGateTests(unittest.TestCase):
         root = qa_variant.ROOT
         for argv in (
             [str(root / 'cc8'), 'verify-failure-ui', '--runtime-root', '/not/used'],
+            [str(root / 'cc8'), 'verify-failure-ui', '--host-only'],
             [str(root / 'tools/qa_variant.py'), '--output', '/not/created'],
         ):
             code = (
@@ -338,6 +339,40 @@ class DriverGateTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertFalse(json.loads(result.stdout)['execute'])
+
+    def test_host_only_runs_real_loopback_recovery_without_device_or_runtime(self):
+        with (
+            patch.object(check, 'Device', side_effect=AssertionError('unexpected device')),
+            patch.object(check, 'private_directory', side_effect=AssertionError('private writes')),
+            patch('builtins.print') as output,
+        ):
+            self.assertEqual(check.main(['--host-only', '--execute', '--limit', '1']), 0)
+        report = json.loads(output.call_args.args[0])
+        self.assertEqual(report['state'], 'passed')
+        self.assertEqual(report['scope'], 'host_fault_recovery')
+        self.assertFalse(report['physical_ui_tested'])
+        self.assertEqual(report['selected_cases'], 1)
+        self.assertEqual(report['generated_wire_requests'], 1)
+        self.assertEqual(report['generated_recovery_wire_requests'], 1)
+        self.assertEqual(report['generated_dot_wire_counts']['recovery_turns'], 1)
+        self.assertRegex(report['fixture_sha256'], r'^[a-f0-9]{64}$')
+
+    def test_host_only_rejects_device_options_and_redacts_fixture_failure(self):
+        with (
+            patch.object(
+                check, 'generate', side_effect=RuntimeError('sensitive test value')
+            ) as run,
+            patch('builtins.print') as output,
+        ):
+            for extra in (['--runtime-root', '/x'], ['--qa-receipt', '/x'], ['--shared-staging']):
+                with self.subTest(extra=extra), self.assertRaises(SystemExit):
+                    check.main(['--host-only', '--execute', *extra])
+            run.assert_not_called()
+            self.assertEqual(check.main(['--host-only', '--execute']), 2)
+        report = json.loads(output.call_args.args[0])
+        self.assertEqual(report['state'], 'failed')
+        self.assertEqual(report['error_type'], 'RuntimeError')
+        self.assertNotIn('sensitive test value', output.call_args.args[0])
 
     def test_private_receipt_regular_owner_only_and_no_links_or_fifo(self):
         with tempfile.TemporaryDirectory() as directory:

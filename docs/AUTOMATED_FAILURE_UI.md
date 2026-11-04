@@ -10,6 +10,19 @@
 
 ## 运行
 
+### Mac 本机故障和恢复检查
+
+```sh
+./cc8 verify-failure-ui --host-only
+.toolchains/cc8/dev-venv/bin/python cc8 verify-failure-ui --host-only --execute
+```
+
+第一条仅列计划。第二条默认用 `loopback_business` 和 `local_stdio` 执行全部 48 项，可用 `--http-fixture loopback_tls` 检查 HTTP 状态错误和连接故障。命令向标准输出写一份 JSON，包含选择的模式、用例数、请求计数和摘要。检查失败时退出码为 2，仅输出异常类型。该入口无需运行目录、APK 或 USB 设备，不访问当前运行实例，不录音、播放或调用真实提供方。实体界面的验证另走下方流程。
+
+候选后台 0.14.45／APK code65 对应源码 `1033887` 已分别运行两套本机矩阵，各 48 项通过。两套均收到 30 次 ASR/TTS 故障请求、33 次初始 Dot 请求、48 次后续 Dot 请求和 3 次拒绝审批。业务错误模式还核对了 30 次独立的 ASR/TTS 恢复请求。
+
+### 实体 CC8 界面重放
+
 默认计划只需要标准库，不访问设备、模型或配置，不创建报告：
 
 ```sh
