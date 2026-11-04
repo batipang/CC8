@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-pause-after-player-begin-20261104.1",
+  "release_id": "p0-usb-pipe-deadline-20261104.1",
   "backend": {
-    "version": "0.14.35"
+    "version": "0.14.36"
   },
   "assistant": {
     "version": "0.9.18",

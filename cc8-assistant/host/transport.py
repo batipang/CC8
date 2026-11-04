@@ -184,7 +184,7 @@ class Channel:
         self.kind = kind
         self.events = events
         self.ident = uuid.uuid4().hex
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self.state_lock = threading.Lock()
         self.reader: threading.Thread | None = None
         self.reader_running = False
@@ -209,7 +209,12 @@ class Channel:
         with self.lock:
             if self.closed:
                 raise EOFError('Transport closed')
-            self.stream.sendall(raw)
+            try:
+                self.stream.sendall(raw)
+            except (OSError, EOFError):
+                # Invalidate before another writer can append to a partial frame.
+                self.close()
+                raise
 
     def event(self, name: str, generation: int = 0, **fields: JsonValue) -> None:
         self.sendall(Packet.event(name, generation, **fields).encode())
@@ -472,9 +477,15 @@ class TransportHub:
                 except (OSError, EOFError):
                     other.close()
         if channel:
-            channel.event('transport_activate', transport=channel.kind)
-            if channel.kind == 'usb':
-                channel.event('lan_config', config=self.pairing.device_config())
+            try:
+                channel.event('transport_activate', transport=channel.kind)
+                if channel.kind == 'usb':
+                    channel.event('lan_config', config=self.pairing.device_config())
+            except (OSError, EOFError):
+                # This failure belongs to the selected route, regardless of
+                # which channel's queued event triggered the reevaluation.
+                channel.close()
+                return
         self.log(
             'transport_selected',
             transport=channel.kind if channel else 'none',
