@@ -12,6 +12,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import upgrade_preparation as upgrade
+from test_audit_observation import observation
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -183,6 +184,64 @@ class UpgradeTests(unittest.TestCase):
             self.assertFalse(report['ready_for_installation'])
             self.assertEqual(list(report['stages']), ['baseline', 'candidate', 'recovery'])
             self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+
+    def test_optional_observation_gate_reaudits_private_report_against_the_baseline(self):
+        with tempfile.TemporaryDirectory() as folder:
+            roots, apks, checked, _ = self.transition_fixture(folder)
+            recorded = Path(folder) / 'observation.json'
+            data = observation()
+            window = data['observation']
+            backend = upgrade.load_release(roots[0]).backend_version
+            for state, expected_backend, expected_code, reason in (
+                ('running', backend, 2, 'window_not_completed'),
+                ('completed', '9.0.1', 2, 'backend_version_not_bound'),
+                ('completed', backend, 0, None),
+            ):
+                with self.subTest(state=state, backend=expected_backend):
+                    window.update(state=state, expected_backend_version=expected_backend)
+                    data['window_verified'] = True  # The saved verdict is not authoritative.
+                    encoded = json.dumps(data)
+                    recorded.write_text(encoded)
+                    recorded.chmod(0o600)
+                    output = Path(folder) / f'receipt-{state}-{expected_backend}.json'
+                    arguments = [
+                        'verify-transition',
+                        '--from-root',
+                        str(roots[0]),
+                        '--to-root',
+                        str(roots[1]),
+                        '--recovery-root',
+                        str(roots[2]),
+                        '--baseline-apk',
+                        str(apks[0]),
+                        '--baseline-sha256',
+                        hashlib.sha256(apks[0].read_bytes()).hexdigest(),
+                        '--observation-report',
+                        str(recorded),
+                        '--output',
+                        str(output),
+                    ]
+                    with patch('tools.release.check_apk', side_effect=checked):
+                        code, _, err = self.invoke(arguments)
+                    self.assertEqual(code, expected_code, err)
+                    report = json.loads(output.read_text())
+                    self.assertTrue(report['verified_against_pinned_baseline'])
+                    self.assertFalse(report['ready_for_installation'])
+                    gate = report['observation_gate']
+                    self.assertEqual(gate['baseline_backend_version'], backend)
+                    self.assertEqual(gate['report_sha256'], upgrade.fingerprint(data))
+                    self.assertEqual(gate['window_verified'], expected_code == 0)
+                    self.assertEqual(gate['reasons'], [reason] if reason else [])
+                    self.assertNotIn('samples', gate)
+                    self.assertEqual(recorded.read_text(), encoded)
+            window['interval_seconds'] = 10**1000
+            recorded.write_text(json.dumps(data))
+            invalid = Path(folder) / 'invalid-window.json'
+            arguments[-1] = str(invalid)
+            with patch('tools.release.check_apk', side_effect=checked):
+                code, _, err = self.invoke(arguments)
+            self.assertEqual(code, 2, err)
+            self.assertFalse(invalid.exists())
 
     def test_transition_rejects_wrong_baseline_signer_or_stale_build_receipt(self):
         with tempfile.TemporaryDirectory() as folder:
