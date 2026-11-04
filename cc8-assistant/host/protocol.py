@@ -138,6 +138,10 @@ def validate_device_event(value: object) -> JsonObject:
         'render_clock_report_version': 32,
         'playback_done_id_version': 32,
     }
+    if name == 'capture_gap':
+        if ('epoch' in value) != ('sequence' in value):
+            raise ValueError('Incomplete capture-gap identity')
+        integers['sequence'] = 64
     if name == 'playout_progress':
         integers.update(playback_id=32, first_signal_frame=64, played_frames=64, accepted_frames=64)
     if name in ('play_done', 'playback_error'):

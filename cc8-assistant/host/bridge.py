@@ -329,7 +329,7 @@ class Bridge:
         ):
             self.playback.device_event(j)
         elif event == 'capture_gap':
-            self.capture.evidence.cancel('capture_read_gap')
+            self.capture.note_read_gap(j.get('epoch'), j.get('sequence'))
             self.log('capture_read_gap', milliseconds=j.get('milliseconds'))
 
     def on_packet(self, p):

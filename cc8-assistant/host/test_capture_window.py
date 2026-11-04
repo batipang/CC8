@@ -53,6 +53,11 @@ class AudioRecord {
   reads++;
   String test=CaptureCheck.test;
   try {
+   if("read_gap".equals(test)){
+    if(reads==2)Thread.sleep(450);
+    if(reads==3){entered.countDown();stopped.await(3,TimeUnit.SECONDS);}
+    return count;
+   }
    if("blocked".equals(test)){
     CaptureCheck.clock.set(1001);entered.countDown();
     if(!stopped.await(3,TimeUnit.SECONDS))throw new AssertionError("native read not unblocked");
@@ -158,6 +163,15 @@ public final class CaptureCheck {
     waitFor(()->!s.recording,"expired waiter stayed active");
     yes(AudioRecord.created.isEmpty(),"expired waiter opened hardware");
     yes(s.packets.get()==0&&s.captureWindow==null,"expired waiter sent audio or kept lease");
+   } else if("read_gap".equals(test)){
+    s.startMicrophone();
+    yes(AudioRecord.entered.await(2,TimeUnit.SECONDS),"fixture did not send second packet");
+    List<JSONObject> gaps=s.events.stream().filter(e->"capture_gap".equals(e.data.get("event"))).toList();
+    yes(gaps.size()==1,"read gap event missing or repeated");
+    JSONObject gap=gaps.get(0);
+    yes(gap.data.get("epoch").equals(s.epoch)&&gap.data.get("sequence").equals(1L),
+        "read gap not bound to the affected capture packet");
+    yes(s.packets.get()==2,"read gap changed microphone packet count");
    } else if("normal".equals(test)){
     s.startMicrophone();yes(AudioRecord.entered.await(2,TimeUnit.SECONDS),"normal read fixture not entered");
     yes(s.captureWindow.clockStats==null&&AudioRecord.created.get(0).timestamps==0,
@@ -334,6 +348,9 @@ class CaptureWindowTests(unittest.TestCase):
 
     def test_audio_read_crossing_deadline_is_not_sent(self):
         self.check_worker('crossing')
+
+    def test_delayed_native_read_reports_its_exact_epoch_and_packet_sequence(self):
+        self.check_worker('read_gap')
 
     def test_default_capture_has_no_limit_or_watchdog(self):
         self.check_worker('normal')
