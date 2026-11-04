@@ -74,6 +74,7 @@ WAKE_SELF_CHECK = 'self_playback_does_not_wake'
 POST_DIALOGUE_SECONDS = 20
 STANDBY_SECONDS = 900
 PAIRED_PLAYOUT_MIN_BACKEND = '0.14.50'
+RESPONSE_ACOUSTIC_MIN_BACKEND = '0.14.57'
 SMOKE_OPTIONS = (
     'capture',
     'standby',
@@ -140,6 +141,13 @@ def require_evidence(condition, reason):
 def require(condition, reason):
     if not condition:
         raise CheckFailure(reason)
+
+
+def observed_response_interval(value):
+    if not isinstance(value, dict) or value.get('status') != 'observed':
+        return None
+    elapsed = value.get(ACOUSTIC_RESPONSE_METRIC)
+    return elapsed if type(elapsed) in (int, float) and 0 <= elapsed <= 20000 else None
 
 
 def summarize_capture_clock(value):
@@ -310,7 +318,12 @@ def rpc(path, request, timeout=5):
         or request == {'operation': 'transport_test', 'seconds': 12}
         or request == ALL_ROUTE_LOSS_REQUEST
         or request == {'operation': 'playback_probe'}
-        or request == {'operation': 'response_probe_arm', 'case': 1}
+        or (
+            request.get('operation') == 'response_probe_arm'
+            and set(request) == {'operation', 'case'}
+            and type(request['case']) is int
+            and 1 <= request['case'] <= len(QA_LATENCY_QUESTIONS)
+        )
         or (
             request.get('operation') == 'response_probe_result'
             and set(request) == {'operation', 'token'}
@@ -1252,7 +1265,8 @@ class SmokeRun:
         response_deadline = self.clock() + available - reserve
         probe_token = None
         if self.response_acoustic_evidence:
-            armed = self.request({'operation': 'response_probe_arm', 'case': 1})
+            case = QA_LATENCY_QUESTIONS.index(self.qa_question) + 1
+            armed = self.request({'operation': 'response_probe_arm', 'case': case})
             probe_token = armed.get('token')
             require(
                 armed.get('status') == 'armed'
@@ -1386,14 +1400,12 @@ class SmokeRun:
         if probe_token is not None:
             observed = self.request({'operation': 'response_probe_result', 'token': probe_token})
             self.health()
-            elapsed = observed.get(ACOUSTIC_RESPONSE_METRIC)
+            elapsed = observed_response_interval(observed)
             generation = observed.get('generation')
             confirmed = (
-                observed.get('status') == 'observed'
-                and type(generation) is int
+                type(generation) is int
                 and generation == completed.get('generation')
-                and type(elapsed) in (int, float)
-                and 0 <= elapsed <= 20000
+                and elapsed is not None
             )
             self.acoustic_evidence['response_acoustic_timing'] = (
                 {'status': 'observed', ACOUSTIC_RESPONSE_METRIC: elapsed}
@@ -1799,7 +1811,7 @@ def planned_checks(options):
     )
 
 
-def run_device_suite(make_run, save, *, qa_latency=False):
+def run_device_suite(make_run, save, *, qa_latency=False, response_acoustic=False):
     planned = QA_LATENCY_PHASES if qa_latency else P0_DEVICE_PHASES
     phases = [
         dict(name=name, state='not_run', expected_checks=planned_checks(set(options)))
@@ -1821,6 +1833,9 @@ def run_device_suite(make_run, save, *, qa_latency=False):
             name: percentiles([])
             for name in (*QA_STAGE_METRICS, QA_ENDPOINT_METRIC, QA_PLAYOUT_METRIC)
         }
+        if response_acoustic:
+            suite['response_acoustic_evidence'] = True
+            suite['latencies_ms'][ACOUSTIC_RESPONSE_METRIC] = percentiles([])
     samples = []
     save(suite)
     source = None
@@ -1870,6 +1885,7 @@ def run_device_suite(make_run, save, *, qa_latency=False):
                     phase.update(state='failed', reason='suite_synthetic_stimulus_not_confirmed')
                 elif qa_latency:
                     stages = evidence.get('qa_stage_latencies_ms')
+                    interval = observed_response_interval(evidence.get('response_acoustic_timing'))
                     if (
                         not isinstance(stages, dict)
                         or set(stages) - {QA_ENDPOINT_METRIC} != set(QA_STAGE_METRICS)
@@ -1879,8 +1895,13 @@ def run_device_suite(make_run, save, *, qa_latency=False):
                         )
                     ):
                         phase.update(state='failed', reason='suite_qa_stage_timing_incomplete')
+                    elif response_acoustic and interval is None:
+                        phase.update(state='failed', reason='suite_qa_acoustic_timing_incomplete')
                     else:
-                        samples.append({**stages, QA_PLAYOUT_METRIC: timing[QA_PLAYOUT_METRIC]})
+                        sample = {**stages, QA_PLAYOUT_METRIC: timing[QA_PLAYOUT_METRIC]}
+                        if response_acoustic:
+                            sample[ACOUSTIC_RESPONSE_METRIC] = interval
+                        samples.append(sample)
                         suite['latencies_ms'] = {
                             name: percentiles(
                                 [sample[name] for sample in samples if name in sample]
@@ -1982,13 +2003,15 @@ def main(argv=None):
     parser.add_argument(
         '--response-acoustic-evidence',
         action='store_true',
-        help='Corroborate the fixed awake answer on the same device microphone clock',
+        help='Corroborate fixed awake answers in an individual run or the QA latency suite',
     )
     args = parser.parse_args(argv)
     options = {key for key in SMOKE_OPTIONS if getattr(args, key)}
     batch = args.p0_device_suite or args.qa_latency_suite
-    if args.response_acoustic_evidence and (batch or not args.awake_dialogue):
-        parser.error('--response-acoustic-evidence requires an individual --awake-dialogue run')
+    if args.response_acoustic_evidence and not (
+        args.qa_latency_suite or (not batch and args.awake_dialogue)
+    ):
+        parser.error('--response-acoustic-evidence requires --awake-dialogue or --qa-latency-suite')
     if batch and options != {'capture'}:
         parser.error('Device batches require --capture and accept no individual check flags')
     if args.standby and not args.capture or args.acoustic and not args.standby:
@@ -2015,6 +2038,11 @@ def main(argv=None):
         parser.error('--capture-clock-evidence requires --capture')
     if args.leading_acoustic_evidence and not args.playback_evidence:
         parser.error('--leading-acoustic-evidence requires --playback-evidence')
+    minimum_batch_backend = (
+        RESPONSE_ACOUSTIC_MIN_BACKEND
+        if args.response_acoustic_evidence
+        else PAIRED_PLAYOUT_MIN_BACKEND
+    )
     if not args.execute:
         if batch:
             plan = {
@@ -2027,10 +2055,12 @@ def main(argv=None):
                 'execute': False,
                 'capture': True,
                 'full_p0_acceptance': False,
-                'minimum_backend_version': PAIRED_PLAYOUT_MIN_BACKEND,
+                'minimum_backend_version': minimum_batch_backend,
             }
             if args.qa_latency_suite:
                 plan['qa_corpus_sha256'] = QA_CORPUS_SHA256
+                if args.response_acoustic_evidence:
+                    plan['response_acoustic_evidence'] = True
         else:
             plan = {
                 'checks': planned_checks(options),
@@ -2064,17 +2094,20 @@ def main(argv=None):
         instance = health.get('runtime_instance')
         if batch:
             if tuple(map(int, manifest.backend_version.split('.'))) < tuple(
-                map(int, PAIRED_PLAYOUT_MIN_BACKEND.split('.'))
+                map(int, minimum_batch_backend.split('.'))
             ):
-                parser.exit(
-                    2, f'固定设备验收批次需要后台 {PAIRED_PLAYOUT_MIN_BACKEND} 或更新版本。\n'
-                )
+                parser.exit(2, f'固定设备验收批次需要后台 {minimum_batch_backend} 或更新版本。\n')
             require(
                 isinstance(instance, str)
                 and bool(instance)
                 and health.get('release_id') == manifest.release_id,
                 'suite_runtime_identity_unconfirmed',
             )
+        if (
+            args.response_acoustic_evidence
+            and health.get('response_acoustic_evidence_supported') is not True
+        ):
+            parser.exit(2, '当前后台未声明支持问答声学计时。\n')
 
         def request(payload):
             timeout = 5
@@ -2157,7 +2190,12 @@ def main(argv=None):
                             stderr=subprocess.DEVNULL,
                         )
                     if batch:
-                        result = run_device_suite(make_run, save, qa_latency=args.qa_latency_suite)
+                        result = run_device_suite(
+                            make_run,
+                            save,
+                            qa_latency=args.qa_latency_suite,
+                            response_acoustic=args.response_acoustic_evidence,
+                        )
                     else:
                         result = make_run(options, save).run()
                 finally:
