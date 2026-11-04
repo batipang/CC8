@@ -60,6 +60,8 @@ LEADING_ACOUSTIC_CHECK = 'leading_playback_acoustic_evidence'
 AWAKE_DIALOGUE_CHECK = 'synthetic_awake_dialogue'
 BARGE_CHECK = 'synthetic_acoustic_interruption'
 ACTIVE_HANDOVER_CHECK = 'active_capture_logical_handover'
+ALL_ROUTE_LOSS_CHECK = 'capture_stops_during_all_route_loss'
+ALL_ROUTE_LOSS_REQUEST = {'operation': 'transport_all_test'}
 WAKE_SELF_CHECK = 'self_playback_does_not_wake'
 POST_DIALOGUE_SECONDS = 20
 STANDBY_SECONDS = 900
@@ -178,6 +180,7 @@ def rpc(path, request, timeout=5):
     require(
         request in allowed
         or request == {'operation': 'transport_test', 'seconds': 12}
+        or request == ALL_ROUTE_LOSS_REQUEST
         or request == {'operation': 'playback_probe'}
         or request == {'text': TEST_TEXT}
         or request == {'text': MULTI_CLAUSE_TEXT}
@@ -298,6 +301,7 @@ class SmokeRun:
         synthetic_barge=False,
         wake_self_playback=False,
         active_handover=False,
+        all_route_loss=False,
         multi_clause=False,
         playback_evidence=False,
         clock_evidence=False,
@@ -315,6 +319,8 @@ class SmokeRun:
         self.wake_self_playback = wake_self_playback
         self.active_handover = active_handover
         self.active_handover_evidence = None
+        self.all_route_loss = all_route_loss
+        self.all_route_loss_evidence = None
         self.wake_self_evidence = None
         self.barge_evidence = None
         self.multi_clause = multi_clause
@@ -383,6 +389,7 @@ class SmokeRun:
             'barge_evidence': self.barge_evidence,
             'wake_self_evidence': self.wake_self_evidence,
             'active_handover_evidence': self.active_handover_evidence,
+            'all_route_loss_evidence': self.all_route_loss_evidence,
             'standby_evidence': self.standby_evidence,
             'playback_probe_evidence': self.playback_probe_evidence,
             'capture_clock_evidence': self.capture_clock_evidence,
@@ -419,7 +426,7 @@ class SmokeRun:
         h = self.health()
         if self.multi_clause or self.wake_self_playback:
             require(h.get('clause_receipts_supported') is True, 'clause_receipts_unsupported')
-        if self.wake_self_playback or self.active_handover:
+        if self.wake_self_playback or self.active_handover or self.all_route_loss:
             self.audio_counters(h)
         require(
             not self.playback_evidence or h.get('playback_evidence_supported') is True,
@@ -446,7 +453,8 @@ class SmokeRun:
             'device_test_capture_limit_unsupported',
         )
         require(
-            not self.active_handover or device.get('test_capture_epoch_supported') is True,
+            not (self.active_handover or self.all_route_loss)
+            or device.get('test_capture_epoch_supported') is True,
             'device_test_capture_epoch_unsupported',
         )
         require(
@@ -471,18 +479,25 @@ class SmokeRun:
             require(ui.get('wake_checked') is True, 'wake_self_playback_requires_wake_mode')
         if self.active_handover:
             require(ui.get('wake_checked') is True, 'active_handover_requires_wake_mode')
+        if self.all_route_loss:
+            require(ui.get('wake_checked') is True, 'all_route_loss_requires_wake_mode')
         if (
             self.awake_dialogue
             or self.synthetic_barge
             or self.multi_clause
             or self.wake_self_playback
             or self.active_handover
+            or self.all_route_loss
         ):
             require(
                 all(row.get('outcome') is not None for row in self.diagnostic_requests()),
                 'owner_request_pending',
             )
         t = self.request({'operation': 'transport_status'})
+        require(
+            not self.all_route_loss or t.get('all_routes_test_suppressed') is False,
+            'all_route_loss_test_unavailable',
+        )
         require(
             t.get('wifi_ready') is True and t.get('usb_ready') is True, 'standby_route_not_ready'
         )
@@ -708,6 +723,143 @@ class SmokeRun:
             'active_handover_unexpected_request',
         )
         evidence['no_new_requests'] = True
+
+    def all_routes_loss_probe(self):
+        self.start_capture()
+        baseline = self.health()
+        counters = self.audio_counters(baseline)
+        d, ui = self.device.status()
+        self.capture_status((d, ui))
+        require(
+            baseline.get('connected') is True
+            and baseline.get('transport') == d.get('transport') == 'usb'
+            and baseline.get('microphone_active') is True
+            and baseline.get('calibrating') is False
+            and baseline.get('playing') is False
+            and baseline.get('waiting_for_wake') is True
+            and counters['mic_frames'] > 0
+            and type(d.get('test_capture_epoch')) is int
+            and d['test_capture_remaining_ms'] >= 45000,
+            'all_route_loss_capture_not_ready',
+        )
+        attempts = ui.get('auto_voice_start_attempts')
+        require(type(attempts) is int and attempts > 0, 'all_route_loss_ui_state_unavailable')
+        routes = self.request({'operation': 'transport_status'})
+        require(
+            routes.get('usb_ready') is True
+            and routes.get('wifi_ready') is True
+            and routes.get('usb_test_suppressed') is False
+            and routes.get('all_routes_test_suppressed') is False,
+            'all_route_loss_routes_not_ready',
+        )
+        rows = self.diagnostic_requests()
+        require(all(row.get('outcome') is not None for row in rows), 'owner_request_pending')
+        ids = {row['request_id'] for row in rows}
+        evidence = {
+            'both_routes_down': False,
+            'capture_stopped': False,
+            'usb_priority_restored': False,
+            'post_reconnect_mic_off_seconds': 0,
+        }
+        self.all_route_loss_evidence = evidence
+        self.checkpoint(self.report('running'))
+        reply = self.request(ALL_ROUTE_LOSS_REQUEST)
+        require(
+            reply.get('ok') is True and reply.get('seconds') == 10,
+            'all_route_loss_suppression_rejected',
+        )
+
+        def device_stopped(d, ui):
+            return (
+                d.get('microphone_active') is False
+                and d.get('test_capture_remaining_ms') == 0
+                and 'test_capture_epoch' not in d
+                and d.get('foreground') is True
+                and d.get('vision_active') is False
+                and ui.get('camera_open') is False
+                and ui.get('auto_voice_pending') is False
+                and ui.get('auto_voice_start_attempts') == attempts
+            )
+
+        def disconnected():
+            health = self.health()
+            status = self.request({'operation': 'transport_status'})
+            require(status.get('all_routes_test_suppressed') is True, 'all_route_loss_window_ended')
+            if (
+                health.get('connected') is not False
+                or health.get('transport') != 'none'
+                or health.get('microphone_active') is not False
+                or status.get('usb_ready') is not False
+                or status.get('wifi_ready') is not False
+            ):
+                return None
+            device, ui_state = self.device.status()
+            if (
+                device.get('connected') is False
+                and device.get('transport') == 'none'
+                and device_stopped(device, ui_state)
+            ):
+                require(
+                    self.request({'operation': 'transport_status'}).get(
+                        'all_routes_test_suppressed'
+                    )
+                    is True,
+                    'all_route_loss_window_ended',
+                )
+                return self.audio_counters(health), device.get('mic_frames')
+            return None
+
+        stopped, native_frames = self.wait(disconnected, 7, 'all_route_loss_stop_unconfirmed')
+        require(
+            type(native_frames) is int and native_frames > 0, 'all_route_loss_native_count_missing'
+        )
+        require(
+            all(
+                stopped[key] == counters[key]
+                for key in ('render_frames', 'voice_asr_attempts', 'local_wake_count')
+            ),
+            'all_route_loss_unexpected_audio',
+        )
+        evidence.update(both_routes_down=True, capture_stopped=True)
+        self.checkpoint(self.report('running'))
+
+        def reconnect():
+            health = self.health()
+            require(
+                health.get('microphone_active') is False
+                and health.get('calibrating') is False
+                and health.get('playing') is False
+                and self.audio_counters(health) == stopped,
+                'all_route_loss_reconnect_started_audio',
+            )
+            status = self.request({'operation': 'transport_status'})
+            return (
+                health.get('connected') is True
+                and health.get('transport') == status.get('transport') == 'usb'
+                and status.get('usb_ready') is True
+                and status.get('wifi_ready') is True
+                and status.get('all_routes_test_suppressed') is False
+            )
+
+        self.wait(reconnect, 35, 'all_route_loss_reconnect_not_confirmed')
+        quiet = self.clock()
+        while self.clock() - quiet < 5:
+            self.sleep(min(0.5, 5 - (self.clock() - quiet)))
+            require(reconnect(), 'all_route_loss_restored_route_changed')
+            evidence['post_reconnect_mic_off_seconds'] = round(self.clock() - quiet, 3)
+        device, ui_state = self.device.status()
+        require(
+            device.get('connected') is True
+            and device.get('transport') == 'usb'
+            and device_stopped(device, ui_state)
+            and device.get('mic_frames') == native_frames,
+            'all_route_loss_device_reopened_capture',
+        )
+        require(
+            all(row['request_id'] in ids for row in self.diagnostic_requests()),
+            'all_route_loss_unexpected_request',
+        )
+        evidence['usb_priority_restored'] = True
 
     @property
     def capture_limit_ms(self):
@@ -1330,6 +1482,8 @@ class SmokeRun:
                     self.check(BARGE_CHECK, self.interruption_probe)
                 self.check(CHECKS[5], self.home)
                 self.check(CHECKS[6], self.maintenance_open)
+                if self.all_route_loss:
+                    self.check(ALL_ROUTE_LOSS_CHECK, self.all_routes_loss_probe)
             if self.standby:
                 self.check(CHECKS[7], self.idle)
             if self.acoustic:
@@ -1391,6 +1545,11 @@ def main(argv=None):
         help='Verify that the same bounded recording continues on Wi-Fi and USB',
     )
     parser.add_argument(
+        '--all-route-loss',
+        action='store_true',
+        help='Temporarily close both assistant channels and verify recording stops and stays off',
+    )
+    parser.add_argument(
         '--multi-clause',
         action='store_true',
         help='Verify separate device receipts for both clauses of a fixed announcement',
@@ -1430,6 +1589,8 @@ def main(argv=None):
         )
     if args.active_handover and not args.capture:
         parser.error('--active-handover requires --capture')
+    if args.all_route_loss and (not args.capture or args.standby):
+        parser.error('--all-route-loss requires --capture and a separate run from --standby')
     if args.playback_evidence and not args.capture:
         parser.error('--playback-evidence requires --capture')
     if args.clock_evidence and not args.playback_evidence:
@@ -1451,6 +1612,7 @@ def main(argv=None):
             + ([AWAKE_DIALOGUE_CHECK] if args.awake_dialogue or args.synthetic_barge else [])
             + ([BARGE_CHECK] if args.synthetic_barge else [])
             + list(CHECKS[5:7])
+            + ([ALL_ROUTE_LOSS_CHECK] if args.all_route_loss else [])
             if args.capture
             else []
         )
@@ -1462,6 +1624,7 @@ def main(argv=None):
         'synthetic_barge': args.synthetic_barge,
         'wake_self_playback': args.wake_self_playback,
         'active_handover': args.active_handover,
+        'all_route_loss': args.all_route_loss,
         'multi_clause': args.multi_clause,
         'playback_evidence': args.playback_evidence,
         'clock_evidence': args.clock_evidence,
@@ -1542,6 +1705,7 @@ def main(argv=None):
                     synthetic_barge=args.synthetic_barge,
                     wake_self_playback=args.wake_self_playback,
                     active_handover=args.active_handover,
+                    all_route_loss=args.all_route_loss,
                     multi_clause=args.multi_clause,
                     playback_evidence=args.playback_evidence,
                     clock_evidence=args.clock_evidence,

@@ -14,6 +14,8 @@ from unittest.mock import Mock, patch
 
 from device_smoke import (
     ACTIVE_HANDOVER_CHECK,
+    ALL_ROUTE_LOSS_CHECK,
+    ALL_ROUTE_LOSS_REQUEST,
     BARGE_ANNOUNCEMENT,
     BARGE_CHECK,
     BARGE_QUERY,
@@ -176,6 +178,8 @@ class DeviceAutomationTests(unittest.TestCase):
             ['--capture', '--standby', '--synthetic-barge'],
             ['--wake-self-playback'],
             ['--active-handover'],
+            ['--all-route-loss'],
+            ['--capture', '--standby', '--all-route-loss'],
             ['--capture', '--standby', '--wake-self-playback'],
             ['--capture', '--synthetic-barge', '--wake-self-playback'],
             ['--capture-clock-evidence'],
@@ -770,6 +774,112 @@ class DeviceAutomationTests(unittest.TestCase):
         report = run.run()
         self.assertEqual(report['checks'][-1]['reason'], 'device_test_capture_epoch_unsupported')
         device.open.assert_not_called()
+
+    def test_all_route_loss_plan_is_offline(self):
+        output = io.StringIO()
+        with patch('device_smoke.Device') as device, redirect_stdout(output):
+            self.assertEqual(
+                main(['--runtime-root', '/unused', '--capture', '--all-route-loss']), 0
+            )
+            device.assert_not_called()
+        self.assertEqual(json.loads(output.getvalue())['checks'][-1], ALL_ROUTE_LOSS_CHECK)
+
+    def test_all_route_loss_requires_stop_and_idle_reconnect_on_both_ends(self):
+        for case, expected in (
+            ('valid', None),
+            ('device_still_recording', 'all_route_loss_stop_unconfirmed'),
+            ('host_still_recording', 'all_route_loss_stop_unconfirmed'),
+            ('reconnect_active', 'all_route_loss_reconnect_started_audio'),
+            ('native_frames_changed', 'all_route_loss_device_reopened_capture'),
+            ('native_restart', 'all_route_loss_device_reopened_capture'),
+            ('new_request', 'all_route_loss_unexpected_request'),
+        ):
+            with self.subTest(case=case):
+                run, device, health, now = self.fixture(capture=True, all_route_loss=True)
+                health.update(
+                    microphone_active=True,
+                    waiting_for_wake=True,
+                    local_wake_count=0,
+                    voice_asr_attempts=0,
+                    render_frames=40,
+                )
+                run.start_capture = Mock()
+                suppressed = False
+                rows = []
+                d, ui = device.status.return_value
+
+                def down():
+                    return suppressed and now[0] < 10
+
+                def status():
+                    active = not suppressed or down() and case == 'device_still_recording'
+                    values = dict(
+                        d,
+                        microphone_active=active,
+                        connected=not down(),
+                        transport='none' if down() else 'usb',
+                        test_capture_limit_ms=180000 if active else 0,
+                        test_capture_remaining_ms=160000 if active else 0,
+                        mic_frames=2000
+                        + int(case == 'native_frames_changed' and suppressed and not down()),
+                    )
+                    if active:
+                        values['test_capture_epoch'] = 3
+                    restarted = suppressed and not down() and case == 'native_restart'
+                    return values, dict(
+                        ui, auto_voice_pending=False, auto_voice_start_attempts=2 + int(restarted)
+                    )
+
+                def request(payload):
+                    nonlocal suppressed
+                    if payload == ALL_ROUTE_LOSS_REQUEST:
+                        suppressed = True
+                        if case == 'new_request':
+                            rows.append(
+                                dict(request_id='private-id', origin='text', outcome='completed')
+                            )
+                        return {'ok': True, 'seconds': 10}
+                    if payload == {'operation': 'transport_status'}:
+                        return dict(
+                            transport='none' if down() else 'usb',
+                            usb_ready=not down(),
+                            wifi_ready=not down(),
+                            all_routes_test_suppressed=down(),
+                            usb_test_suppressed=down(),
+                        )
+                    if payload == {'operation': 'diagnostics'}:
+                        return {'requests': rows}
+                    self.assertEqual(payload, {'operation': 'health'})
+                    active = not suppressed or (
+                        case == 'host_still_recording' if down() else case == 'reconnect_active'
+                    )
+                    return dict(
+                        health,
+                        microphone_active=active,
+                        connected=not down(),
+                        transport='none' if down() else 'usb',
+                    )
+
+                run.request = request
+                device.status.side_effect = status
+                if expected:
+                    with self.assertRaisesRegex(CheckFailure, expected):
+                        run.all_routes_loss_probe()
+                else:
+                    run.all_routes_loss_probe()
+                    report = run.report('passed')
+                    self.assertEqual(
+                        report['all_route_loss_evidence'],
+                        dict(
+                            both_routes_down=True,
+                            capture_stopped=True,
+                            usb_priority_restored=True,
+                            post_reconnect_mic_off_seconds=5,
+                        ),
+                    )
+                    self.assertFalse(report['physical_usb_unplug_tested'])
+                run.start_capture.assert_called_once()
+                device.speak_probe.assert_not_called()
 
     def test_active_handover_requires_fresh_frames_and_the_original_capture(self):
         for case, reason in (

@@ -1,5 +1,11 @@
 # Changelog
 
+## Backend 0.14.45 — verify microphone stop across a complete test outage
+
+- Add an owner-only test command that closes both assistant transports and
+  declines reconnection for ten seconds. The device test verifies both ends
+  stop recording and that USB priority returns without restarting capture.
+
 ## Assistant 0.9.26 — verify an active microphone across transport changes
 
 - Expose the native capture epoch only during an explicitly bounded test capture.

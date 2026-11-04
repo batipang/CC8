@@ -130,6 +130,43 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(hub.diagnostics()['transport'], 'wifi')
         self.assertEqual(hub.switches, 3)
 
+    def test_test_outage_closes_both_routes_rejects_registration_and_expires(self):
+        hub = self.hub()
+        wifi_peer = self.connect(hub)
+        receive(wifi_peer)
+        wifi_peer.sendall(Packet.event('transport_hello', protocol=2).encode())
+        wifi = self.up(hub)
+        usb_stream, usb_peer = socket.socketpair()
+        self.addCleanup(usb_peer.close)
+        usb = hub.register(usb_stream, 'usb')
+        usb_peer.sendall(Packet.event('transport_hello', protocol=2).encode())
+        self.assertIs(self.up(hub), usb)
+        self.assertIs(hub.preferred(), usb)
+        self.assertEqual(hub.suppress_all_for_test(), {'ok': True, 'seconds': 10})
+        deadline = hub.all_disabled_until
+        with self.assertRaises(RuntimeError):
+            hub.suppress_all_for_test()
+        with self.assertRaises(RuntimeError):
+            hub.suppress_usb_for_test(12)
+        self.assertEqual(hub.all_disabled_until, deadline)
+        self.assertTrue(wifi.closed and usb.closed)
+        self.assertIsNone(hub.preferred())
+        self.assertFalse(hub.selected(usb))
+        self.assertTrue(hub.diagnostics()['all_routes_test_suppressed'])
+        self.assertTrue(hub.diagnostics()['usb_test_suppressed'])
+        for kind in ('usb', 'wifi'):
+            stream, peer = socket.socketpair()
+            with peer, self.assertRaises(RuntimeError):
+                hub.register(stream, kind)
+            self.assertEqual(stream.fileno(), -1)
+        with hub.guard:
+            hub.all_disabled_until = time.monotonic() - 1
+        peer = self.connect(hub)
+        receive(peer)
+        peer.sendall(Packet.event('transport_hello', protocol=2).encode())
+        self.assertIs(self.up(hub), hub.preferred())
+        self.assertFalse(hub.diagnostics()['all_routes_test_suppressed'])
+
     def test_deep_discovery_cannot_kill_listener(self):
         hub = self.hub()
         client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
