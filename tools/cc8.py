@@ -458,6 +458,10 @@ def main():
         from observe import main as observe_main
 
         return observe_main(sys.argv[2:])
+    if sys.argv[1:2] == ['audit-observation']:
+        from audit_observation import main as audit_main
+
+        return audit_main(sys.argv[2:])
     if sys.argv[1:2] == ['score-asr']:
         from score_asr import main as score_main
 
@@ -503,6 +507,7 @@ def main():
     commands.add_parser(
         'observe', help='Read-only bounded health/resource curves; never starts capture'
     )
+    commands.add_parser('audit-observation', help='Audit a saved 72-hour backend window offline')
     commands.add_parser(
         'score-asr', help='Score supplied private ASR text; never records or uploads'
     )
