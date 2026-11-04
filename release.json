@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-wake-only-punctuation-20261104.1",
+  "release_id": "p0-echo-rebuild-rollback-20261104.1",
   "backend": {
-    "version": "0.14.51"
+    "version": "0.14.52"
   },
   "assistant": {
     "version": "0.9.30",

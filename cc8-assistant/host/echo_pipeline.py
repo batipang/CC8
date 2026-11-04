@@ -1,6 +1,7 @@
 """Own render reference, alignment samples and native echo processor lifetime."""
 
 from __future__ import annotations
+from contextlib import ExitStack
 from dataclasses import dataclass
 import threading
 from typing import Callable, ContextManager, Protocol, TypeAlias
@@ -59,11 +60,25 @@ class EchoPipeline:
         self.calibration_frames = []
         self.reference_shift_ns = 0
 
-    def open(self):
-        self.aec = self.hooks.factory()
-        self.stop_aec = (
-            self.hooks.factory(noise_suppression=False) if self.hooks.fast_stop_enabled() else None
-        )
+    def open(self, frames=(), *, shift_ns=0):
+        with self.dsp_lock, ExitStack() as pending:
+            aec = self.hooks.factory()
+            pending.callback(aec.close)
+            stop_aec = None
+            if self.hooks.fast_stop_enabled():
+                stop_aec = self.hooks.factory(noise_suppression=False)
+                pending.callback(stop_aec.close)
+            # Keep the working pair and its alignment until both replacements
+            # have been initialized and warmed with the same calibration data.
+            for stamp, pcm in frames:
+                reference = self.timeline.at(stamp - shift_ns, FRAME)
+                aec.process(pcm, reference)
+                if stop_aec:
+                    stop_aec.process(pcm, reference)
+            self.close()
+            self.aec, self.stop_aec = aec, stop_aec
+            self.reference_shift_ns = shift_ns
+            pending.pop_all()
 
     def close(self):
         with self.dsp_lock:
@@ -93,10 +108,10 @@ class EchoPipeline:
         self.timeline.resume_at(nanos)
 
     def process(self, nanos, raw):
-        reference = self.timeline.at(nanos - self.reference_shift_ns, FRAME)
         with self.dsp_lock:
             if not self.aec:
                 return None
+            reference = self.timeline.at(nanos - self.reference_shift_ns, FRAME)
             cleaned = self.aec.process(raw, reference)
             # Stop detection retains its existing AEC3 path without extra NS.
             stop_cleaned = self.stop_aec.process(raw, reference) if self.stop_aec else cleaned
@@ -114,21 +129,10 @@ class EchoPipeline:
             mic = np.concatenate([pcm for _, pcm in frames])
             render = np.concatenate([self.timeline.at(stamp, FRAME) for stamp, _ in frames])
             shift, correlation = estimate_reference_shift(mic, render)
-            self.reference_shift_ns = round(shift * 1e9 / RATE)
             with self.dsp_lock:
                 if not self.hooks.active():
                     return False
-                if self.aec:
-                    self.aec.close()
-                if self.stop_aec:
-                    self.stop_aec.close()
-                self.open()
-                # Warm only on this visible calibration's in-memory samples.
-                for stamp, pcm in frames:
-                    reference = self.timeline.at(stamp - self.reference_shift_ns, FRAME)
-                    self.aec.process(pcm, reference)
-                    if self.stop_aec:
-                        self.stop_aec.process(pcm, reference)
+                self.open(frames, shift_ns=round(shift * 1e9 / RATE))
             self.hooks.metric('reference_shift_samples', shift)
             self.hooks.metric('calibration_reference_correlation', round(correlation, 3))
             self.calibration_frames.clear()

@@ -392,12 +392,16 @@ class SessionController:
         if self.active or self.hooks.announcements().generation is not None:
             self.hooks.stop()
         self.epoch = int(j['epoch'])
-        self.capture_start_required = False
-        self.active = True
+        self.capture_start_required = True
         self.generation += 1
         self.hooks.capture().reset_session()
         self.hooks.playback().reset_session()
-        self.hooks.capture().echo.open()
+        try:
+            self.hooks.capture().echo.open()
+        except ImportError:
+            raise RuntimeError('Local echo processor unavailable') from None
+        self.capture_start_required = False
+        self.active = True
         self.hooks.calibration().begin()
         self.awake = not self.wake
         self.screen_sleeping = False
