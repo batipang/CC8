@@ -97,6 +97,35 @@ class DiagnosticRunTests(unittest.TestCase):
         self.run.ingest(good)
         self.assertNotIn('SECRET', json.dumps(self.run.report()))
 
+    def test_playout_pair_requires_matching_receipt_count_and_order(self):
+        self.request()
+        self.now = 1
+        ack = self.book.mark(100, 'playout_ack')
+        self.now = 2
+        self.book.playback_done(100, confirmed_ack_ms=ack)
+        good = self.book.report()
+        for field, value in (
+            ('confirmed_playout_ack', None),
+            ('confirmed_playback_done', None),
+            ('confirmed_playback_clauses', None),
+            ('confirmed_playout_ack', 999),
+            ('confirmed_playout_ack', 2001),
+            ('confirmed_playback_done', 1999),
+            ('confirmed_playback_done', True),
+        ):
+            with self.subTest(field=field, value=value):
+                malformed = deepcopy(good)
+                row = malformed['requests'][0]
+                target = row if field == 'confirmed_playback_clauses' else row['stages']
+                if value is None:
+                    del target[field]
+                else:
+                    target[field] = value
+                with self.assertRaises(ValueError):
+                    self.run.ingest(malformed)
+        self.run.ingest(good)
+        self.assertEqual(self.run.report()['requests'], good['requests'])
+
     def test_invalid_elapsed_values_never_enter_statistics(self):
         self.request()
         for value in (True, -1, float('inf'), float('nan'), 10**1000, 'SECRET'):

@@ -1,5 +1,11 @@
 # Changelog
 
+## Backend 0.14.50 — match response timing to a confirmed clause
+
+- Record the progress and completion timestamps of the same confirmed clause.
+- Keep older confirmation counts and exclude timings without the paired receipt
+  from confirmed-response percentiles.
+
 ## Backend 0.14.49 — fence buffered audio at the wake boundary
 
 - Keep audio already received before waiting for local wake out of keyword
