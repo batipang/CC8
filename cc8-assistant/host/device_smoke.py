@@ -19,7 +19,7 @@ import uuid
 from private_output import PrivateOutput, private_directory
 from release_info import load_release
 from mac_voice import resolve_voice, __file__ as voice_source
-from diagnostics import MAX_CONFIRMED_PLAYBACK_CLAUSES
+from diagnostics import MAX_CONFIRMED_PLAYBACK_CLAUSES, MAX_DEVICE_PAUSE_MS
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPONENT = 'com.happyhome.cc8assistant/.MainActivity'
@@ -30,6 +30,11 @@ TEST_TEXT = (
 MULTI_CLAUSE_TEXT = (
     '这是本机自动化的多段播报测试，用于检查同一回合内的播放回执，测试结束后将保持麦克风关闭。' * 3
 )
+BARGE_ANNOUNCEMENT = (
+    '窗外的雨渐渐停了，小路上还有一层薄薄的水。小松鼠带着一篮松果走过石桥，'
+    '看见河面映出了云朵和树梢。它把篮子放在大石头上，坐下来听水声，等朋友们一起回家。'
+)
+BARGE_QUERY = '换个问题，三加五等于几？'
 MULTI_CLAUSE_CHECK = 'multi_clause_announcement_and_playout'
 EXPECTED_CLAUSES = 2
 CHECKS = (
@@ -48,6 +53,7 @@ CAPTURE_CLOCK_CHECK = 'recording_clock_provenance'
 RENDER_CLOCK_CHECK = 'playback_clock_provenance'
 LEADING_ACOUSTIC_CHECK = 'leading_playback_acoustic_evidence'
 AWAKE_DIALOGUE_CHECK = 'synthetic_awake_dialogue'
+BARGE_CHECK = 'synthetic_acoustic_interruption'
 POST_DIALOGUE_SECONDS = 20
 STANDBY_SECONDS = 900
 
@@ -167,7 +173,8 @@ def rpc(path, request, timeout=5):
         or request == {'operation': 'transport_test', 'seconds': 12}
         or request == {'operation': 'playback_probe'}
         or request == {'text': TEST_TEXT}
-        or request == {'text': MULTI_CLAUSE_TEXT},
+        or request == {'text': MULTI_CLAUSE_TEXT}
+        or request == {'text': BARGE_ANNOUNCEMENT},
         'unsupported_test_operation',
     )
     info = path.lstat()
@@ -246,10 +253,15 @@ class Device:
     def prepare_speech_probe(self):
         return resolve_voice('Tingting')
 
-    def speak_probe(self):
+    def speak_probe(self, *, interruption=False):
         voice = self.prepare_speech_probe()
         subprocess.run(
-            ['/usr/bin/say', '-v', voice, '大黄蜂，一加一等于几？'],
+            [
+                '/usr/bin/say',
+                '-v',
+                voice,
+                BARGE_QUERY if interruption else '大黄蜂，一加一等于几？',
+            ],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -275,6 +287,7 @@ class SmokeRun:
         standby=False,
         acoustic=False,
         awake_dialogue=False,
+        synthetic_barge=False,
         multi_clause=False,
         playback_evidence=False,
         clock_evidence=False,
@@ -288,6 +301,8 @@ class SmokeRun:
         self.device, self.request = device, request
         self.capture, self.standby, self.acoustic = capture, standby, acoustic
         self.awake_dialogue = awake_dialogue
+        self.synthetic_barge = synthetic_barge
+        self.barge_evidence = None
         self.multi_clause = multi_clause
         self.multi_clause_evidence = None
         self.playback_evidence = playback_evidence
@@ -339,7 +354,9 @@ class SmokeRun:
             'cleanup_microphone_off_verified': self.cleanup_verified,
             'capture_tests_enabled': self.capture,
             'standby_enabled': self.standby,
-            'synthetic_acoustic_probe_enabled': self.acoustic or self.awake_dialogue,
+            'synthetic_acoustic_probe_enabled': (
+                self.acoustic or self.awake_dialogue or self.synthetic_barge
+            ),
             'awake_dialogue_enabled': self.awake_dialogue,
             'multi_clause_evidence': self.multi_clause_evidence,
             'raw_audio_saved': False,
@@ -349,6 +366,7 @@ class SmokeRun:
             'acoustic_latency_asserted': False,
             'full_p0_acceptance': False,
             'acoustic_evidence': self.acoustic_evidence,
+            'barge_evidence': self.barge_evidence,
             'standby_evidence': self.standby_evidence,
             'playback_probe_evidence': self.playback_probe_evidence,
             'capture_clock_evidence': self.capture_clock_evidence,
@@ -380,7 +398,7 @@ class SmokeRun:
             self.checkpoint(self.report('running'))
 
     def preflight(self):
-        if self.acoustic or self.awake_dialogue:
+        if self.acoustic or self.awake_dialogue or self.synthetic_barge:
             self.device.prepare_speech_probe()
         h = self.health()
         if self.multi_clause:
@@ -420,9 +438,9 @@ class SmokeRun:
             device.get('vision_active') is False and ui.get('camera_open') is False, 'camera_busy'
         )
         require(ui.get('wake_checked') is True or not self.standby, 'standby_requires_wake_mode')
-        if self.awake_dialogue:
+        if self.awake_dialogue or self.synthetic_barge:
             require(ui.get('wake_checked') is True, 'awake_dialogue_requires_wake_mode')
-        if self.awake_dialogue or self.multi_clause:
+        if self.awake_dialogue or self.synthetic_barge or self.multi_clause:
             require(
                 all(row.get('outcome') is not None for row in self.diagnostic_requests()),
                 'owner_request_pending',
@@ -550,7 +568,9 @@ class SmokeRun:
 
     @property
     def capture_limit_ms(self):
-        return 1200000 if self.standby else 180000
+        if self.standby:
+            return 1200000
+        return 300000 if self.synthetic_barge else 180000
 
     def start_capture(self):
         limit = self.capture_limit_ms
@@ -703,7 +723,7 @@ class SmokeRun:
         require(len({r['request_id'] for r in rows}) == len(rows), 'duplicate_diagnostic_id')
         return rows
 
-    def acoustic_probe(self, *, awake=False):
+    def acoustic_probe(self, *, awake=False, quiet_seconds=POST_DIALOGUE_SECONDS):
         # A computer speaker is a synthetic source with unknown room geometry.
         # This can verify the live chain, never a human recall rate or dB level.
         h = self.health()
@@ -724,7 +744,7 @@ class SmokeRun:
         require(ui.get('screen_sleeping') is (not awake), 'acoustic_probe_screen_state_invalid')
         d = self.capture_status((d, ui))
         # Reserve space for the speech command and post-playback observation.
-        reserve = POST_DIALOGUE_SECONDS + 5
+        reserve = quiet_seconds + 5
         available = d['test_capture_remaining_ms'] / 1000
         require(available > 20 + reserve, 'acoustic_probe_capture_budget_insufficient')
         response_deadline = self.clock() + available - reserve
@@ -813,8 +833,8 @@ class SmokeRun:
         # a transient candidate must resolve and a rejected pause must resume.
         # Counts remain visible; success never implies pause-free playback.
         quiet_started = self.clock()
-        while self.clock() - quiet_started < POST_DIALOGUE_SECONDS:
-            self.sleep(min(0.5, POST_DIALOGUE_SECONDS - (self.clock() - quiet_started)))
+        while self.clock() - quiet_started < quiet_seconds:
+            self.sleep(min(0.5, quiet_seconds - (self.clock() - quiet_started)))
             require(received(), 'synthetic_acoustic_chain_not_confirmed')
             self.acoustic_evidence['post_playback_quiet_seconds'] = round(
                 self.clock() - quiet_started, 3
@@ -834,6 +854,161 @@ class SmokeRun:
             'awake_dialogue_left_foreground' if awake else 'acoustic_probe_did_not_wake_foreground',
         )
         self.capture_status((d, ui))
+
+    def interruption_probe(self):
+        def active_health():
+            health = self.health()
+            require(
+                health.get('connected') is True
+                and health.get('transport') == 'usb'
+                and health.get('microphone_active') is True
+                and health.get('calibrating') is False,
+                'interruption_capture_or_usb_lost',
+            )
+            return health
+
+        health = active_health()
+        require(
+            health.get('playing') is False and health.get('waiting_for_wake') is False,
+            'interruption_requires_awake_idle_capture',
+        )
+        device = self.capture_status()
+        available = device['test_capture_remaining_ms'] / 1000
+        require(available >= 120, 'interruption_capture_budget_insufficient')
+        deadline = self.clock() + available
+        before = self.diagnostic_requests()
+        require(all(row.get('outcome') is not None for row in before), 'owner_request_pending')
+        baseline = {row['request_id'] for row in before}
+        seen = set()
+        evidence = {
+            'announcement_started': False,
+            'stimulus_played': False,
+            'announcement_cancelled': False,
+            'replacement_completed': False,
+            'device_pause_from_trigger_ms': None,
+            'admitted_voice_requests': 0,
+            'rejected_pause_requests': 0,
+            'pending_voice_candidates': 0,
+            'post_playback_quiet_seconds': 0,
+        }
+        self.barge_evidence = evidence
+
+        def observe():
+            health = active_health()
+            rows = [r for r in self.diagnostic_requests() if r['request_id'] not in baseline]
+            ids = {r['request_id'] for r in rows}
+            require(seen <= ids, 'interruption_receipt_window_lost')
+            seen.update(ids)
+            announcements = [r for r in rows if r.get('origin') == 'announcement']
+            voices = [r for r in rows if r.get('origin') == 'voice']
+            groups = classify_voice_records(voices)
+            admitted = groups['admitted']
+            announcement = announcements[0] if len(announcements) == 1 else {}
+            replacement = admitted[0] if len(admitted) == 1 else {}
+            elapsed = replacement.get('device_pause_from_trigger_ms')
+            old_generation = announcement.get('generation')
+            new_generation = replacement.get('generation')
+            evidence.update(
+                announcement_cancelled=announcement.get('outcome') == 'cancelled',
+                replacement_completed=(
+                    replacement.get('gate') == 'accepted'
+                    and type(old_generation) is int
+                    and type(new_generation) is int
+                    and old_generation < new_generation
+                    and replacement.get('outcome') == 'completed'
+                    and replacement.get('task_outcome') == 'completed'
+                    and {
+                        'pause_request',
+                        'pause_ack',
+                        'asr_end',
+                        'brain_start',
+                        'playout_ack',
+                        'playback_done',
+                    }
+                    <= replacement.get('stages', {}).keys()
+                ),
+                device_pause_from_trigger_ms=(
+                    elapsed
+                    if type(elapsed) in (int, float) and 0 <= elapsed <= MAX_DEVICE_PAUSE_MS
+                    else None
+                ),
+                admitted_voice_requests=len(admitted),
+                rejected_pause_requests=sum(
+                    'pause_request' in r.get('stages', {}) for r in groups['rejected']
+                ),
+                pending_voice_candidates=len(groups['pending']),
+            )
+            self.checkpoint(self.report('running'))
+            require(
+                len(announcements) <= 1 and len(rows) == len(announcements) + len(voices),
+                'interruption_unexpected_request',
+            )
+            require(not groups['invalid'] and len(admitted) <= 1, 'interruption_unexpected_voice')
+            require(not evidence['rejected_pause_requests'], 'interruption_rejected_voice_paused')
+            return health, announcement, replacement
+
+        def started():
+            health, announcement, replacement = observe()
+            require(not replacement, 'interruption_voice_before_stimulus')
+            require(announcement.get('outcome') is None, 'interruption_announcement_ended_early')
+            if (
+                health.get('playing') is not True
+                or health.get('waiting_for_wake') is not False
+                or 'playout_ack' not in announcement.get('stages', {})
+                or evidence['pending_voice_candidates']
+            ):
+                return False
+            d, ui = self.device.status()
+            self.capture_status((d, ui))
+            return (
+                ui.get('screen_sleeping') is False
+                and d.get('announcement_active') is True
+                and d.get('phase') == 'speaking'
+                and d.get('playback_paused') is False
+            )
+
+        def completed():
+            _, announcement, replacement = observe()
+            require(
+                announcement.get('outcome') in (None, 'cancelled'),
+                'interruption_announcement_not_cancelled',
+            )
+            require(
+                replacement.get('outcome') in (None, 'completed') and not replacement.get('error'),
+                'interruption_replacement_failed',
+            )
+            return evidence['announcement_cancelled'] and evidence['replacement_completed']
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            reply = pool.submit(self.request, {'text': BARGE_ANNOUNCEMENT})
+            self.wait(started, 25, 'interruption_playout_not_observed')
+            evidence['announcement_started'] = True
+            self.device.speak_probe(interruption=True)
+            evidence['stimulus_played'] = True
+            self.checkpoint(self.report('running'))
+            remaining = min(75, deadline - self.clock() - POST_DIALOGUE_SECONDS - 5)
+            require(remaining > 0, 'interruption_capture_budget_insufficient')
+            self.wait(completed, remaining, 'interruption_replacement_not_confirmed')
+            require(
+                reply.result(timeout=5).get('status') == 'interrupted',
+                'interruption_announcement_receipt_invalid',
+            )
+        require(
+            evidence['device_pause_from_trigger_ms'] is not None,
+            'interruption_pause_timing_missing',
+        )
+        quiet_started = self.clock()
+        while self.clock() - quiet_started < POST_DIALOGUE_SECONDS:
+            self.sleep(min(0.5, POST_DIALOGUE_SECONDS - (self.clock() - quiet_started)))
+            require(completed(), 'interruption_replacement_not_confirmed')
+            evidence['post_playback_quiet_seconds'] = round(self.clock() - quiet_started, 3)
+        require(not evidence['pending_voice_candidates'], 'interruption_unresolved_voice')
+        d, ui = self.device.status()
+        self.capture_status((d, ui))
+        require(
+            ui.get('screen_sleeping') is False and d.get('playback_paused') is False,
+            'interruption_device_not_ready_after_response',
+        )
 
     def cleanup(self):
         if not self.touched:
@@ -886,8 +1061,14 @@ class SmokeRun:
                         self.leading_acoustic_probe,
                         continue_if_unconfirmed=True,
                     )
-                if self.awake_dialogue:
-                    self.check(AWAKE_DIALOGUE_CHECK, lambda: self.acoustic_probe(awake=True))
+                if self.awake_dialogue or self.synthetic_barge:
+                    quiet_seconds = 2 if self.synthetic_barge else POST_DIALOGUE_SECONDS
+                    self.check(
+                        AWAKE_DIALOGUE_CHECK,
+                        lambda: self.acoustic_probe(awake=True, quiet_seconds=quiet_seconds),
+                    )
+                if self.synthetic_barge:
+                    self.check(BARGE_CHECK, self.interruption_probe)
                 self.check(CHECKS[5], self.home)
                 self.check(CHECKS[6], self.maintenance_open)
             if self.standby:
@@ -936,6 +1117,11 @@ def main(argv=None):
         help='Play one public synthetic query while the screen is already awake',
     )
     parser.add_argument(
+        '--synthetic-barge',
+        action='store_true',
+        help='Use one fixed Mac speech stimulus to interrupt a verified ongoing CC8 announcement',
+    )
+    parser.add_argument(
         '--multi-clause',
         action='store_true',
         help='Verify separate device receipts for both clauses of a fixed announcement',
@@ -965,6 +1151,8 @@ def main(argv=None):
         parser.error('--standby requires --capture; --acoustic requires --standby')
     if args.awake_dialogue and (not args.capture or args.standby):
         parser.error('--awake-dialogue requires --capture and a separate run from --standby')
+    if args.synthetic_barge and (not args.capture or args.standby):
+        parser.error('--synthetic-barge requires --capture and a separate run from --standby')
     if args.playback_evidence and not args.capture:
         parser.error('--playback-evidence requires --capture')
     if args.clock_evidence and not args.playback_evidence:
@@ -981,7 +1169,8 @@ def main(argv=None):
             + ([CHECKS[9]] if args.playback_evidence else [])
             + ([RENDER_CLOCK_CHECK] if args.clock_evidence else [])
             + ([LEADING_ACOUSTIC_CHECK] if args.leading_acoustic_evidence else [])
-            + ([AWAKE_DIALOGUE_CHECK] if args.awake_dialogue else [])
+            + ([AWAKE_DIALOGUE_CHECK] if args.awake_dialogue or args.synthetic_barge else [])
+            + ([BARGE_CHECK] if args.synthetic_barge else [])
             + list(CHECKS[5:7])
             if args.capture
             else []
@@ -991,6 +1180,7 @@ def main(argv=None):
         'execute': args.execute,
         'capture': args.capture,
         'awake_dialogue': args.awake_dialogue,
+        'synthetic_barge': args.synthetic_barge,
         'multi_clause': args.multi_clause,
         'playback_evidence': args.playback_evidence,
         'clock_evidence': args.clock_evidence,
@@ -1062,6 +1252,7 @@ def main(argv=None):
                     standby=args.standby,
                     acoustic=args.acoustic,
                     awake_dialogue=args.awake_dialogue,
+                    synthetic_barge=args.synthetic_barge,
                     multi_clause=args.multi_clause,
                     playback_evidence=args.playback_evidence,
                     clock_evidence=args.clock_evidence,

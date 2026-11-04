@@ -116,6 +116,17 @@ USB 激活失败由尝试激活的通道处理。即使触发路由复查的是 
 
 `acoustic_evidence`仅包含固定数字：本次voice记录总数（保留旧字段名new_voice_requests）、准入/已拒绝/未决/未知终态候选数、拒绝候选的暂停/未恢复数、完成/取消/任务完成数、固定阶段计数与已观察的播后时长。超时或取消也保留部分证据；请求ID、文字与提供方错误原文均不写入该字段。未启用或未进入该检查时为null。
 
+### 固定合成语句插话
+
+```bash
+./cc8 verify-device --runtime-root /absolute/live/workspace --capture --synthetic-barge
+./cc8 verify-device --runtime-root /absolute/live/workspace --execute --capture --synthetic-barge
+```
+
+第一条只显示计划。实机命令适用于具备 [暂停应用时间回执](PLAYBACK_CONFIRMATION.md#自动记录插话触发至设备暂停时延) 的已部署组合，使用独立于待机的前台限时录音，结束时走原有停采检查。脚本先用现有固定语句完成唤醒问答，再让 CC8 播报固定短文。观察到该次播报的起播回执、CC8 屏幕亮且正在播放，才从 Mac 播放一次“换个问题，三加五等于几？”。
+
+通过须观察到同一短文被取消、新代次的语音回合有设备暂停回执及录音触发时延，且任务完成并收到播完回执。之后观察 20 秒，额外准入、被拒绝的候选发起暂停、未决候选或采集断开均会失败。`barge_evidence`只保存布尔值、计数及耗时。测试核对控制链与回执，语义正确性、现场声音强度、扬声器实际停声及声画同步时延仍需各自的证据。
+
 准入依据是gate=accepted、绑定generation、brain_start或任务回执，任何一个成立就不能用“拒绝候选”标签隐藏额外对话。只有无准入证据、明确rejected且门控为empty/echo_text/echo_render/weak_near/wake_closed的候选可单列；未知、错误、stale/cancelled不会被忽略。候选可在20秒窗口内完成分类，已确认的暂停还须有resume_ack。计数保留真实暂停，自动问答完成不等于纯播报没有误暂停，P0-04仍独立验收。
 
 2026-11-04的0.14.17首轮实机在第九项按两条原始voice记录提前失败。独立数字诊断证明一个准入问题已播完，另一条generation=null、echo_text/rejected，无大脑或任务，暂停后恢复。原失败和缺失的播后20秒观察保留，未重放刺激或把原轮次改成通过。候选统计的离线修复不改变音频门槛、APK、模型或运行后台；新检查器实机仍须另行验证。
