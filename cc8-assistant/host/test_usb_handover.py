@@ -36,22 +36,24 @@ def cc8(entry=3, serial='fixture-private-serial', location=41, product=0x201C):
     }
 
 
-def status(route='usb'):
+def status(route='usb', *, switches=None):
     return {
         'runtime_instance': 'fixture-private-runtime',
         'bridge_version': '0.14.20',
         'model_ready': True,
         'connected': route is not None,
-        'transport': route,
+        'transport': route or 'none',
         'microphone_active': False,
         'calibrating': False,
         'playing': False,
         'mic_frames': 120,
+        'render_frames': 240,
     }, {
-        'transport': route,
+        'transport': route or 'none',
         'usb_ready': route == 'usb',
         'wifi_ready': True,
         'usb_test_suppressed': False,
+        'transport_switches': (0 if route == 'usb' else 1) if switches is None else switches,
     }
 
 
@@ -65,9 +67,9 @@ class WitnessTests(unittest.TestCase):
         check = self.ready()
         self.assertFalse(check.sample(bus(), *status('usb'), 1))
         self.assertFalse(check.sample(bus(), *status(None), 3))
-        self.assertFalse(check.sample(bus(), *status('wifi'), 10))
-        self.assertFalse(check.sample(bus(cc8(4)), *status('wifi'), 12))
-        self.assertTrue(check.sample(bus(cc8(4)), *status('usb'), 16))
+        self.assertFalse(check.sample(bus(), *status('wifi', switches=2), 10))
+        self.assertFalse(check.sample(bus(cc8(4)), *status('wifi', switches=2), 12))
+        self.assertTrue(check.sample(bus(cc8(4)), *status(switches=3), 16))
         self.assertEqual(
             check.rows,
             [
@@ -76,19 +78,21 @@ class WitnessTests(unittest.TestCase):
                     'wifi_selected_s': 10,
                     'usb_returned_s': 12,
                     'usb_selected_s': 16,
+                    'route_switches': 3,
                 }
             ],
         )
         self.assertIsNone(check.current)
-        self.assertFalse(check.sample(bus(cc8(4)), *status('usb'), 18))
-        self.assertFalse(check.sample(bus(), *status('wifi'), 19))
-        self.assertTrue(check.sample(bus(cc8(5)), *status('usb'), 21))
+        self.assertFalse(check.sample(bus(cc8(4)), *status(switches=3), 18))
+        self.assertFalse(check.sample(bus(), *status('wifi', switches=4), 19))
+        self.assertTrue(check.sample(bus(cc8(5)), *status(switches=5), 21))
         self.assertEqual(len(check.rows), 2)
 
     def test_software_switch_never_counts_as_bus_detach(self):
         check = self.ready()
-        self.assertFalse(check.sample(bus(cc8()), *status('wifi'), 1))
-        self.assertFalse(check.sample(bus(cc8()), *status('usb'), 2))
+        with self.assertRaisesRegex(CheckFailure, 'route_switched_without_bus_edge'):
+            check.sample(bus(cc8()), *status('wifi'), 1)
+        check = self.ready()
         h, t = status('wifi')
         with self.assertRaisesRegex(CheckFailure, 'usb_software_suppression'):
             check.sample(bus(cc8()), h, {**t, 'usb_test_suppressed': True}, 3)
@@ -144,6 +148,27 @@ class WitnessTests(unittest.TestCase):
             with self.subTest(reason=reason), self.assertRaisesRegex(CheckFailure, reason):
                 self.ready().sample(bus(), {**h, **patch}, t, 2)
 
+    def test_playback_between_idle_polls_invalidates_evidence(self):
+        check = self.ready()
+        h, t = status('wifi')
+        with self.assertRaisesRegex(CheckFailure, 'render_frames_changed'):
+            check.sample(bus(), {**h, 'render_frames': 241}, t, 1)
+        self.assertFalse(check.rows)
+
+    def test_backup_drop_after_usb_reappears_cannot_be_hidden(self):
+        check = self.ready()
+        check.sample(bus(), *status('wifi'), 1)
+        with self.assertRaisesRegex(CheckFailure, 'backup_route_lost_before_usb_reselected'):
+            check.sample(bus(cc8(4)), *status(None, switches=2), 2)
+        self.assertFalse(check.rows)
+
+    def test_extra_switches_between_samples_cannot_pass(self):
+        check = self.ready()
+        check.sample(bus(), *status('wifi'), 1)
+        with self.assertRaisesRegex(CheckFailure, 'unexpected_route_switches'):
+            check.sample(bus(cc8(4)), *status(switches=4), 2)
+        self.assertFalse(check.rows)
+
     def test_unrecognized_and_duplicate_devices_fail_closed(self):
         with self.assertRaisesRegex(CheckFailure, 'usb_device_identity_unconfirmed'):
             bus(cc8(product=0x2000))
@@ -162,7 +187,7 @@ class WitnessTests(unittest.TestCase):
                 [
                     (bus(cc8()), status()),
                     (bus(), status('wifi')),
-                    (bus(cc8(4)), status()),
+                    (bus(cc8(4)), status(switches=2)),
                 ]
             )
             seen = []

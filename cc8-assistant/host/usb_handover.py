@@ -98,6 +98,8 @@ class Handover:
         self.seen_entries = set()
         self.runtime = None
         self.frames = None
+        self.usb_switches = None
+        self.wifi_switches = None
         self.rows = []
         self.current = None
 
@@ -116,16 +118,20 @@ class Handover:
             'runtime_audio_not_idle',
         )
         require(transport.get('usb_test_suppressed') is False, 'usb_software_suppression')
-        mic_frames = health.get('mic_frames')
+        mic_frames, render_frames = health.get('mic_frames'), health.get('render_frames')
+        switches = transport.get('transport_switches')
         require(type(mic_frames) is int and mic_frames >= 0, 'mic_counter_unavailable')
+        require(type(render_frames) is int and render_frames >= 0, 'render_counter_unavailable')
+        require(type(switches) is int and 0 <= switches < 2**63, 'switch_counter_unavailable')
         if self.runtime is not None:
             require(runtime == self.runtime, 'runtime_changed')
-            require(mic_frames == self.frames, 'microphone_frames_changed')
-        return runtime, mic_frames
+            require(mic_frames == self.frames[0], 'microphone_frames_changed')
+            require(render_frames == self.frames[1], 'render_frames_changed')
+        return runtime, (mic_frames, render_frames), switches
 
     def sample(self, usb, health, transport, elapsed):
         device, entries, locations = usb
-        runtime, mic_frames = self.validate_runtime(health, transport)
+        runtime, frames, switches = self.validate_runtime(health, transport)
         route = None
         selected = health.get('transport')
         if (
@@ -147,7 +153,7 @@ class Handover:
             self.identity = device
             self.last_entry = device.entry
             self.seen_entries.add(device.entry)
-            self.runtime, self.frames = runtime, mic_frames
+            self.runtime, self.frames, self.usb_switches = runtime, frames, switches
             return False
 
         identity = self.identity
@@ -166,6 +172,7 @@ class Handover:
         if row is None:
             if device is not None:
                 require(device.entry == self.last_entry, 'usb_detach_not_observed')
+                require(switches == self.usb_switches, 'route_switched_without_bus_edge')
                 return False
             self.current = row = {'usb_absent_s': round(elapsed, 3)}
         if 'usb_returned_s' in row:
@@ -175,23 +182,37 @@ class Handover:
             if 'wifi_selected_s' not in row:
                 require(elapsed - row['usb_absent_s'] <= ROUTE_WAIT, 'wifi_takeover_not_observed')
                 if route == 'wifi' and transport.get('usb_ready') is False:
+                    # A detach can select Wi-Fi directly or pass through no route.
+                    require(switches - self.usb_switches in (1, 2), 'unexpected_route_switches')
+                    self.wifi_switches = switches
                     row['wifi_selected_s'] = round(elapsed, 3)
             else:
                 require(
                     route == 'wifi' and transport.get('usb_ready') is False,
                     'wifi_route_lost_while_usb_absent',
                 )
+                require(switches == self.wifi_switches, 'unexpected_route_switches')
         else:
             require('wifi_selected_s' in row, 'usb_returned_before_wifi_observed')
             require(device.entry not in self.seen_entries, 'usb_new_registration_not_observed')
             self.last_entry = device.entry
             self.seen_entries.add(device.entry)
             row['usb_returned_s'] = round(elapsed, 3)
-        if route == 'usb' and 'usb_returned_s' in row:
-            row['usb_selected_s'] = round(elapsed, 3)
-            self.rows.append(row)
-            self.current = None
-            return True
+        if 'usb_returned_s' in row:
+            require(
+                not (health.get('connected') is False and transport.get('transport') == 'none'),
+                'backup_route_lost_before_usb_reselected',
+            )
+            if route == 'wifi':
+                require(switches == self.wifi_switches, 'unexpected_route_switches')
+            elif route == 'usb':
+                require(switches == self.wifi_switches + 1, 'unexpected_route_switches')
+                row['usb_selected_s'] = round(elapsed, 3)
+                row['route_switches'] = switches - self.usb_switches
+                self.rows.append(row)
+                self.usb_switches = switches
+                self.current = None
+                return True
         return False
 
 
