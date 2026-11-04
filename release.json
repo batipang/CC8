@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "p0-playback-visual-frame-20261104.1",
+  "release_id": "p0-playback-ui-ownership-20261104.1",
   "backend": {
     "version": "0.14.45"
   },
   "assistant": {
-    "version": "0.9.28",
-    "version_code": 63,
+    "version": "0.9.30",
+    "version_code": 65,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {
