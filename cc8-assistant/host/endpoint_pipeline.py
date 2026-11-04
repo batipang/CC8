@@ -140,15 +140,18 @@ class EndpointPipeline:
             and 0 <= stamp - self.last_capture_render_ns < 3_000_000_000
         )
         now = time.monotonic()
-        render_text = (
-            self.hooks.last_spoken()
-            if self.hooks.playing() or now - self.hooks.last_audio_end() < 3
-            else ''
-        )
+        recent_output = self.hooks.playing() or 0 <= now - self.hooks.last_audio_end() < 3
+        render_text = self.hooks.last_spoken() if recent_output else ''
         if now < self.hooks.previous_spoken_until():
-            render_text += self.hooks.previous_spoken()
+            # Preserve word boundaries and playback order across English clauses.
+            render_text = self.hooks.previous_spoken() + '\n' + render_text
+        # A completion receipt still identifies recent playback if the
+        # microphone stream has not delivered the matching render reference.
         self.hooks.wake_feed(
-            cleaned, self.hooks.generation(), echo_risk=echo_risk, render_text=render_text
+            cleaned,
+            self.hooks.generation(),
+            echo_risk=echo_risk or recent_output,
+            render_text=render_text,
         )
         if self.fast_stop and (self.hooks.awake() or echo_risk):
             self.hooks.metric('stop_input_dbfs', round(level(stop_cleaned), 1))

@@ -1,5 +1,11 @@
 # Changelog
 
+## Backend 0.14.42 — local wake playback references
+
+- Preserve English word boundaries and clause order when suppressing a wake
+  name in recent playback. Retain the name-specific guard after completion
+  even if the microphone stream has no matching render reference.
+
 ## Backend 0.14.41 — playback receipts for each clause
 
 - Count clauses whose validated playout and completion receipts identify the same playback.
