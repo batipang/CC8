@@ -400,6 +400,7 @@ class SmokeRun:
         self.capture_clock_required = capture_clock_evidence
         self.leading_acoustic_evidence = leading_acoustic_evidence
         self.capture_clock_evidence = None
+        self.capture_start_failure = None
         self.playback_probe_evidence = None
         self.clock, self.sleep, self.checkpoint = clock, sleep, checkpoint
         self.started = clock()
@@ -473,6 +474,7 @@ class SmokeRun:
             'standby_evidence': self.standby_evidence,
             'playback_probe_evidence': self.playback_probe_evidence,
             'capture_clock_evidence': self.capture_clock_evidence,
+            'capture_start_failure': self.capture_start_failure,
         }
 
     def check(self, name, action, *, continue_if_unconfirmed=False):
@@ -950,14 +952,49 @@ class SmokeRun:
     def start_capture(self):
         limit = self.capture_limit_ms
         self.device.open(True, capture_limit_ms=limit)
-        self.wait(lambda: self.health().get('microphone_active') is True, 15, 'capture_not_started')
-        self.wait(lambda: self.health().get('calibrating') is False, 25, 'calibration_not_finished')
-        h = self.health()
-        require(
-            h.get('microphone_active') is True and h.get('local_wake_ready') is True,
-            'wake_capture_not_ready',
+        try:
+            self.wait(
+                lambda: self.health().get('microphone_active') is True, 15, 'capture_not_started'
+            )
+            self.wait(
+                lambda: self.health().get('calibrating') is False, 25, 'calibration_not_finished'
+            )
+            h = self.health()
+            require(
+                h.get('microphone_active') is True and h.get('local_wake_ready') is True,
+                'wake_capture_not_ready',
+            )
+            return self.capture_status()
+        except RuntimeChanged:
+            raise
+        except (CheckFailure, OSError, ValueError, subprocess.SubprocessError):
+            self.record_capture_start_failure()
+            raise
+
+    def record_capture_start_failure(self):
+        # Read both sides before Home or a maintenance open can change the
+        # evidence. Missing evidence cannot overwrite the original failure.
+        evidence = dict.fromkeys(
+            ('host_microphone_active', 'device_microphone_active', 'device_phase')
         )
-        return self.capture_status()
+        self.capture_start_failure = evidence
+        try:
+            host = self.health().get('microphone_active')
+            if type(host) is bool:
+                evidence['host_microphone_active'] = host
+        except RuntimeChanged:
+            return
+        except (CheckFailure, OSError, ValueError, subprocess.SubprocessError):
+            pass
+        try:
+            device, _ = self.device.status()
+        except (CheckFailure, OSError, ValueError, subprocess.SubprocessError):
+            return
+        active, phase = device.get('microphone_active'), device.get('phase')
+        if type(active) is bool:
+            evidence['device_microphone_active'] = active
+        if phase in ('calibrating', 'error', 'idle', 'listening', 'speaking', 'thinking'):
+            evidence['device_phase'] = phase
 
     def capture_status(self, status=None):
         limit = self.capture_limit_ms
@@ -1037,13 +1074,26 @@ class SmokeRun:
 
     def home(self):
         self.device.home()
-        self.wait(
-            lambda: self.health().get('microphone_active') is False, 15, 'home_did_not_stop_capture'
-        )
-        before = self.health().get('mic_frames')
+
+        def stopped():
+            host = self.health()
+            if host.get('microphone_active') is not False:
+                return None
+            device, _ = self.device.status()
+            if device.get('microphone_active') is not False:
+                return None
+            frames = host.get('mic_frames'), device.get('mic_frames')
+            require(
+                all(type(count) is int and count >= 0 for count in frames),
+                'home_microphone_frame_count_missing',
+            )
+            return frames
+
+        before = self.wait(stopped, 15, 'home_did_not_stop_capture')
         self.sleep(2)
-        require(self.health().get('microphone_active') is False, 'home_restarted_capture')
-        require(self.health().get('mic_frames') == before, 'home_microphone_frames_increasing')
+        after = stopped()
+        require(after is not None, 'home_restarted_capture')
+        require(before == after, 'home_microphone_frames_increasing')
 
     def idle(self):
         began = self.clock()
