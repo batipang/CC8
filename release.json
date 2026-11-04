@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "p0-cancel-notification-20261105.1",
+  "release_id": "p0-device-stop-receipt-20261105.1",
   "backend": {
     "version": "0.14.58"
   },
   "assistant": {
-    "version": "0.9.31",
-    "version_code": 67,
+    "version": "0.9.32",
+    "version_code": 69,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {
