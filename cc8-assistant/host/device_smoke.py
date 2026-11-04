@@ -40,6 +40,11 @@ BARGE_ANNOUNCEMENT = (
 BARGE_QUERY = '换个问题，三加五等于几？'
 ACOUSTIC_WAKE = '大黄蜂'
 ACOUSTIC_QUESTION = '一加一等于几？'
+QA_LATENCY_QUESTIONS = tuple(
+    f'{left}加{right}等于几？' for left in '一二三四五六' for right in '一二三四五'
+)
+QA_CORPUS_SHA256 = hashlib.sha256('\n'.join(QA_LATENCY_QUESTIONS).encode()).hexdigest()
+QA_DIGITS = str.maketrans('一二三四五六', '123456')
 WAKE_SELF_TEXT = {
     'zh': '大黄蜂正在播报。现在只检查设备自己的声音。',
     'en': 'Bumblebee is speaking. This is a playback check.',
@@ -109,7 +114,8 @@ P0_DEVICE_PHASES = (
     ('standby_3', ('capture', 'standby', 'acoustic')),
 )
 QA_LATENCY_PHASES = tuple(
-    (f'qa_{index:02}', ('capture', 'awake_dialogue', 'latency_sample')) for index in range(1, 31)
+    (f'qa_{index:02}', ('capture', 'awake_dialogue', 'latency_sample'))
+    for index in range(1, len(QA_LATENCY_QUESTIONS) + 1)
 )
 QA_STAGE_METRICS = ('utterance_to_asr_ms', 'brain_first_clause_ms', 'tts_first_pcm_ms')
 QA_ENDPOINT_METRIC = 'device_vad_tail_ms'
@@ -269,7 +275,14 @@ def objects(text, marker):
     return value
 
 
-def matches_acoustic_question(workspace, generation):
+def normalize_acoustic_question(text):
+    text = ''.join(unicodedata.normalize('NFKC', text).split()).rstrip('。?!.,，')
+    if text.startswith(ACOUSTIC_WAKE):
+        text = text[len(ACOUSTIC_WAKE) :].lstrip(',，:：')
+    return text.translate(QA_DIGITS).replace('+', '加').replace('=', '等于')
+
+
+def matches_acoustic_question(workspace, generation, question=ACOUSTIC_QUESTION):
     tasks = workspace.get('tasks')
     if (
         workspace.get('ok') is not True
@@ -290,11 +303,7 @@ def matches_acoustic_question(workspace, generation):
     title = matches[0].get('title')
     if not isinstance(title, str) or len(title) > 80:
         return False
-    text = ''.join(unicodedata.normalize('NFKC', title).split()).rstrip('。?!.,，')
-    if text.startswith(ACOUSTIC_WAKE):
-        text = text[len(ACOUSTIC_WAKE) :].lstrip(',，:：')
-    text = text.replace('一', '1').replace('+', '加').replace('=', '等于')
-    return text == '1加1等于几'
+    return normalize_acoustic_question(title) == normalize_acoustic_question(question)
 
 
 def rpc(path, request, timeout=5):
@@ -392,14 +401,15 @@ class Device:
     def prepare_speech_probe(self):
         return resolve_voice('Tingting')
 
-    def speak_probe(self, *, interruption=False):
+    def speak_probe(self, *, interruption=False, question=ACOUSTIC_QUESTION):
+        require(question in QA_LATENCY_QUESTIONS, 'unknown_synthetic_probe')
         voice = self.prepare_speech_probe()
         subprocess.run(
             [
                 '/usr/bin/say',
                 '-v',
                 voice,
-                BARGE_QUERY if interruption else ACOUSTIC_WAKE + '，' + ACOUSTIC_QUESTION,
+                BARGE_QUERY if interruption else ACOUSTIC_WAKE + '，' + question,
             ],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -427,6 +437,7 @@ class SmokeRun:
         acoustic=False,
         awake_dialogue=False,
         latency_sample=False,
+        qa_question=ACOUSTIC_QUESTION,
         synthetic_barge=False,
         wake_self_playback=False,
         active_handover=False,
@@ -445,6 +456,7 @@ class SmokeRun:
         self.capture, self.standby, self.acoustic = capture, standby, acoustic
         self.awake_dialogue = awake_dialogue
         self.latency_sample = latency_sample
+        self.qa_question = qa_question
         self.synthetic_barge = synthetic_barge
         self.wake_self_playback = wake_self_playback
         self.active_handover = active_handover
@@ -1233,7 +1245,7 @@ class SmokeRun:
         available = d['test_capture_remaining_ms'] / 1000
         require(available > 20 + reserve, 'acoustic_probe_capture_budget_insufficient')
         response_deadline = self.clock() + available - reserve
-        self.device.speak_probe()
+        self.device.speak_probe(question=self.qa_question)
 
         admitted_id = None
         recognized_stimulus_matches = None
@@ -1327,7 +1339,9 @@ class SmokeRun:
         require(response_seconds > 0, 'acoustic_probe_capture_budget_insufficient')
         completed = self.wait(received, response_seconds, 'synthetic_acoustic_chain_not_confirmed')
         matched = matches_acoustic_question(
-            self.request({'operation': 'workspace_status'}), completed.get('generation')
+            self.request({'operation': 'workspace_status'}),
+            completed.get('generation'),
+            self.qa_question,
         )
         self.health()
         recognized_stimulus_matches = matched
@@ -1769,6 +1783,7 @@ def run_device_suite(make_run, save, *, qa_latency=False):
     )
     if qa_latency:
         suite['audible_onset_measured'] = False
+        suite['qa_corpus_sha256'] = QA_CORPUS_SHA256
         suite['latencies_ms'] = {
             name: percentiles([])
             for name in (*QA_STAGE_METRICS, QA_ENDPOINT_METRIC, QA_PLAYOUT_METRIC)
@@ -1776,7 +1791,7 @@ def run_device_suite(make_run, save, *, qa_latency=False):
     samples = []
     save(suite)
     source = None
-    for phase, (_, options) in zip(phases, planned):
+    for index, (phase, (_, options)) in enumerate(zip(phases, planned)):
         phase['state'] = 'running'
 
         def checkpoint(report, phase=phase):
@@ -1784,7 +1799,11 @@ def run_device_suite(make_run, save, *, qa_latency=False):
             save(suite)
 
         save(suite)
-        run = make_run(set(options), checkpoint)
+        run = (
+            make_run(set(options), checkpoint, qa_question=QA_LATENCY_QUESTIONS[index])
+            if qa_latency
+            else make_run(set(options), checkpoint)
+        )
         if source is None:
             source = (run.source_sha256, run.speech_source_sha256)
         if (run.source_sha256, run.speech_source_sha256) != source:
@@ -1970,6 +1989,8 @@ def main(argv=None):
                 'full_p0_acceptance': False,
                 'minimum_backend_version': PAIRED_PLAYOUT_MIN_BACKEND,
             }
+            if args.qa_latency_suite:
+                plan['qa_corpus_sha256'] = QA_CORPUS_SHA256
         else:
             plan = {
                 'checks': planned_checks(options),
@@ -2073,11 +2094,12 @@ def main(argv=None):
 
                 device = Device()
 
-                def make_run(enabled, checkpoint):
+                def make_run(enabled, checkpoint, *, qa_question=ACOUSTIC_QUESTION):
                     return SmokeRun(
                         device,
                         request,
                         checkpoint=checkpoint,
+                        qa_question=qa_question,
                         expected_apk=(manifest.assistant.version, manifest.assistant.version_code),
                         **dict.fromkeys(enabled, True),
                     )

@@ -14,6 +14,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from device_smoke import (
+    ACOUSTIC_QUESTION,
     ACTIVE_HANDOVER_CHECK,
     ALL_ROUTE_LOSS_CHECK,
     ALL_ROUTE_LOSS_REQUEST,
@@ -30,7 +31,9 @@ from device_smoke import (
     P0_DEVICE_PHASES,
     POST_DIALOGUE_SECONDS,
     QA_ENDPOINT_METRIC,
+    QA_CORPUS_SHA256,
     QA_LATENCY_PHASES,
+    QA_LATENCY_QUESTIONS,
     QA_PLAYOUT_METRIC,
     QA_STAGE_METRICS,
     RuntimeChanged,
@@ -100,6 +103,11 @@ class DeviceAutomationTests(unittest.TestCase):
             self.assertEqual(command.call_args.args[0][1:3], ['-v', 'Tingting (Chinese CN)'])
             device.speak_probe(interruption=True)
             self.assertEqual(command.call_args.args[0][-1], BARGE_QUERY)
+            device.speak_probe(question=QA_LATENCY_QUESTIONS[-1])
+            self.assertEqual(command.call_args.args[0][-1], '大黄蜂，六加五等于几？')
+            with self.assertRaisesRegex(CheckFailure, 'unknown_synthetic_probe'):
+                device.speak_probe(question='任意内容')
+            self.assertEqual(command.call_count, 3)
         with (
             patch('device_smoke.resolve_voice', side_effect=ValueError),
             patch('device_smoke.subprocess.run') as command,
@@ -352,15 +360,18 @@ class DeviceAutomationTests(unittest.TestCase):
         self.assertEqual(len(plan['phases']), 30)
         self.assertEqual(plan['phases'][0]['name'], 'qa_01')
         self.assertEqual(plan['phases'][-1]['name'], 'qa_30')
+        self.assertEqual(plan['qa_corpus_sha256'], QA_CORPUS_SHA256)
+        self.assertEqual(len(set(QA_LATENCY_QUESTIONS)), 30)
         self.assertNotIn('logical_wifi_handover', plan['phases'][0]['checks'])
         self.assertNotIn('announcement_and_playout', plan['phases'][0]['checks'])
 
     def test_qa_latency_batch_counts_only_complete_samples_and_never_retries(self):
         for fail_at in (None, 4):
-            runs = []
+            runs, questions = [], []
 
-            def make_run(options, checkpoint):
+            def make_run(options, checkpoint, *, qa_question):
                 self.assertEqual(options, set(QA_LATENCY_PHASES[0][1]))
+                questions.append(qa_question)
                 index = len(runs) + 1
                 stages = dict.fromkeys(QA_STAGE_METRICS, 100)
                 if index % 2:
@@ -391,6 +402,8 @@ class DeviceAutomationTests(unittest.TestCase):
             self.assertFalse(result['full_p0_acceptance'])
             self.assertEqual(result['scope'], 'synthetic_qa_latency')
             self.assertEqual(len(runs), fail_at or 30)
+            self.assertEqual(questions, list(QA_LATENCY_QUESTIONS[: fail_at or 30]))
+            self.assertEqual(result['qa_corpus_sha256'], QA_CORPUS_SHA256)
             stats = result['latencies_ms'][QA_PLAYOUT_METRIC]
             self.assertEqual(
                 result['latencies_ms'][QA_ENDPOINT_METRIC],
@@ -1653,7 +1666,7 @@ class DeviceAutomationTests(unittest.TestCase):
         health['local_wake_ready'] = True
         spoken = [False]
 
-        def speak():
+        def speak(*, question):
             spoken[0] = True
 
         def status():
@@ -1710,7 +1723,7 @@ class DeviceAutomationTests(unittest.TestCase):
                 'maintenance_reopen_keeps_microphone_off',
             ],
         )
-        device.speak_probe.assert_called_once_with()
+        device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
         run.cleanup.assert_called_once()
 
     def test_synthetic_barge_dry_plan_has_no_side_effects(self):
@@ -2002,7 +2015,7 @@ class DeviceAutomationTests(unittest.TestCase):
                 with self.assertRaisesRegex(CheckFailure, 'synthetic_acoustic_chain_not_confirmed'):
                     run.acoustic_probe(awake=True)
                 self.assertEqual(now[0], 25)
-                device.speak_probe.assert_called_once_with()
+                device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
 
     def test_same_admitted_request_must_stay_present_through_post_playback(self):
         run, device, _, now = self.acoustic_fixture(
@@ -2012,7 +2025,7 @@ class DeviceAutomationTests(unittest.TestCase):
         with self.assertRaisesRegex(CheckFailure, 'unexpected_extra_voice_request'):
             run.acoustic_probe(awake=True)
         self.assertEqual(now[0], 5)
-        device.speak_probe.assert_called_once_with()
+        device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
 
     @staticmethod
     def acoustic_row(**changes):
@@ -2034,7 +2047,7 @@ class DeviceAutomationTests(unittest.TestCase):
         run.acoustic_probe()
         self.assertGreaterEqual(now[0], 20)
         self.assertLessEqual(now[0], 20.5)
-        device.speak_probe.assert_called_once_with()
+        device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
         evidence = run.report('passed').get('acoustic_evidence')
         self.assertIsInstance(evidence, dict)
         self.assertEqual(evidence['post_playback_quiet_seconds'], 20)
@@ -2063,7 +2076,7 @@ class DeviceAutomationTests(unittest.TestCase):
                 evidence = run.report('failed')['acoustic_evidence']
                 self.assertFalse(evidence['recognized_stimulus_matches'])
                 self.assertNotIn('PRIVATE', json.dumps(evidence))
-                device.speak_probe.assert_called_once_with()
+                device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
 
     def test_acoustic_probe_accepts_a_retained_fixed_wake_prefix(self):
         tasks = [{'generation': 8, 'status': 'completed', 'title': '大黄蜂，１＋１等于几？'}]
@@ -2072,7 +2085,24 @@ class DeviceAutomationTests(unittest.TestCase):
         )
         run.acoustic_probe(awake=True)
         self.assertTrue(run.report('passed')['acoustic_evidence']['recognized_stimulus_matches'])
-        device.speak_probe.assert_called_once_with()
+        device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
+
+    def test_latency_phase_rejects_a_correct_transcript_for_another_question(self):
+        expected = QA_LATENCY_QUESTIONS[-1]
+        for title, matches in (('大黄蜂，６＋５＝几？', True), ('五加六等于几', False)):
+            with self.subTest(title=title):
+                tasks = [{'generation': 8, 'status': 'completed', 'title': title}]
+                run, device, _, _ = self.acoustic_fixture(
+                    lambda _: [self.acoustic_row()], awake=True, tasks=tasks
+                )
+                run.qa_question = expected
+                if matches:
+                    run.acoustic_probe(awake=True)
+                else:
+                    with self.assertRaisesRegex(CheckFailure, 'synthetic_stimulus_not_confirmed'):
+                        run.acoustic_probe(awake=True)
+                self.assertIs(run.acoustic_evidence['recognized_stimulus_matches'], matches)
+                device.speak_probe.assert_called_once_with(question=expected)
 
     def test_acoustic_probe_reports_only_the_fresh_completed_response_pair(self):
         for case in ('observed', 'malformed', 'missing'):
@@ -2156,7 +2186,7 @@ class DeviceAutomationTests(unittest.TestCase):
                 )
                 run.handover.assert_not_called()
                 run.playback.assert_not_called()
-                device.speak_probe.assert_called_once_with()
+                device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
 
     def test_acoustic_cancelled_narration_is_not_a_completed_answer(self):
         row = self.acoustic_row(outcome='cancelled')
@@ -2170,7 +2200,7 @@ class DeviceAutomationTests(unittest.TestCase):
         self.assertEqual(evidence['completed_tasks'], 1)
         self.assertEqual(evidence['cancelled_requests'], 1)
         self.assertEqual(evidence['stage_counts']['playback_done'], 0)
-        device.speak_probe.assert_called_once_with()
+        device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
 
     def test_extra_voice_after_completed_playback_fails_without_replaying_stimulus(self):
         first = self.acoustic_row()
@@ -2189,7 +2219,7 @@ class DeviceAutomationTests(unittest.TestCase):
         self.assertEqual(evidence['stage_counts']['pause_request'], 1)
         self.assertGreater(evidence['post_playback_quiet_seconds'], 0)
         self.assertNotIn('PRIVATE', json.dumps(evidence))
-        device.speak_probe.assert_called_once_with()
+        device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
 
     def test_acoustic_missing_wake_stage_keeps_partial_evidence_on_timeout(self):
         row = self.acoustic_row()
@@ -2202,7 +2232,7 @@ class DeviceAutomationTests(unittest.TestCase):
         self.assertIsInstance(evidence, dict)
         self.assertEqual(evidence['stage_counts']['wake_detected'], 0)
         self.assertEqual(evidence['stage_counts']['asr_end'], 1)
-        device.speak_probe.assert_called_once_with()
+        device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
 
     @staticmethod
     def rejected_candidate(**changes):
@@ -2237,7 +2267,7 @@ class DeviceAutomationTests(unittest.TestCase):
         self.assertEqual(evidence['unresumed_rejected_pauses'], 0)
         self.assertGreaterEqual(now[0], 20)
         self.assertNotIn('PRIVATE', json.dumps(evidence))
-        device.speak_probe.assert_called_once_with()
+        device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
 
     def test_pending_candidate_can_be_rejected_during_observation(self):
         first = self.acoustic_row()
@@ -2254,7 +2284,7 @@ class DeviceAutomationTests(unittest.TestCase):
             )
         self.assertGreaterEqual(now[0], 20)
         self.assertEqual(run.report('passed')['acoustic_evidence']['pending_voice_candidates'], 0)
-        device.speak_probe.assert_called_once_with()
+        device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
 
     def test_unresolved_candidate_cannot_pass_the_end_of_the_quiet_window(self):
         first = self.acoustic_row()
@@ -2263,7 +2293,7 @@ class DeviceAutomationTests(unittest.TestCase):
         with self.assertRaisesRegex(CheckFailure, 'unresolved_voice_candidate'):
             run.acoustic_probe()
         self.assertGreaterEqual(now[0], 20)
-        device.speak_probe.assert_called_once_with()
+        device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
 
     def test_rejected_acknowledged_pause_requires_a_resume_receipt(self):
         first = self.acoustic_row()
@@ -2272,7 +2302,7 @@ class DeviceAutomationTests(unittest.TestCase):
         with self.assertRaisesRegex(CheckFailure, 'rejected_pause_not_resumed'):
             run.acoustic_probe()
         self.assertGreaterEqual(now[0], 20)
-        device.speak_probe.assert_called_once_with()
+        device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
 
     def test_rejected_label_cannot_hide_an_extra_admitted_generation_or_task(self):
         for marker in (
@@ -2289,7 +2319,7 @@ class DeviceAutomationTests(unittest.TestCase):
                 self.assertRaisesRegex(CheckFailure, 'unexpected_extra_voice_request'),
             ):
                 run.acoustic_probe()
-            device.speak_probe.assert_called_once_with()
+            device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
 
     def test_unknown_or_cancelled_candidate_cannot_be_silently_ignored(self):
         for changes in (
@@ -2305,7 +2335,7 @@ class DeviceAutomationTests(unittest.TestCase):
                 self.assertRaisesRegex(CheckFailure, 'synthetic_voice_candidate_not_rejected'),
             ):
                 run.acoustic_probe()
-            device.speak_probe.assert_called_once_with()
+            device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
 
     def test_acoustic_observation_rejects_capture_loss_or_runtime_replacement(self):
         for changed in ('microphone_active', 'connected', 'runtime_instance'):
@@ -2321,7 +2351,7 @@ class DeviceAutomationTests(unittest.TestCase):
                     CheckFailure, 'acoustic_capture_or_connection_lost|runtime_restarted'
                 ):
                     run.acoustic_probe()
-                device.speak_probe.assert_called_once_with()
+                device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
 
     def test_dumpsys_missing_or_duplicate_receipt_is_not_success(self):
         for text in ('other output', 'HUD_UI_STATUS {}\nHUD_UI_STATUS {}'):
