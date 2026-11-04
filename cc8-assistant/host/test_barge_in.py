@@ -2,6 +2,7 @@ import json
 import threading
 import time
 import unittest
+from unittest.mock import patch
 import numpy as np
 
 from bridge import Bridge, Reply
@@ -170,6 +171,79 @@ class BargeInTests(unittest.TestCase):
         b.wait_playback(old)
         self.assertGreater(b.session.generation, old)
         self.assertIsNone(b.playback.pause_state)
+
+    def test_expired_snapshot_cannot_cancel_resolved_or_replaced_pause(self):
+        for replace in (False, True):
+            with self.subTest(replace=replace):
+                b = self.bridge()
+                generation = b.generation
+                old_token = b.pause_for_voice()
+                self.assertIsNotNone(old_token)
+                checking = threading.Event()
+                release = threading.Event()
+                progressed = threading.Event()
+                parked = threading.Event()
+                errors = []
+
+                class ExpiringPause(dict):
+                    def __getitem__(self, key):
+                        value = super().__getitem__(key)
+                        if key == 'started':
+                            checking.set()
+                            if not release.wait(3):
+                                raise RuntimeError('Pause deadline barrier timed out')
+                        return value
+
+                b.playback.pause_state['started'] -= 21
+                b.playback.pause_state = ExpiringPause(b.playback.pause_state)
+                real_wait = b.playback.done.wait
+
+                def wait_for_replacement(timeout):
+                    parked.set()
+                    progressed.set()
+                    return real_wait(timeout)
+
+                def render():
+                    try:
+                        b.wait_playback(generation)
+                    except Exception as error:
+                        errors.append(type(error).__name__)
+                    finally:
+                        progressed.set()
+
+                worker = threading.Thread(target=render, daemon=True)
+                new_token = None
+                with patch.object(b.playback.done, 'wait', side_effect=wait_for_replacement):
+                    worker.start()
+                    try:
+                        self.assertTrue(checking.wait(2))
+                        b.resume_after_rejection(old_token, generation)
+                        self.assertIsNone(b.playback.pause_state)
+                        if replace:
+                            # Bypass the unrelated cooldown within this fixture.
+                            b.playback.pause_cooldown = 0
+                            new_token = b.pause_for_voice()
+                            self.assertIsNotNone(new_token)
+                            self.assertNotEqual(new_token, old_token)
+                        release.set()
+                        self.assertTrue(progressed.wait(2))
+                        self.assertEqual(b.generation, generation)
+                        self.assertTrue(b.playback.playing)
+                        self.assertEqual(parked.is_set(), replace)
+                        if replace:
+                            self.assertEqual(b.playback.pause_state['token'], new_token)
+                    finally:
+                        release.set()
+                        if new_token is not None:
+                            b.resume_after_rejection(new_token, generation)
+                        worker.join(2)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(errors, [])
+                self.assertIsNone(b.playback.pause_state)
+                self.assertEqual(
+                    [event['event'] for event in self.events(b)],
+                    ['playback_pause', 'playback_resume'] * (2 if replace else 1),
+                )
 
     def test_asr_failure_stops_old_audio_instead_of_resuming(self):
         class Speech:
