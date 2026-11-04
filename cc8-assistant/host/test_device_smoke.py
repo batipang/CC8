@@ -29,6 +29,7 @@ from device_smoke import (
     MULTI_CLAUSE_TEXT,
     P0_DEVICE_PHASES,
     POST_DIALOGUE_SECONDS,
+    RuntimeChanged,
     SmokeRun,
     main,
     objects,
@@ -336,7 +337,7 @@ class DeviceAutomationTests(unittest.TestCase):
                 def run_phase():
                     try:
                         request({'operation': 'health'})
-                    except CheckFailure as error:
+                    except RuntimeChanged as error:
                         return dict(state='failed', checks=[{'reason': str(error)}])
                     return dict(
                         state='passed',
@@ -526,8 +527,74 @@ class DeviceAutomationTests(unittest.TestCase):
         run, _, health, _ = self.fixture()
         run.preflight()
         health['runtime_instance'] = 'different-instance'
-        with self.assertRaisesRegex(CheckFailure, 'runtime_restarted'):
+        with self.assertRaisesRegex(RuntimeChanged, 'runtime_restarted'):
             run.health()
+
+    def test_cleanup_never_sends_home_to_a_replacement_runtime(self):
+        for observed_before_cleanup in (False, True):
+            with self.subTest(observed_before_cleanup=observed_before_cleanup):
+                run, device, health, _ = self.fixture()
+                previous = health['runtime_instance']
+
+                def failure():
+                    health['runtime_instance'] = 'PRIVATE_REPLACEMENT'
+                    if observed_before_cleanup:
+                        try:
+                            run.health()
+                        finally:
+                            # A later matching response cannot restore test ownership.
+                            health['runtime_instance'] = previous
+                    raise CheckFailure('playback_failure')
+
+                run.playback = failure
+                report = run.run()
+                device.home.assert_not_called()
+                device.open.assert_called_once_with(False)
+                self.assertEqual(report['state'], 'cleanup_unconfirmed')
+                self.assertFalse(report['cleanup_microphone_off_verified'])
+                self.assertEqual(report['cleanup_reason'], 'runtime_restarted_during_test')
+                self.assertEqual(
+                    report['checks'][-1]['reason'],
+                    'runtime_restarted_during_test'
+                    if observed_before_cleanup
+                    else 'playback_failure',
+                )
+                self.assertNotIn('PRIVATE_REPLACEMENT', json.dumps(report))
+
+    def test_cleanup_does_not_reopen_when_runtime_changes_after_home(self):
+        run, device, health, _ = self.fixture()
+        run.playback = Mock(side_effect=CheckFailure('playback_failure'))
+
+        def home():
+            health['runtime_instance'] = 'replacement'
+
+        device.home.side_effect = home
+        report = run.run()
+        device.home.assert_called_once()
+        device.open.assert_called_once_with(False)
+        self.assertEqual(report['state'], 'cleanup_unconfirmed')
+        self.assertEqual(report['cleanup_reason'], 'runtime_restarted_during_test')
+
+    def test_temporary_health_failure_does_not_prevent_emergency_home(self):
+        run, device, _, _ = self.fixture()
+        request = run.request
+
+        def failure():
+            def cleanup_request(payload):
+                if not device.home.called and payload == {'operation': 'health'}:
+                    raise ConnectionError('PRIVATE_CONNECTION_FAILURE')
+                return request(payload)
+
+            run.request = cleanup_request
+            raise CheckFailure('playback_failure')
+
+        run.playback = failure
+        report = run.run()
+        device.home.assert_called_once()
+        self.assertEqual(device.open.call_count, 2)
+        self.assertEqual(report['state'], 'failed')
+        self.assertTrue(report['cleanup_microphone_off_verified'])
+        self.assertNotIn('PRIVATE_CONNECTION_FAILURE', json.dumps(report))
 
     def test_unsupported_acoustic_observer_aborts_before_ui_or_capture(self):
         run, device, health, _ = self.fixture(capture=True, playback_evidence=True)
