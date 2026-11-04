@@ -15,6 +15,7 @@ import stat
 import subprocess
 import sys
 import time
+import unicodedata
 import uuid
 
 from private_output import PrivateOutput, private_directory
@@ -37,6 +38,8 @@ BARGE_ANNOUNCEMENT = (
     '看见河面映出了云朵和树梢。它把篮子放在大石头上，坐下来听水声，等朋友们一起回家。'
 )
 BARGE_QUERY = '换个问题，三加五等于几？'
+ACOUSTIC_WAKE = '大黄蜂'
+ACOUSTIC_QUESTION = '一加一等于几？'
 WAKE_SELF_TEXT = {
     'zh': '大黄蜂正在播报。现在只检查设备自己的声音。',
     'en': 'Bumblebee is speaking. This is a playback check.',
@@ -240,11 +243,40 @@ def objects(text, marker):
     return value
 
 
+def matches_acoustic_question(workspace, generation):
+    tasks = workspace.get('tasks')
+    if (
+        workspace.get('ok') is not True
+        or type(generation) is not int
+        or not 0 <= generation < 2**32
+        or not isinstance(tasks, list)
+    ):
+        return False
+    matches = [
+        task
+        for task in tasks
+        if isinstance(task, dict)
+        and type(task.get('generation')) is int
+        and task['generation'] == generation
+    ]
+    if len(matches) != 1 or matches[0].get('status') != 'completed':
+        return False
+    title = matches[0].get('title')
+    if not isinstance(title, str) or len(title) > 80:
+        return False
+    text = ''.join(unicodedata.normalize('NFKC', title).split()).rstrip('。?!.,，')
+    if text.startswith(ACOUSTIC_WAKE):
+        text = text[len(ACOUSTIC_WAKE) :].lstrip(',，:：')
+    text = text.replace('一', '1').replace('+', '加').replace('=', '等于')
+    return text == '1加1等于几'
+
+
 def rpc(path, request, timeout=5):
-    # This test client deliberately has no camera, task or arbitrary tool route.
+    # Workspace status is read-only. The test client cannot create tasks via IPC.
     allowed = (
         {'operation': 'health'},
         {'operation': 'diagnostics'},
+        {'operation': 'workspace_status'},
         {'operation': 'transport_status'},
     )
     require(
@@ -341,7 +373,7 @@ class Device:
                 '/usr/bin/say',
                 '-v',
                 voice,
-                BARGE_QUERY if interruption else '大黄蜂，一加一等于几？',
+                BARGE_QUERY if interruption else ACOUSTIC_WAKE + '，' + ACOUSTIC_QUESTION,
             ],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -1126,6 +1158,7 @@ class SmokeRun:
         self.device.speak_probe()
 
         admitted_id = None
+        recognized_stimulus_matches = None
 
         def received():
             nonlocal admitted_id
@@ -1169,6 +1202,7 @@ class SmokeRun:
                 'completed_requests': sum(r.get('outcome') == 'completed' for r in rows),
                 'cancelled_requests': sum(r.get('outcome') == 'cancelled' for r in rows),
                 'completed_tasks': sum(r.get('task_outcome') == 'completed' for r in rows),
+                'recognized_stimulus_matches': recognized_stimulus_matches,
                 'response_playout_timing': response_playout_timing(completed),
                 'stage_counts': {
                     stage: sum(stage in r.get('stages', {}) for r in rows)
@@ -1204,11 +1238,19 @@ class SmokeRun:
                 ),
                 'synthetic_voice_request_not_completed',
             )
-            return completed is not None
+            return completed
 
         response_seconds = min(120, response_deadline - self.clock())
         require(response_seconds > 0, 'acoustic_probe_capture_budget_insufficient')
-        self.wait(received, response_seconds, 'synthetic_acoustic_chain_not_confirmed')
+        completed = self.wait(received, response_seconds, 'synthetic_acoustic_chain_not_confirmed')
+        matched = matches_acoustic_question(
+            self.request({'operation': 'workspace_status'}), completed.get('generation')
+        )
+        self.health()
+        recognized_stimulus_matches = matched
+        self.acoustic_evidence['recognized_stimulus_matches'] = recognized_stimulus_matches
+        self.checkpoint(self.report('running'))
+        require(recognized_stimulus_matches, 'synthetic_stimulus_not_confirmed')
         # An immediate cleanup could hide a post-answer echo turn. Keep one
         # bounded observation window. An extra admitted dialogue fails, while
         # a transient candidate must resolve and a rejected pause must resume.
@@ -1678,6 +1720,8 @@ def run_device_suite(make_run, save):
                     phase.update(state='failed', reason='suite_awake_dialogue_quiet_incomplete')
                 elif not isinstance(timing, dict) or timing.get('status') != 'observed':
                     phase.update(state='failed', reason='suite_response_playout_timing_incomplete')
+                elif evidence.get('recognized_stimulus_matches') is not True:
+                    phase.update(state='failed', reason='suite_synthetic_stimulus_not_confirmed')
         if phase['state'] != 'passed':
             suite['state'] = phase['state']
             save(suite)
