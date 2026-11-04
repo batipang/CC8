@@ -76,10 +76,14 @@ fields 是操作人员核对的**实际听到/解释成的字段值**，只能�
 # 已有语音 Python 环境执行：默认15条调参；显式选择60条验收或全部75条
 /absolute/voice/python cc8 verify-asr --runtime-root /absolute/live/workspace --execute
 /absolute/voice/python cc8 verify-asr --runtime-root /absolute/live/workspace --execute --partition acceptance
+# 对照已有的同分区 API 报告，全部 PCM 字节一致才开始识别
+/absolute/voice/python cc8 verify-asr --runtime-root /absolute/live/workspace --execute --partition acceptance --reference-report /absolute/private/api-acceptance.json
 ```
 
 执行需 macOS、已配置的 MiniMax ASR 和匹配的五个识别/配置/网络预算源码文件；不下载音色、不安装依赖或改变运行提供方。共享运行目录的自动化排他锁，避免与设备/故障测试重叠。上传的是公开合成单句，使用现有 API 配额；每条最多一次工具级调用，连续三条生成或请求失败即结束，支持 Ctrl+C 收尾。
 
 执行源码目录的 `device-access/private/synthetic-asr/` 保存原子 0600 报告：固定样本 ID、分区、失败类别、CER/WER、完整转录规范化精确计数、音频/源码/语料摘要。临时 WAV 删除，不保存识别正文。合成耗时、识别耗时分别计时；`recognition_ms` 使用已评分请求的识别阶段 p50/p95（线性插值），不包含生成时间，也不是用户句尾到实际出声延迟。失败和缺测另列，不混入成功分母。
+
+对照模式先读取已有的 0600 报告，校验语料摘要、分区、每个样本的身份与 PCM SHA-256，再把已经核对过的字节从内存直接送进识别。缺样本、缺摘要或音频变化均在构造识别提供方前退出 2，避免部分上传后才发现输入不同。新报告的 `reference_fixtures_verified` 记录这项校验是否执行。对照锁覆盖核对和 API 调用。PCM 摘要对应识别预处理前的数字输入，预处理源码或服务端配置变化仍可能影响结果。
 
 completed/退出0仅代表选定样本全部完成测量；有错字仍可是 completed，不能解释为准确率达标。partial/退出2、cancelled/退出130均保留已测和剩余覆盖。默认计划退出0也不代表实际执行通过。即使类别名是 pause_soft，当前输入仍是正常合成读法，不冒充轻声/自然停顿；没有声学距离、电视、人声打断、关键字段或任务意图验收。

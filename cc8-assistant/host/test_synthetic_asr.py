@@ -280,6 +280,79 @@ class SyntheticASRTests(unittest.TestCase):
             self.assertEqual(reports[0].stat().st_mode & 0o777, 0o600)
             self.assertEqual(json.loads(reports[0].read_text())['state'], 'cancelled')
 
+    def test_reference_cli_checks_all_pcm_before_provider_and_does_not_resynthesize(self):
+        samples = select_samples('calibration')
+        first, last, changed = (b'\x01\0', b'\x02\0', b'\x03\0')
+        clips = [first] * (len(samples) - 1) + [last]
+        baseline = SyntheticRun(samples, lambda _: '你好', Mock(side_effect=clips)).run()
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            private = root / 'device-access/private/voice-runtime'
+            private.mkdir(parents=True, mode=0o700)
+            private.parent.chmod(0o700)
+            reference = private.parent / 'reference.json'
+            reference.write_text(json.dumps(baseline))
+            reference.chmod(0o600)
+            args = [
+                '--runtime-root',
+                str(root),
+                '--execute',
+                '--reference-report',
+                str(reference),
+            ]
+            report_dir = private.parent / 'synthetic-asr'
+            provider, cancel = Mock(return_value='你好'), Mock()
+            with (
+                patch('synthetic_asr.ROOT', root),
+                patch('synthetic_asr.platform.system', return_value='Darwin'),
+                patch('synthetic_asr.resolve_voice', return_value='Tingting'),
+                patch(
+                    'synthetic_asr.load_release',
+                    return_value=SimpleNamespace(backend_version='1.0'),
+                ),
+                patch('synthetic_asr.pipeline', return_value=(provider, cancel, {})) as setup,
+                patch('synthetic_asr.synthesize', side_effect=clips[:-1] + [changed]) as synth,
+                redirect_stdout(io.StringIO()),
+                redirect_stderr(io.StringIO()),
+            ):
+                self.assertEqual(main(args), 2)
+                self.assertEqual(synth.call_count, len(clips))
+                setup.assert_not_called()
+                self.assertFalse(list(report_dir.glob('*.json')))
+                synth.reset_mock(side_effect=True)
+                synth.side_effect = clips
+                self.assertEqual(main(args), 0)
+                self.assertEqual(synth.call_count, len(clips))
+                self.assertEqual([call.args[0] for call in provider.call_args_list], clips)
+                cancel.assert_called_once()
+                report = json.loads(next(report_dir.glob('*.json')).read_text())
+                self.assertTrue(report['reference_fixtures_verified'])
+
+    def test_reference_rejects_changed_corpus_partition_and_sample_identity_before_synthesis(self):
+        samples = cases()
+        baseline = self.run_fixture(lambda _: '你好')
+        synthesize_pcm = Mock()
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'reference.json'
+            for mutation in ('corpus', 'selection', 'duplicate', 'partition', 'missing_hash'):
+                with self.subTest(mutation=mutation):
+                    report = copy.deepcopy(baseline)
+                    if mutation == 'corpus':
+                        report['corpus_sha256'] = '0' * 64
+                    elif mutation == 'selection':
+                        report['selected_samples_sha256'] = '0' * 64
+                    elif mutation == 'duplicate':
+                        report['samples'][1] = report['samples'][0]
+                    elif mutation == 'partition':
+                        report['samples'][1]['partition'] = 'acceptance'
+                    else:
+                        del report['samples'][1]['fixture_pcm_sha256']
+                    path.write_text(json.dumps(report))
+                    path.chmod(0o600)
+                    with self.assertRaises(ValueError):
+                        synthetic_asr.reference_fixtures(path, samples, synthesize_pcm)
+                    synthesize_pcm.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()
