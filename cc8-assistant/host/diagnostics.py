@@ -26,6 +26,7 @@ DOT_CONTEXT_FIELDS = {
     'dot_context_ready': 'dot_context_reused',
 }
 ROUTE_COMPLETION_STAGES = {'web': 'web_route_completed', 'tool': 'tool_route_completed'}
+ASR_STOP_STAGE = 'asr_stop_applied'
 STAGES = (
     frozenset(
         (
@@ -34,6 +35,7 @@ STAGES = (
             'utterance_end',
             'asr_start',
             'asr_end',
+            ASR_STOP_STAGE,
             'brain_start',
             'first_clause',
             'tts_start',

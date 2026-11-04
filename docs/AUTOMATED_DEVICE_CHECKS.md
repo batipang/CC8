@@ -193,6 +193,14 @@ APK 0.9.32（code 69）为合成插话验收增加 `test_playback_stop` 设备�
 
 APK 0.9.34（code 71）在同一轮另外记录 `device_stop_to_visuals_cleared_ms`。界面用零播放幅度更新嘴型和声波、清空旧字幕并隐藏进度后，记录该状态在播放器停播后首次确认的时间。旧播放器、旧路由或已经过期的录音不能产生该回执。数值表示播放器停播到界面清除状态首次确认的间隔，屏幕面板出画和扬声器实际停声仍各需实测。
 
+### 固定合成整句停播
+
+```sh
+./cc8 verify-device --runtime-root /absolute/live/workspace --capture --synthetic-stop --stop-route asr
+```
+
+默认只显示计划。长稳观察结束后，后台 0.14.66 与 APK code 71 或更新版本可用 `--execute` 单独运行。脚本确认 MiniMax ASR 已配置，锁定运行实例，在播报中播放一次“大黄蜂，别说了”。通过须同时看到整句 ASR 起止和 `asr_stop_applied` 事件、旧播报中断、同次取消的播放器和界面回执，且无本地停止命中或 Dot 任务。播后继续检查 20 秒，随后双端停采。允许为同一候选追加一次回声对照识别。报告保留计数和状态，不保存原音或识别文字。这项检查也不证明 ASR 保留了称呼、真人发音准确率或实际扬声器停声延迟。
+
 准入依据是gate=accepted、绑定generation、brain_start或任务回执，任何一个成立就不能用“拒绝候选”标签隐藏额外对话。只有无准入证据、明确rejected且门控为empty/echo_text/echo_render/weak_near/wake_closed的候选可单列；未知、错误、stale/cancelled不会被忽略。候选可在20秒窗口内完成分类，已确认的暂停还须有resume_ack。计数保留真实暂停，自动问答完成不等于纯播报没有误暂停，P0-04仍独立验收。
 
 2026-11-04的0.14.17首轮实机在第九项按两条原始voice记录提前失败。独立数字诊断证明一个准入问题已播完，另一条generation=null、echo_text/rejected，无大脑或任务，暂停后恢复。原失败和缺失的播后20秒观察保留，未重放刺激或把原轮次改成通过。候选统计的离线修复不改变音频门槛、APK、模型或运行后台；新检查器实机仍须另行验证。
