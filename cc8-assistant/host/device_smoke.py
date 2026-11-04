@@ -38,6 +38,7 @@ BARGE_ANNOUNCEMENT = (
     '看见河面映出了云朵和树梢。它把篮子放在大石头上，坐下来听水声，等朋友们一起回家。'
 )
 BARGE_QUERY = '换个问题，三加五等于几？'
+ACOUSTIC_WAKE = '大黄蜂'
 ACOUSTIC_QUESTION = '一加一等于几？'
 WAKE_SELF_TEXT = {
     'zh': '大黄蜂正在播报。现在只检查设备自己的声音。',
@@ -264,6 +265,8 @@ def matches_acoustic_question(workspace, generation):
     if not isinstance(title, str) or len(title) > 80:
         return False
     text = ''.join(unicodedata.normalize('NFKC', title).split()).rstrip('。?!.,，')
+    if text.startswith(ACOUSTIC_WAKE):
+        text = text[len(ACOUSTIC_WAKE) :].lstrip(',，:：')
     text = text.replace('一', '1').replace('+', '加').replace('=', '等于')
     return text == '1加1等于几'
 
@@ -370,7 +373,7 @@ class Device:
                 '/usr/bin/say',
                 '-v',
                 voice,
-                BARGE_QUERY if interruption else '大黄蜂，' + ACOUSTIC_QUESTION,
+                BARGE_QUERY if interruption else ACOUSTIC_WAKE + '，' + ACOUSTIC_QUESTION,
             ],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
