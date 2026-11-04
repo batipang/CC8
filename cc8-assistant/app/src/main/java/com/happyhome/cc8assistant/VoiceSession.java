@@ -1108,6 +1108,8 @@ final class VoiceSession {
                     if (now - last > 400000000L && micFrames > 0) {
                       JSONObject gap = Wire.event("capture_gap");
                       Wire.put(gap, "milliseconds", (now - last) / 1000000);
+                      Wire.put(gap, "epoch", mine);
+                      Wire.put(gap, "sequence", sequence);
                       send(gap);
                     }
                     last = now;

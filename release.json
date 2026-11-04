@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "p0-single-backend-launch-20261104.1",
+  "release_id": "p0-capture-gap-boundary-20261104.1",
   "backend": {
-    "version": "0.14.32"
+    "version": "0.14.33"
   },
   "assistant": {
-    "version": "0.9.17",
-    "version_code": 52,
+    "version": "0.9.18",
+    "version_code": 53,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {

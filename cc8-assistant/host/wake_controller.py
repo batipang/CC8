@@ -72,7 +72,7 @@ class WakeController:
         )
 
     def reset(self, reason):
-        if reason not in ('start', 'stop', 'mode', 'cancel', 'transport'):
+        if reason not in ('start', 'stop', 'mode', 'cancel', 'transport', 'capture_gap'):
             raise ValueError('Invalid local wake reset reason')
         with self.hooks.lock:
             self.serial += 1
@@ -82,7 +82,7 @@ class WakeController:
                     self.detector.reset(clear_metrics=reason == 'start')
             if not self.hooks.active():
                 self.deadline = None
-            elif reason not in ('cancel', 'transport'):
+            elif reason not in ('cancel', 'transport', 'capture_gap'):
                 self.deadline = (
                     self.clock() + self.window_seconds
                     if self.hooks.active() and self.hooks.awake() and self.hooks.wake_mode()

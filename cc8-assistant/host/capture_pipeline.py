@@ -36,6 +36,7 @@ class CapturePipeline:
         self.capture_lookahead_ns = 80_000_000
         self.pending_mic = deque()
         self.last_sequence = None
+        self.next_read_gap = None
         self.last_status = 0
         self.evidence = PlaybackEvidence()
         self.probe = None
@@ -92,6 +93,7 @@ class CapturePipeline:
         self.pending_mic.clear()
         self.endpoint.reset_transport()
         self.last_sequence = None
+        self.next_read_gap = None
 
     def reset_session(self):
         self.end_probe(status='session_changed')
@@ -100,6 +102,7 @@ class CapturePipeline:
         self.echo.reset_session()
         self.endpoint.reset_session()
         self.last_sequence = None
+        self.next_read_gap = None
         self.pending_mic.clear()
 
     def close(self):
@@ -109,18 +112,31 @@ class CapturePipeline:
         self.echo.close()
         self.pending_mic.clear()
         self.echo.clear_calibration_frames()
+        self.next_read_gap = None
 
-    def process_microphone(self, packet):
+    def note_read_gap(self, epoch, sequence):
+        if epoch is None:
+            # Legacy device events had no epoch or following packet identity.
+            self.evidence.cancel('capture_read_gap')
+        elif self.hooks.active() and epoch == self.hooks.epoch():
+            self.next_read_gap = sequence
+
+    def process_microphone(self, packet, *, read_gap=False):
         # Reference/capture use device timestamps, never network arrival time.
         measurement_packet = self.measuring or packet.nanos < self.discard_endpoint_before_ns
-        if self.last_sequence is not None and packet.sequence != self.last_sequence + 1:
-            self.evidence.cancel('capture_packet_gap')
+        sequence_gap = self.last_sequence is not None and packet.sequence != self.last_sequence + 1
+        if sequence_gap:
             self.hooks.add_metric('sequence_gaps', 1)
             self.hooks.log('capture_packet_gap')
         self.last_sequence = packet.sequence
+        if sequence_gap or read_gap:
+            self.evidence.cancel('capture_read_gap' if read_gap else 'capture_packet_gap')
+            self.endpoint.discard_capture_gap()
         mic = np.frombuffer(packet.data, dtype='<i2').astype(float) / 32768
         if len(mic) % FRAME:
             self.evidence.cancel('invalid_capture')
+            if not (sequence_gap or read_gap):
+                self.endpoint.discard_capture_gap()
             self.hooks.log('unaligned_capture_frame', frames=len(mic))
             return
         self.evidence.microphone(packet.generation, packet.nanos, mic)
@@ -159,10 +175,15 @@ class CapturePipeline:
         if p.kind != MIC or not self.hooks.active() or p.generation != self.hooks.epoch():
             return
         self.last_received_mic_end = p.nanos + round(len(p.data) / 2 * 1e9 / RATE)
-        if self.pending_mic and p.nanos <= self.pending_mic[-1].nanos:
+        if self.pending_mic and p.nanos <= self.pending_mic[-1][0].nanos:
             raise ValueError('Non-monotonic microphone timestamp')
         if len(self.pending_mic) >= 64:
             raise ValueError('Microphone lookahead exceeded')
-        self.pending_mic.append(p)
-        while self.pending_mic and p.nanos - self.pending_mic[0].nanos >= self.capture_lookahead_ns:
-            self.process_microphone(self.pending_mic.popleft())
+        read_gap = p.sequence == self.next_read_gap
+        self.next_read_gap = None
+        self.pending_mic.append((p, read_gap))
+        while (
+            self.pending_mic and p.nanos - self.pending_mic[0][0].nanos >= self.capture_lookahead_ns
+        ):
+            packet, read_gap = self.pending_mic.popleft()
+            self.process_microphone(packet, read_gap=read_gap)

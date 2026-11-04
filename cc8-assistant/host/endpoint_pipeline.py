@@ -32,6 +32,7 @@ class EndpointHooks:
     pause_token: Callable[[], int | None]
     paused: Callable[[], bool]
     pause_voice: Callable[[], int | None]
+    resume_rejected: Callable[[int | None, int], None]
     cancel_session: Callable[[str], int]
     event: EventSink
     status: Callable[[str, str], None]
@@ -46,6 +47,7 @@ class EndpointHooks:
     wake_feed: WakeFrame
     wake_allowed: Callable[[], bool]
     claim_wake: Callable[[], bool]
+    reset_wake_gap: Callable[[], None]
 
 
 class EndpointPipeline:
@@ -64,6 +66,7 @@ class EndpointPipeline:
         self.turn_capture_started = 0
         self.last_capture_render_ns = None
         self.turn_pause_token = None
+        self.owns_turn_pause = False
         self.capture_evidence = None
         self.last_fast_stop_ns = 0
         self.ignore_vad_until_ns = 0
@@ -82,6 +85,7 @@ class EndpointPipeline:
         self.reference_capture.reset()
         self.near_speech.reset()
         self.turn_pause_token = None
+        self.owns_turn_pause = False
         self.capture_evidence = None
 
     def reset_session(self):
@@ -94,6 +98,7 @@ class EndpointPipeline:
         self.reference_capture.reset()
         self.near_speech.reset()
         self.turn_pause_token = None
+        self.owns_turn_pause = False
         self.capture_evidence = None
         self.last_fast_stop_ns = 0
         self.ignore_vad_until_ns = 0
@@ -105,6 +110,23 @@ class EndpointPipeline:
         self.vad.reset()
         self.reference_capture.reset()
         self.capture_evidence = None
+
+    def discard_capture_gap(self):
+        # Only the unfinished endpoint can give up a pause here. A complete
+        # utterance already queued for ASR still owns its own disposition.
+        token = (
+            self.turn_pause_token if self.voice_trace is not None and self.owns_turn_pause else None
+        )
+        generation = self.live_turn
+        self.reset_voice_activity()
+        self.near_speech.reset()
+        self.turn_pause_token = None
+        self.owns_turn_pause = False
+        if self.fast_stop:
+            self.fast_stop.reset()
+        self.hooks.reset_wake_gap()
+        if token is not None:
+            self.hooks.resume_rejected(token, generation)
 
     def consume(self, frame):
         stamp = frame.nanos
@@ -160,6 +182,7 @@ class EndpointPipeline:
             self.turn_echo_risk = echo_risk
             self.turn_capture_started = now
             self.turn_pause_token = self.hooks.pause_token()
+            self.owns_turn_pause = False
             self.turn_reference = self.hooks.recent_spoken()
             self.live_turn = (
                 self.hooks.generation()
@@ -180,6 +203,7 @@ class EndpointPipeline:
             and (not self.hooks.paused())
         ):
             self.turn_pause_token = self.hooks.pause_voice()
+            self.owns_turn_pause = self.turn_pause_token is not None
         if self.vad.talking or utterance is not None:
             self.turn_echo_risk |= echo_risk
         if (

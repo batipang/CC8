@@ -187,6 +187,7 @@ def build_components(
                 ),
                 wake_allowed=lambda: host.wake.allowed(),
                 claim_wake=lambda: host.wake.claim_prefix(),
+                reset_wake_gap=lambda: host.wake.reset('capture_gap'),
                 playing=lambda: host.playback.playing,
                 last_audio_end=lambda: host.playback.last_audio_end,
                 last_spoken=lambda: host.playback.last_spoken,
@@ -198,6 +199,9 @@ def build_components(
                 ),
                 paused=lambda: host.playback.pause_state is not None,
                 pause_voice=lambda: host.pause_for_voice(),
+                resume_rejected=lambda token, generation: host.playback.resume_after_rejection(
+                    token, generation
+                ),
                 cancel_session=lambda reason: host.cancel(reason),
                 event=lambda name, **fields: host.event(name, **fields),
                 status=lambda phase, message: host.status(phase, message),
