@@ -50,8 +50,8 @@ public class PauseFixture {
   }
   static class AudioTrack {
     static final int PLAYSTATE_PLAYING = 3;
-    boolean failPause, failPlay, playing;
-    int pauses, plays, headReads, head;
+    boolean failPause, failPlay, failFlush, playing;
+    int pauses, plays, flushes, headReads, head;
     Runnable duringRead;
     int getPlayState() { return playing ? PLAYSTATE_PLAYING : 2; }
     int getPlaybackHeadPosition() {
@@ -72,7 +72,10 @@ public class PauseFixture {
       playing = true;
       plays++;
     }
-    void flush() {}
+    void flush() {
+      if (failFlush) throw new IllegalStateException("fixture flush");
+      flushes++;
+    }
   }
   static class Listener {
     long listeningNanos;
@@ -95,6 +98,7 @@ public class PauseFixture {
     CaptionProgress frozenCaption;
     CaptionTimeline timings = new CaptionTimeline(new int[][]{{0, 7, 0, 700}}, 7);
     long written = 700;
+    volatile long cancelAppliedNanos;
     int pauseToken;
     long resumeCount;
     String phase;
@@ -173,6 +177,15 @@ public class PauseFixture {
     AudioTrack neverStarted = new AudioTrack();
     yes(!cancelled.startTrack(neverStarted) && neverStarted.plays == 0
         && cancelled.events.isEmpty(), "cancelled startup");
+    yes(cancelled.cancelAppliedNanos == 0, "missing track acknowledged stop");
+
+    Player failedStop = new Player();
+    AudioTrack failedFlush = new AudioTrack();
+    failedStop.startTrack(failedFlush);
+    failedFlush.failFlush = true;
+    failedStop.cancel();
+    yes(failedFlush.pauses == 1 && failedStop.cancelAppliedNanos == 0,
+        "flush failure acknowledged stop");
 
     Player visual = new Player();
     AudioTrack displayTrack = new AudioTrack();
@@ -197,7 +210,10 @@ public class PauseFixture {
     yes(!resumed.paused && resumed.position == 6 && resumed.level == .25f,
         "resume did not return to the current hardware frame and timings");
     visual.pauseForVoice(16);
+    long beforeStop = System.nanoTime();
     visual.cancel();
+    yes(displayTrack.flushes == 1 && visual.cancelAppliedNanos >= beforeStop,
+        "applied stop did not follow pause and flush");
     yes(visual.visualFrame().id == 0 && visual.visualFrame().level == 0, "cancel retained a visual");
   }
 }

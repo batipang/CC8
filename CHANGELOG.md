@@ -1,5 +1,37 @@
 # Changelog
 
+## Assistant 0.9.34 — record when stop updates the playback visuals
+
+- In bounded capture tests, associate the first cleared caption, progress and
+  mouth animation update with the same player stop and device clock.
+
+## Backend 0.14.60 — time the stop command on the device clock
+
+- Pair the capture frame that triggered the local stop detector with the
+  device pause-and-flush receipt for the same cancellation.
+
+## Backend 0.14.59 — automate the local stop-command check
+
+- Expose the local stop detector's availability and hit count. Require one
+  fresh hit and the device's applied stop receipt in the opt-in test.
+
+## Assistant 0.9.32 — observe an applied player stop during test capture
+
+- Record a stop for the active route and player only after Android AudioTrack
+  has completed pause and flush. Expose one bounded receipt during the
+  explicitly timed test capture.
+
+## Backend 0.14.58 — deliver device cancellation after a provider error
+
+- Attempt both provider cancellations and send the invalidated generation to
+  CC8 even if provider cleanup raises. The device can then discard queued PCM.
+
+## Backend 0.14.57 — corroborate synthetic dialogue response in room audio
+
+- Allow a one-shot passive measurement for a fixed local-wake QA question.
+  Correlate the answer's render reference against device microphone audio
+  without pausing the active voice pipeline or saving audio.
+
 ## Backend 0.14.56 — bound proxy CONNECT and origin TLS together
 
 - Keep the original connection deadline through CONNECT headers and the TLS

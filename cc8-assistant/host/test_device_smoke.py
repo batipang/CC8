@@ -14,6 +14,8 @@ import unittest
 from unittest.mock import Mock, patch
 
 from device_smoke import (
+    ACOUSTIC_QUESTION,
+    ACOUSTIC_RESPONSE_METRIC,
     ACTIVE_HANDOVER_CHECK,
     ALL_ROUTE_LOSS_CHECK,
     ALL_ROUTE_LOSS_REQUEST,
@@ -22,6 +24,10 @@ from device_smoke import (
     BARGE_CHECK,
     BARGE_PRIME_CHECK,
     BARGE_QUERY,
+    FAST_STOP_DEVICE_METRIC,
+    STOP_CHECK,
+    STOP_QUERY,
+    STOP_VISUAL_METRIC,
     WAKE_SELF_CHECK,
     WAKE_SELF_TEXT,
     CheckFailure,
@@ -30,7 +36,9 @@ from device_smoke import (
     P0_DEVICE_PHASES,
     POST_DIALOGUE_SECONDS,
     QA_ENDPOINT_METRIC,
+    QA_CORPUS_SHA256,
     QA_LATENCY_PHASES,
+    QA_LATENCY_QUESTIONS,
     QA_PLAYOUT_METRIC,
     QA_STAGE_METRICS,
     RuntimeChanged,
@@ -100,6 +108,13 @@ class DeviceAutomationTests(unittest.TestCase):
             self.assertEqual(command.call_args.args[0][1:3], ['-v', 'Tingting (Chinese CN)'])
             device.speak_probe(interruption=True)
             self.assertEqual(command.call_args.args[0][-1], BARGE_QUERY)
+            device.speak_probe(stop=True)
+            self.assertEqual(command.call_args.args[0][-1], STOP_QUERY)
+            device.speak_probe(question=QA_LATENCY_QUESTIONS[-1])
+            self.assertEqual(command.call_args.args[0][-1], '大黄蜂，六加五等于几？')
+            with self.assertRaisesRegex(CheckFailure, 'unknown_synthetic_probe'):
+                device.speak_probe(question='任意内容')
+            self.assertEqual(command.call_count, 4)
         with (
             patch('device_smoke.resolve_voice', side_effect=ValueError),
             patch('device_smoke.subprocess.run') as command,
@@ -241,6 +256,145 @@ class DeviceAutomationTests(unittest.TestCase):
                 ],
             )
 
+    def test_extended_voice_plan_adds_stop_and_room_evidence_without_device_access(self):
+        output = io.StringIO()
+        with (
+            patch('device_smoke.Device') as device,
+            patch('device_smoke.rpc') as query,
+            redirect_stdout(output),
+        ):
+            self.assertEqual(
+                main(
+                    [
+                        '--runtime-root',
+                        '/unused',
+                        '--capture',
+                        '--p0-device-suite',
+                        '--extended-voice-evidence',
+                    ]
+                ),
+                0,
+            )
+            device.assert_not_called()
+            query.assert_not_called()
+        plan = json.loads(output.getvalue())
+        self.assertTrue(plan['extended_voice_evidence'])
+        self.assertEqual(plan['minimum_backend_version'], '0.14.60')
+        self.assertEqual(plan['minimum_apk_code'], 69)
+        self.assertEqual(
+            [phase['name'] for phase in plan['phases']],
+            [
+                'transport_and_self_wake',
+                'interruption_and_playback',
+                'synthetic_stop',
+                'awake_dialogue',
+                'standby_1',
+                'standby_2',
+                'standby_3',
+            ],
+        )
+        self.assertIn(STOP_CHECK, plan['phases'][2]['checks'])
+
+    def test_extended_voice_suite_requires_stop_and_room_results(self):
+        for case in ('ok', 'cloud_attempt', 'missing_room', 'missing_visuals'):
+            with self.subTest(case=case):
+                runs, reports = [], []
+
+                def make_run(options, checkpoint):
+                    runs.append(options)
+                    report = {
+                        'state': 'passed',
+                        'checks': [
+                            dict(name=name, state='passed') for name in planned_checks(options)
+                        ],
+                        'cleanup_microphone_off_verified': True,
+                        'expected_apk_code': 71,
+                        'acoustic_evidence': {
+                            'post_playback_quiet_seconds': 20,
+                            'recognized_stimulus_matches': True,
+                            'response_playout_timing': {'status': 'observed'},
+                        },
+                    }
+                    if 'synthetic_stop' in options:
+                        report['barge_evidence'] = {
+                            'device_stop_applied': True,
+                            'announcement_cancelled': True,
+                            'stimulus_played': True,
+                            'fast_stop_detections': 1,
+                            'stop_cloud_asr_attempts': int(case == 'cloud_attempt'),
+                            FAST_STOP_DEVICE_METRIC: 120,
+                            'admitted_voice_requests': 0,
+                            'post_playback_quiet_seconds': 20,
+                        }
+                        if case != 'missing_visuals':
+                            report['barge_evidence'][STOP_VISUAL_METRIC] = 32
+                    if 'response_acoustic_evidence' in options and case != 'missing_room':
+                        report['acoustic_evidence']['response_acoustic_timing'] = {
+                            'status': 'observed',
+                            ACOUSTIC_RESPONSE_METRIC: 1200,
+                        }
+                    run = Mock(source_sha256='source', speech_source_sha256='speech')
+                    run.run.side_effect = lambda: checkpoint(report) or report
+                    return run
+
+                result = run_device_suite(make_run, reports.append, extended_voice=True)
+                self.assertTrue(result['extended_voice_evidence'])
+                self.assertFalse(result['full_p0_acceptance'])
+                if case == 'ok':
+                    self.assertEqual(result['state'], 'passed')
+                    self.assertEqual(len(runs), 7)
+                    self.assertIn('response_acoustic_evidence', runs[3])
+                else:
+                    failed = 3 if case == 'missing_room' else 2
+                    self.assertEqual(len(runs), failed + 1)
+                    self.assertEqual(result['state'], 'failed')
+                    self.assertEqual(
+                        result['phases'][failed]['reason'],
+                        'suite_awake_response_acoustic_incomplete'
+                        if case == 'missing_room'
+                        else 'suite_synthetic_stop_evidence_incomplete',
+                    )
+                    self.assertTrue(
+                        all(p['state'] == 'not_run' for p in result['phases'][failed + 1 :])
+                    )
+
+    def test_extended_voice_suite_rejects_missing_stop_detector_before_device_access(self):
+        from release_info import RELEASE
+
+        health = dict(
+            bridge_version=RELEASE.backend_version,
+            protocol_version=RELEASE.protocol_version,
+            release_id=RELEASE.release_id,
+            runtime_instance='test',
+            response_acoustic_evidence_supported=True,
+            fast_stop_ready=False,
+            fast_stop_count=0,
+        )
+        errors = io.StringIO()
+        with (
+            patch('device_smoke.load_release', return_value=RELEASE),
+            patch('device_smoke.rpc', return_value=health) as request,
+            patch('device_smoke.Device') as device,
+            patch('device_smoke.private_directory') as output,
+            redirect_stderr(errors),
+            self.assertRaises(SystemExit) as stopped,
+        ):
+            main(
+                [
+                    '--runtime-root',
+                    str(Path.cwd()),
+                    '--capture',
+                    '--p0-device-suite',
+                    '--extended-voice-evidence',
+                    '--execute',
+                ]
+            )
+        self.assertEqual(stopped.exception.code, 2)
+        self.assertIn('当前版本组合不支持扩展语音验收', errors.getvalue())
+        self.assertEqual(request.call_count, 1)
+        device.assert_not_called()
+        output.assert_not_called()
+
     def test_device_suite_does_not_retry_or_accept_missing_checks_and_cleanup(self):
         for case in (
             'passed',
@@ -352,20 +506,57 @@ class DeviceAutomationTests(unittest.TestCase):
         self.assertEqual(len(plan['phases']), 30)
         self.assertEqual(plan['phases'][0]['name'], 'qa_01')
         self.assertEqual(plan['phases'][-1]['name'], 'qa_30')
+        self.assertEqual(plan['qa_corpus_sha256'], QA_CORPUS_SHA256)
+        self.assertEqual(len(set(QA_LATENCY_QUESTIONS)), 30)
         self.assertNotIn('logical_wifi_handover', plan['phases'][0]['checks'])
         self.assertNotIn('announcement_and_playout', plan['phases'][0]['checks'])
 
-    def test_qa_latency_batch_counts_only_complete_samples_and_never_retries(self):
-        for fail_at in (None, 4):
-            runs = []
+    def test_qa_acoustic_latency_plan_declares_the_new_capability_without_contacting_device(self):
+        output = io.StringIO()
+        with (
+            patch('device_smoke.Device') as device,
+            patch('device_smoke.rpc') as request,
+            redirect_stdout(output),
+        ):
+            self.assertEqual(
+                main(
+                    [
+                        '--runtime-root',
+                        '/unused',
+                        '--capture',
+                        '--qa-latency-suite',
+                        '--response-acoustic-evidence',
+                    ]
+                ),
+                0,
+            )
+            device.assert_not_called()
+            request.assert_not_called()
+        plan = json.loads(output.getvalue())
+        self.assertTrue(plan['response_acoustic_evidence'])
+        self.assertEqual(plan['minimum_backend_version'], '0.14.57')
+        self.assertEqual(plan['qa_corpus_sha256'], QA_CORPUS_SHA256)
+        self.assertEqual(len(plan['phases']), 30)
 
-            def make_run(options, checkpoint):
+    def test_qa_latency_batch_counts_only_complete_samples_and_never_retries(self):
+        for fail_at, acoustic, bad_interval in (
+            (None, False, None),
+            (4, False, None),
+            (None, True, None),
+            (4, True, True),
+            (4, True, 20001),
+            (4, True, float('nan')),
+        ):
+            runs, questions = [], []
+
+            def make_run(options, checkpoint, *, qa_question):
                 self.assertEqual(options, set(QA_LATENCY_PHASES[0][1]))
+                questions.append(qa_question)
                 index = len(runs) + 1
                 stages = dict.fromkeys(QA_STAGE_METRICS, 100)
                 if index % 2:
                     stages[QA_ENDPOINT_METRIC] = 800
-                if index == fail_at:
+                if index == fail_at and not acoustic:
                     stages.pop(QA_STAGE_METRICS[0])
                 report = {
                     'state': 'passed',
@@ -381,16 +572,25 @@ class DeviceAutomationTests(unittest.TestCase):
                         },
                     },
                 }
+                if acoustic:
+                    report['acoustic_evidence']['response_acoustic_timing'] = {
+                        'status': 'observed',
+                        ACOUSTIC_RESPONSE_METRIC: bad_interval if index == fail_at else 150 * index,
+                    }
                 run = Mock(source_sha256='source', speech_source_sha256='voice')
                 run.run.side_effect = lambda: checkpoint(report) or report
                 runs.append(run)
                 return run
 
-            result = run_device_suite(make_run, lambda _: None, qa_latency=True)
+            result = run_device_suite(
+                make_run, lambda _: None, qa_latency=True, response_acoustic=acoustic
+            )
             self.assertFalse(result['audible_onset_measured'])
             self.assertFalse(result['full_p0_acceptance'])
             self.assertEqual(result['scope'], 'synthetic_qa_latency')
             self.assertEqual(len(runs), fail_at or 30)
+            self.assertEqual(questions, list(QA_LATENCY_QUESTIONS[: fail_at or 30]))
+            self.assertEqual(result['qa_corpus_sha256'], QA_CORPUS_SHA256)
             stats = result['latencies_ms'][QA_PLAYOUT_METRIC]
             self.assertEqual(
                 result['latencies_ms'][QA_ENDPOINT_METRIC],
@@ -398,12 +598,27 @@ class DeviceAutomationTests(unittest.TestCase):
             )
             if fail_at:
                 self.assertEqual(result['state'], 'failed')
-                self.assertEqual(result['phases'][3]['reason'], 'suite_qa_stage_timing_incomplete')
+                self.assertEqual(
+                    result['phases'][3]['reason'],
+                    'suite_qa_acoustic_timing_incomplete'
+                    if acoustic
+                    else 'suite_qa_stage_timing_incomplete',
+                )
                 self.assertTrue(all(phase['state'] == 'not_run' for phase in result['phases'][4:]))
                 self.assertEqual(stats, {'samples': 3, 'p50': 200, 'p95': 290})
             else:
                 self.assertEqual(result['state'], 'passed')
                 self.assertEqual(stats, {'samples': 30, 'p50': 1550, 'p95': 2855})
+            if acoustic:
+                self.assertTrue(result['response_acoustic_evidence'])
+                self.assertEqual(
+                    result['latencies_ms'][ACOUSTIC_RESPONSE_METRIC],
+                    {'samples': 3, 'p50': 300, 'p95': 435}
+                    if fail_at
+                    else {'samples': 30, 'p50': 2325, 'p95': 4282.5},
+                )
+            else:
+                self.assertNotIn(ACOUSTIC_RESPONSE_METRIC, result['latencies_ms'])
 
     def test_fixed_suite_rejects_legacy_backend_before_device_access(self):
         from dataclasses import replace
@@ -426,6 +641,40 @@ class DeviceAutomationTests(unittest.TestCase):
         ):
             main(['--runtime-root', str(Path.cwd()), '--capture', '--p0-device-suite', '--execute'])
         self.assertEqual(stopped.exception.code, 2)
+        device.assert_not_called()
+        output.assert_not_called()
+
+    def test_acoustic_latency_batch_rejects_missing_support_before_device_access(self):
+        from release_info import RELEASE
+
+        health = dict(
+            bridge_version=RELEASE.backend_version,
+            protocol_version=RELEASE.protocol_version,
+            release_id=RELEASE.release_id,
+            runtime_instance='test',
+        )
+        errors = io.StringIO()
+        with (
+            patch('device_smoke.load_release', return_value=RELEASE),
+            patch('device_smoke.rpc', return_value=health) as request,
+            patch('device_smoke.Device') as device,
+            patch('device_smoke.private_directory') as output,
+            redirect_stderr(errors),
+            self.assertRaises(SystemExit) as stopped,
+        ):
+            main(
+                [
+                    '--runtime-root',
+                    str(Path.cwd()),
+                    '--capture',
+                    '--qa-latency-suite',
+                    '--response-acoustic-evidence',
+                    '--execute',
+                ]
+            )
+        self.assertEqual(stopped.exception.code, 2)
+        self.assertIn('当前后台未声明支持问答声学计时', errors.getvalue())
+        self.assertEqual(request.call_count, 1)
         device.assert_not_called()
         output.assert_not_called()
 
@@ -1653,7 +1902,7 @@ class DeviceAutomationTests(unittest.TestCase):
         health['local_wake_ready'] = True
         spoken = [False]
 
-        def speak():
+        def speak(*, question):
             spoken[0] = True
 
         def status():
@@ -1710,8 +1959,50 @@ class DeviceAutomationTests(unittest.TestCase):
                 'maintenance_reopen_keeps_microphone_off',
             ],
         )
-        device.speak_probe.assert_called_once_with()
+        device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
         run.cleanup.assert_called_once()
+
+    def test_awake_response_acoustic_timing_requires_the_completed_generation(self):
+        token = 'e' * 32
+        for case, generation in ((1, 8), (30, 8), (30, 9)):
+            with self.subTest(case=case, generation=generation):
+                question = QA_LATENCY_QUESTIONS[case - 1]
+                run, device, _, _ = self.acoustic_fixture(
+                    lambda _: [self.acoustic_row()],
+                    awake=True,
+                    tasks=[{'generation': 8, 'status': 'completed', 'title': question}],
+                )
+                run.qa_question = question
+                run.response_acoustic_evidence = True
+                fixture_request = run.request
+
+                def request(payload):
+                    if payload == {'operation': 'response_probe_arm', 'case': case}:
+                        device.speak_probe.assert_not_called()
+                        return {'status': 'armed', 'token': token}
+                    if payload == {'operation': 'response_probe_result', 'token': token}:
+                        device.speak_probe.assert_called_once_with(question=question)
+                        return {
+                            'status': 'observed',
+                            'generation': generation,
+                            ACOUSTIC_RESPONSE_METRIC: 720,
+                        }
+                    return fixture_request(payload)
+
+                run.request = request
+                if generation == 8:
+                    run.acoustic_probe(awake=True)
+                    expected = {'status': 'observed', ACOUSTIC_RESPONSE_METRIC: 720}
+                else:
+                    with self.assertRaisesRegex(
+                        CheckFailure, 'response_acoustic_timing_unconfirmed'
+                    ):
+                        run.acoustic_probe(awake=True)
+                    expected = {'status': 'unconfirmed'}
+                report = run.report('passed' if generation == 8 else 'failed')
+                self.assertEqual(report['acoustic_evidence']['response_acoustic_timing'], expected)
+                self.assertFalse(report['acoustic_latency_asserted'])
+                self.assertNotIn(token, json.dumps(report))
 
     def test_synthetic_barge_dry_plan_has_no_side_effects(self):
         output = io.StringIO()
@@ -1736,6 +2027,156 @@ class DeviceAutomationTests(unittest.TestCase):
                 'maintenance_reopen_keeps_microphone_off',
             ],
         )
+
+    def test_synthetic_stop_dry_plan_and_capability_gate(self):
+        output = io.StringIO()
+        with patch('device_smoke.Device') as mock, redirect_stdout(output):
+            self.assertEqual(
+                main(['--runtime-root', '/unused', '--capture', '--synthetic-stop']), 0
+            )
+            mock.assert_not_called()
+        plan = json.loads(output.getvalue())
+        self.assertTrue(plan['synthetic_stop'])
+        self.assertEqual(plan['checks'][-4:-2], [BARGE_PRIME_CHECK, STOP_CHECK])
+        run, device, _, _ = self.fixture(capture=True, synthetic_stop=True)
+        result = run.run()
+        self.assertEqual(
+            result['checks'][-1]['reason'], 'device_playback_stop_evidence_unsupported'
+        )
+        device.status.return_value[0]['test_playback_stop_supported'] = True
+        result = run.run()
+        self.assertEqual(result['checks'][-1]['reason'], 'backend_fast_stop_evidence_unsupported')
+        device.open.assert_not_called()
+        device.speak_probe.assert_not_called()
+
+    def test_synthetic_stop_requires_one_local_hit_and_no_cloud_or_new_turn(self):
+        for case, failure in (
+            ('ok', None),
+            ('ok_visual', None),
+            ('no_hit', 'fast_stop_not_confirmed'),
+            ('preexisting_hit', 'fast_stop_count_unexpected'),
+            ('double_hit', 'fast_stop_count_unexpected'),
+            ('cloud', 'fast_stop_reached_cloud_asr'),
+            ('new_turn', 'fast_stop_unexpected_voice_turn'),
+            ('wrong_cancel', 'interruption_device_stop_not_confirmed'),
+            ('wrong_clock_generation', 'fast_stop_device_timing_unconfirmed'),
+            ('inverted_clock', 'fast_stop_device_timing_unconfirmed'),
+            ('missing_clock', 'fast_stop_device_timing_unconfirmed'),
+            ('long_interval', 'fast_stop_device_timing_out_of_range'),
+            ('wrong_visual', 'fast_stop_visual_timing_unconfirmed'),
+            ('missing_visual', 'fast_stop_visual_timing_unconfirmed'),
+        ):
+            with self.subTest(case=case), patch('device_smoke.ThreadPoolExecutor') as executor:
+                run, device, health, now = self.fixture(capture=True, synthetic_stop=True)
+                health.update(
+                    microphone_active=True,
+                    waiting_for_wake=False,
+                    fast_stop_ready=True,
+                    fast_stop_timing_supported=True,
+                    fast_stop_count=12,
+                    voice_asr_attempts=5,
+                )
+                device_status = device.status.return_value[0]
+                device_status.update(
+                    microphone_active=True,
+                    test_capture_limit_ms=run.capture_limit_ms,
+                    test_capture_remaining_ms=210000,
+                    test_playback_stop_supported=True,
+                    playback_paused=False,
+                )
+                if case.endswith('_visual'):
+                    device_status['test_stop_visual_timing_supported'] = True
+                announcement = dict(
+                    request_id='announcement-private',
+                    origin='announcement',
+                    generation=20,
+                    outcome=None,
+                    stages={'playout_ack': 0},
+                )
+                rows = []
+
+                def submit(_request, payload):
+                    self.assertEqual(payload, {'text': BARGE_ANNOUNCEMENT})
+                    rows.append(announcement)
+                    health['playing'] = True
+                    device_status.update(announcement_active=True, phase='speaking')
+                    if case == 'preexisting_hit':
+                        health['fast_stop_count'] += 1
+                    reply = Mock()
+                    reply.result.return_value = {'status': 'interrupted'}
+                    return reply
+
+                def stimulus(*, stop):
+                    self.assertIs(stop, True)
+                    announcement['outcome'] = 'cancelled'
+                    health['playing'] = False
+                    health['fast_stop_count'] += {'no_hit': 0, 'double_hit': 2}.get(case, 1)
+                    health['voice_asr_attempts'] += int(case == 'cloud')
+                    if case != 'missing_clock':
+                        health['fast_stop_observation'] = {
+                            'cancel_generation': 20 if case == 'wrong_clock_generation' else 21,
+                            'detecting_frame_nanos': (
+                                1829374651 if case == 'inverted_clock' else 1709374650
+                            ),
+                        }
+                    device_status.update(
+                        announcement_active=False,
+                        test_playback_stop={
+                            'generation': 20,
+                            'playback_id': 938471,
+                            'cancel_generation': 22 if case == 'wrong_cancel' else 21,
+                            'nanos': 22829374650 if case == 'long_interval' else 1829374650,
+                        },
+                    )
+                    if case in ('ok_visual', 'wrong_visual'):
+                        device_status['test_stop_visual_timing'] = {
+                            'cancel_generation': 20 if case == 'wrong_visual' else 21,
+                            'nanos': 1861374650,
+                        }
+                    rows.append(
+                        dict(
+                            request_id='partial',
+                            origin='voice',
+                            generation=None,
+                            outcome='cancelled',
+                            gate='stale',
+                            stages={'voice_detected': 0},
+                        )
+                    )
+                    if case == 'new_turn':
+                        rows.append(self.acoustic_row(request_id='new-voice'))
+
+                def request(payload):
+                    if payload == {'operation': 'health'}:
+                        return dict(health)
+                    self.assertEqual(payload, {'operation': 'diagnostics'})
+                    return {'requests': rows}
+
+                run.request = request
+                device.speak_probe.side_effect = stimulus
+                executor.return_value.__enter__.return_value.submit.side_effect = submit
+                if failure:
+                    with self.assertRaisesRegex(CheckFailure, failure):
+                        run.interruption_probe()
+                else:
+                    run.interruption_probe()
+                    evidence = run.report('passed')['barge_evidence']
+                    self.assertEqual(evidence['fast_stop_detections'], 1)
+                    self.assertTrue(evidence['device_stop_applied'])
+                    self.assertEqual(evidence[FAST_STOP_DEVICE_METRIC], 120)
+                    self.assertEqual(evidence['admitted_voice_requests'], 0)
+                    self.assertEqual(now[0], 20)
+                    self.assertNotIn('1829374650', json.dumps(evidence))
+                    self.assertNotIn('1709374650', json.dumps(evidence))
+                    if case == 'ok_visual':
+                        self.assertEqual(evidence[STOP_VISUAL_METRIC], 32)
+                        self.assertNotIn('1861374650', json.dumps(evidence))
+                    else:
+                        self.assertNotIn(STOP_VISUAL_METRIC, evidence)
+                if case == 'preexisting_hit':
+                    device.speak_probe.assert_not_called()
+                else:
+                    device.speak_probe.assert_called_once_with(stop=True)
 
     def test_self_playback_plan_and_capability_gate(self):
         output = io.StringIO()
@@ -1865,6 +2306,11 @@ class DeviceAutomationTests(unittest.TestCase):
     def test_interruption_probe_requires_new_pause_and_replacement_receipts(self):
         for case, expected in (
             ('valid', None),
+            ('valid_stop', None),
+            ('missing_stop', 'interruption_device_stop_not_confirmed'),
+            ('wrong_stop_generation', 'interruption_device_stop_not_confirmed'),
+            ('wrong_stop_cancel_generation', 'interruption_device_stop_not_confirmed'),
+            ('invalid_stop_id', 'interruption_device_stop_not_confirmed'),
             ('early_voice', 'interruption_voice_before_stimulus'),
             ('no_playout', 'interruption_playout_not_observed'),
             ('completed_announcement', 'interruption_announcement_not_cancelled'),
@@ -1890,6 +2336,8 @@ class DeviceAutomationTests(unittest.TestCase):
                     phase='speaking',
                     playback_paused=False,
                 )
+                if case.endswith('_stop') or '_stop_' in case:
+                    d['test_playback_stop_supported'] = True
                 old = self.acoustic_row(request_id='old')
                 announcement = {
                     'request_id': 'announcement-id',
@@ -1930,6 +2378,15 @@ class DeviceAutomationTests(unittest.TestCase):
                         if case == 'transcript_content':
                             transcript['text'] = 'content must never enter a report'
                         d['test_interruption_transcript'] = transcript
+                    if d.get('test_playback_stop_supported') is True and case != 'missing_stop':
+                        d['test_playback_stop'] = {
+                            'generation': 19 if case == 'wrong_stop_generation' else 20,
+                            'cancel_generation': 22
+                            if case == 'wrong_stop_cancel_generation'
+                            else 21,
+                            'playback_id': True if case == 'invalid_stop_id' else 678901,
+                            'nanos': 9876543210,
+                        }
                     if case == 'rejected_pause':
                         rows.append(self.rejected_candidate(stages={'pause_request': 25}))
                     if case == 'lost_capture':
@@ -1958,6 +2415,12 @@ class DeviceAutomationTests(unittest.TestCase):
                     self.assertTrue(evidence['replacement_completed'])
                     self.assertIs(evidence['transcript_matches_stimulus'], True)
                     self.assertNotIn('announcement-id', json.dumps(evidence))
+                    if case == 'valid_stop':
+                        self.assertIs(evidence['device_stop_applied'], True)
+                        self.assertNotIn('9876543210', json.dumps(evidence))
+                        self.assertNotIn('678901', json.dumps(evidence))
+                    else:
+                        self.assertNotIn('device_stop_applied', evidence)
                 else:
                     with self.assertRaisesRegex(CheckFailure, expected):
                         run.interruption_probe()
@@ -2002,7 +2465,7 @@ class DeviceAutomationTests(unittest.TestCase):
                 with self.assertRaisesRegex(CheckFailure, 'synthetic_acoustic_chain_not_confirmed'):
                     run.acoustic_probe(awake=True)
                 self.assertEqual(now[0], 25)
-                device.speak_probe.assert_called_once_with()
+                device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
 
     def test_same_admitted_request_must_stay_present_through_post_playback(self):
         run, device, _, now = self.acoustic_fixture(
@@ -2012,7 +2475,7 @@ class DeviceAutomationTests(unittest.TestCase):
         with self.assertRaisesRegex(CheckFailure, 'unexpected_extra_voice_request'):
             run.acoustic_probe(awake=True)
         self.assertEqual(now[0], 5)
-        device.speak_probe.assert_called_once_with()
+        device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
 
     @staticmethod
     def acoustic_row(**changes):
@@ -2034,7 +2497,7 @@ class DeviceAutomationTests(unittest.TestCase):
         run.acoustic_probe()
         self.assertGreaterEqual(now[0], 20)
         self.assertLessEqual(now[0], 20.5)
-        device.speak_probe.assert_called_once_with()
+        device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
         evidence = run.report('passed').get('acoustic_evidence')
         self.assertIsInstance(evidence, dict)
         self.assertEqual(evidence['post_playback_quiet_seconds'], 20)
@@ -2063,7 +2526,7 @@ class DeviceAutomationTests(unittest.TestCase):
                 evidence = run.report('failed')['acoustic_evidence']
                 self.assertFalse(evidence['recognized_stimulus_matches'])
                 self.assertNotIn('PRIVATE', json.dumps(evidence))
-                device.speak_probe.assert_called_once_with()
+                device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
 
     def test_acoustic_probe_accepts_a_retained_fixed_wake_prefix(self):
         tasks = [{'generation': 8, 'status': 'completed', 'title': '大黄蜂，１＋１等于几？'}]
@@ -2072,7 +2535,24 @@ class DeviceAutomationTests(unittest.TestCase):
         )
         run.acoustic_probe(awake=True)
         self.assertTrue(run.report('passed')['acoustic_evidence']['recognized_stimulus_matches'])
-        device.speak_probe.assert_called_once_with()
+        device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
+
+    def test_latency_phase_rejects_a_correct_transcript_for_another_question(self):
+        expected = QA_LATENCY_QUESTIONS[-1]
+        for title, matches in (('大黄蜂，６＋５＝几？', True), ('五加六等于几', False)):
+            with self.subTest(title=title):
+                tasks = [{'generation': 8, 'status': 'completed', 'title': title}]
+                run, device, _, _ = self.acoustic_fixture(
+                    lambda _: [self.acoustic_row()], awake=True, tasks=tasks
+                )
+                run.qa_question = expected
+                if matches:
+                    run.acoustic_probe(awake=True)
+                else:
+                    with self.assertRaisesRegex(CheckFailure, 'synthetic_stimulus_not_confirmed'):
+                        run.acoustic_probe(awake=True)
+                self.assertIs(run.acoustic_evidence['recognized_stimulus_matches'], matches)
+                device.speak_probe.assert_called_once_with(question=expected)
 
     def test_acoustic_probe_reports_only_the_fresh_completed_response_pair(self):
         for case in ('observed', 'malformed', 'missing'):
@@ -2156,7 +2636,7 @@ class DeviceAutomationTests(unittest.TestCase):
                 )
                 run.handover.assert_not_called()
                 run.playback.assert_not_called()
-                device.speak_probe.assert_called_once_with()
+                device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
 
     def test_acoustic_cancelled_narration_is_not_a_completed_answer(self):
         row = self.acoustic_row(outcome='cancelled')
@@ -2170,7 +2650,7 @@ class DeviceAutomationTests(unittest.TestCase):
         self.assertEqual(evidence['completed_tasks'], 1)
         self.assertEqual(evidence['cancelled_requests'], 1)
         self.assertEqual(evidence['stage_counts']['playback_done'], 0)
-        device.speak_probe.assert_called_once_with()
+        device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
 
     def test_extra_voice_after_completed_playback_fails_without_replaying_stimulus(self):
         first = self.acoustic_row()
@@ -2189,7 +2669,7 @@ class DeviceAutomationTests(unittest.TestCase):
         self.assertEqual(evidence['stage_counts']['pause_request'], 1)
         self.assertGreater(evidence['post_playback_quiet_seconds'], 0)
         self.assertNotIn('PRIVATE', json.dumps(evidence))
-        device.speak_probe.assert_called_once_with()
+        device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
 
     def test_acoustic_missing_wake_stage_keeps_partial_evidence_on_timeout(self):
         row = self.acoustic_row()
@@ -2202,7 +2682,7 @@ class DeviceAutomationTests(unittest.TestCase):
         self.assertIsInstance(evidence, dict)
         self.assertEqual(evidence['stage_counts']['wake_detected'], 0)
         self.assertEqual(evidence['stage_counts']['asr_end'], 1)
-        device.speak_probe.assert_called_once_with()
+        device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
 
     @staticmethod
     def rejected_candidate(**changes):
@@ -2237,7 +2717,7 @@ class DeviceAutomationTests(unittest.TestCase):
         self.assertEqual(evidence['unresumed_rejected_pauses'], 0)
         self.assertGreaterEqual(now[0], 20)
         self.assertNotIn('PRIVATE', json.dumps(evidence))
-        device.speak_probe.assert_called_once_with()
+        device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
 
     def test_pending_candidate_can_be_rejected_during_observation(self):
         first = self.acoustic_row()
@@ -2254,7 +2734,7 @@ class DeviceAutomationTests(unittest.TestCase):
             )
         self.assertGreaterEqual(now[0], 20)
         self.assertEqual(run.report('passed')['acoustic_evidence']['pending_voice_candidates'], 0)
-        device.speak_probe.assert_called_once_with()
+        device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
 
     def test_unresolved_candidate_cannot_pass_the_end_of_the_quiet_window(self):
         first = self.acoustic_row()
@@ -2263,7 +2743,7 @@ class DeviceAutomationTests(unittest.TestCase):
         with self.assertRaisesRegex(CheckFailure, 'unresolved_voice_candidate'):
             run.acoustic_probe()
         self.assertGreaterEqual(now[0], 20)
-        device.speak_probe.assert_called_once_with()
+        device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
 
     def test_rejected_acknowledged_pause_requires_a_resume_receipt(self):
         first = self.acoustic_row()
@@ -2272,7 +2752,7 @@ class DeviceAutomationTests(unittest.TestCase):
         with self.assertRaisesRegex(CheckFailure, 'rejected_pause_not_resumed'):
             run.acoustic_probe()
         self.assertGreaterEqual(now[0], 20)
-        device.speak_probe.assert_called_once_with()
+        device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
 
     def test_rejected_label_cannot_hide_an_extra_admitted_generation_or_task(self):
         for marker in (
@@ -2289,7 +2769,7 @@ class DeviceAutomationTests(unittest.TestCase):
                 self.assertRaisesRegex(CheckFailure, 'unexpected_extra_voice_request'),
             ):
                 run.acoustic_probe()
-            device.speak_probe.assert_called_once_with()
+            device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
 
     def test_unknown_or_cancelled_candidate_cannot_be_silently_ignored(self):
         for changes in (
@@ -2305,7 +2785,7 @@ class DeviceAutomationTests(unittest.TestCase):
                 self.assertRaisesRegex(CheckFailure, 'synthetic_voice_candidate_not_rejected'),
             ):
                 run.acoustic_probe()
-            device.speak_probe.assert_called_once_with()
+            device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
 
     def test_acoustic_observation_rejects_capture_loss_or_runtime_replacement(self):
         for changed in ('microphone_active', 'connected', 'runtime_instance'):
@@ -2321,7 +2801,7 @@ class DeviceAutomationTests(unittest.TestCase):
                     CheckFailure, 'acoustic_capture_or_connection_lost|runtime_restarted'
                 ):
                     run.acoustic_probe()
-                device.speak_probe.assert_called_once_with()
+                device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
 
     def test_dumpsys_missing_or_duplicate_receipt_is_not_success(self):
         for text in ('other output', 'HUD_UI_STATUS {}\nHUD_UI_STATUS {}'):
@@ -2335,6 +2815,9 @@ class DeviceAutomationTests(unittest.TestCase):
             {'operation': 'camera_snapshot'},
             {'operation': 'text_request', 'text': 'PRIVATE'},
             {'operation': 'device_control', 'arguments': {'action': 'start'}},
+            {'operation': 'response_probe_arm', 'case': True},
+            {'operation': 'response_probe_arm', 'case': 31},
+            {'operation': 'response_probe_arm', 'case': 30, 'text': 'PRIVATE'},
         ):
             with patch('device_smoke.socket.socket') as connection:
                 with self.assertRaises(CheckFailure):

@@ -30,6 +30,7 @@ MIN_CAPTURE_RMS = 0.002
 class Probe:
     generation: int
     epoch: int
+    input_end_ns: int | None = None
     done: threading.Event = field(default_factory=threading.Event)
     result: dict | None = None
     render_clock: RenderClockReceipt = field(default_factory=RenderClockReceipt)
@@ -52,19 +53,23 @@ class PlaybackEvidence:
         self.clock_resets = 0
         self.max_clock_step_ms = 0
 
-    def arm(self, generation, epoch, *, seconds=20):
+    def arm(self, generation, epoch, *, seconds=20, input_end_ns=None):
         if type(seconds) not in (int, float) or not math.isfinite(seconds) or not 0 < seconds <= 20:
             raise ValueError('Invalid playback probe deadline')
         with self.lock:
             if self.current is not None:
                 raise RuntimeError('Playback probe already active')
-            probe = Probe(generation, epoch)
+            probe = Probe(generation, epoch, input_end_ns=input_end_ns)
             self.current = probe
             self.clock_resets = 0
             self.max_clock_step_ms = 0
             self.timer = threading.Timer(seconds, lambda: self.cancel('expired', probe))
             self.timer.daemon = True
-            self.timer.start()
+            try:
+                self.timer.start()
+            except RuntimeError:
+                self._finish('timer_unavailable')
+                raise
             return probe
 
     def cancel(self, status='cancelled', probe=None):
@@ -218,7 +223,7 @@ class PlaybackEvidence:
         if confidence < 0.55:
             return {'status': 'leading_match_unconfirmed'}
         detected_nanos = self.mic_start + round(capture_offset * 1e9 / RATE)
-        return {
+        evidence = {
             'status': 'observed',
             'block_ms': 20,
             'consecutive_blocks': 2,
@@ -226,6 +231,11 @@ class PlaybackEvidence:
             'reference_block_start_ms': offset * 1000 // RATE,
             'capture_minus_render_origin_ms': round((detected_nanos - self.render_start) / 1e6, 3),
         }
+        if self.current.input_end_ns is not None:
+            elapsed = detected_nanos - self.current.input_end_ns
+            if 0 <= elapsed <= 20_000_000_000:
+                evidence['last_voiced_to_confirmed_output_block_ms'] = round(elapsed / 1e6, 3)
+        return evidence
 
     def _analyze(self):
         if self.template_start is None or self.mic_start is None:

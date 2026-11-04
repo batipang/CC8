@@ -707,7 +707,7 @@ final class VoiceSession {
         announcement = false;
         textSession = false;
         listener.playback(false);
-        cancelPlayback();
+        cancelPlaybackForCommand(p.generation, route);
         listener.caption("", "attentive");
         if (recording) listener.state("listening", "我在听，你继续说");
         else {
@@ -1264,6 +1264,41 @@ final class VoiceSession {
     if (p != null) p.cancel();
   }
 
+  private void cancelPlaybackForCommand(int cancelGeneration, long route) {
+    synchronized (routeLock) {
+      if (!foreground || !currentRoute(route)) return;
+      synchronized (this) {
+        Player stopped = player;
+        CaptureWindow window = captureWindow;
+        cancelPlayback();
+        if (recording && window != null && stopped != null)
+          window.observeStop(
+              route,
+              stopped.generation,
+              stopped.playbackId,
+              cancelGeneration,
+              stopped.cancelAppliedNanos,
+              SystemClock.elapsedRealtime());
+      }
+    }
+  }
+
+  void noteTestStopVisuals(CaptionProgress frame) {
+    CaptureWindow window = captureWindow;
+    if (window == null
+        || window.limitMs == 0
+        || frame.id != 0
+        || frame.level != 0
+        || frame.playing
+        || frame.paused) return;
+    long appliedNanos = System.nanoTime();
+    synchronized (routeLock) {
+      if (foreground && recording && captureWindow == window && player == null)
+        window.observeStopVisuals(
+            routeEpoch, minimumGeneration, appliedNanos, SystemClock.elapsedRealtime());
+    }
+  }
+
   static final class PlaybackPresentation {
     final String text, mood, phase, message;
 
@@ -1325,7 +1360,26 @@ final class VoiceSession {
       }
     }
     Wire.put(j, "test_interruption_transcript_supported", true);
+    Wire.put(j, "test_playback_stop_supported", true);
+    Wire.put(j, "test_stop_visual_timing_supported", true);
     if (recording && window != null) {
+      CaptureWindow.StopEvidence stop =
+          window.stopEvidence(routeEpoch, SystemClock.elapsedRealtime());
+      if (stop != null && recording && captureWindow == window && currentRoute(stop.route)) {
+        JSONObject receipt = new JSONObject();
+        Wire.put(receipt, "generation", stop.generation);
+        Wire.put(receipt, "playback_id", stop.playbackId);
+        Wire.put(receipt, "cancel_generation", stop.cancelGeneration);
+        Wire.put(receipt, "nanos", stop.nanos);
+        Wire.put(j, "test_playback_stop", receipt);
+        long visualNanos = stop.visualNanos;
+        if (visualNanos > 0) {
+          JSONObject visuals = new JSONObject();
+          Wire.put(visuals, "cancel_generation", stop.cancelGeneration);
+          Wire.put(visuals, "nanos", visualNanos);
+          Wire.put(j, "test_stop_visual_timing", visuals);
+        }
+      }
       CaptureWindow.TranscriptEvidence evidence =
           window.transcriptEvidence(routeEpoch, SystemClock.elapsedRealtime());
       if (evidence != null) {
@@ -1483,6 +1537,7 @@ final class VoiceSession {
     volatile AudioTrack track;
     volatile long written = 0;
     volatile long resumeCount = 0;
+    volatile long cancelAppliedNanos;
     int configuredBufferFrames;
     final PlaybackDrain drain = new PlaybackDrain();
 
@@ -1519,6 +1574,7 @@ final class VoiceSession {
     }
 
     void cancel() {
+      cancelAppliedNanos = 0;
       stopped = true;
       frozenCaption = null;
       queue.clear();
@@ -1527,6 +1583,7 @@ final class VoiceSession {
         try {
           t.pause();
           t.flush();
+          cancelAppliedNanos = System.nanoTime();
         } catch (RuntimeException ignored) {
         }
       interrupt();

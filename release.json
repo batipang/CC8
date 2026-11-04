@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "p0-proxy-connect-deadline-20261105.1",
+  "release_id": "p0-stop-visual-timing-20261105.1",
   "backend": {
-    "version": "0.14.56"
+    "version": "0.14.60"
   },
   "assistant": {
-    "version": "0.9.31",
-    "version_code": 67,
+    "version": "0.9.34",
+    "version_code": 71,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {

@@ -76,6 +76,7 @@ class EndpointPipeline:
         self.owns_turn_pause = False
         self.capture_evidence = None
         self.last_fast_stop_ns = 0
+        self.fast_stop_observation = None
         self.ignore_vad_until_ns = 0
 
     def cancel_partial_trace(self):
@@ -88,6 +89,7 @@ class EndpointPipeline:
 
     def reset_transport(self):
         self.cancel_partial_trace()
+        self.fast_stop_observation = None
         self.vad.reset()
         self.reference_capture.reset()
         self.near_speech.reset()
@@ -97,6 +99,7 @@ class EndpointPipeline:
 
     def reset_session(self):
         self.cancel_partial_trace()
+        self.fast_stop_observation = None
         self.vad = VoiceDetector()
         self.turn_reference = []
         self.turn_local_wake = False
@@ -114,6 +117,7 @@ class EndpointPipeline:
 
     def reset_voice_activity(self):
         self.cancel_partial_trace()
+        self.fast_stop_observation = None
         self.vad.reset()
         self.reference_capture.reset()
         self.capture_evidence = None
@@ -232,7 +236,9 @@ class EndpointPipeline:
         if utterance is not None:
             self.hooks.diagnostics().mark(self.voice_trace, 'utterance_end')
             self.hooks.add_metric('utterances', 1)
+            input_end_ns = None
             if self.capture_evidence is not None:
+                input_end_ns = self.capture_evidence.last_voiced_end()
                 self.hooks.diagnostics().capture(
                     self.voice_trace,
                     self.capture_evidence.snapshot(
@@ -250,6 +256,7 @@ class EndpointPipeline:
                 'captured_at': self.turn_capture_started,
                 'pause_token': self.turn_pause_token,
                 'local_wake': self.turn_local_wake,
+                'input_end_ns': input_end_ns,
             }
             job = (
                 self.live_turn,
@@ -271,10 +278,14 @@ class EndpointPipeline:
 
     def apply_fast_stop(self, keyword, stamp):
         start = time.perf_counter()
+        was_playing = self.hooks.playing()
         self.last_fast_stop_ns = stamp
         self.ignore_vad_until_ns = stamp + 160_000_000
         self.cancel_partial_trace()
-        self.hooks.cancel_session('streaming_stop_keyword')
+        cancel_generation = self.hooks.cancel_session('streaming_stop_keyword')
+        # Bind the device clock of the frame that produced the local hit to
+        # this cancellation. It is not a timestamp for the last phoneme.
+        self.fast_stop_observation = (cancel_generation, stamp) if was_playing else None
         self.vad.reset()
         self.capture_evidence = None
         self.live_turn = self.hooks.generation()

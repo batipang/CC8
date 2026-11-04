@@ -267,6 +267,9 @@ def build_components(
             resume_rejected=lambda token, generation: host.resume_after_rejection(
                 token, generation
             ),
+            bind_response_probe=lambda text, generation, input_end_ns: (
+                host.capture.bind_response_probe(text, generation, input_end_ns)
+            ),
         )
     )
     response = ResponseWorker(

@@ -107,6 +107,14 @@ class AnnouncementServer:
                         result = self.snapshot(connection, request)
                     elif request.get('operation') == 'playback_probe':
                         result = self.playback_probe(connection, request)
+                    elif request.get('operation') == 'response_probe_arm':
+                        if set(request) != {'operation', 'case'}:
+                            raise ValueError('Response probe accepts only a public case')
+                        result = self.bridge.arm_response_probe(request['case'])
+                    elif request.get('operation') == 'response_probe_result':
+                        if set(request) != {'operation', 'token'}:
+                            raise ValueError('Response probe requires its token')
+                        result = self.bridge.read_response_probe(request['token'])
                     elif request.get('operation') == 'device_control':
                         from voice_tools import VoiceTools
 
