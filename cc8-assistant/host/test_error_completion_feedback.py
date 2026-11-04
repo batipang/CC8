@@ -306,7 +306,7 @@ class TextFailureTests(unittest.TestCase):
 
 
 def branch(source, event):
-    signature = 'else if ("' + event + '".equals(event)) {'
+    signature = 'if ("' + event + '".equals(event)) {'
     if source.count(signature) != 1:
         raise AssertionError('Event branch is no longer unique')
     start = source.index(signature) + len(signature)
@@ -321,6 +321,7 @@ class DeviceFeedbackTests(unittest.TestCase):
     def compile_and_run(self, body):
         source = (JAVA / 'VoiceSession.java').read_text()
         events = (
+            'hello',
             'status',
             'text_begin',
             'text_done',
@@ -349,18 +350,25 @@ class DeviceFeedbackTests(unittest.TestCase):
 class FeedbackCheck {
  boolean foreground=true,recording=false,announcement=false,visual=false,textSession=false;
  int minimumGeneration=0,textGeneration=0,announcementGeneration=0,visualGeneration=0;
+ final Object routeLock=new Object();long route=5, activeRoute=5;
+ boolean dotChatSupported,savedTasksSupported;
+ boolean currentRoute(long wanted){return activeRoute==wanted;}
  String phase="idle";
  String pendingVisionNonce="",desktopVisionNonce="";
  static class Packet{int generation;Packet(int g){generation=g;}}
  static class Data{String next,message;Data(String n,String m){next=n;message=m;}
   String optString(String k){return "phase".equals(k)?next:message;}
-  String optString(String k,String fallback){return optString(k);}}
+  String optString(String k,String fallback){return optString(k);}
+  Object opt(String k){
+   if(!"playback_interrupted_by_transport".equals(k))return null;
+   return "notice".equals(next)?Boolean.TRUE:"string-notice".equals(next)?"true":null;
+  }}
  static class Listener{String phase="idle",message="";boolean playing;int visionCalls;boolean preserveVisionError;
   void state(String p,String m){phase=p;message=m;}
   void playback(boolean active){playing=active;}
   void vision(boolean active,String message){vision(active,message,false);}
   void vision(boolean active,String message,boolean preserve){visionCalls++;preserveVisionError=preserve;}
-  void heard(String text){} void caption(String text,String mood){} void announcement(){}}
+  void recognition(String engine){} void heard(String text){} void caption(String text,String mood){} void announcement(){}}
  final Listener listener=new Listener();
  void cancelPlayback(){}
  static void yes(boolean value,String message){if(!value)throw new AssertionError(message);}
@@ -392,6 +400,27 @@ class FeedbackCheck {
                 timeout=10,
             )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_route_interruption_notice_survives_rebind_and_clears_for_new_work(self):
+        self.compile_and_run("""c.recording=true;c.hello(8,"notice","连接切换中断播报");
+ c.status(8,"listening","连接已切换，我在听");c.hello(8,"","duplicate handshake");
+ yes(c.listener.phase.equals("error")&&c.listener.message.equals("连接切换中断播报"),
+     "ordinary reconnect erased interruption");
+ c.text_begin(9,"","");c.status(9,"thinking","new work");c.hello(8,"notice","late");
+ yes(c.listener.phase.equals("thinking"),"stale interruption overwrote new work");
+ yes(c.recording&&c.listener.playing,"interruption prevented a new request");""")
+
+    def test_interruption_uses_only_current_foreground_route_and_boolean_flag(self):
+        self.compile_and_run("""c.activeRoute=6;c.hello(8,"notice","stale route");
+ yes(!c.listener.phase.equals("error"),"stale route reported interruption");
+ c.route=6;c.foreground=false;c.hello(8,"notice","background");
+ yes(!c.listener.phase.equals("error"),"background notice changed UI");
+ c.foreground=true;c.hello(8,"string-notice","malformed");
+ yes(!c.listener.phase.equals("error"),"string spoofed interruption");
+ c.hello(8,"notice","fixed interruption");
+ yes(c.listener.phase.equals("error")&&!c.recording,"notice rearmed mic or was hidden");
+ c.text_begin(9,"","");c.status(9,"thinking","next");
+ yes(c.listener.phase.equals("thinking")&&!c.recording,"new task did not replace notice");""")
 
     def test_text_cleanup_keeps_error_and_releases_playback_ui(self):
         self.compile_and_run("""c.text_begin(8,"","");c.status(8,"error","固定错误与恢复指引");

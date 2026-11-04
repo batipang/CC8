@@ -78,6 +78,7 @@ class SessionController:
         self.connection = None
         self.transport_kind = 'none'
         self.rebind_seen = False
+        self.playback_interrupted_by_transport = False
         self.write_lock = threading.Lock()
         self.guard = threading.RLock()
         self.active = False
@@ -221,6 +222,8 @@ class SessionController:
             self.generation += 1
             generation = self.generation
             was_playing = self.hooks.playback().stop_output()
+            if reason == 'transport_switch' and was_playing and not self.hooks.calibration().active:
+                self.playback_interrupted_by_transport = True
             self.hooks.announcements().invalidate()
             self.text_generation = None
             self.hooks.visual().invalidate()
@@ -292,20 +295,31 @@ class SessionController:
                 self.wake = bool(j['wake_mode'])
                 self.awake = not self.wake
                 self.hooks.wake_reset('mode')
+        interrupted = self.playback_interrupted_by_transport
+        if interrupted:
+            message = (
+                '播报因连接切换中断。已完成的结果可在任务页查看。'
+                '如需继续，可以在语音开启后重新提问；执行结果不明的操作请先核对。'
+            )
+        elif self.active:
+            message = '我在听'
+        elif self.hooks.calibration().pending:
+            message = '回声自检已准备 · 点击开始语音后保持安静'
+        else:
+            message = '大黄蜂已就绪 · 点击开始语音'
         self.hooks.event(
             'hello',
-            message='我在听'
-            if self.active
-            else '回声自检已准备 · 点击开始语音后保持安静'
-            if self.hooks.calibration().pending
-            else '大黄蜂已就绪 · 点击开始语音',
+            message=message,
             transport=self.transport_kind,
+            playback_interrupted_by_transport=interrupted,
             supports_dot_chat_handoff=True,
             supports_saved_task_results=True,
             asr_engine=getattr(
                 getattr(self.hooks.speech(), 'recognizer', None), 'engine', 'sensevoice'
             ),
         )
+        # A failed send leaves the notice for the next authenticated route.
+        self.playback_interrupted_by_transport = False
         self.hooks.log('device_handshake_verified', transport=self.transport_kind)
         self.hooks.event(
             'brain_provider', provider=getattr(self.hooks.brain(), 'selected', 'minimax')

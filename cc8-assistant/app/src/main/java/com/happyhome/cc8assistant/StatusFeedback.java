@@ -6,12 +6,14 @@ final class StatusFeedback {
   private boolean failed;
   private boolean cancelled;
   private boolean begun;
+  private boolean transportInterrupted;
 
   synchronized void reset() {
     generation = -1;
     failed = false;
     cancelled = false;
     begun = false;
+    transportInterrupted = false;
   }
 
   synchronized boolean begin(int incoming) {
@@ -23,15 +25,20 @@ final class StatusFeedback {
     failed = false;
     cancelled = false;
     begun = true;
+    transportInterrupted = false;
     return true;
   }
 
   synchronized boolean accept(int incoming, String phase) {
-    if (incoming < 0 || incoming < generation) return false;
+    if (incoming < 0
+        || incoming < generation
+        || (transportInterrupted(incoming) && ("listening".equals(phase) || "idle".equals(phase))))
+      return false;
     generation = incoming;
     failed = "error".equals(phase);
     cancelled = false;
     begun = true;
+    transportInterrupted = false;
     return true;
   }
 
@@ -41,7 +48,22 @@ final class StatusFeedback {
     failed = false;
     cancelled = ownedRequest;
     begun = false;
+    transportInterrupted = false;
     return true;
+  }
+
+  synchronized boolean transportInterruption(int incoming) {
+    if (incoming < 0 || incoming < generation || (incoming == generation && begun)) return false;
+    generation = incoming;
+    failed = true;
+    cancelled = false;
+    begun = true;
+    transportInterrupted = true;
+    return true;
+  }
+
+  synchronized boolean transportInterrupted(int incoming) {
+    return incoming == generation && transportInterrupted;
   }
 
   synchronized boolean cancelled(int incoming) {

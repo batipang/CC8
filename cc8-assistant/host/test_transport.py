@@ -1,4 +1,5 @@
 import hashlib
+import io
 from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
@@ -12,10 +13,11 @@ import tempfile
 import threading
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from transport import Pairing, TransportHub, Channel, signature, private_ipv4
-from protocol import Packet, receive, SPEAKER, RENDER, EVENT
+from protocol import Packet, receive, decode_event, SPEAKER, RENDER, EVENT
 from bridge import Bridge, usb_target
 from tools.java_toolchain import java_bin
 
@@ -348,6 +350,72 @@ class HandoverTests(unittest.TestCase):
         b.session.connection = FakeChannel('usb')
         b.session.transport_kind = 'usb'
         return b
+
+    def hellos(self, channel):
+        events = [
+            decode_event(receive(SimpleNamespace(recv=io.BytesIO(raw).read)).data)
+            for raw in channel.sent
+        ]
+        return [event for event in events if event['event'] == 'hello']
+
+    def test_interrupted_playback_notice_reaches_new_route_and_keeps_task_complete(self):
+        for active in (False, True):
+            with self.subTest(active=active):
+                b = self.bridge()
+                b.session.active = active
+                b.session.epoch = 12
+                task = b.workspace.task_start(b.generation, '固定任务')
+                b.workspace.task_finish(task, 'completed', '已完成的固定结果')
+                b.playback.playing = True
+                old = b.session.connection
+                new = FakeChannel('wifi')
+                b.change_transport(new)
+                self.assertFalse(b.playback.playing)
+                self.assertFalse(self.hellos(old))
+                for _ in range(2):
+                    b.on_event({'event': 'device_ready', 'capture_active': active})
+                notice, duplicate = self.hellos(new)
+                self.assertTrue(notice['playback_interrupted_by_transport'])
+                self.assertIn('任务页', notice['message'])
+                self.assertFalse(duplicate['playback_interrupted_by_transport'])
+                self.assertEqual(b.workspace.tasks[-1]['status'], 'completed')
+                self.assertEqual(b.session.active, active)
+                self.assertEqual(b.session.epoch, 12)
+                self.assertTrue(b.response.queue.empty())
+
+    def test_notice_survives_all_routes_lost_and_a_failed_hello(self):
+        b = self.bridge()
+        b.session.active = True
+        b.playback.playing = True
+        b.change_transport(None)
+        self.assertFalse(b.session.active)
+
+        class Broken(FakeChannel):
+            def sendall(self, raw):
+                raise BrokenPipeError('fixture route dropped')
+
+        b.change_transport(Broken('wifi'))
+        with self.assertRaises(BrokenPipeError):
+            b.on_event({'event': 'device_ready', 'capture_active': False})
+        restored = FakeChannel('usb')
+        b.change_transport(restored)
+        b.on_event({'event': 'device_ready', 'capture_active': False})
+        self.assertTrue(self.hellos(restored)[0]['playback_interrupted_by_transport'])
+        self.assertFalse(b.session.active)
+        self.assertFalse(b.playback.playing)
+
+    def test_idle_and_automatic_calibration_switch_do_not_claim_playback_interruption(self):
+        for calibration in (False, True):
+            with self.subTest(calibration=calibration):
+                b = self.bridge()
+                if calibration:
+                    b.session.active = True
+                    b.calibration.begin()
+                    b.playback.playing = True
+                new = FakeChannel('wifi')
+                b.change_transport(new)
+                b.on_event({'event': 'device_ready', 'capture_active': calibration})
+                self.assertFalse(self.hellos(new)[0]['playback_interrupted_by_transport'])
 
     def test_existing_capture_epoch_is_preserved_and_old_audio_is_discarded(self):
         b = self.bridge()
