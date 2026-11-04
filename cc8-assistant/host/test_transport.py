@@ -436,6 +436,93 @@ class HandoverTests(unittest.TestCase):
         b.on_packet(Packet(RENDER, old, data=b'\0\0'))
         self.assertEqual(b.metrics['render_frames'], 0)
 
+    def test_queued_playback_event_cannot_cross_cancellation_or_route_switch(self):
+        for switch in (False, True):
+            with self.subTest(switch=switch):
+                b = self.bridge()
+                previous = b.session.connection
+                old = b.generation
+                entered, release = threading.Event(), threading.Event()
+                packet_event = Packet.event
+
+                def encode(event, *args, **fields):
+                    packet = packet_event(event, *args, **fields)
+                    if event == 'play_begin' and fields.get('playback_id') == 1:
+                        entered.set()
+                        release.wait(2)
+                    return packet
+
+                with patch.object(Packet, 'event', side_effect=encode):
+                    worker = threading.Thread(
+                        target=b.event,
+                        args=('play_begin',),
+                        kwargs={'generation': old, 'playback_id': 1, 'text': '固定旧播报'},
+                        daemon=True,
+                    )
+                    worker.start()
+                    try:
+                        self.assertTrue(entered.wait(1))
+                        if switch:
+                            b.change_transport(FakeChannel('wifi'))
+                        else:
+                            b.cancel('test_cancel')
+                        self.assertGreater(b.generation, old)
+                        b.event('play_begin', generation=b.generation, playback_id=2)
+                    finally:
+                        release.set()
+                        worker.join(3)
+
+                self.assertFalse(worker.is_alive())
+                current = b.session.connection
+                wires = current.sent if current is previous else previous.sent + current.sent
+                events = [
+                    decode_event(receive(SimpleNamespace(recv=io.BytesIO(raw).read)).data)
+                    for raw in wires
+                ]
+                self.assertEqual(
+                    [event['playback_id'] for event in events if event['event'] == 'play_begin'],
+                    [2],
+                )
+
+    def test_generation_is_rechecked_after_waiting_for_the_write_lock(self):
+        b = self.bridge()
+        generation = b.generation
+        queued, cancelled = threading.Event(), threading.Event()
+        lock = b.session.write_lock
+        event = threading.Thread(
+            target=b.event,
+            args=('caption_timing',),
+            kwargs={'generation': generation, 'playback_id': 1, 'timings': []},
+            daemon=True,
+        )
+        cancel = threading.Thread(target=b.cancel, args=('test_cancel',), daemon=True)
+
+        class ObservedLock:
+            def __enter__(self):
+                if threading.current_thread() is event:
+                    queued.set()
+                lock.acquire()
+
+            def __exit__(self, *unused):
+                lock.release()
+
+        b.session.write_lock = ObservedLock()
+        with patch.object(b.playback, 'notify', side_effect=cancelled.set):
+            with b.session.write_lock:
+                event.start()
+                self.assertTrue(queued.wait(1))
+                cancel.start()
+                self.assertTrue(cancelled.wait(1))
+            event.join(3)
+            cancel.join(3)
+        self.assertFalse(event.is_alive())
+        self.assertFalse(cancel.is_alive())
+        sent = [
+            decode_event(receive(SimpleNamespace(recv=io.BytesIO(raw).read)).data)['event']
+            for raw in b.session.connection.sent
+        ]
+        self.assertEqual(sent, ['cancel'])
+
     def test_losing_all_routes_stops_capture_and_reconnect_does_not_enable_it(self):
         b = self.bridge()
         b.session.active = True
