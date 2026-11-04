@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "p0-wake-playback-boundaries-20261104.1",
+  "release_id": "p0-device-pause-receipts-20261104.1",
   "backend": {
     "version": "0.14.42"
   },
   "assistant": {
-    "version": "0.9.18",
-    "version_code": 53,
+    "version": "0.9.20",
+    "version_code": 55,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {
