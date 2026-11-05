@@ -80,6 +80,7 @@ def run(args, *, query_fn=query, clock=time.monotonic, sleep=time.sleep):
     next_checkpoint = started + 30
     state = 'running'
     failures = consecutive = 0
+    late_snapshot_discarded = False
     with PrivateOutput(path) as output:
 
         def save():
@@ -89,6 +90,7 @@ def run(args, *, query_fn=query, clock=time.monotonic, sleep=time.sleep):
                 'elapsed_seconds': round(max(0, clock() - started), 3),
                 'requested_seconds': args.seconds,
                 'query_failures': failures,
+                'late_snapshot_discarded': late_snapshot_discarded,
                 'condition': args.condition,
                 'distance': args.distance,
                 'partition': args.partition,
@@ -109,6 +111,10 @@ def run(args, *, query_fn=query, clock=time.monotonic, sleep=time.sleep):
                         operation='diagnostics',
                         timeout=min(5, max(0.001, deadline - clock())),
                     )
+                    if clock() > deadline:
+                        late_snapshot_discarded = True
+                        state = 'partial'
+                        break
                     current = diagnostic_source(payload)
                     if source is not None and current != source:
                         state = 'runtime_changed'
@@ -148,7 +154,7 @@ def run(args, *, query_fn=query, clock=time.monotonic, sleep=time.sleep):
             else:
                 state = (
                     'completed'
-                    if book.polls and not failures
+                    if book.polls and not failures and not book.discontinuities
                     else 'partial'
                     if book.polls
                     else 'ipc_unavailable'
@@ -211,6 +217,10 @@ def audit_main(argv=None):
                 'backend_version_mismatch',
             }
             or coverage.get('complete_capture_asserted') is not False
+            or (
+                'late_snapshot_discarded' in capture
+                and type(capture['late_snapshot_discarded']) is not bool
+            )
             or any(
                 type(value) is not int or value < 0
                 for value in (capture.get('query_failures'), coverage.get('window_discontinuities'))
@@ -220,6 +230,7 @@ def audit_main(argv=None):
         result = {
             'capture_state': capture['state'],
             'query_failures': capture['query_failures'],
+            'late_snapshot_discarded': capture.get('late_snapshot_discarded'),
             'window_discontinuities': coverage['window_discontinuities'],
             'playout_ack_is_audible_onset': False,
             'full_p0_acceptance': False,
