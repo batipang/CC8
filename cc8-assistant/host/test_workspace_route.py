@@ -19,7 +19,7 @@ SESSION_INTERFACES = r"""
   final Object routeLock=new Object();
   boolean foreground=true,recording,visual,announcement,textSession,receiverRegistered;
   boolean dotChatSupported,savedTasksSupported;
-  int epoch,minimumGeneration,lifecycle,requests;
+  int epoch,minimumGeneration,lifecycle,requests,announcementGeneration,outputStarts;
   CaptureWindow captureWindow;
   volatile long routeEpoch;
   Link activeLink,usbLink,wifiLink;
@@ -29,7 +29,9 @@ SESSION_INTERFACES = r"""
   final Object usbState=new Object();
   final Context context=new Context();final Lan lan=new Lan();
   final Auth desktopCameraAuth=new Auth();final Feedback statusFeedback=new Feedback();
+  final Output speakerOwner=new Output();
   void cancelVision(){visual=false;}void stopMicrophone(){recording=false;}void cancelPlayback(){}
+  void beginTaskOutput(String role,int generation){outputStarts++;}
   String transportName(){return activeLink==null?"none":activeLink.kind;}
   void workspaceGet(){requests++;}
   ROUTE_METHODS
@@ -37,7 +39,8 @@ SESSION_INTERFACES = r"""
  static class Context{void unregisterReceiver(Object receiver){}}
  static class Lan{void cancelPending(){}void release(){}void acquire(){}void configure(JSONObject data){}}
  static class Auth{void reset(){}String challenge(){return "public-test-challenge";}}
- static class Feedback{void reset(){}}
+ static class Feedback{void reset(){}boolean begin(int generation){return true;}}
+ static class Output{void endTasksThrough(int generation){}}
  static class BuildConfig{static final int CC8_PROTOCOL=2;}
  static class Link{
   boolean closed,ready;int ticket;String kind;
@@ -50,7 +53,7 @@ SESSION_INTERFACES = r"""
   static final int EVENT=1;
   static boolean block;static int parses,blockAt=2;
   static final java.util.concurrent.CountDownLatch entered=new java.util.concurrent.CountDownLatch(1),release=new java.util.concurrent.CountDownLatch(1);
-  static class Packet{int type=EVENT;JSONObject data;Packet(JSONObject value){data=value;}}
+  static class Packet{int type=EVENT,generation=7;JSONObject data;Packet(JSONObject value){data=value;}}
   static JSONObject json(Packet p)throws Exception{
    parses++;
    if(block&&parses==blockAt){entered.countDown();if(!release.await(2,java.util.concurrent.TimeUnit.SECONDS))throw new AssertionError("fixture barrier timeout");}
@@ -60,6 +63,7 @@ SESSION_INTERFACES = r"""
   static void put(JSONObject data,String key,Object value){data.values.put(key,value);}
  }
  void vision(boolean active,String message,boolean preserve){}
+ void announcement(){}
  void playback(boolean active){}void caption(String value,String mood){}void state(String value,String message){}
  final Queue<Runnable> ui=new java.util.concurrent.ConcurrentLinkedQueue<>();
  void drain(){Runnable r;while((r=ui.poll())!=null)r.run();}
@@ -76,6 +80,19 @@ SCENARIOS = r"""
   Link old=new Link("usb");activate(c,old);c.drain();
   c.snapshot(1,task("running"));c.drain();
   switch(args[0]){
+   case "late_audio_begin_parse":{
+    Wire.block=true;
+    List<Throwable> errors=Collections.synchronizedList(new ArrayList<>());
+    Thread reader=new Thread(()->{try{s.deliver(new Wire.Packet(new JSONObject("event","announcement_begin")),old);}catch(Throwable e){errors.add(e);}});
+    reader.start();
+    try{
+     yes(Wire.entered.await(1,java.util.concurrent.TimeUnit.SECONDS),"audio control did not reach parse barrier");
+     activate(c,new Link("wifi"));
+    }finally{Wire.release.countDown();reader.join(3000);}
+    yes(!reader.isAlive()&&errors.isEmpty(),"audio control reader failed");
+    yes(!s.announcement&&s.outputStarts==0,"old route enabled announcement after control parse");
+    break;
+   }
    case "late_loss":case "late_reconnect":case "same_link_reactivated":case "same_link_control_parse":{
     Wire.block=true;
     if("same_link_control_parse".equals(args[0]))Wire.blockAt=1;
@@ -188,7 +205,9 @@ class WorkspaceRouteTests(unittest.TestCase):
             + branch(session, 'workspace')
             + '}else if("workspace_result".equals(event)){'
             + branch(session, 'workspace_result')
-            + '}}}'
+            + '}else if("announcement_begin".equals(event)){'
+            + branch(session, 'announcement_begin')
+            + '}' * (session[start:end].count('{') - session[start:end].count('}') + 2)
         )
         if bound:
             route_methods.extend(
@@ -274,6 +293,9 @@ class WorkspaceRouteTests(unittest.TestCase):
 
     def test_same_link_reactivation_during_control_parse_keeps_original_binding(self):
         self.scenario('same_link_control_parse')
+
+    def test_old_route_announcement_cannot_arm_output_after_control_parse(self):
+        self.scenario('late_audio_begin_parse')
 
     def test_queued_workspace_cannot_hide_interrupted_work(self):
         self.scenario('queued_workspace_loss')
