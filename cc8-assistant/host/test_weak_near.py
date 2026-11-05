@@ -191,6 +191,39 @@ class WeakNearTests(unittest.TestCase):
         events = [json.loads(p.data) for p in b.session.connection.packets]
         self.assertFalse(any(e['event'] == 'playback_resume' for e in events))
 
+    def test_replaced_or_stopped_queued_voice_does_not_start_asr_or_publish_status(self):
+        original = Bridge.valid
+        for stop in (False, True):
+            with self.subTest(stop=stop):
+                checked, continue_worker = threading.Event(), threading.Event()
+
+                def check(bridge, generation):
+                    current = original(bridge, generation)
+                    if not checked.is_set():
+                        checked.set()
+                        if not continue_worker.wait(2):
+                            raise TimeoutError('test did not release the first validity check')
+                    return current
+
+                with patch.object(Bridge, 'valid', autospec=True, side_effect=check):
+                    b, key, _, replies, calls, _, _ = self.start(risky=False)
+                    try:
+                        self.assertTrue(checked.wait(1))
+                        if stop:
+                            b.stop()
+                        else:
+                            b.cancel('replacement')
+                            b.status('thinking', '新请求')
+                        packets_before = len(b.session.connection.packets)
+                    finally:
+                        continue_worker.set()
+                    row = self.wait(b, key)
+                self.assertEqual(calls, [])
+                self.assertEqual(replies, [])
+                self.assertNotIn('asr_start', row['stages'])
+                self.assertEqual(row['gate'], 'stale')
+                self.assertEqual(b.session.connection.packets[packets_before:], [])
+
     def test_stale_echo_comparison_cannot_update_status_or_start_another_asr(self):
         for comparison, result, asr_count in (
             (1, True, 1),
