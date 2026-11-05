@@ -163,15 +163,19 @@ class RecognitionWorker:
             rejected = False
             decision = 'stale'
             try:
-                if not self.hooks.wake_allowed():
-                    decision = 'wake_closed'
-                    rejected = True
-                    self.hooks.status('listening', WAITING)
-                    continue
-                if not self.hooks.playing():
-                    self.hooks.status('thinking', '正在识别语音…')
-                self.hooks.diagnostics().mark(trace_id, 'asr_start')
-                self.hooks.metric('voice_asr_attempts', increment=True)
+                # The dequeued job can lose ownership before announcing ASR.
+                with self.hooks.lock:
+                    if not self.hooks.valid(generation):
+                        continue
+                    if not self.hooks.wake_allowed():
+                        decision = 'wake_closed'
+                        rejected = True
+                        self.hooks.status('listening', WAITING)
+                        continue
+                    if not self.hooks.playing():
+                        self.hooks.status('thinking', '正在识别语音…')
+                    self.hooks.diagnostics().mark(trace_id, 'asr_start')
+                    self.hooks.metric('voice_asr_attempts', increment=True)
                 text = self.hooks.speech().recognize(audio)
                 self.hooks.diagnostics().mark(trace_id, 'asr_end')
                 asr = getattr(self.hooks.speech(), 'recognizer', None)
