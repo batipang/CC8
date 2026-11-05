@@ -1,6 +1,6 @@
 # 大黄蜂统一待办：功能与工程质量
 
-更新：2026-11-05。原排期基线为 Android 0.8.6 / 后台 0.11.0；当前部署为后台 0.14.68 / 原签名 APK 0.9.34（code71），源码 b10c650；签名、数据和配置保留，部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)；P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)；复选框仍按完整验收标准关闭。
+更新：2026-11-05。原排期基线为 Android 0.8.6 / 后台 0.11.0；当前部署为后台 0.14.70 / 原签名 APK 0.9.34（code71），源码 7400f7b；签名、数据和配置保留，部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)；P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)；复选框仍按完整验收标准关闭。
 
 依据：[竞品复盘](COMPETITOR_REVIEW_2026-11-01.md)、[当前架构](ARCHITECTURE.md)、[实机与回归记录](VALIDATION.md)。本次已合并 [ToFix](ToFix.md) 的 20 个工程条目；这是功能与工程质量的唯一详细清单；[ROADMAP](ROADMAP.md)保留完成情况和阶段概览。
 
@@ -130,6 +130,7 @@
   - 依赖：P0-01；唤醒相关部分接 P0-03。范围：Mac 音频 / 识别及 CC8 播放状态。保留当前可用版本做同样本 A/B 对照。
 
 - [ ] **P0-05 — USB / Wi-Fi、15 分钟待机与长时间运行验收**
+  - 重连后的等待提示（后台 0.14.71 候选）：握手和录音重绑定显示实际的等待唤醒或聆听状态，覆盖两种唤醒模式下的清醒与等待状态。见 [本地唤醒](LOCAL_WAKE.md#等待对话与停止)。
   - 亮屏通知补送（后台 0.14.70 候选）：切换时发送失败的亮屏事件在替代通道握手后补送。两次发送失败、保留收音和全部通道丢失各有回归。见 [本地唤醒](LOCAL_WAKE.md#等待对话与停止)。
   - Home 停采证据：维护重开前核实两端收音都已关闭、两端帧数保持稳定；启动故障另保存清理前快照。见 [收音启动失败与 Home 停采](AUTOMATED_DEVICE_CHECKS.md#收音启动失败与-home-停采)。
   - USB 总线观察隔离：物理往返检查与新版长稳、设备和后台故障测试互斥，拒绝双通道软件抑制。实体往返仍待执行，见 [USB 总线与路由观察](AUTOMATED_DEVICE_CHECKS.md#usb-总线与路由观察)。

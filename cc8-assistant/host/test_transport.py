@@ -631,6 +631,32 @@ class HandoverTests(unittest.TestCase):
         self.assertTrue(b.session.active)
         self.assertEqual(b.session.generation, old)
 
+    def test_route_handover_keeps_the_current_local_wake_prompt(self):
+        from wake_controller import WAITING
+
+        for wake_mode, awake in ((True, False), (False, False), (True, True), (False, True)):
+            with self.subTest(wake_mode=wake_mode, awake=awake):
+                b = self.bridge()
+                b.session.active = True
+                b.session.epoch = 12
+                b.session.wake = wake_mode
+                b.session.awake = awake
+                new = FakeChannel('wifi')
+                b.change_transport(new)
+                b.on_event(
+                    {'event': 'device_ready', 'capture_active': True, 'wake_mode': wake_mode}
+                )
+                b.on_event({'event': 'session_rebind', 'capture_active': True, 'epoch': 12})
+                hello = self.hellos(new)[-1]
+                status = [e for e in self.events(new) if e['event'] == 'status'][-1]
+                self.assertEqual(
+                    (hello['message'], status['message']),
+                    ('我在听', '连接已切换，我在听') if awake else (WAITING, WAITING),
+                )
+                self.assertTrue(b.session.active)
+                self.assertEqual(b.session.awake, awake)
+                self.assertEqual(b.session.epoch, 12)
+
 
 class RebindIdempotenceTests(unittest.TestCase):
     def test_start_and_rebind_for_same_epoch_cannot_duplicate_calibration(self):
