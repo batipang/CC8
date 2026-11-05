@@ -2307,8 +2307,16 @@ class DeviceAutomationTests(unittest.TestCase):
 
     def test_awake_response_acoustic_timing_requires_the_completed_generation(self):
         token = 'e' * 32
-        for case, generation in ((1, 8), (30, 8), (31, 8), (90, 8), (90, 9)):
-            with self.subTest(case=case, generation=generation):
+        for case, generation, probe_reason, report_reason in (
+            (1, 8, None, None),
+            (30, 8, None, None),
+            (31, 8, None, None),
+            (90, 8, None, None),
+            (90, 9, None, 'generation_mismatch'),
+            (1, 8, 'render_clock_discontinuous', 'render_clock_discontinuous'),
+            (1, 8, 'private-backend-error-body', 'unknown'),
+        ):
+            with self.subTest(case=case, generation=generation, probe_reason=probe_reason):
                 question = ALL_QUESTIONS[case - 1]
                 run, device, _, _ = self.acoustic_fixture(
                     lambda _: [self.acoustic_row()],
@@ -2325,6 +2333,12 @@ class DeviceAutomationTests(unittest.TestCase):
                         return {'status': 'armed', 'token': token}
                     if payload == {'operation': 'response_probe_result', 'token': token}:
                         device.speak_probe.assert_called_once_with(question=question)
+                        if probe_reason is not None:
+                            return {
+                                'status': 'unconfirmed',
+                                'generation': generation,
+                                'reason': probe_reason,
+                            }
                         return {
                             'status': 'observed',
                             'generation': generation,
@@ -2333,7 +2347,7 @@ class DeviceAutomationTests(unittest.TestCase):
                     return fixture_request(payload)
 
                 run.request = request
-                if generation == 8:
+                if report_reason is None:
                     run.acoustic_probe(awake=True)
                     expected = {'status': 'observed', ACOUSTIC_RESPONSE_METRIC: 720}
                 else:
@@ -2341,11 +2355,12 @@ class DeviceAutomationTests(unittest.TestCase):
                         CheckFailure, 'response_acoustic_timing_unconfirmed'
                     ):
                         run.acoustic_probe(awake=True)
-                    expected = {'status': 'unconfirmed'}
-                report = run.report('passed' if generation == 8 else 'failed')
+                    expected = {'status': 'unconfirmed', 'reason': report_reason}
+                report = run.report('passed' if report_reason is None else 'failed')
                 self.assertEqual(report['acoustic_evidence']['response_acoustic_timing'], expected)
                 self.assertFalse(report['acoustic_latency_asserted'])
                 self.assertNotIn(token, json.dumps(report))
+                self.assertNotIn('private-backend-error-body', json.dumps(report))
 
     def test_synthetic_barge_dry_plan_has_no_side_effects(self):
         output = io.StringIO()

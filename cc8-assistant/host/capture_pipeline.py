@@ -102,12 +102,11 @@ class CapturePipeline:
         owner = self.live_response_probe()
         if owner is None or owner.status != 'waiting':
             return
-        if (
-            normalize_question(text) != owner.question
-            or type(input_end_ns) is not int
-            or input_end_ns < 0
-        ):
+        if normalize_question(text) != owner.question:
             owner.status = 'unmatched_input'
+            return
+        if type(input_end_ns) is not int or input_end_ns < 0:
+            owner.status = 'input_clock_unavailable'
             return
         remaining = owner.expires - time.monotonic()
         if remaining <= 0:
@@ -118,7 +117,7 @@ class CapturePipeline:
                 generation, owner.epoch, seconds=min(20, remaining), input_end_ns=input_end_ns
             )
         except RuntimeError:
-            owner.status = 'unconfirmed'
+            owner.status = 'probe_setup_failed'
             return
         owner.status = 'observing'
 
@@ -137,7 +136,12 @@ class CapturePipeline:
         measured = leading.get('last_voiced_to_confirmed_output_block_ms')
         self.clear_response_probe()
         if measured is None:
-            return {'status': 'unconfirmed', 'generation': probe.generation}
+            reason = probe.result['status']
+            if reason == 'observed':
+                reason = leading['status']
+                if reason == 'observed':
+                    reason = 'interval_out_of_bounds'
+            return {'status': 'unconfirmed', 'generation': probe.generation, 'reason': reason}
         return {
             'status': 'observed',
             'generation': probe.generation,

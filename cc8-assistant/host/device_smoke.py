@@ -199,6 +199,66 @@ def observed_response_interval(value):
     return elapsed if type(elapsed) in (int, float) and 0 <= elapsed <= 20000 else None
 
 
+RESPONSE_PROBE_STATES = frozenset(
+    (
+        'unavailable',
+        'waiting',
+        'observing',
+        'expired',
+        'unmatched_input',
+        'input_clock_unavailable',
+        'probe_setup_failed',
+    )
+)
+RESPONSE_PROBE_REASONS = frozenset(
+    (
+        'expired',
+        'cancelled',
+        'invalid_render',
+        'render_gap',
+        'insufficient_reference',
+        'invalid_capture',
+        'capture_clock_gap',
+        'capture_read_gap',
+        'capture_packet_gap',
+        'insufficient_capture_coverage',
+        'ambiguous',
+        'not_observed',
+        'render_clock_discontinuous',
+        'reference_not_found',
+        'capture_prefix_missing',
+        'reference_not_sustained',
+        'leading_match_unconfirmed',
+        'interval_out_of_bounds',
+    )
+)
+
+
+def summarize_response_acoustic(value, generation):
+    if not isinstance(value, dict):
+        return {'status': 'unconfirmed', 'reason': 'invalid_receipt'}
+    status = value.get('status')
+    if type(status) is str and status in RESPONSE_PROBE_STATES:
+        return {'status': 'unconfirmed', 'reason': status}
+    if status not in ('observed', 'unconfirmed'):
+        return {'status': 'unconfirmed', 'reason': 'invalid_receipt'}
+    actual = value.get('generation')
+    if type(actual) is not int or actual != generation:
+        return {'status': 'unconfirmed', 'reason': 'generation_mismatch'}
+    if status == 'unconfirmed':
+        reason = value.get('reason')
+        return {
+            'status': 'unconfirmed',
+            'reason': reason
+            if type(reason) is str and reason in RESPONSE_PROBE_REASONS
+            else 'unknown',
+        }
+    elapsed = observed_response_interval(value)
+    if elapsed is None:
+        return {'status': 'unconfirmed', 'reason': 'invalid_interval'}
+    return {'status': 'observed', ACOUSTIC_RESPONSE_METRIC: elapsed}
+
+
 def summarize_capture_clock(value):
     """Keep only bounded numeric evidence from the current device capture window."""
     if value is None:
@@ -1600,19 +1660,9 @@ class SmokeRun:
         if probe_token is not None:
             observed = self.request({'operation': 'response_probe_result', 'token': probe_token})
             self.health()
-            elapsed = observed_response_interval(observed)
-            generation = observed.get('generation')
-            confirmed = (
-                type(generation) is int
-                and generation == completed.get('generation')
-                and elapsed is not None
-            )
-            self.acoustic_evidence['response_acoustic_timing'] = (
-                {'status': 'observed', ACOUSTIC_RESPONSE_METRIC: elapsed}
-                if confirmed
-                else {'status': 'unconfirmed'}
-            )
-            require_evidence(confirmed, 'response_acoustic_timing_unconfirmed')
+            timing = summarize_response_acoustic(observed, completed.get('generation'))
+            self.acoustic_evidence['response_acoustic_timing'] = timing
+            require_evidence(timing['status'] == 'observed', 'response_acoustic_timing_unconfirmed')
         d, ui = self.device.status()
         require(
             ui.get('screen_sleeping') is False and d.get('foreground') is True,

@@ -390,6 +390,10 @@ class ProbeIntegrationTests(unittest.TestCase):
         capture.bind_response_probe('二加一等于几？', 101, START)
         self.assertEqual(capture.read_response_probe(token), {'status': 'unmatched_input'})
         self.assertIsNone(capture.evidence.current)
+        token = capture.arm_response_probe(1)
+        capture.bind_response_probe('一加一等于几？', 101, None)
+        self.assertEqual(capture.read_response_probe(token), {'status': 'input_clock_unavailable'})
+        self.assertIsNone(capture.evidence.current)
         capture.reset_transport('wifi')
         self.assertEqual(capture.read_response_probe(token), {'status': 'unavailable'})
         token = capture.arm_response_probe(1)
@@ -399,6 +403,29 @@ class ProbeIntegrationTests(unittest.TestCase):
         capture.reset_session()
         self.assertEqual(capture.read_response_probe(token), {'status': 'unavailable'})
         self.assertFalse(capture.evidence.mic.size)
+
+    def test_passive_probe_keeps_failure_at_the_window_or_leading_block(self):
+        bridge = self.bridge()
+        bridge.session.active = True
+        bridge.session.epoch = 7
+        capture = bridge.capture
+        reference = public_signal()
+        missing_prefix = scene(reference)
+        missing_prefix[5120:5440] = 0
+        for audio, reason in (
+            (np.zeros(32000), 'not_observed'),
+            (missing_prefix, 'leading_match_unconfirmed'),
+        ):
+            with self.subTest(reason=reason):
+                token = capture.arm_response_probe(1)
+                capture.bind_response_probe('一加一等于几？', 101, START - 600_000_000)
+                feed(capture.evidence, reference, audio)
+                self.assertEqual(
+                    capture.read_response_probe(token),
+                    {'status': 'unconfirmed', 'generation': 101, 'reason': reason},
+                )
+                self.assertFalse(capture.evidence.mic.size)
+                self.assertEqual(capture.read_response_probe(token), {'status': 'unavailable'})
 
     def test_server_deadline_and_invalid_shape_never_open_capture(self):
         from announce import Announcement
