@@ -1,6 +1,6 @@
 """Passive composition root: bind component ports, without mutating session state.
 
-This is the only module that sees the complete Bridge for dependency wiring.
+Only the composition modules see the complete Bridge for dependency wiring.
 Components themselves receive frozen narrow hooks, never the Bridge. All
 constructors are passive; Bridge publishes the bundle before starting workers.
 """
@@ -10,15 +10,15 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Pattern, Callable
 from pathlib import Path
 from brain_router import BrainRouter
+from composition_audio import build_audio_pipeline
 from vision import desktop_signature
 from calibration_controller import CalibrationController, CalibrationHooks
 from vision_controller import VisionController, VisionHooks
 from playback_controller import PlaybackController, PlaybackHooks
-from capture_pipeline import CapturePipeline, CaptureHooks
-from echo_pipeline import EchoPipeline, EchoHooks, EchoFactory
-from endpoint_pipeline import EndpointPipeline, EndpointHooks
-from recognition_worker import RecognitionWorker, RecognitionHooks
-from response_worker import ResponseWorker, ResponseHooks
+from capture_pipeline import CapturePipeline
+from echo_pipeline import EchoFactory
+from recognition_worker import RecognitionWorker
+from response_worker import ResponseWorker
 from fast_stop import FastStopDetector
 from session_controller import SessionController
 from session_ports import SessionHooks
@@ -174,128 +174,8 @@ def build_components(
             ),
         )
     )
-    capture = CapturePipeline(
-        CaptureHooks(
-            generation=lambda: host.session.generation,
-            epoch=lambda: host.session.epoch,
-            active=lambda: host.session.active,
-            calibrating=lambda: host.calibration.active,
-            diagnostics=lambda: host.diagnostics,
-            metric=host.record_metric,
-            add_metric=host.add_capture_metric,
-            log=lambda name, **fields: host.log(name, **fields),
-            save_status=lambda: host.save_status(),
-        ),
-        EchoPipeline(
-            EchoHooks(
-                lock=host.session.guard,
-                active=lambda: host.session.active,
-                valid=lambda generation: host.valid(generation),
-                factory=lambda **kwargs: echo_factory(**kwargs),
-                fast_stop_enabled=lambda: bool(host.capture.endpoint.fast_stop),
-                metric=host.record_metric,
-                log=lambda name, **fields: host.log(name, **fields),
-            )
-        ),
-        EndpointPipeline(
-            EndpointHooks(
-                generation=lambda: host.session.generation,
-                awake=lambda: host.session.awake,
-                wake_feed=lambda pcm, generation, **fields: host.wake.feed(
-                    pcm, generation, **fields
-                ),
-                capture_current=lambda nanos: host.capture.endpoint_audio_current(nanos),
-                wake_allowed=lambda: host.wake.allowed(),
-                claim_wake=lambda: host.wake.claim_prefix(),
-                reset_wake_gap=lambda: host.wake.reset('capture_gap'),
-                playing=lambda: host.playback.playing,
-                last_audio_end=lambda: host.playback.last_audio_end,
-                last_spoken=lambda: host.playback.last_spoken,
-                previous_spoken=lambda: host.playback.previous_spoken,
-                previous_spoken_until=lambda: host.playback.previous_spoken_until,
-                recent_spoken=lambda: [text for _, text in tuple(host.playback.spoken)],
-                pause_token=lambda: (
-                    host.playback.pause_state['token'] if host.playback.pause_state else None
-                ),
-                paused=lambda: host.playback.pause_state is not None,
-                pause_voice=lambda stamp: host.pause_for_voice(stamp),
-                resume_rejected=lambda token, generation: host.playback.resume_after_rejection(
-                    token, generation
-                ),
-                cancel_session=lambda reason: host.cancel(reason),
-                event=lambda name, **fields: host.event(name, **fields),
-                status=lambda phase, message: host.status(phase, message),
-                log=lambda name, **fields: host.log(name, **fields),
-                save_status=lambda: host.save_status(),
-                metric=host.record_metric,
-                add_metric=host.add_capture_metric,
-                metric_value=lambda name: host.metrics[name],
-                diagnostics=lambda: host.diagnostics,
-                enqueue=lambda job: host.enqueue_recognition(job),
-                discard_recognition=lambda: host.discard_recognition(),
-            ),
-            fast_stop,
-        ),
-    )
-    recognition = RecognitionWorker(
-        RecognitionHooks(
-            lock=host.session.guard,
-            valid=lambda generation: host.valid(generation),
-            diagnostics=lambda: host.diagnostics,
-            playing=lambda: host.playback.playing,
-            last_audio_end=lambda: host.playback.last_audio_end,
-            recent_spoken=lambda: [line for _, line in tuple(host.playback.spoken)],
-            pause_state=lambda: host.playback.pause_state,
-            speech=lambda: host.speech,
-            metric=host.record_metric,
-            set_metric_field=host.set_metric_field,
-            add_metric_field=host.add_metric_field,
-            record_echo_pair=host.record_echo_pair,
-            echo_running=lambda: host.calibration.running,
-            echo_failed=lambda: host.calibration.failed,
-            awake=lambda: host.session.awake,
-            wake_allowed=lambda: host.wake.allowed(),
-            wake=lambda: host.session.wake,
-            set_awake=host.set_awake,
-            wake_pattern=wake_pattern,
-            touch=lambda: host.touch_activity(),
-            event=lambda name, **fields: host.event(name, **fields),
-            status=lambda phase, message: host.status(phase, message),
-            log=lambda name, **fields: host.log(name, **fields),
-            cancel_session=lambda reason: host.cancel(reason),
-            begin_visual=lambda text, origin: host.begin_visual(text, origin),
-            enqueue_response=lambda job: host.enqueue_response(job),
-            failure=lambda message, error, **fields: host.failure(message, error, **fields),
-            resume_rejected=lambda token, generation: host.resume_after_rejection(
-                token, generation
-            ),
-            bind_response_probe=lambda text, generation, input_end_ns: (
-                host.capture.bind_response_probe(text, generation, input_end_ns)
-            ),
-        )
-    )
-    response = ResponseWorker(
-        ResponseHooks(
-            lock=host.session.guard,
-            valid=lambda generation: host.valid(generation),
-            diagnostics=lambda: host.diagnostics,
-            workspace=lambda: host.workspace,
-            brain=lambda: host.brain,
-            speech=lambda: host.speech,
-            active=lambda: host.session.active,
-            metric=host.record_metric,
-            dispatch=lambda job: host.respond_job(job),
-            answer=lambda text, generation: host.answer(text, generation),
-            answer_visual=lambda job: host.answer_visual(job),
-            read_announcement=lambda job: host.read_announcement(job),
-            finish_text=host.finish_text_response,
-            publish_workspace=lambda: host.publish_workspace(),
-            event=lambda name, **fields: host.event(name, **fields),
-            status=lambda phase, message: host.status(phase, message),
-            log=lambda name, **fields: host.log(name, **fields),
-            failure=lambda message, error, **fields: host.failure(message, error, **fields),
-            speak=lambda text, generation: host.speak(text, generation),
-        )
+    capture, recognition, response = build_audio_pipeline(
+        host, echo_factory=echo_factory, wake_pattern=wake_pattern, fast_stop=fast_stop
     )
     announcements = AnnouncementController(
         AnnouncementHooks(
