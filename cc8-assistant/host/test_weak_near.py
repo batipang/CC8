@@ -217,11 +217,67 @@ class WeakNearTests(unittest.TestCase):
         self.assertIn('thinking', phases)
         self.assertEqual(phases[-1], 'listening')
 
+    def test_empty_asr_only_prompts_to_repeat_for_confirmed_non_echo_speech(self):
+        for text, count, risky, expected in (
+            ('', 30, False, '刚才没听清，请再说一遍'),
+            ('。', 2, False, '我在听'),
+            ('谢谢观看', 30, False, '我在听'),
+            ('', 30, True, '我在听'),
+        ):
+            with self.subTest(text=text, count=count, risky=risky):
+                b, key, _, replies, _, _, _ = self.start(
+                    text,
+                    capture=captured(credible=count, risky=risky),
+                    risky=risky,
+                    playing=False,
+                )
+                row = self.wait(b, key)
+                self.assertEqual(row['gate'], 'empty')
+                self.assertEqual(row['outcome'], 'rejected')
+                self.assertEqual(replies, [])
+                events = [json.loads(p.data) for p in b.session.connection.packets]
+                statuses = [e for e in events if e['event'] == 'status']
+                self.assertEqual(statuses[-1]['message'], expected)
+                self.assertFalse(any(e['event'] == 'transcript' for e in events))
+
+    def test_empty_asr_resumes_playback_without_a_listening_status(self):
+        b, key, generation, replies, _, entered, release = self.start(
+            '', capture=captured(credible=30), delayed=True
+        )
+        self.assertTrue(entered.wait(1))
+        resume = b.recognition.hooks.resume_rejected
+        resumed = threading.Event()
+
+        def record_resume(*args):
+            try:
+                return resume(*args)
+            finally:
+                resumed.set()
+
+        b.recognition.hooks = replace(b.recognition.hooks, resume_rejected=record_resume)
+        release.set()
+        self.assertTrue(resumed.wait(1))
+        row = self.wait(b, key)
+        self.assertEqual(row['gate'], 'empty')
+        self.assertEqual(b.session.generation, generation)
+        self.assertEqual(replies, [])
+        events = [json.loads(p.data) for p in b.session.connection.packets]
+        self.assertTrue(any(e['event'] == 'playback_resume' for e in events))
+        self.assertFalse(any(e['event'] == 'status' and e['phase'] == 'listening' for e in events))
+
     def test_cancel_during_evidence_read_does_not_overwrite_new_owner_status(self):
-        for count in (2, 30):
-            with self.subTest(credible_frames=count):
+        for text, count, risky in (
+            ('一九二九年。', 2, True),
+            ('一九二九年。', 30, True),
+            ('', 30, False),
+        ):
+            with self.subTest(text=text, credible_frames=count):
                 b, key, _, replies, _, entered, release = self.start(
-                    capture=captured(credible=count), delayed=True, playing=False
+                    text,
+                    capture=captured(credible=count, risky=risky),
+                    risky=risky,
+                    delayed=True,
+                    playing=False,
                 )
                 self.assertTrue(entered.wait(1))
                 reading, finish_read = threading.Event(), threading.Event()
