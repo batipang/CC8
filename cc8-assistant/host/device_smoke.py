@@ -238,6 +238,36 @@ RESPONSE_PROBE_REASONS = frozenset(
 )
 
 
+def summarize_response_anchor(value):
+    limits = {
+        'prefix_minus_projected_ms': (-80, 80),
+        'reference_anchor_spacing_ms': (-240, 20000),
+        'prefix_correlation': (0.55, 1),
+        'prefix_competing_correlation': (0, 1),
+    }
+    if not isinstance(value, dict) or set(value) != limits.keys() | {'prefix_block_status'}:
+        return None
+    if any(
+        type(value[key]) not in (int, float) or not lower <= value[key] <= upper
+        for key, (lower, upper) in limits.items()
+    ):
+        return None
+    if (
+        abs(value['prefix_minus_projected_ms']) <= 2
+        or value['prefix_competing_correlation'] > value['prefix_correlation']
+        or value['prefix_block_status']
+        not in (
+            'observed',
+            'capture_prefix_missing',
+            'reference_not_sustained',
+            'leading_match_unconfirmed',
+            'response_prefix_discontinuous',
+        )
+    ):
+        return None
+    return dict(value)
+
+
 def summarize_response_acoustic(value, generation):
     if not isinstance(value, dict):
         return {'status': 'unconfirmed', 'reason': 'invalid_receipt'}
@@ -251,12 +281,17 @@ def summarize_response_acoustic(value, generation):
         return {'status': 'unconfirmed', 'reason': 'generation_mismatch'}
     if status == 'unconfirmed':
         reason = value.get('reason')
-        return {
+        timing = {
             'status': 'unconfirmed',
             'reason': reason
             if type(reason) is str and reason in RESPONSE_PROBE_REASONS
             else 'unknown',
         }
+        if reason == 'response_prefix_alignment_mismatch':
+            diagnostic = summarize_response_anchor(value.get('anchor_diagnostic'))
+            if diagnostic is not None:
+                timing['anchor_diagnostic'] = diagnostic
+        return timing
     elapsed = observed_response_interval(value)
     if elapsed is None:
         return {'status': 'unconfirmed', 'reason': 'invalid_interval'}

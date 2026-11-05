@@ -304,12 +304,30 @@ class PlaybackEvidence:
         template = self.response_prefix[offset : offset + WINDOW][::2]
         if np.std(template) < MIN_REFERENCE_RMS:
             return {'status': 'response_prefix_reference_missing'}
-        peak, _, _, status = match_window(self.mic[left:right:2], template)
+        peak, confidence, rival, status = match_window(self.mic[left:right:2], template)
         origin = left + peak - offset
         if status != 'observed':
             return {'status': 'response_prefix_match_unconfirmed'}
-        if abs(origin - projected) > PREFIX_AGREEMENT:
-            return {'status': 'response_prefix_alignment_mismatch'}
+        leading = self._verify_response_prefix(origin, offset)
+        difference = origin - projected
+        if abs(difference) > PREFIX_AGREEMENT:
+            return {
+                'status': 'response_prefix_alignment_mismatch',
+                'anchor_diagnostic': {
+                    'prefix_minus_projected_ms': round(difference * 1000 / RATE, 3),
+                    'reference_anchor_spacing_ms': round(
+                        (self.segment_frame + self.template_offset - offset) * 1000 / RATE, 3
+                    ),
+                    'prefix_correlation': round(confidence, 4),
+                    'prefix_competing_correlation': round(rival, 4),
+                    'prefix_block_status': leading['status'],
+                },
+            }
+        if leading['status'] == 'observed':
+            leading['alignment'] = 'matched_render_frames'
+        return leading
+
+    def _verify_response_prefix(self, origin, offset):
         leading = self._leading_evidence(origin, self.response_prefix, offset)
         if leading['status'] != 'observed':
             return leading
@@ -324,7 +342,6 @@ class PlaybackEvidence:
                 and block_correlation(expected, measured) < 0.55
             ):
                 return {'status': 'response_prefix_discontinuous'}
-        leading['alignment'] = 'matched_render_frames'
         return leading
 
     def _analyze(self):
