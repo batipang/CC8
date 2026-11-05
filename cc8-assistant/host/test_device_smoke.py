@@ -3245,6 +3245,60 @@ class DeviceAutomationTests(unittest.TestCase):
         self.assertEqual(evidence['stage_counts']['asr_end'], 1)
         device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
 
+    def test_acoustic_timeout_distinguishes_capture_from_local_wake_rejection(self):
+        capture = {
+            'frames': 290,
+            'voiced_frames': 177,
+            'credible_frames': 160,
+            'render_frames': 0,
+            'pause_requested_frames': 0,
+            'voiced_after_pause_request_frames': 0,
+            'raw_correlated_frames': 0,
+            'residual_correlated_frames': 0,
+            'raw_peak_dbfs': -19.1,
+            'cleaned_peak_dbfs': -18.1,
+            'render_peak_dbfs': -120.0,
+            'max_raw_correlation': 0,
+            'max_residual_correlation': 0,
+            'echo_risk': False,
+            'during_playback': False,
+            'local_wake': False,
+        }
+        for value, expected in (
+            (None, {'status': 'missing'}),
+            ({**capture, 'raw_audio': 'PRIVATE_AUDIO'}, {'status': 'malformed'}),
+            (capture, {'status': 'observed', **capture}),
+        ):
+            with self.subTest(expected=expected['status']):
+                candidate = self.rejected_candidate(
+                    gate='wake_closed', stages={'voice_detected': 0}, text='PRIVATE_TEXT'
+                )
+                if value is not None:
+                    candidate['capture'] = value
+                run, device, health, _ = self.acoustic_fixture(
+                    lambda _: [candidate],
+                    awake=True,
+                    english_wake=True,
+                    before=[self.rejected_candidate(request_id='PRIVATE_HISTORICAL')],
+                )
+                health.update(local_wake_count=0, local_wake_english_count=0, mic_frames=320)
+                speak = device.speak_probe.side_effect
+
+                def speak_and_advance(**kwargs):
+                    speak(**kwargs)
+                    health['mic_frames'] = 640
+
+                device.speak_probe.side_effect = speak_and_advance
+                with self.assertRaisesRegex(CheckFailure, 'synthetic_acoustic_chain_not_confirmed'):
+                    run.acoustic_probe(awake=True)
+                evidence = run.report('failed')['acoustic_evidence']
+                self.assertEqual(evidence['new_mic_frames'], 320)
+                self.assertEqual(evidence['rejected_voice_gates']['wake_closed'], 1)
+                self.assertEqual(evidence['rejected_voice_gates']['echo_text'], 0)
+                self.assertEqual(evidence['stage_counts']['asr_start'], 0)
+                self.assertEqual(evidence['sole_wake_rejection_capture'], expected)
+                self.assertNotIn('PRIVATE', json.dumps(evidence))
+
     @staticmethod
     def rejected_candidate(**changes):
         return {
@@ -3274,6 +3328,8 @@ class DeviceAutomationTests(unittest.TestCase):
         self.assertEqual(evidence['new_voice_requests'], 2)
         self.assertEqual(evidence['admitted_voice_requests'], 1)
         self.assertEqual(evidence['rejected_voice_candidates'], 1)
+        self.assertEqual(evidence['rejected_voice_gates']['echo_text'], 1)
+        self.assertIsNone(evidence['sole_wake_rejection_capture'])
         self.assertEqual(evidence['rejected_pause_count'], 1)
         self.assertEqual(evidence['unresumed_rejected_pauses'], 0)
         self.assertGreaterEqual(now[0], 20)
