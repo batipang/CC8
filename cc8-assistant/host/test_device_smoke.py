@@ -2321,6 +2321,7 @@ class DeviceAutomationTests(unittest.TestCase):
             (1, 8, None, None),
             (30, 8, None, None),
             (31, 8, None, None),
+            (32, 8, None, None),
             (90, 8, None, None),
             (90, 9, None, 'generation_mismatch'),
             (1, 8, 'render_clock_discontinuous', 'render_clock_discontinuous'),
@@ -2328,9 +2329,11 @@ class DeviceAutomationTests(unittest.TestCase):
         ):
             with self.subTest(case=case, generation=generation, probe_reason=probe_reason):
                 question = ALL_QUESTIONS[case - 1]
-                alignment = {30: 'matched_render_frames', 31: 'matched_render_frames_room_fit'}.get(
-                    case
-                )
+                alignment = {
+                    30: 'matched_render_frames',
+                    31: 'matched_render_frames_room_fit',
+                    32: 'matched_render_frames_room_alignment',
+                }.get(case)
                 run, device, _, _ = self.acoustic_fixture(
                     lambda _: [self.acoustic_row()],
                     awake=True,

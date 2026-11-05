@@ -324,7 +324,11 @@ def summarize_response_acoustic(value, generation):
         return {'status': 'unconfirmed', 'reason': 'invalid_interval'}
     timing = {'status': 'observed', ACOUSTIC_RESPONSE_METRIC: elapsed}
     if 'alignment' in value:
-        if value['alignment'] not in ('matched_render_frames', 'matched_render_frames_room_fit'):
+        if value['alignment'] not in (
+            'matched_render_frames',
+            'matched_render_frames_room_fit',
+            'matched_render_frames_room_alignment',
+        ):
             return {'status': 'unconfirmed', 'reason': 'invalid_receipt'}
         timing['alignment'] = value['alignment']
     return timing

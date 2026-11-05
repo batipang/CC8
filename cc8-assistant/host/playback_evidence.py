@@ -356,6 +356,18 @@ class PlaybackEvidence:
         leading = self._verify_response_prefix(origin, offset)
         difference = origin - projected
         if abs(difference) > PREFIX_AGREEMENT:
+            if abs(difference) <= 2 * ROOM_HALF_TAPS and leading['status'] in (
+                'observed',
+                'response_prefix_discontinuous',
+            ):
+                projected_leading = self._leading_evidence(projected, self.response_prefix, offset)
+                if (
+                    projected_leading['status'] == 'observed'
+                    and self._room_prefix_status(projected, offset, confirm_alignment=True)
+                    == 'matched'
+                ):
+                    projected_leading['alignment'] = 'matched_render_frames_room_alignment'
+                    return projected_leading
             return {
                 'status': 'response_prefix_alignment_mismatch',
                 'anchor_diagnostic': {
@@ -379,7 +391,7 @@ class PlaybackEvidence:
             leading['alignment'] = 'matched_render_frames'
         return leading
 
-    def _room_prefix_status(self, origin, offset):
+    def _room_prefix_status(self, origin, offset, *, confirm_alignment=False):
         context = 2 * ROOM_HALF_TAPS
         # Use only the stable segment, with all fit and holdout samples
         # strictly after the original prefix being tested.
@@ -404,7 +416,21 @@ class PlaybackEvidence:
         prefix = np.pad(self.response_prefix[::2], (ROOM_HALF_TAPS, 0))
         windows = np.lib.stride_tricks.sliding_window_view(prefix, len(weights))
         predicted = windows @ weights
-        for start in range(offset + 2 * LEADING_BLOCK, offset + WINDOW, LEADING_BLOCK):
+        first_check = offset + 2 * LEADING_BLOCK
+        if confirm_alignment:
+            # The filter is fitted and held out on later audio. Its prediction
+            # of the original prefix must independently locate that prefix at
+            # the projected alignment within the original 2 ms tolerance.
+            template = predicted[offset // 2 : (offset + WINDOW) // 2]
+            left = origin + offset - PREFIX_SEARCH_RADIUS
+            right = origin + offset + PREFIX_SEARCH_RADIUS + WINDOW
+            if left < 0 or right > len(self.mic) or np.std(template) < MIN_REFERENCE_RMS:
+                return 'alignment_unconfirmed'
+            peak, _, _, status = match_window(self.mic[left:right:2], template)
+            if status != 'observed' or abs(peak - PREFIX_SEARCH_RADIUS) > PREFIX_AGREEMENT:
+                return 'alignment_unconfirmed'
+            first_check = offset
+        for start in range(first_check, offset + WINDOW, LEADING_BLOCK):
             raw = self.response_prefix[start : start + LEADING_BLOCK : 2]
             capture = origin + start
             measured = self.mic[capture : capture + LEADING_BLOCK : 2]
