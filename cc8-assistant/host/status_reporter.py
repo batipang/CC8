@@ -21,13 +21,12 @@ from dsp import NearSpeechDetector, VoiceDetector
 from failure_feedback import feedback
 from dot_receipt import UnconfirmedTurnStart
 from release_info import RELEASE
-from session_controller import SessionView
 from playback_controller import PlaybackController
 from capture_pipeline import CapturePipeline
 from calibration_controller import CalibrationController
 from vision_controller import VisionController
 from announcement_controller import AnnouncementController
-from session_ports import EventSink
+from session_ports import EventSink, SessionView
 from wake_controller import WakeController
 
 
