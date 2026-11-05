@@ -1,5 +1,12 @@
 # Changelog
 
+## Backend 0.14.85 / Assistant 0.9.35 — classify invalid capture clock anchors
+
+- Count the first failed hardware-clock guard by fixed numeric category during
+  explicit bounded recording diagnostics. Preserve recording timestamps and
+  audio processing. Accept older reports without the optional reason group;
+  require complete, bounded counts whose sum equals the rejected total.
+
 ## Backend 0.14.84 — pause narration for a standalone listening request
 
 - Treat a standalone “听一下” as a stop-and-listen command in the utterance

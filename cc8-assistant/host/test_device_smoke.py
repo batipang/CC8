@@ -1343,6 +1343,49 @@ class DeviceAutomationTests(unittest.TestCase):
         run.capture_clock_probe(status)
         self.assertEqual(run.report('passed')['capture_clock_evidence']['status'], 'observed')
 
+    def test_capture_clock_reason_counts_are_optional_complete_and_conserved(self):
+        reasons = {
+            'invalid_' + name: 0
+            for name in (
+                'frame_range',
+                'capture_range',
+                'frame_distance',
+                'origin',
+                'timestamp',
+                'future_timestamp',
+                'stale_timestamp',
+                'offset',
+            )
+        }
+        base = dict(
+            samples=3,
+            available=2,
+            unavailable=0,
+            invalid=1,
+            duplicate=0,
+            discontinuities=0,
+            min_offset_ns=0,
+            max_offset_ns=1,
+        )
+        counts = {**reasons, 'invalid_timestamp': 1}
+        valid = {**base, **counts}
+        for value, expected in (
+            (base, {'status': 'unconfirmed', **base}),
+            (valid, {'status': 'unconfirmed', **valid}),
+            ({**valid, 'invalid_timestamp': True}, {'status': 'malformed'}),
+            ({**valid, 'invalid_timestamp': -1}, {'status': 'malformed'}),
+            ({**valid, 'invalid_timestamp': 6101}, {'status': 'malformed'}),
+            ({**valid, 'invalid_timestamp': 0}, {'status': 'malformed'}),
+            ({**base, 'invalid_timestamp': 1}, {'status': 'malformed'}),
+            ({**valid, 'raw_timestamp': 123}, {'status': 'malformed'}),
+            (
+                {**base, **reasons, 'invalid': 0, 'unavailable': 1},
+                {'status': 'observed', **base, **reasons, 'invalid': 0, 'unavailable': 1},
+            ),
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(summarize_capture_clock(value), expected)
+
     def test_clock_requirement_refuses_old_apk_before_capture(self):
         run, device, health, _ = self.fixture(
             capture=True, playback_evidence=True, clock_evidence=True

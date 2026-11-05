@@ -365,6 +365,21 @@ def summarize_response_acoustic(value, generation):
     return timing
 
 
+CAPTURE_CLOCK_INVALID_REASONS = tuple(
+    'invalid_' + name
+    for name in (
+        'frame_range',
+        'capture_range',
+        'frame_distance',
+        'origin',
+        'timestamp',
+        'future_timestamp',
+        'stale_timestamp',
+        'offset',
+    )
+)
+
+
 def summarize_capture_clock(value):
     """Keep only bounded numeric evidence from the current device capture window."""
     if value is None:
@@ -378,6 +393,16 @@ def summarize_capture_clock(value):
     if value['samples'] != sum(value[k] for k in counters[1:]):
         return {'status': 'malformed'}
     fields = counters + offsets if value['available'] else counters
+    if set(value) & set(CAPTURE_CLOCK_INVALID_REASONS):
+        if (
+            any(
+                type(value.get(k)) is not int or not 0 <= value[k] <= 6100
+                for k in CAPTURE_CLOCK_INVALID_REASONS
+            )
+            or sum(value[k] for k in CAPTURE_CLOCK_INVALID_REASONS) != value['invalid']
+        ):
+            return {'status': 'malformed'}
+        fields += CAPTURE_CLOCK_INVALID_REASONS
     if set(value) != set(fields):
         return {'status': 'malformed'}
     if value['available'] and (

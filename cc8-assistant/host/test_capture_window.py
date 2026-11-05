@@ -1,13 +1,14 @@
 """Run actual capture worker/finally and opening callbacks with bounded hardware interfaces."""
 
 from pathlib import Path
+import json
 import subprocess
 import tempfile
 import unittest
 
 from test_interrupted_task_notice import method
 from tools.java_toolchain import java_bin
-from device_smoke import BARGE_QUERY
+from device_smoke import BARGE_QUERY, summarize_capture_clock
 
 ROOT = Path(__file__).resolve().parents[2]
 JAVA = ROOT / 'cc8-assistant/app/src/main/java/com/happyhome/cc8assistant'
@@ -262,10 +263,34 @@ public final class CaptureCheck {
     stats.observe(true,319,origin+9_000_000,origin+20_000_000,640,origin);
     stats.observe(true,640,origin+50_000_000,origin+49_999_999,640,origin);
     stats.observe(true,640,origin+50_000_000,origin+60_000_000,640,origin);
-    yes(stats.snapshot().equals(Map.of(
+    Map<String,Number> expected=new LinkedHashMap<>(Map.of(
      "samples",6,"available",2,"unavailable",1,"invalid",1,"duplicate",1,
-     "discontinuities",1,"min_offset_ns",-10_000_000L,"max_offset_ns",10_000_000L)),
+     "discontinuities",1,"min_offset_ns",-10_000_000L,"max_offset_ns",10_000_000L));
+    for(String reason:new String[]{"frame_range","capture_range","frame_distance","origin",
+     "timestamp","future_timestamp","stale_timestamp","offset"})
+     expected.put("invalid_"+reason,"future_timestamp".equals(reason)?1:0);
+    yes(stats.snapshot().equals(expected),
      "incorrect classification, offset or data exposure");
+   } else if("clock_reasons".equals(test)){
+    CaptureClockStats stats=new CaptureClockStats();
+    long origin=10_000_000_000L,now=origin+20_000_000L;
+    stats.observe(true,-1,origin,now,320,origin);
+    stats.observe(true,320,origin,now,0,origin);
+    stats.observe(true,40000,origin,now,320,origin);
+    stats.observe(true,320,origin,now,320,0);
+    stats.observe(true,320,0,now,320,origin);
+    stats.observe(true,320,now+1,now,320,origin);
+    stats.observe(true,320,origin-3_000_000_000L,now,320,origin);
+    stats.observe(true,20000,origin-1_000_000_000L,now,20000,origin);
+    yes(stats.snapshot().get("invalid").intValue()==8,"invalid count changed");
+    for(String reason:new String[]{"frame_range","capture_range","frame_distance","origin",
+     "timestamp","future_timestamp","stale_timestamp","offset"})
+     yes(Integer.valueOf(1).equals(stats.snapshot().get("invalid_"+reason)),"reason missing: "+reason);
+    StringJoiner result=new StringJoiner(",","{","}");
+    for(Map.Entry<String,Number> e:stats.snapshot().entrySet())
+     result.add("\""+e.getKey()+"\":"+e.getValue());
+    System.out.print(result);
+    return;
    } else if("invalid".equals(test)){
     for(long limit:new long[]{-1,999,1500001,Long.MAX_VALUE}){
      try{s.startMicrophone(limit);throw new AssertionError("invalid limit accepted");}
@@ -459,6 +484,7 @@ class CaptureWindowTests(unittest.TestCase):
             timeout=12,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout
 
     def test_rejection_stops_only_the_owned_capture_and_releases_hardware(self):
         self.check_worker('rejected_capture')
@@ -480,6 +506,11 @@ class CaptureWindowTests(unittest.TestCase):
 
     def test_capture_clock_uses_only_plausible_advancing_anchors(self):
         self.check_worker('clock_math')
+
+    def test_capture_clock_invalid_reasons_survive_the_actual_java_report(self):
+        value = json.loads(self.check_worker('clock_reasons'))
+        summary = summarize_capture_clock(value)
+        self.assertEqual(summary, {'status': 'unconfirmed', **value})
 
     def test_bounded_capture_correlates_the_public_interruption_transcript(self):
         self.check_worker('interruption_transcript', BARGE_QUERY)
