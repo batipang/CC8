@@ -184,6 +184,47 @@ class AuditDeviceSuiteTests(unittest.TestCase):
         self.assertFalse(reviewed['verified'])
         self.assertEqual(reviewed['reason'], 'suite_latency_route_incomplete')
 
+    def test_partial_qa_replays_only_completed_prefix(self):
+        for state in ('running', 'failed'):
+            with self.subTest(state=state):
+                data = saved_suite(qa=True)
+                data['state'] = state
+                data['phases'][2]['state'] = state
+                data['latencies_ms'] = {QA_PLAYOUT_METRIC: {'samples': 30, 'p95': 0}}
+
+                reviewed = audit(data)
+                self.assertFalse(reviewed['verified'])
+                self.assertFalse(reviewed['full_p0_acceptance'])
+                self.assertEqual(reviewed['expected_phases'], 30)
+                self.assertEqual(reviewed['completed_phases'], 2)
+                self.assertEqual(reviewed['phase'], 'qa_03')
+                self.assertEqual(reviewed['reason'], 'phase_not_completed')
+                self.assertEqual(
+                    reviewed['latencies_ms'][QA_PLAYOUT_METRIC],
+                    {'samples': 2, 'p50': 15, 'p95': 19.5},
+                )
+
+    def test_partial_audit_stops_at_earlier_invalid_evidence(self):
+        data = saved_suite(qa=True)
+        data['state'] = 'running'
+        data['phases'][3]['state'] = 'running'
+        data['phases'][2]['report']['raw_audio_saved'] = True
+        data['phases'][1]['report']['automation_source_sha256'] = 'c' * 64
+
+        reviewed = audit(data)
+        self.assertFalse(reviewed['verified'])
+        self.assertEqual(reviewed['completed_phases'], 1)
+        self.assertEqual(reviewed['phase'], 'qa_02')
+        self.assertEqual(reviewed['reason'], 'suite_source_changed')
+        self.assertEqual(reviewed['latencies_ms'][QA_PLAYOUT_METRIC]['samples'], 1)
+
+        data['phases'][1]['report']['automation_source_sha256'] = 'a' * 64
+        reviewed = audit(data)
+        self.assertEqual(reviewed['completed_phases'], 2)
+        self.assertEqual(reviewed['phase'], 'qa_03')
+        self.assertEqual(reviewed['reason'], 'phase_provenance_incomplete')
+        self.assertEqual(reviewed['latencies_ms'][QA_PLAYOUT_METRIC]['samples'], 2)
+
     def test_self_playback_soak_recomputes_coverage_and_uses_one_pause_budget(self):
         data = saved_suite(echo_soak=True)
         data['echo_soak_totals'] = {'pause_requests': 0}
@@ -310,6 +351,17 @@ class AuditDeviceSuiteTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertNotIn('PRIVATE_NOT_IN_OUTPUT', result.stdout)
             self.assertTrue(json.loads(result.stdout)['verified'])
+            self.assertEqual(report.read_text(), encoded)
+            data['state'] = 'running'
+            data['phases'][1]['state'] = 'running'
+            encoded = json.dumps(data)
+            report.write_text(encoded)
+            partial = subprocess.run(
+                cmd, env={'PATH': '/usr/bin:/bin'}, capture_output=True, text=True, timeout=10
+            )
+            self.assertEqual(partial.returncode, 2)
+            self.assertNotIn('PRIVATE_NOT_IN_OUTPUT', partial.stdout)
+            self.assertEqual(json.loads(partial.stdout)['completed_phases'], 1)
             self.assertEqual(report.read_text(), encoded)
             report.chmod(0o644)
             bad = subprocess.run(

@@ -65,7 +65,7 @@ setup 可加 `--dry-run` 输出 argv 计划，不创建环境、不下载、不�
 
 `./cc8 audit-observation REPORT --expect-backend VERSION` 离线复核已保存的 72 小时窗口，输出无正文的判定和资源趋势。
 
-`./cc8 audit-device-suite REPORT --expect-backend VERSION --expect-apk-code CODE` 离线复核设备批次或 30 轮时延报告，按单轮证据重新判定。
+`./cc8 audit-device-suite REPORT --expect-backend VERSION --expect-apk-code CODE` 离线复核设备批次或 30 轮时延报告，按单轮证据重新判定。未完成的批次仍以状态码 2 退出，同时列出首个未通过的阶段、此前连续通过的轮数，以及由这些合格轮次重算的时延统计。部分样本仅用于诊断，不能作为完整批次的验收结果。
 
 ## 离线升级准备
 

@@ -134,16 +134,19 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
 
     reports = []
     artifact = None
+    failure = None
     for phase, (name, options) in zip(phases, plan):
         if (
             not isinstance(phase, dict)
             or phase.get('name') != name
             or phase.get('expected_checks') != planned_checks(set(options))
         ):
-            return {**result, 'phase': name, 'reason': 'phase_plan_mismatch'}
+            failure = {'phase': name, 'reason': 'phase_plan_mismatch'}
+            break
         report = phase.get('report')
         if phase.get('state') != 'passed' or not isinstance(report, dict):
-            return {**result, 'phase': name, 'reason': 'phase_not_completed'}
+            failure = {'phase': name, 'reason': 'phase_not_completed'}
+            break
         version, code = report.get('expected_apk_version'), report.get('expected_apk_code')
         if (
             not isinstance(version, str)
@@ -154,7 +157,8 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
             or (expect_apk_code is not None and code != expect_apk_code)
             or (artifact is not None and artifact != (version, code))
         ):
-            return {**result, 'phase': name, 'reason': 'apk_identity_mismatch'}
+            failure = {'phase': name, 'reason': 'apk_identity_mismatch'}
+            break
         artifact = (version, code)
         if (
             type(report.get('schema')) is not int
@@ -167,11 +171,13 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
                 for key in ('automation_source_sha256', 'speech_probe_source_sha256')
             )
         ):
-            return {**result, 'phase': name, 'reason': 'phase_provenance_incomplete'}
+            failure = {'phase': name, 'reason': 'phase_provenance_incomplete'}
+            break
         if 'standby' in options and not real_standby(
             report.get('standby_evidence'), report.get('elapsed_seconds')
         ):
-            return {**result, 'phase': name, 'reason': 'standby_duration_unconfirmed'}
+            failure = {'phase': name, 'reason': 'standby_duration_unconfirmed'}
+            break
         if {'awake_dialogue', 'acoustic'} & set(options):
             evidence = report.get('acoustic_evidence')
             quiet = (
@@ -180,17 +186,22 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
             if not bounded_number(quiet, POST_DIALOGUE_SECONDS, 86400) or not matched_playout(
                 evidence
             ):
-                return {**result, 'phase': name, 'reason': 'dialogue_timing_unconfirmed'}
+                failure = {'phase': name, 'reason': 'dialogue_timing_unconfirmed'}
+                break
         reports.append(report)
 
+    if failure is not None and not reports:
+        return {**result, **failure}
     rows = iter(reports)
 
     def replay(_options, _checkpoint, **_kwargs):
-        row = next(rows)
+        row = next(rows, None)
+        # Stop the in-memory replay at the first phase without usable evidence.
+        source = reports[0] if row is None else row
         return SimpleNamespace(
-            source_sha256=row['automation_source_sha256'],
-            speech_source_sha256=row['speech_probe_source_sha256'],
-            run=lambda: row,
+            source_sha256=source['automation_source_sha256'],
+            speech_source_sha256=source['speech_probe_source_sha256'],
+            run=lambda: {'state': 'failed'} if row is None else row,
         )
 
     reviewed = run_device_suite(
@@ -205,7 +216,13 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
         background=background,
     )
     result['completed_phases'] = sum(p['state'] == 'passed' for p in reviewed['phases'])
+    if (qa_latency or interruption) and result['completed_phases']:
+        result['latencies_ms'] = reviewed['latencies_ms']
+        if scenario != 'qa':
+            result['latency_scenario'] = scenario
     if reviewed['state'] != 'passed':
+        if failure is not None and result['completed_phases'] == len(reports):
+            return {**result, **failure}
         failed = next(p for p in reviewed['phases'] if p['state'] != 'passed')
         return {
             **result,
@@ -218,10 +235,6 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
         result['echo_soak_totals'] = reviewed['echo_soak_totals']
         if background is not None:
             result['background'] = background
-    if qa_latency or interruption:
-        result['latencies_ms'] = reviewed['latencies_ms']
-        if scenario != 'qa':
-            result['latency_scenario'] = scenario
     return {**result, 'verified': True}
 
 
