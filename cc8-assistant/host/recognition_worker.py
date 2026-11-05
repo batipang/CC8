@@ -210,18 +210,6 @@ class RecognitionWorker:
                 available = (
                     references if evidence is not None else references + self.hooks.recent_spoken()
                 )
-                self.hooks.metric(
-                    'last_voice_gate',
-                    {
-                        'echo_risk': risky,
-                        'references': len(available),
-                        'characters': len(clean),
-                        'capture_age_ms': round((time.monotonic() - evidence['captured_at']) * 1000)
-                        if evidence
-                        else None,
-                        'rejected': False,
-                    },
-                )
                 echo = (
                     risky
                     and (len(clean) > 2 or during_playback)
@@ -236,6 +224,8 @@ class RecognitionWorker:
                     and (len(render_audio) >= RATE // 3)
                     and (np.count_nonzero(np.abs(render_audio) > 0.001) >= RATE // 5)
                 ):
+                    if not self.hooks.valid(generation) or not self.hooks.wake_allowed():
+                        continue
                     # Only the captured render interval is compared, sequentially
                     # using the selected ASR provider; never decode the full answer.
                     self.hooks.metric('render_asr_checks', increment=True)
@@ -246,46 +236,62 @@ class RecognitionWorker:
                     echo = bool(render_text) and resembles_playback(text, [render_text])
                     if echo:
                         echo_decision = 'echo_render'
-                        self.hooks.metric('render_asr_rejections', increment=True)
                 if risky and ('明镜与点点' in clean or '明镜与点栏目' in clean):
                     echo = True
-                if self.hooks.echo_running() and render_text:
-                    self.hooks.record_echo_pair(text, render_text, echo)
-                if echo:
-                    decision = echo_decision
-                    rejected = True
-                    self.hooks.set_metric_field('last_voice_gate', 'rejected', True)
-                    self.hooks.metric('echo_transcripts_rejected', increment=True)
-                    self.hooks.log(
-                        'reference_like_transcript_rejected',
-                        characters=len(clean),
-                        references=len(available),
-                        capture_age_ms=round((time.monotonic() - evidence['captured_at']) * 1000)
-                        if evidence
-                        else None,
-                    )
-                    if not self.hooks.playing():
-                        self.hooks.status('listening', '我在听')
-                    continue
-                if (
-                    self.hooks.echo_running() or self.hooks.echo_failed()
-                ) and clean not in STOP_COMMANDS:
-                    decision = 'calibration'
-                    if self.hooks.echo_running():
-                        self.hooks.add_metric_field('echo_self_check', 'unmatched_candidates', 1)
-                    self.hooks.log(
-                        'echo_self_check_candidate_withheld',
-                        characters=len(clean),
-                        echo_risk=risky,
-                        references=len(available),
-                    )
-                    continue
                 captured = self.hooks.diagnostics().capture_record(trace_id)
                 # Recheck after reading evidence, then linearize admission,
-                # wake/stop actions and routing with the existing session guard.
+                # echo feedback, wake/stop actions and routing with the session guard.
                 # The capture-record lock was released before entering here.
                 with self.hooks.lock:
                     if not self.hooks.valid(generation) or not self.hooks.wake_allowed():
+                        continue
+                    capture_age_ms = (
+                        round((time.monotonic() - evidence['captured_at']) * 1000)
+                        if evidence
+                        else None
+                    )
+                    self.hooks.metric(
+                        'last_voice_gate',
+                        {
+                            'echo_risk': risky,
+                            'references': len(available),
+                            'characters': len(clean),
+                            'capture_age_ms': capture_age_ms,
+                            'rejected': False,
+                        },
+                    )
+                    if self.hooks.echo_running() and render_text:
+                        self.hooks.record_echo_pair(text, render_text, echo)
+                    if echo:
+                        decision = echo_decision
+                        rejected = True
+                        if echo_decision == 'echo_render':
+                            self.hooks.metric('render_asr_rejections', increment=True)
+                        self.hooks.set_metric_field('last_voice_gate', 'rejected', True)
+                        self.hooks.metric('echo_transcripts_rejected', increment=True)
+                        self.hooks.log(
+                            'reference_like_transcript_rejected',
+                            characters=len(clean),
+                            references=len(available),
+                            capture_age_ms=capture_age_ms,
+                        )
+                        if not self.hooks.playing():
+                            self.hooks.status('listening', '我在听')
+                        continue
+                    if (
+                        self.hooks.echo_running() or self.hooks.echo_failed()
+                    ) and clean not in STOP_COMMANDS:
+                        decision = 'calibration'
+                        if self.hooks.echo_running():
+                            self.hooks.add_metric_field(
+                                'echo_self_check', 'unmatched_candidates', 1
+                            )
+                        self.hooks.log(
+                            'echo_self_check_candidate_withheld',
+                            characters=len(clean),
+                            echo_risk=risky,
+                            references=len(available),
+                        )
                         continue
                     weak_capture = (
                         risky

@@ -5,6 +5,7 @@ import json
 import threading
 import time
 import unittest
+from unittest.mock import patch
 import numpy as np
 
 from bridge import Bridge
@@ -45,6 +46,7 @@ class WeakNearTests(unittest.TestCase):
         delayed=False,
         playing=None,
         references=None,
+        render_audio=None,
     ):
         entered, release = threading.Event(), threading.Event()
         calls = []
@@ -84,7 +86,7 @@ class WeakNearTests(unittest.TestCase):
                     'pause_token': token,
                     'local_wake': local_wake,
                 },
-                None,
+                render_audio,
                 key,
             )
         )
@@ -188,6 +190,45 @@ class WeakNearTests(unittest.TestCase):
         self.assertIsNone(current['outcome'])
         events = [json.loads(p.data) for p in b.session.connection.packets]
         self.assertFalse(any(e['event'] == 'playback_resume' for e in events))
+
+    def test_stale_echo_comparison_cannot_update_status_or_start_another_asr(self):
+        for comparison, result, asr_count in (
+            (1, True, 1),
+            (1, False, 1),
+            (2, True, 2),
+        ):
+            with self.subTest(comparison=comparison, result=result):
+                comparing, finish_comparison = threading.Event(), threading.Event()
+                comparisons = 0
+
+                def compare(*_):
+                    nonlocal comparisons
+                    comparisons += 1
+                    if comparisons != comparison:
+                        return False
+                    comparing.set()
+                    if not finish_comparison.wait(2):
+                        raise TimeoutError('test comparison was not released')
+                    return result
+
+                with patch('recognition_worker.resembles_playback', side_effect=compare):
+                    b, key, _, replies, calls, _, _ = self.start(
+                        '旧播报内容。', render_audio=np.full(16000, 0.1)
+                    )
+                    try:
+                        self.assertTrue(comparing.wait(1))
+                        b.cancel('new request')
+                        b.status('thinking', '新请求')
+                        packet_count = len(b.session.connection.packets)
+                    finally:
+                        finish_comparison.set()
+                    row = self.wait(b, key)
+                self.assertEqual(calls, ['recognize'] * asr_count)
+                self.assertEqual(row['gate'], 'stale')
+                self.assertEqual(replies, [])
+                self.assertEqual(b.session.connection.packets[packet_count:], [])
+                self.assertEqual(b.metrics.get('echo_transcripts_rejected', 0), 0)
+                self.assertEqual(b.metrics.get('render_asr_rejections', 0), 0)
 
     def test_weak_visual_words_do_not_open_camera_but_confirmed_request_still_routes(self):
         for count, expected in ((2, 0), (30, 1)):
