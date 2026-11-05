@@ -1,8 +1,11 @@
 """Independent keyword streams and serialized native reset; no real model/capture."""
 
+from pathlib import Path
+import tempfile
 import threading
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import numpy as np
 from fast_stop import FastStopDetector
 from local_wake import WakeDetector, ChineseWake, EnglishWake
@@ -44,6 +47,35 @@ class Backend:
 
 
 class LocalWakeTests(unittest.TestCase):
+    def test_only_english_wake_uses_wider_decoder_search(self):
+        model_files = (
+            'tokens.txt',
+            'encoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx',
+            'decoder-epoch-12-avg-2-chunk-16-left-64.onnx',
+            'joiner-epoch-12-avg-2-chunk-16-left-64.int8.onnx',
+            'encoder-epoch-13-avg-2-chunk-8-left-64.int8.onnx',
+            'decoder-epoch-13-avg-2-chunk-8-left-64.onnx',
+            'joiner-epoch-13-avg-2-chunk-8-left-64.int8.onnx',
+        )
+        english, chinese = Backend(), Backend()
+        spotter = Mock(side_effect=(chinese, english))
+        with tempfile.TemporaryDirectory() as directory:
+            model = Path(directory)
+            for name in model_files:
+                (model / name).touch()
+            with patch.dict(
+                'sys.modules', {'sherpa_onnx': SimpleNamespace(KeywordSpotter=spotter)}
+            ):
+                stop = FastStopDetector(model=model)
+                wake = WakeDetector.load(stop, english_model=model)
+
+        stop_call, english_call = spotter.call_args_list
+        self.assertNotIn('max_active_paths', stop_call.kwargs)
+        self.assertEqual(english_call.kwargs.get('max_active_paths'), 8)
+        self.assertEqual(english_call.kwargs['keywords_threshold'], 0.25)
+        self.assertIs(wake.chinese.detector, stop.detector)
+        self.assertIs(wake.english.detector, english)
+
     def pair(self):
         backend = Backend()
         with patch('fast_stop.keyword_spotter', return_value=backend):

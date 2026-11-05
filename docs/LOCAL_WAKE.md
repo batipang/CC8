@@ -32,6 +32,8 @@
 
 原双语模型对本轮英语合成音效果不足，英文改用独立的 `sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01`，资源为 `▁BU M B LE B E E @Bumblebee`。两支均 CPU 单线程、score 1、threshold 0.25、trailing blanks 1、输入 gain 2 / clip ±0.98。英文使用 int8 encoder / joiner 与原 fp32 decoder；未新增运行 Python 包。SentencePiece 只在隔离开发环境核对一次 BPE，不是运行依赖。
 
+后台 0.14.74 候选将英文解码的候选路径上限由 4 提到 8。中文唤醒和停止指令仍共用原检测器，得分、阈值和前处理保持原值。配对数字结果及实机验收范围见 [英文解码搜索范围配对](WAKE_RESEARCH.md#英文解码搜索范围配对2026-11-05)。
+
 `./cc8 setup --profile voice` 仍通过原全局运行所有权检查，再按两个清单下载/核对精确长度与 SHA-256、拒绝路径穿越/链接后解包。`doctor` 对照两个固定归档逐文件核验已提取内容。权重、下载缓存、生成音频不进入 Git；已运行另一份后台时不要从第二个克隆准备或启动模型。
 
 英文归档 17,626,723 字节，SHA-256 `f170013b4716e41b62b9bfd809687c207cef798ef9bc6534d524e17af9b6561a`。此 SHA 从官方 HTTPS 资产本机计算，上游旧资产 API 未提供 digest，清单明确记录来源；不是官方数字签名。中文固定清单沿用已核验的归档。
