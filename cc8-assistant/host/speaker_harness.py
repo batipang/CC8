@@ -38,6 +38,7 @@ public class AudioTrack {
  public volatile int pauses,plays,flushes,headReads,legacyWrites,modernWrites;
  public volatile Runnable duringRead;
  public final AtomicInteger releases=new AtomicInteger();
+ public final CountDownLatch resetApplied=new CountDownLatch(1);
  public final int bytes;
  public float volume;
  public AudioTrack(int stream,int rate,int channels,int encoding,int size,int mode){
@@ -54,6 +55,11 @@ public class AudioTrack {
   if(failFlush)throw new IllegalStateException("flush");
   physical=0;lastStart=0;manualHead=-1;flushes++;
   if(firstFlushNanos==0)firstFlushNanos=System.nanoTime();
+  if(flushes>=2&&Thread.currentThread().getName().equals("cc8-speaker-clock"))resetApplied.countDown();
+ }
+ public void awaitReset(){
+  try{if(!resetApplied.await(3,TimeUnit.SECONDS))throw new AssertionError("worker did not observe stop");}
+  catch(InterruptedException error){Thread.currentThread().interrupt();throw new AssertionError(error);}
  }
  public void release(){released=true;playing=false;if(releases.incrementAndGet()!=1)throw new AssertionError("double release");}
  public int getPlayState(){return playing?PLAYSTATE_PLAYING:2;}
@@ -228,7 +234,8 @@ public class VoiceSession implements AutoCloseable {
    yes(p.visualFrame()==frozen&&t.headReads==reads,"paused frame changed");
    p.resumeAfterNoise(15);CaptionProgress resumed=p.visualFrame();
    yes(!resumed.paused&&resumed.position==6&&resumed.level==.25f,"resume local frame");
-   p.pauseForVoice(16);long stop=System.nanoTime();p.cancel();
+   p.pauseForVoice(16);long stop=System.nanoTime();
+   synchronized(s.routeLock){s.cancelPlayback();}
    yes(t.flushes>=1&&p.cancelAppliedNanos>=stop&&p.cancelAppliedNanos>=t.firstFlushNanos,"native stop receipt");
    yes(p.visualFrame().id==0&&p.visualFrame().level==0,"stopped visuals retained");
   }
@@ -375,7 +382,7 @@ public class VoiceSession implements AutoCloseable {
 
 
 class SpeakerHarness:
-    def __init__(self):
+    def __init__(self, *, cancel_interleave=False):
         self.java = require_java()
         self.folder = tempfile.TemporaryDirectory(prefix='cc8-speaker-integration-')
         try:
@@ -395,6 +402,16 @@ class SpeakerHarness:
                 'boolean currentRoute(long route)',
             )
             actual = '\n'.join(method(source, signature) for signature in signatures)
+            if cancel_interleave:
+                # A derived scheduling fixture: run the actual Player with one latch checkpoint
+                # after it publishes stopped. Native operations and receipt logic stay unchanged.
+                marker = '      stopped = true;'
+                if actual.count(marker) != 1:
+                    raise AssertionError('Cancellation scheduling point must be unique')
+                actual = actual.replace(
+                    marker,
+                    marker + '\nif(lease!=null)((NativeSpeaker)lease.device).track.awaitReset();',
+                )
             signature = '} else if (p.type == Wire.SPEAKER) {'
             start = source.index(signature) + len(signature)
             end, depth = start, 1

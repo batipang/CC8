@@ -51,3 +51,14 @@ class SpeakerIntegrationTests(unittest.TestCase):
 
     def test_desktop_photo_keeps_audio_closed_while_explicit_scene_analysis_gets_output(self):
         self.check('vision_output')
+
+    def test_worker_observing_stop_cannot_consume_the_explicit_native_stop_receipt(self):
+        # The added latch checkpoint forces the worker to observe stopped before cancel returns.
+        # The ordinary fixture above still compiles the unmodified complete Player.
+        fixture = SpeakerHarness(cancel_interleave=True)
+        try:
+            result = fixture.run('visuals')
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(result.stdout.strip(), 'visuals passed')
+        finally:
+            fixture.close()

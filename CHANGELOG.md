@@ -7,6 +7,8 @@
 - Preserve applied pause/resume/stop receipts, invalidate old leases before
   clearing late writes, and release output on Stop, background or terminal
   standalone requests. Late PCM cannot create an output owner.
+- Cancel the native lease before publishing the Player's stopped flag, so the
+  session worker cannot consume the explicit command's applied-stop receipt.
 - Recheck transport identity after control parsing and bind each player and its
   PCM to the original route, including same-generation transport handovers.
 - Backend 0.14.85 and protocol 2 remain unchanged. This is an integration

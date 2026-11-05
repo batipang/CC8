@@ -1623,15 +1623,18 @@ final class VoiceSession {
 
     void cancel() {
       cancelAppliedNanos = 0;
-      stopped = true;
       frozenCaption = null;
       queue.clear();
-      if (outputOwner != null && lease != null)
-        try {
+      try {
+        if (outputOwner != null && lease != null)
           cancelAppliedNanos = outputOwner.output().cancel(lease);
-        } catch (RuntimeException ignored) {
-        }
-      interrupt();
+      } catch (RuntimeException ignored) {
+      } finally {
+        // Cancel the lease before publishing stopped: its worker also observes allowed().
+        // Otherwise that worker can win the flush and consume our applied-stop witness.
+        stopped = true;
+        interrupt();
+      }
     }
 
     void pauseForVoice(int token) {
