@@ -22,6 +22,7 @@ MIN_DELAY = -1280  # Render-clock estimates can be slightly ahead of capture.
 MAX_DELAY = 12800
 LEADING_BLOCK = 320  # 20 ms at 16 kHz.
 LEADING_LIMIT = 4000  # Search only the first 250 ms of the original reference.
+LEADING_SEARCH_FRAMES = ((LEADING_LIMIT - 1) // LEADING_BLOCK + 1) * LEADING_BLOCK
 RESPONSE_PREFIX_LIMIT = LEADING_LIMIT + WINDOW
 PREFIX_AGREEMENT = 32  # 2 ms on the device capture clock.
 PREFIX_SEARCH_RADIUS = 1280  # Inspect competing matches within 80 ms of the projected block.
@@ -330,7 +331,12 @@ class PlaybackEvidence:
         if self.current.input_end_ns is None:
             return {'status': 'render_clock_discontinuous'}
         offset = first_leading_block(self.response_prefix)
-        if offset is None or len(self.response_prefix) < offset + WINDOW:
+        required_frames = LEADING_SEARCH_FRAMES if offset is None else offset + WINDOW
+        if len(self.response_prefix) < required_frames:
+            # The stable template and MIC window can arrive before the full
+            # original RENDER prefix. Continue within this probe's deadline.
+            return None
+        if offset is None:
             return {'status': 'response_prefix_reference_missing'}
         # An observed later segment gives an independent capture-time anchor.
         # If the first waveform is contiguous with it, both matches project
@@ -442,6 +448,8 @@ class PlaybackEvidence:
         if status == 'observed':
             if self.clock_resets:
                 leading = self._response_leading_after_clock_jump(left + peak)
+                if leading is None:
+                    return
             else:
                 leading = self._leading_evidence(
                     left + peak - self.template_offset,

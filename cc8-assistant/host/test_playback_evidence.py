@@ -339,6 +339,56 @@ class AcousticEvidenceTests(unittest.TestCase):
                     self.assertNotIn(metric, evidence)
                 self.assertFalse(observer.response_prefix.size or observer.mic.size)
 
+    def test_response_probe_waits_for_late_render_reference_after_clock_jump(self):
+        for outcome in ('complete', 'expired', 'render_gap', 'no_leading_block'):
+            with self.subTest(outcome=outcome):
+                reference = public_signal()
+                silent_frames = 4800 if outcome == 'no_leading_block' else 1280
+                reference[:silent_frames] = 0
+                mic = scene(reference)
+                observer = PlaybackEvidence()
+                probe = observer.arm(101, 7, input_end_ns=START - 600_000_000)
+
+                def render(start, end):
+                    for frame in range(start, end, 320):
+                        step = 120_000_000 if frame < 640 else 0
+                        stamp = START + round(frame * 1e9 / RATE) + step
+                        observer.render(101, frame, stamp, reference[frame : frame + 320])
+
+                # With 80 ms of silence the stable template already exists,
+                # but the leading 200 ms window needs two more RENDER packets.
+                render(0, 3840)
+                for frame in range(0, len(mic), 320):
+                    observer.microphone(
+                        7, START - 200_000_000 + round(frame * 1e9 / RATE), mic[frame : frame + 320]
+                    )
+                self.assertFalse(probe.done.is_set())
+                if outcome == 'no_leading_block':
+                    render(3840, len(reference))
+                    self.assertTrue(probe.done.is_set())
+                    self.assertEqual(
+                        probe.result['leading_acoustic_evidence'],
+                        {'status': 'response_prefix_reference_missing'},
+                    )
+                elif outcome == 'complete':
+                    render(3840, 4480)
+                    self.assertTrue(probe.done.is_set())
+                    self.assertEqual(probe.result['status'], 'observed')
+                    leading = probe.result['leading_acoustic_evidence']
+                    self.assertEqual(leading['alignment'], 'matched_render_frames')
+                    self.assertEqual(leading['reference_block_start_ms'], 80)
+                    self.assertAlmostEqual(leading['last_voiced_to_confirmed_output_block_ms'], 800)
+                else:
+                    if outcome == 'expired':
+                        observer.cancel('expired', probe)
+                    else:
+                        render(4160, 4480)
+                    self.assertTrue(probe.done.is_set())
+                    self.assertEqual(probe.result['status'], outcome)
+                    render(3840, 4480)
+                    self.assertEqual(probe.result['status'], outcome)
+                self.assertFalse(observer.response_prefix.size or observer.mic.size)
+
     def test_repeated_clock_refinements_can_still_produce_a_stable_later_window(self):
         observer = PlaybackEvidence()
         probe = observer.arm(101, 7)

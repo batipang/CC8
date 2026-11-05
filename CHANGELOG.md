@@ -1,5 +1,11 @@
 # Changelog
 
+## Backend 0.14.80 — wait for delayed playback reference in the acoustic probe
+
+- Keep the bounded response probe pending when the microphone window arrives
+  before the original reference window. Retain the existing match thresholds,
+  timeout and discontinuity checks.
+
 ## Backend 0.14.79 — separate response acoustic fit failures
 
 - Report bounded reasons for insufficient room-fit coverage, an unconfirmed
