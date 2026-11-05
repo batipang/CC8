@@ -97,6 +97,7 @@ class StatusReporter:
             ),
             'playback_evidence_supported': True,
             'known_speech_evidence_supported': True,
+            'near_only_speech_evidence_supported': True,
             'causal_speech_model_supported': True,
             'far_reference_preflight_supported': True,
             'far_reference_overlap_supported': True,

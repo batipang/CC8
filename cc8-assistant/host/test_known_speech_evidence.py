@@ -109,6 +109,28 @@ class KnownSpeechTests(unittest.TestCase):
         self.assertEqual(result['status'], 'observed')
         self.assertEqual(result['match_start_offset_frames'], 9600)
 
+    def test_near_only_uses_same_matcher_without_fabricating_render_coverage(self):
+        pcm, metadata, _ = fixture()
+        mic, _ = self.signals()
+        for render in (False, True):
+            with self.subTest(render=render):
+                probe = KnownSpeechWindow(pcm, metadata, 12, 7, near_only=True)
+                held = probe.mic
+                self.assertEqual(probe.mark_stimulus(), {'status': 'unavailable'})
+                probe.microphone(7, 1_000_000_000, mic)
+                if render:
+                    probe.reference(13, 0, 1_000_000_000, np.zeros(160))
+                result = validate(probe.read(), near_only=True)
+                self.assertEqual(result['status'], 'unexpected_render' if render else 'observed')
+                self.assertEqual(result['reference_frames'], 0)
+                if not render:
+                    self.assertGreater(result['confidence'], 0.85)
+                    self.assertEqual(result['match_start_offset_frames'], 9600)
+                    self.assertEqual(result['matched_window_digital_render_ms'], 0)
+                self.assertFalse(np.any(held))
+                with self.assertRaises(ValueError):
+                    validate(result)
+
     def test_nearly_silent_identical_shape_does_not_confirm_an_acoustic_window(self):
         probe = self.probe()
         pcm, _, _ = fixture()

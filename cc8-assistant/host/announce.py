@@ -123,7 +123,8 @@ class AnnouncementServer:
                             self.path.parent / 'public-speech-fixtures',
                             request['directory'],
                             request['metadata'],
-                            request['generation'],
+                            request.get('generation'),
+                            near_only=request.get('near_only', False),
                         )
                     elif request.get('operation') == 'known_speech_stimulus':
                         if not known_speech_request(request):
