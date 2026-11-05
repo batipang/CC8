@@ -98,6 +98,7 @@ class StatusReporter:
             'playback_evidence_supported': True,
             'known_speech_evidence_supported': True,
             'causal_speech_model_supported': True,
+            'far_reference_preflight_supported': True,
             'leading_acoustic_evidence_supported': True,
             'response_acoustic_evidence_supported': True,
             'render_clock_evidence_supported': playback.device_can_report_clock,

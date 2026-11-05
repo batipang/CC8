@@ -88,6 +88,8 @@ def analyse(mic, render, template, mic_cutoff, render_cutoff):
         if score < 0.8 or not gain_ok or not signed:
             return {**result, 'status': 'held_out_unconfirmed'}
         result['status'] = 'validated'
+        if template is None:
+            return result
         # Predict only where the same original far-end reference is available.
         # Do not zero-pad the far end and present the remainder as clean speech.
         full = np.lib.stride_tricks.sliding_window_view(render[::2], 2 * HALF + 1)

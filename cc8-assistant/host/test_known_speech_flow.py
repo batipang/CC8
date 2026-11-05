@@ -7,7 +7,7 @@ from pathlib import Path
 import socket
 import threading
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 import numpy as np
 
@@ -242,6 +242,14 @@ class KnownSpeechFlowTests(unittest.TestCase):
             ({'operation': 'known_speech_result', 'token': 'a' * 32}, 'expired'),
             ({'operation': 'known_speech_stimulus', 'token': 'a' * 32}, 'insufficient_audio'),
             (
+                {'operation': 'known_speech_stimulus', 'token': 'a' * 32, 'verify_far': True},
+                'insufficient_audio',
+            ),
+            (
+                {'operation': 'known_speech_stimulus', 'token': 'a' * 32, 'verify_far': 1},
+                'invalid_request',
+            ),
+            (
                 {'operation': 'known_speech_stimulus', 'token': 'a' * 32, 'text': 'x'},
                 'invalid_request',
             ),
@@ -258,7 +266,10 @@ class KnownSpeechFlowTests(unittest.TestCase):
             Path('/owner/private/public-speech-fixtures'), arm['directory'], arm['metadata'], 12
         )
         bridge.read_known_speech.assert_called_once_with('a' * 32)
-        bridge.mark_known_speech_stimulus.assert_called_once_with('a' * 32)
+        self.assertEqual(
+            bridge.mark_known_speech_stimulus.call_args_list,
+            [call('a' * 32), call('a' * 32, verify_far=True)],
+        )
         bridge.announce.assert_not_called()
         bridge.control_device.assert_not_called()
 
@@ -324,7 +335,7 @@ class KnownSpeechFlowTests(unittest.TestCase):
             rpc.assert_not_called()
         plan = json.loads(output.getvalue())
         self.assertTrue(plan['known_speech_room_model'])
-        self.assertEqual(plan['minimum_backend_version'], '0.14.88')
+        self.assertEqual(plan['minimum_backend_version'], '0.14.89')
         from release_info import RELEASE
 
         health = dict(
