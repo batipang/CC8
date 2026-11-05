@@ -186,7 +186,7 @@ USB 激活失败由尝试激活的通道处理。即使触发路由复查的是 
 
 P0 的重叠采样另加 `--require-render-overlap`，后台须为 0.14.83 或更新版本。该模式检查已被接纳的新问题，要求至少一个 credible 帧同时具有高于 −60dBFS 的数字播放参考。报告保存 `credible_render_overlap_frames` 和本次严格模式声明。缺少整组捕获观察、旧格式计数或零覆盖时，完成操作与收尾后以 `interruption_render_overlap_unconfirmed` 保留未确认。
 
-0.14.86 候选的收音摘要还提供 VAD 成句前的 `onset_prefix_*` 观察，严格模式把整组摘要另存为 `barge_evidence.onset_prefix`，旧后台为 null。该组计数只解释覆盖缺口，不替代上述通过条件。字段范围、连续性和历史兼容见 [收音观察](VOICE_GATE_OBSERVATIONS.md)。
+0.14.86 的收音摘要还提供 VAD 成句前的 `onset_prefix_*` 观察，严格模式把整组摘要另存为 `barge_evidence.onset_prefix`，旧后台为 null。该组计数只解释覆盖缺口，不替代上述通过条件。字段范围、连续性、历史兼容与首次实机失败见 [收音观察](VOICE_GATE_OBSERVATIONS.md)。
 
 ```sh
 ./cc8 verify-device --runtime-root /absolute/live/workspace --capture --synthetic-barge --require-render-overlap
