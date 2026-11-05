@@ -111,6 +111,7 @@ class KnownSpeechWindow:
         self.cancelled = None
         self.analysing = False
         self.stimulus_boundary = None
+        self.preflight_pending = False
         self.timer = timer(8, lambda: self.cancel('expired'))
         self.timer.daemon = True
         try:
@@ -182,13 +183,13 @@ class KnownSpeechWindow:
             if self.cancelled is None:
                 self.render_frame = frame + len(pcm)
 
-    def mark_stimulus(self):
+    def mark_stimulus(self, *, verify_far=False):
         """Freeze samples already received before the client may start playback.
 
         No fitting occurs under the audio lock. Repeated calls cannot move the
         causal boundary into later mixed speech or reuse a completed owner.
         """
-        from causal_speech_model import MIN_PRE_FRAMES
+        from causal_speech_model import MIN_PRE_FRAMES, analyse
 
         with self.lock:
             if (
@@ -201,11 +202,41 @@ class KnownSpeechWindow:
             if min(self.mic_count, self.render_count) < MIN_PRE_FRAMES:
                 return {'status': 'insufficient_audio'}
             self.stimulus_boundary = (self.mic_count, self.render_count)
-            return {
+            boundary = {
                 'status': 'recorded',
                 'pre_stimulus_mic_frames': self.mic_count,
                 'pre_stimulus_render_frames': self.render_count,
             }
+            if not verify_far:
+                return boundary
+            mic = self.mic[: self.mic_count].copy()
+            render = self.render[: self.render_count].copy()
+            delta = round((self.mic_start - self.render_start) * RATE / 1e9)
+            self.preflight_pending = True
+
+        try:
+            left = max(0, delta)
+            right = min(len(render), delta + len(mic))
+            overlap = max(0, right - left)
+            result = {
+                'status': 'checked',
+                'boundary': boundary,
+                'coverage': {
+                    'estimated_mic_start_relative_to_render_frames': delta,
+                    'estimated_overlap_frames': overlap,
+                    'overlap_reference_rms': round(float(np.std(render[left:right])), 6)
+                    if overlap
+                    else 0.0,
+                },
+                'transfer': analyse(mic, render, None, len(mic), len(render)),
+            }
+        finally:
+            mic.fill(0)
+            render.fill(0)
+            with self.lock:
+                self.preflight_pending = False
+        with self.lock:
+            return {'status': 'unavailable'} if self.cancelled else result
 
     def read(self):
         # Transfer buffers to this IPC caller; no FFT on the audio ingress path.
@@ -214,7 +245,7 @@ class KnownSpeechWindow:
                 return self._receipt(self.cancelled)
             if self.result is not None:
                 return copy.deepcopy(self.result)
-            if self.analysing:
+            if self.analysing or self.preflight_pending:
                 return self._receipt('analysing')
             self.analysing = True
             self.timer.cancel()

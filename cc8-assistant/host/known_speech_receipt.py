@@ -47,7 +47,14 @@ def valid_request(value):
         return False
     if value.get('operation') in ('known_speech_result', 'known_speech_stimulus'):
         return (
-            set(value) == {'operation', 'token'}
+            (
+                set(value) == {'operation', 'token'}
+                or (
+                    value['operation'] == 'known_speech_stimulus'
+                    and set(value) == {'operation', 'token', 'verify_far'}
+                    and value['verify_far'] is True
+                )
+            )
             and isinstance(value['token'], str)
             and re.fullmatch('[a-f0-9]{32}', value['token']) is not None
         )
@@ -120,7 +127,7 @@ def validate(value):
         raise ValueError('Invalid known speech physical claim')
     for key in MATCH & fields:
         number = value[key]
-        if type(number) not in (int, float) or not math.isfinite(number) or not 0 <= number <= 1:
+        if type(number) not in (int, float) or not 0 <= number <= 1:
             raise ValueError('Invalid known speech score')
     if status == 'observed':
         start, overlap = (
@@ -164,7 +171,7 @@ def validate_boundary(value):
     return dict(value)
 
 
-def validate_transfer(value, mic_frames, render_frames):
+def validate_transfer(value, mic_frames, render_frames, *, preflight=False):
     """Strict content-free diagnostics; never an alternative raw-match gate."""
     base = {
         'schema',
@@ -194,6 +201,9 @@ def validate_transfer(value, mic_frames, render_frames):
         'residual_observed',
         'residual_unconfirmed',
     }
+    if preflight:
+        statuses -= {'mixed_window_incomplete', 'residual_observed', 'residual_unconfirmed'}
+        statuses.add('validated')
     if (
         not isinstance(value, dict)
         or not isinstance(value.get('status'), str)
@@ -209,6 +219,7 @@ def validate_transfer(value, mic_frames, render_frames):
         'fit_unavailable',
         'held_out_unconfirmed',
         'mixed_window_incomplete',
+        'validated',
         'residual_observed',
         'residual_unconfirmed',
     ):
@@ -216,6 +227,7 @@ def validate_transfer(value, mic_frames, render_frames):
     if status in (
         'held_out_unconfirmed',
         'mixed_window_incomplete',
+        'validated',
         'residual_observed',
         'residual_unconfirmed',
     ):
@@ -245,7 +257,7 @@ def validate_transfer(value, mic_frames, render_frames):
         alignment | {'held_out_confidence'} | residual - {'residual_window_offset_frames'}
     ) & fields:
         number = value[key]
-        if type(number) not in (float, int) or not math.isfinite(number) or not 0 <= number <= 1:
+        if type(number) not in (float, int) or not 0 <= number <= 1:
             raise ValueError('Invalid far transfer score')
     if held <= fields and any(
         type(value[k]) is not bool for k in ('held_out_gain_valid', 'held_out_polarity_valid')
@@ -259,7 +271,12 @@ def validate_transfer(value, mic_frames, render_frames):
             or not value['pre_stimulus_mic_frames'] <= offset <= mic_frames - 3200
         ):
             raise ValueError('Invalid residual window')
-    if status in ('mixed_window_incomplete', 'residual_observed', 'residual_unconfirmed') and (
+    if status in (
+        'validated',
+        'mixed_window_incomplete',
+        'residual_observed',
+        'residual_unconfirmed',
+    ) and (
         value['alignment_confidence'] < 0.55
         or value['alignment_confidence'] - value['alignment_rival'] < 0.12 - 0.0001
         or value['held_out_confidence'] < 0.8
@@ -274,3 +291,44 @@ def validate_transfer(value, mic_frames, render_frames):
     ):
         raise ValueError('Invalid residual match')
     return dict(value)
+
+
+def validate_far_preflight(value):
+    if (
+        not isinstance(value, dict)
+        or set(value) != {'status', 'boundary', 'coverage', 'transfer'}
+        or value['status'] != 'checked'
+    ):
+        raise ValueError('Invalid far preflight receipt')
+    boundary = validate_boundary(value['boundary'])
+    mic = boundary['pre_stimulus_mic_frames']
+    render = boundary['pre_stimulus_render_frames']
+    coverage = value['coverage']
+    if not isinstance(coverage, dict) or set(coverage) != {
+        'estimated_mic_start_relative_to_render_frames',
+        'estimated_overlap_frames',
+        'overlap_reference_rms',
+    }:
+        raise ValueError('Invalid far preflight coverage')
+    delta = coverage['estimated_mic_start_relative_to_render_frames']
+    overlap = coverage['estimated_overlap_frames']
+    rms = coverage['overlap_reference_rms']
+    if (
+        type(delta) is not int
+        or abs(delta) > 2**63
+        or type(overlap) is not int
+        or overlap != max(0, min(render, delta + mic) - max(0, delta))
+        or type(rms) not in (int, float)
+        or not 0 <= rms <= 1
+        or (overlap == 0 and rms != 0)
+    ):
+        raise ValueError('Invalid far preflight coverage values')
+    transfer = validate_transfer(value['transfer'], mic, render, preflight=True)
+    if any(transfer[k] != boundary[k] for k in boundary if k != 'status'):
+        raise ValueError('Invalid far preflight cutoff')
+    return {
+        'status': 'checked',
+        'boundary': boundary,
+        'coverage': dict(coverage),
+        'transfer': transfer,
+    }

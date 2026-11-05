@@ -30,7 +30,7 @@ from mac_voice import (
 from capture_evidence import validate as validate_capture, ONSET_PREFIX_COUNTS
 from known_speech_receipt import (
     validate as validate_known_speech,
-    validate_boundary as validate_known_boundary,
+    validate_far_preflight,
     valid_request as known_speech_request,
 )
 from diagnostics import (
@@ -1020,8 +1020,8 @@ class SmokeRun:
             'backend_known_speech_evidence_unsupported',
         )
         require(
-            not self.known_speech_room_model or h.get('causal_speech_model_supported') is True,
-            'backend_causal_speech_model_unsupported',
+            not self.known_speech_room_model or h.get('far_reference_preflight_supported') is True,
+            'backend_far_reference_preflight_unsupported',
         )
         require(
             not self.leading_acoustic_evidence
@@ -2468,13 +2468,28 @@ class SmokeRun:
                 # external speech. Never fit using the mixed test segment.
                 if self.known_speech_room_model:
                     self.sleep(1.0)
-                    boundary = self.request(
-                        {'operation': 'known_speech_stimulus', 'token': known_token}
+                    preflight = self.request(
+                        {
+                            'operation': 'known_speech_stimulus',
+                            'token': known_token,
+                            'verify_far': True,
+                        }
                     )
                     try:
-                        boundary = validate_known_boundary(boundary)
+                        preflight = validate_far_preflight(preflight)
                     except ValueError:
                         raise CheckFailure('known_speech_boundary_unconfirmed') from None
+                    evidence['far_reference_preflight'] = preflight
+                    require(
+                        preflight['transfer']['status'] == 'validated',
+                        'known_speech_far_reference_unconfirmed',
+                    )
+                    boundary = preflight['boundary']
+                    original_generation = announcement_generation
+                    require(
+                        started() and announcement_generation == original_generation,
+                        'known_speech_far_playback_changed',
+                    )
                 else:
                     self.sleep(0.25)
             prepared_options = (
@@ -3461,7 +3476,7 @@ def main(argv=None):
             plan['minimum_backend_version'] = '0.14.87'
         if args.known_speech_room_model:
             plan['known_speech_room_model'] = True
-            plan['minimum_backend_version'] = '0.14.88'
+            plan['minimum_backend_version'] = '0.14.89'
         print(json.dumps(plan, ensure_ascii=False, indent=2))
         return 0
     try:
@@ -3494,8 +3509,8 @@ def main(argv=None):
             )
         if args.known_speech_room_model:
             require(
-                health.get('causal_speech_model_supported') is True,
-                'backend_causal_speech_model_unsupported',
+                health.get('far_reference_preflight_supported') is True,
+                'backend_far_reference_preflight_unsupported',
             )
         if args.require_render_overlap:
             require(

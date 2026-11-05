@@ -3134,6 +3134,8 @@ class DeviceAutomationTests(unittest.TestCase):
             ('known', None),
             ('known_room', None),
             ('known_room_raw_miss', 'known_speech_window_unconfirmed'),
+            ('known_room_far_miss', 'known_speech_far_reference_unconfirmed'),
+            ('known_room_playback_changed', 'known_speech_far_playback_changed'),
             ('known_room_boundary_invalid', 'known_speech_boundary_unconfirmed'),
             ('known_room_boundary_mismatch', 'known_speech_boundary_mismatch'),
             ('known_miss', 'known_speech_window_unconfirmed'),
@@ -3372,17 +3374,40 @@ class DeviceAutomationTests(unittest.TestCase):
                         and payload.get('operation') == 'known_speech_stimulus'
                     ):
                         self.assertEqual(
-                            payload, {'operation': 'known_speech_stimulus', 'token': 'a' * 32}
+                            payload,
+                            {
+                                'operation': 'known_speech_stimulus',
+                                'token': 'a' * 32,
+                                'verify_far': True,
+                            },
                         )
                         if case == 'known_room_boundary_invalid':
                             return {'status': 'insufficient_audio'}
                         self.assertEqual(now[0], 1.0)
-                        return dict(
-                            status='recorded',
-                            pre_stimulus_mic_frames=CUTOFF
-                            + (160 if case == 'known_room_boundary_mismatch' else 0),
-                            pre_stimulus_render_frames=CUTOFF,
+                        cutoff = CUTOFF + (160 if case == 'known_room_boundary_mismatch' else 0)
+                        transfer = analyse(
+                            mic if case != 'known_room_far_miss' else mic * 0,
+                            far,
+                            None,
+                            cutoff,
+                            CUTOFF,
                         )
+                        if case == 'known_room_playback_changed':
+                            health['playing'] = False
+                        return {
+                            'status': 'checked',
+                            'boundary': {
+                                'status': 'recorded',
+                                'pre_stimulus_mic_frames': cutoff,
+                                'pre_stimulus_render_frames': CUTOFF,
+                            },
+                            'coverage': {
+                                'estimated_mic_start_relative_to_render_frames': 0,
+                                'estimated_overlap_frames': CUTOFF,
+                                'overlap_reference_rms': 0.3,
+                            },
+                            'transfer': transfer,
+                        }
                     self.assertEqual(payload, {'operation': 'diagnostics'})
                     extra = (
                         [self.acoustic_row(request_id='extra')]
@@ -3439,6 +3464,8 @@ class DeviceAutomationTests(unittest.TestCase):
                     'no_playout',
                     'known_bad_arm',
                     'known_room_boundary_invalid',
+                    'known_room_far_miss',
+                    'known_room_playback_changed',
                 ):
                     device.speak_probe.assert_not_called()
                 else:

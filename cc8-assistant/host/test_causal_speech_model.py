@@ -7,7 +7,12 @@ import numpy as np
 
 import causal_speech_model as model
 from known_speech_evidence import KnownSpeechWindow
-from known_speech_receipt import validate, validate_boundary, validate_transfer
+from known_speech_receipt import (
+    validate,
+    validate_boundary,
+    validate_far_preflight,
+    validate_transfer,
+)
 from test_known_speech_evidence import fixture
 
 
@@ -69,6 +74,44 @@ class CausalSpeechModelTests(unittest.TestCase):
             stamp = 1_000_000_000 + offset * 62500
             probe.reference(12, offset, stamp, far[offset : offset + 160])
             probe.microphone(7, stamp, mic[offset : offset + 160])
+
+    def test_far_preflight_freezes_samples_and_reports_signed_estimated_coverage(self):
+        mic, far, _ = signals(near=False)
+        pcm, metadata, _ = fixture()
+        probe = KnownSpeechWindow(pcm, metadata, 12, 7, timer=Mock())
+        self.addCleanup(probe.cancel)
+        probe.reference(12, 0, 1_000_000_000, far[:CUTOFF])
+        probe.microphone(7, 1_060_000_000, mic[960 : 960 + CUTOFF])
+        checked = validate_far_preflight(probe.mark_stimulus(verify_far=True))
+        self.assertEqual(checked['transfer']['status'], 'alignment_unconfirmed')
+        self.assertEqual(checked['coverage']['estimated_mic_start_relative_to_render_frames'], 960)
+        self.assertEqual(checked['coverage']['estimated_overlap_frames'], CUTOFF - 960)
+        self.assertGreater(checked['coverage']['overlap_reference_rms'], 0.1)
+        checked['coverage']['estimated_overlap_frames'] += 1
+        with self.assertRaises(ValueError):
+            validate_far_preflight(checked)
+
+    def test_far_preflight_discards_cancelled_result_and_clears_snapshot(self):
+        mic, far, _ = signals(near=False)
+        pcm, metadata, _ = fixture()
+        probe = KnownSpeechWindow(pcm, metadata, 12, 7, timer=Mock())
+        self.addCleanup(probe.cancel)
+        self.feed(probe, mic, far, 0, CUTOFF)
+        analyse = model.analyse
+        snapshots = []
+
+        def cancel_while_fitting(captured, reference, *args):
+            snapshots.extend((captured, reference))
+            self.assertEqual(probe.read()['status'], 'analysing')
+            self.feed(probe, mic, far, CUTOFF, CUTOFF + 160)
+            self.assertEqual(probe.mic_count, CUTOFF + 160)
+            probe.cancel('transport_changed')
+            return analyse(captured, reference, *args)
+
+        with patch.object(model, 'analyse', side_effect=cancel_while_fitting):
+            self.assertEqual(probe.mark_stimulus(verify_far=True), {'status': 'unavailable'})
+        self.assertEqual(probe.read()['status'], 'transport_changed')
+        self.assertTrue(all(not np.any(samples) for samples in snapshots))
 
     def test_silence_near_only_noise_and_far_only_cannot_invent_a_mixed_near_match(self):
         mic, far, known = signals(near=False)
