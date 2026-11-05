@@ -335,7 +335,7 @@ class KnownSpeechFlowTests(unittest.TestCase):
             rpc.assert_not_called()
         plan = json.loads(output.getvalue())
         self.assertTrue(plan['known_speech_room_model'])
-        self.assertEqual(plan['minimum_backend_version'], '0.14.89')
+        self.assertEqual(plan['minimum_backend_version'], '0.14.90')
         from release_info import RELEASE
 
         health = dict(

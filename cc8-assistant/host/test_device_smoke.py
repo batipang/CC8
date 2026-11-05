@@ -3137,6 +3137,8 @@ class DeviceAutomationTests(unittest.TestCase):
             ('known_room_far_miss', 'known_speech_far_reference_unconfirmed'),
             ('known_room_playback_changed', 'known_speech_far_playback_changed'),
             ('known_room_boundary_invalid', 'known_speech_boundary_unconfirmed'),
+            ('known_room_overlap_late', None),
+            ('known_room_overlap_timeout', 'known_speech_common_overlap_unconfirmed'),
             ('known_room_boundary_mismatch', 'known_speech_boundary_mismatch'),
             ('known_miss', 'known_speech_window_unconfirmed'),
             ('known_bad_receipt', 'known_speech_evidence_invalid'),
@@ -3382,8 +3384,24 @@ class DeviceAutomationTests(unittest.TestCase):
                             },
                         )
                         if case == 'known_room_boundary_invalid':
-                            return {'status': 'insufficient_audio'}
-                        self.assertEqual(now[0], 1.0)
+                            return {'status': 'unavailable'}
+                        if case == 'known_room_overlap_timeout' or (
+                            case == 'known_room_overlap_late' and now[0] == 1.0
+                        ):
+                            return {
+                                'status': 'awaiting_overlap',
+                                'boundary': {
+                                    'status': 'pending',
+                                    'pre_stimulus_mic_frames': 16000,
+                                    'pre_stimulus_render_frames': 16384,
+                                },
+                                'coverage': {
+                                    'estimated_mic_start_relative_to_render_frames': -7209,
+                                    'estimated_overlap_frames': 8791,
+                                    'overlap_reference_rms': None,
+                                },
+                            }
+                        self.assertEqual(now[0], 1.5 if case == 'known_room_overlap_late' else 1.0)
                         cutoff = CUTOFF + (160 if case == 'known_room_boundary_mismatch' else 0)
                         transfer = analyse(
                             mic if case != 'known_room_far_miss' else mic * 0,
@@ -3421,8 +3439,9 @@ class DeviceAutomationTests(unittest.TestCase):
                 run.request = request
                 if expected is None:
                     run.interruption_probe()
+                    expected_time = 21 if case.startswith('known_room') else 20.25 if known else 20
                     self.assertEqual(
-                        now[0], 21 if case.startswith('known_room') else 20.25 if known else 20
+                        now[0], expected_time + (0.5 if case == 'known_room_overlap_late' else 0)
                     )
                     evidence = run.report('passed')['barge_evidence']
                     self.assertEqual(evidence['device_pause_from_trigger_ms'], 35.5)
@@ -3464,6 +3483,7 @@ class DeviceAutomationTests(unittest.TestCase):
                     'no_playout',
                     'known_bad_arm',
                     'known_room_boundary_invalid',
+                    'known_room_overlap_timeout',
                     'known_room_far_miss',
                     'known_room_playback_changed',
                 ):

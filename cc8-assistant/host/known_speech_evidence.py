@@ -111,6 +111,7 @@ class KnownSpeechWindow:
         self.cancelled = None
         self.analysing = False
         self.stimulus_boundary = None
+        self.stimulus_delta = None
         self.preflight_pending = False
         self.timer = timer(8, lambda: self.cancel('expired'))
         self.timer.daemon = True
@@ -190,6 +191,7 @@ class KnownSpeechWindow:
         causal boundary into later mixed speech or reuse a completed owner.
         """
         from causal_speech_model import MIN_PRE_FRAMES, analyse
+        from known_speech_receipt import MIN_COMMON_FRAMES, estimated_overlap
 
         with self.lock:
             if (
@@ -201,34 +203,45 @@ class KnownSpeechWindow:
                 return {'status': 'unavailable'}
             if min(self.mic_count, self.render_count) < MIN_PRE_FRAMES:
                 return {'status': 'insufficient_audio'}
-            self.stimulus_boundary = (self.mic_count, self.render_count)
             boundary = {
                 'status': 'recorded',
                 'pre_stimulus_mic_frames': self.mic_count,
                 'pre_stimulus_render_frames': self.render_count,
             }
             if not verify_far:
+                self.stimulus_boundary = (self.mic_count, self.render_count)
                 return boundary
+            delta = round((self.mic_start - self.render_start) * RATE / 1e9)
+            overlap = estimated_overlap(self.mic_count, self.render_count, delta)
+            coverage = {
+                'estimated_mic_start_relative_to_render_frames': delta,
+                'estimated_overlap_frames': overlap,
+                'overlap_reference_rms': None,
+            }
+            if overlap < MIN_COMMON_FRAMES:
+                return {
+                    'status': 'awaiting_overlap',
+                    'boundary': {**boundary, 'status': 'pending'},
+                    'coverage': coverage,
+                }
             mic = self.mic[: self.mic_count].copy()
             render = self.render[: self.render_count].copy()
-            delta = round((self.mic_start - self.render_start) * RATE / 1e9)
+            self.stimulus_boundary = (len(mic), len(render))
+            self.stimulus_delta = delta
             self.preflight_pending = True
 
         try:
             left = max(0, delta)
-            right = min(len(render), delta + len(mic))
-            overlap = max(0, right - left)
+            coverage['overlap_reference_rms'] = round(
+                float(np.std(render[left : left + overlap])), 6
+            )
             result = {
                 'status': 'checked',
                 'boundary': boundary,
-                'coverage': {
-                    'estimated_mic_start_relative_to_render_frames': delta,
-                    'estimated_overlap_frames': overlap,
-                    'overlap_reference_rms': round(float(np.std(render[left:right])), 6)
-                    if overlap
-                    else 0.0,
-                },
-                'transfer': analyse(mic, render, None, len(mic), len(render)),
+                'coverage': coverage,
+                'transfer': analyse(
+                    mic, render, None, len(mic), len(render), estimated_delta=delta
+                ),
             }
         finally:
             mic.fill(0)
@@ -261,6 +274,7 @@ class KnownSpeechWindow:
                     render[: self.render_count],
                     template,
                     *self.stimulus_boundary,
+                    estimated_delta=self.stimulus_delta,
                 )
         finally:
             for audio in (mic, render, template):

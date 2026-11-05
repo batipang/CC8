@@ -29,6 +29,7 @@ from mac_voice import (
 )
 from capture_evidence import validate as validate_capture, ONSET_PREFIX_COUNTS
 from known_speech_receipt import (
+    MIN_COMMON_FRAMES,
     validate as validate_known_speech,
     validate_far_preflight,
     valid_request as known_speech_request,
@@ -1020,8 +1021,8 @@ class SmokeRun:
             'backend_known_speech_evidence_unsupported',
         )
         require(
-            not self.known_speech_room_model or h.get('far_reference_preflight_supported') is True,
-            'backend_far_reference_preflight_unsupported',
+            not self.known_speech_room_model or h.get('far_reference_overlap_supported') is True,
+            'backend_far_reference_overlap_unsupported',
         )
         require(
             not self.leading_acoustic_evidence
@@ -2468,18 +2469,31 @@ class SmokeRun:
                 # external speech. Never fit using the mixed test segment.
                 if self.known_speech_room_model:
                     self.sleep(1.0)
-                    preflight = self.request(
-                        {
-                            'operation': 'known_speech_stimulus',
-                            'token': known_token,
-                            'verify_far': True,
-                        }
+
+                    def preflight_reference():
+                        receipt = self.request(
+                            {
+                                'operation': 'known_speech_stimulus',
+                                'token': known_token,
+                                'verify_far': True,
+                            }
+                        )
+                        if receipt == {'status': 'insufficient_audio'}:
+                            return None
+                        try:
+                            checked = validate_far_preflight(receipt)
+                        except ValueError:
+                            raise CheckFailure('known_speech_boundary_unconfirmed') from None
+                        evidence['far_reference_preflight'] = checked
+                        return checked if checked['status'] == 'checked' else None
+
+                    preflight = self.wait(
+                        preflight_reference, 1.5, 'known_speech_common_overlap_unconfirmed'
                     )
-                    try:
-                        preflight = validate_far_preflight(preflight)
-                    except ValueError:
-                        raise CheckFailure('known_speech_boundary_unconfirmed') from None
-                    evidence['far_reference_preflight'] = preflight
+                    require(
+                        preflight['coverage']['estimated_overlap_frames'] >= MIN_COMMON_FRAMES,
+                        'known_speech_common_overlap_unconfirmed',
+                    )
                     require(
                         preflight['transfer']['status'] == 'validated',
                         'known_speech_far_reference_unconfirmed',
@@ -3476,7 +3490,7 @@ def main(argv=None):
             plan['minimum_backend_version'] = '0.14.87'
         if args.known_speech_room_model:
             plan['known_speech_room_model'] = True
-            plan['minimum_backend_version'] = '0.14.89'
+            plan['minimum_backend_version'] = '0.14.90'
         print(json.dumps(plan, ensure_ascii=False, indent=2))
         return 0
     try:
@@ -3509,8 +3523,8 @@ def main(argv=None):
             )
         if args.known_speech_room_model:
             require(
-                health.get('far_reference_preflight_supported') is True,
-                'backend_far_reference_preflight_unsupported',
+                health.get('far_reference_overlap_supported') is True,
+                'backend_far_reference_overlap_unsupported',
             )
         if args.require_render_overlap:
             require(
