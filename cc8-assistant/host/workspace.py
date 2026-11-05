@@ -237,7 +237,11 @@ class Workspace:
             task['stage'] = {
                 'completed': '请求已完成',
                 'failed': '执行结果待核对' if unconfirmed else '请求未完成',
-                'cancelled': '已停止等待；已执行的操作不会撤销',
+                'cancelled': (
+                    '连接已切换，执行结果待核对。请确认后再试。'
+                    if unconfirmed
+                    else '已停止等待；已执行的操作不会撤销'
+                ),
             }.get(status, status)
             for step in task['steps']:
                 if step['status'] == 'running':
@@ -250,12 +254,12 @@ class Workspace:
                     )
             self.revision += 1
 
-    def cancel_generation(self, generation: int) -> bool:
+    def cancel_generation(self, generation: int, *, unconfirmed: bool = False) -> bool:
         with self.lock:
             before = self.revision
             for task in self.tasks:
                 if task['generation'] == generation:
-                    self.task_finish(task['id'], 'cancelled')
+                    self.task_finish(task['id'], 'cancelled', unconfirmed=unconfirmed)
             return self.revision != before
 
     def reminder(

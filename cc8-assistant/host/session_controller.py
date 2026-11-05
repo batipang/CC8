@@ -235,7 +235,9 @@ class SessionController:
                 self.hooks.calibration().stop()
             self.hooks.cancel_observation()
             self.hooks.diagnostics().finish(self.generation, 'cancelled')
-            workspace_changed = self.hooks.workspace().cancel_generation(self.generation)
+            workspace_changed = self.hooks.workspace().cancel_generation(
+                self.generation, unconfirmed=reason == 'transport_switch'
+            )
             self.generation += 1
             generation = self.generation
             was_playing = self.hooks.playback().stop_output()
