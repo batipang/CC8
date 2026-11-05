@@ -253,6 +253,36 @@ RESPONSE_PROBE_REASONS = frozenset(
     )
 )
 
+ACOUSTIC_COVERAGE_REASONS = frozenset(
+    (
+        'ambiguous',
+        'not_observed',
+        'insufficient_reference',
+        'insufficient_capture_coverage',
+        'render_clock_discontinuous',
+        'reference_not_found',
+        'reference_not_sustained',
+        'capture_prefix_missing',
+        'leading_match_unconfirmed',
+        'response_prefix_reference_missing',
+        'response_prefix_match_unconfirmed',
+        'response_prefix_alignment_mismatch',
+        'response_prefix_discontinuous',
+    )
+)
+
+
+def acoustic_coverage_reason(value):
+    if (
+        isinstance(value, dict)
+        and value.get('status') == 'unconfirmed'
+        and ACOUSTIC_RESPONSE_METRIC not in value
+    ):
+        reason = value.get('reason')
+        if isinstance(reason, str) and reason in ACOUSTIC_COVERAGE_REASONS:
+            return reason
+    return None
+
 
 def summarize_response_anchor(value):
     limits = {
@@ -682,6 +712,7 @@ class SmokeRun:
         latency_scenario='qa',
         qa_question=ACOUSTIC_QUESTION,
         response_acoustic_evidence=False,
+        response_acoustic_coverage=False,
         synthetic_barge=False,
         synthetic_stop=False,
         stop_route='local',
@@ -708,6 +739,7 @@ class SmokeRun:
         self.latency_scenario = latency_scenario
         self.qa_question = ENGLISH_QUESTION if english_wake else qa_question
         self.response_acoustic_evidence = response_acoustic_evidence
+        self.response_acoustic_coverage = response_acoustic_coverage
         self.synthetic_barge = synthetic_barge
         self.synthetic_stop = synthetic_stop
         self.asr_stop = synthetic_stop and stop_route == 'asr'
@@ -1745,7 +1777,13 @@ class SmokeRun:
             self.health()
             timing = summarize_response_acoustic(observed, completed.get('generation'))
             self.acoustic_evidence['response_acoustic_timing'] = timing
-            require_evidence(timing['status'] == 'observed', 'response_acoustic_timing_unconfirmed')
+            require_evidence(
+                timing['status'] == 'observed'
+                or self.response_acoustic_coverage
+                and self.latency_sample
+                and acoustic_coverage_reason(timing) is not None,
+                'response_acoustic_timing_unconfirmed',
+            )
         d, ui = self.device.status()
         require(
             ui.get('screen_sleeping') is False and d.get('foreground') is True,
@@ -2499,12 +2537,17 @@ def run_device_suite(
     *,
     qa_latency=False,
     response_acoustic=False,
+    response_acoustic_coverage=False,
     extended_voice=False,
     latency_scenario='qa',
     interruption=False,
     echo_soak=False,
     background=None,
 ):
+    if response_acoustic_coverage and (
+        not (qa_latency and response_acoustic) or extended_voice or interruption or echo_soak
+    ):
+        raise ValueError('Acoustic coverage requires a QA acoustic suite')
     planned = device_suite_phases(
         qa_latency=qa_latency,
         extended_voice=extended_voice,
@@ -2543,6 +2586,9 @@ def run_device_suite(
         if response_acoustic:
             suite['response_acoustic_evidence'] = True
             suite['latencies_ms'][ACOUSTIC_RESPONSE_METRIC] = percentiles([])
+        if response_acoustic_coverage:
+            suite['response_acoustic_coverage'] = True
+            suite['response_acoustic_unconfirmed'] = {}
         if latency_scenario in MATH_SCENARIOS:
             suite['math_answers'] = dict.fromkeys(
                 ('matched', 'mismatch', 'unconfirmed', 'unreported'), 0
@@ -2694,6 +2740,20 @@ def run_device_suite(
                     phase.update(state='failed', reason='suite_awake_dialogue_quiet_incomplete')
                 elif not isinstance(timing, dict) or timing.get('status') != 'observed':
                     phase.update(state='failed', reason='suite_response_playout_timing_incomplete')
+                elif response_acoustic_coverage and (
+                    not matched_playout(evidence)
+                    or any(
+                        type(evidence.get(name)) is not int or evidence[name] != expected
+                        for name, expected in (
+                            ('admitted_voice_requests', 1),
+                            ('pending_voice_candidates', 0),
+                            ('unresumed_rejected_pauses', 0),
+                        )
+                    )
+                ):
+                    phase.update(
+                        state='failed', reason='suite_acoustic_coverage_dialogue_incomplete'
+                    )
                 elif evidence.get('recognized_stimulus_matches') is not True:
                     phase.update(state='failed', reason='suite_synthetic_stimulus_not_confirmed')
                 elif (
@@ -2711,7 +2771,13 @@ def run_device_suite(
                     phase.update(state='failed', reason='suite_latency_route_incomplete')
                 elif qa_latency:
                     stages = evidence.get('qa_stage_latencies_ms')
-                    interval = observed_response_interval(evidence.get('response_acoustic_timing'))
+                    acoustic_timing = evidence.get('response_acoustic_timing')
+                    interval = observed_response_interval(acoustic_timing)
+                    missing_reason = (
+                        acoustic_coverage_reason(acoustic_timing)
+                        if response_acoustic_coverage
+                        else None
+                    )
                     math_answers = suite.get('math_answers')
                     math_answer = evidence.get('math_answer_status', 'unreported')
                     if (
@@ -2723,7 +2789,7 @@ def run_device_suite(
                         )
                     ):
                         phase.update(state='failed', reason='suite_qa_stage_timing_incomplete')
-                    elif response_acoustic and interval is None:
+                    elif response_acoustic and interval is None and missing_reason is None:
                         phase.update(state='failed', reason='suite_qa_acoustic_timing_incomplete')
                     elif math_answers is not None and (
                         not isinstance(math_answer, str) or math_answer not in math_answers
@@ -2733,8 +2799,11 @@ def run_device_suite(
                         if math_answers is not None:
                             math_answers[math_answer] += 1
                         sample = {**stages, QA_PLAYOUT_METRIC: timing[QA_PLAYOUT_METRIC]}
-                        if response_acoustic:
+                        if response_acoustic and interval is not None:
                             sample[ACOUSTIC_RESPONSE_METRIC] = interval
+                        if missing_reason is not None:
+                            unconfirmed = suite['response_acoustic_unconfirmed']
+                            unconfirmed[missing_reason] = unconfirmed.get(missing_reason, 0) + 1
                         samples.append(sample)
                         suite['latencies_ms'] = {
                             name: percentiles(
@@ -2778,7 +2847,9 @@ def run_device_suite(
             save(suite)
             return suite
         save(suite)
-    suite['state'] = 'passed'
+    suite['state'] = (
+        'acoustic_incomplete' if suite.get('response_acoustic_unconfirmed') else 'passed'
+    )
     save(suite)
     return suite
 
@@ -2910,6 +2981,11 @@ def main(argv=None):
         action='store_true',
         help='Corroborate fixed awake answers in an individual run or the QA latency suite',
     )
+    parser.add_argument(
+        '--collect-acoustic-coverage',
+        action='store_true',
+        help='Continue a QA acoustic suite after a bounded acoustic-only miss',
+    )
     args = parser.parse_args(argv)
     options = {key for key in SMOKE_OPTIONS if getattr(args, key)}
     batch = (
@@ -2951,6 +3027,12 @@ def main(argv=None):
         args.qa_latency_suite or (not batch and args.awake_dialogue)
     ):
         parser.error('--response-acoustic-evidence requires --awake-dialogue or --qa-latency-suite')
+    if args.collect_acoustic_coverage and not (
+        args.qa_latency_suite and args.response_acoustic_evidence
+    ):
+        parser.error(
+            '--collect-acoustic-coverage requires --qa-latency-suite and --response-acoustic-evidence'
+        )
     if batch and options != {'capture'}:
         parser.error('Device batches require --capture and accept no individual check flags')
     if args.standby and not args.capture or args.acoustic and not args.standby:
@@ -3017,6 +3099,8 @@ def main(argv=None):
                     plan['latency_scenario'] = args.latency_scenario
                 if args.response_acoustic_evidence:
                     plan['response_acoustic_evidence'] = True
+                if args.collect_acoustic_coverage:
+                    plan['response_acoustic_coverage'] = True
             if args.self_playback_soak:
                 plan['self_playback_seconds_per_phase'] = ECHO_SOAK_SECONDS
                 if background_receipt is not None:
@@ -3197,6 +3281,7 @@ def main(argv=None):
                             args.response_acoustic_evidence
                             or 'response_acoustic_evidence' in enabled
                         ),
+                        response_acoustic_coverage=args.collect_acoustic_coverage,
                         expected_apk=(manifest.assistant.version, manifest.assistant.version_code),
                         **dict.fromkeys(enabled - {'response_acoustic_evidence'}, True),
                     )
@@ -3217,6 +3302,7 @@ def main(argv=None):
                             save,
                             qa_latency=args.qa_latency_suite,
                             response_acoustic=args.response_acoustic_evidence,
+                            response_acoustic_coverage=args.collect_acoustic_coverage,
                             extended_voice=args.extended_voice_evidence,
                             latency_scenario=args.latency_scenario,
                             interruption=args.interruption_suite,
@@ -3245,6 +3331,10 @@ def main(argv=None):
                         summary['latencies_ms'] = result['latencies_ms']
                         if 'math_answers' in result:
                             summary['math_answers'] = result['math_answers']
+                        if 'response_acoustic_unconfirmed' in result:
+                            summary['response_acoustic_unconfirmed'] = result[
+                                'response_acoustic_unconfirmed'
+                            ]
                         if args.latency_scenario != 'qa':
                             summary['latency_scenario'] = args.latency_scenario
                 else:
