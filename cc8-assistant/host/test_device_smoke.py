@@ -1720,7 +1720,49 @@ class DeviceAutomationTests(unittest.TestCase):
         result = run.run()
         self.assertEqual(result['state'], 'cleanup_unconfirmed')
         self.assertFalse(result['cleanup_microphone_off_verified'])
+        self.assertEqual(result['cleanup_reason'], 'cleanup_home_failed')
         self.assertNotIn('PRIVATE_BODY', json.dumps(result))
+
+    def test_cleanup_failures_keep_distinct_safe_phase_reasons(self):
+        for case, reason in (
+            ('stop', 'cleanup_capture_stop_unconfirmed'),
+            ('reopen', 'cleanup_maintenance_open_failed'),
+            ('connection', 'cleanup_connection_unconfirmed'),
+            ('foreground', 'cleanup_foreground_unconfirmed'),
+            ('fixture', 'cleanup_fixture_not_removed'),
+        ):
+            with self.subTest(case=case):
+                run, device, health, _ = self.fixture()
+                run.playback = Mock(side_effect=CheckFailure('original_check_failed'))
+                if case == 'stop':
+                    device.home.side_effect = lambda: health.update(microphone_active=True)
+                elif case == 'reopen':
+                    device.open.side_effect = [None, OSError('PRIVATE_REOPEN_FAILURE')]
+                elif case in ('connection', 'foreground'):
+
+                    def open_activity(capture):
+                        self.assertFalse(capture)
+                        if device.open.call_count == 2:
+                            if case == 'connection':
+                                health['connected'] = False
+                            else:
+                                device.status.return_value[0]['foreground'] = False
+
+                    device.open.side_effect = open_activity
+                else:
+                    run.preparation_attempted = True
+                    device.close_speech_probe.side_effect = OSError('PRIVATE_FIXTURE_FAILURE')
+                result = run.run()
+                self.assertEqual(result['state'], 'cleanup_unconfirmed')
+                self.assertEqual(result['cleanup_reason'], reason)
+                self.assertEqual(result['cleanup_microphone_off_verified'], case == 'fixture')
+                self.assertEqual(result['checks'][-1]['reason'], 'original_check_failed')
+                self.assertNotIn('PRIVATE_', json.dumps(result))
+                device.home.assert_called_once()
+                self.assertEqual(
+                    [call.args for call in device.open.call_args_list],
+                    [(False,)] * (1 if case == 'stop' else 2),
+                )
 
     def test_playout_requires_fresh_completed_receipt_not_old_success(self):
         for fresh in (False, True):

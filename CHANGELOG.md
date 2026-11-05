@@ -1,5 +1,14 @@
 # Changelog
 
+## Device checks — retain a safe cleanup failure phase
+
+- Identify which cleanup phase was unconfirmed without exporting device/IPC
+  error bodies or obscuring the original check failure. A replacement runtime
+  still blocks old device actions and takes precedence in the receipt.
+- Keep existing stop/reopen checks and device actions unchanged. Record the
+  0.14.88 field run and separate capture-off foreground recovery without
+  rewriting the original acoustic or cleanup result.
+
 ## Backend 0.14.88 — causal transfer diagnostics for known-speech QA
 
 - Add an opt-in pre-stimulus boundary to the known-source interruption check.
