@@ -3316,6 +3316,25 @@ class DeviceAutomationTests(unittest.TestCase):
             (SCENARIO_QUESTIONS['tool'][-1], 'tool', '５＋６＝十一。', 'matched'),
             (SCENARIO_QUESTIONS['tool'][-1], 'tool', '1 1', 'unconfirmed'),
             (SCENARIO_QUESTIONS['tool'][-1], 'tool', '5 + 5 = 11', 'mismatch'),
+            (
+                SCENARIO_QUESTIONS['tool'][0],
+                'tool',
+                '本机只读终端命令计算结果：一加一等于二。',
+                'matched',
+            ),
+            (
+                SCENARIO_QUESTIONS['tool'][0],
+                'tool',
+                '本机只读终端命令计算结果：一加一等于三。',
+                'mismatch',
+            ),
+            (
+                SCENARIO_QUESTIONS['tool'][0],
+                'tool',
+                '本机只读终端命令计算结果：一加一等于二，或者等于三。',
+                'unconfirmed',
+            ),
+            (ACOUSTIC_QUESTION, 'qa', '本机只读终端命令计算结果：一加一等于二。', 'unconfirmed'),
             (SCENARIO_QUESTIONS['web'][0], 'web', '答案是二', None),
         ):
             with self.subTest(scenario=scenario, answer=answer):

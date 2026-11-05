@@ -39,6 +39,7 @@ WEB_TOPICS = (
     '深圳图书馆',
 )
 TOOL_PREFIX = '请用本机只读终端命令计算'
+TOOL_ANSWER_LABEL = '本机只读终端命令计算结果:'
 MATH_SCENARIOS = ('qa', 'tool')
 SCENARIO_QUESTIONS = {
     'qa': QUESTIONS,
@@ -87,6 +88,8 @@ def math_answer_status(question, result):
 
     left, right = map(int, operands.groups())
     answer = unicodedata.normalize('NFKC', result).strip().rstrip('。.!').rstrip()
+    if question.startswith(TOOL_PREFIX):
+        answer = answer.removeprefix(TOOL_ANSWER_LABEL).lstrip()
     value = ANSWER_VALUE.fullmatch(answer)
     if value is not None:
         return 'matched' if number(value[1]) == left + right else 'mismatch'
