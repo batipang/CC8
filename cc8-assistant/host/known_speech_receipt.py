@@ -20,6 +20,19 @@ BASE = {
 }
 MATCH = {'confidence', 'rival_confidence', 'render_similarity'}
 OBSERVED = {'match_start_offset_frames', 'matched_window_digital_render_ms'}
+NEAR_TRANSFER_STATUSES = {
+    'coverage_incomplete',
+    'training_below_floor',
+    'alignment_unconfirmed',
+    'fit_unavailable',
+    'held_out_unconfirmed',
+    'validated',
+}
+NEAR_BLOCK_STATUSES = {'matched', 'capture_below_floor', 'gain_out_of_range', 'shape_mismatch'}
+NEAR_MAX_DELAY = 17600  # 1.1 s at 16 kHz
+NEAR_FILTER_HALF = 96
+NEAR_HOLDOUT_START = 36000  # 2.25 s at 16 kHz
+NEAR_HOLDOUT_BLOCK = 3200
 STATUSES = {
     'observed',
     'ambiguous',
@@ -89,6 +102,13 @@ def validate(value, *, near_only=False):
     fields = (
         BASE
         | ({'near_only'} if near_only else set())
+        | (
+            {'near_transfer'}
+            if near_only
+            and 'near_transfer' in value
+            and status in ('observed', 'ambiguous', 'not_observed', 'capture_incomplete')
+            else set()
+        )
         | (
             MATCH
             if status in ('observed', 'ambiguous', 'not_observed', 'reference_not_distinct')
@@ -171,7 +191,59 @@ def validate(value, *, near_only=False):
                 value['far_transfer'], value['captured_frames'], value['reference_frames']
             ),
         }
+    if 'near_transfer' in value:
+        return {**value, 'near_transfer': validate_near_transfer(value['near_transfer'], value)}
     return dict(value)
+
+
+def validate_near_transfer(transfer, receipt):
+    if not isinstance(transfer, dict) or not isinstance(transfer.get('status'), str):
+        raise ValueError('Invalid near transfer receipt')
+    status = transfer['status']
+    fields = set(transfer)
+    scores = {'envelope_confidence', 'envelope_rival'}
+    fit = {'delay_frames'}
+    holdout = {'held_out_blocks'}
+    before_fit = {'status'} | scores
+    after_fit = before_fit | fit
+    allowed = {
+        'coverage_incomplete': ({'status'}, after_fit),
+        'training_below_floor': ({'status'}, after_fit),
+        'alignment_unconfirmed': (before_fit,),
+        'fit_unavailable': (after_fit,),
+        'held_out_unconfirmed': (after_fit | holdout,),
+        'validated': (after_fit | holdout,),
+    }
+    if status not in NEAR_TRANSFER_STATUSES or fields not in allowed[status]:
+        raise ValueError('Invalid near transfer fields')
+    for key in scores & fields:
+        item = transfer[key]
+        if type(item) not in (int, float) or not 0 <= item <= 1:
+            raise ValueError('Invalid near transfer score')
+    if fit <= fields:
+        delay = transfer['delay_frames']
+        if (
+            type(delay) is not int
+            or not -NEAR_FILTER_HALF <= delay <= NEAR_MAX_DELAY
+            or delay % 2
+            or transfer['envelope_confidence'] < 0.60
+            or transfer['envelope_confidence'] - transfer['envelope_rival'] < 0.08 - 0.0001
+        ):
+            raise ValueError('Invalid near transfer alignment')
+    if holdout <= fields:
+        blocks = transfer['held_out_blocks']
+        if (
+            not isinstance(blocks, list)
+            or len(blocks) != 2
+            or any(
+                not isinstance(block, str) or block not in NEAR_BLOCK_STATUSES for block in blocks
+            )
+            or (status == 'validated') != (blocks == ['matched', 'matched'])
+            or receipt['captured_frames'] < NEAR_HOLDOUT_START + 2 * NEAR_HOLDOUT_BLOCK + delay
+        ):
+            raise ValueError('Invalid near transfer holdout')
+        return {**transfer, 'held_out_blocks': list(blocks)}
+    return dict(transfer)
 
 
 def validate_boundary(value):
