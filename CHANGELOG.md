@@ -1,5 +1,11 @@
 # Changelog
 
+## Backend 0.14.83 — record contiguous near-speech and playback overlap
+
+- Include the longest credible frame run and the credible frame counts with and
+  without an energetic playback reference in bounded utterance diagnostics.
+  Preserve legacy reports with unknown temporal coverage.
+
 ## Backend 0.14.82 — check local response alignment before accepting room compensation
 
 - Locate overlapping short portions of the predicted prefix independently before

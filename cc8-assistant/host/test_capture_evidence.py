@@ -16,7 +16,7 @@ from unittest.mock import patch
 import numpy as np
 
 from bridge import Bridge
-from capture_evidence import CaptureEvidence, validate
+from capture_evidence import CaptureEvidence, TEMPORAL_COUNTS, validate
 from diagnostic_run import DiagnosticRun
 from diagnostics import TraceBook
 from dsp import FRAME, RATE, VoiceDetector
@@ -48,6 +48,93 @@ def evidence():
 
 
 class CaptureDiagnosticsTests(unittest.TestCase):
+    def test_credible_runs_and_render_overlap_survive_the_real_diagnostic_collector(self):
+        stats = CaptureEvidence()
+        near = SimpleNamespace(correlation=0.0, residual_correlation=0.0)
+        pcm, zero = np.full(FRAME, 0.1), np.zeros(FRAME)
+        for index, (credible, rendering) in enumerate(
+            zip(
+                (True, True, False, True, True, True, False, True),
+                (True, False, True, True, False, False, False, True),
+            )
+        ):
+            stats.feed(
+                CleanFrame(index * 10_000_000, pcm, pcm if rendering else zero, pcm, pcm),
+                near,
+                voiced=credible,
+                credible=credible,
+                pause_requested=False,
+            )
+        value = stats.snapshot(echo_risk=True, during_playback=True, local_wake=False)
+        self.assertEqual(value['max_credible_run_frames'], 3)
+        self.assertEqual(value['credible_with_render_frames'], 3)
+        self.assertEqual(value['credible_without_render_frames'], 3)
+        book = TraceBook()
+        run = DiagnosticRun()
+        run.ingest(book.report())
+        key = book.begin('voice')
+        book.capture(key, value)
+        run.ingest(book.report())
+        self.assertEqual(run.report()['requests'][0]['capture'], value)
+        changed = deepcopy(book.report())
+        changed['requests'][0]['capture']['max_credible_run_frames'] = 2
+        before = run.report()
+        with self.assertRaises(ValueError):
+            run.ingest(changed)
+        self.assertEqual(run.report(), before)
+
+    def test_credible_run_breaks_at_silence_and_capture_clock_discontinuities(self):
+        pcm = np.full(FRAME, 0.1)
+        near = SimpleNamespace(correlation=0.0, residual_correlation=0.0)
+        for stamps, expected in (
+            ([0, 10_000_000, 20_000_000, 30_000_000], 4),
+            ([0, 8_000_000, 20_000_000, 30_000_000], 4),
+            ([0, 10_000_000, 30_000_000, 40_000_000], 2),
+            ([0, 10_000_000, 10_000_000, 20_000_000], 2),
+        ):
+            with self.subTest(stamps=stamps):
+                stats = CaptureEvidence()
+                for stamp in stamps:
+                    stats.feed(
+                        CleanFrame(stamp, pcm, pcm, pcm, pcm),
+                        near,
+                        voiced=True,
+                        credible=True,
+                        pause_requested=False,
+                    )
+                value = stats.snapshot(echo_risk=True, during_playback=True, local_wake=False)
+                self.assertEqual(value['max_credible_run_frames'], expected)
+        stats = CaptureEvidence()
+        stats.feed(
+            CleanFrame(0, pcm, pcm, pcm, pcm),
+            near,
+            voiced=False,
+            credible=False,
+            pause_requested=False,
+        )
+        self.assertEqual(
+            stats.snapshot(echo_risk=False, during_playback=False, local_wake=False)[
+                'max_credible_run_frames'
+            ],
+            0,
+        )
+
+    def test_legacy_capture_reports_keep_temporal_coverage_unknown(self):
+        legacy = {k: v for k, v in evidence().items() if k not in TEMPORAL_COUNTS}
+        self.assertEqual(validate(legacy), legacy)
+        book = TraceBook()
+        run = DiagnosticRun()
+        run.ingest(book.report())
+        book.capture(book.begin('voice'), legacy)
+        run.ingest(book.report())
+        capture = run.report()['requests'][0]['capture']
+        self.assertEqual(capture, legacy)
+        self.assertFalse(TEMPORAL_COUNTS & capture.keys())
+        for field in TEMPORAL_COUNTS:
+            partial = {**legacy, field: 0}
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                validate(partial)
+
     def test_numeric_observations_roundtrip_without_pcm_or_aliases(self):
         value = evidence()
         self.assertEqual(
@@ -158,6 +245,12 @@ class CaptureDiagnosticsTests(unittest.TestCase):
             ('frames', 2001),
             ('voiced_frames', 3),
             ('credible_frames', 2),
+            ('max_credible_run_frames', True),
+            ('max_credible_run_frames', 0),
+            ('max_credible_run_frames', 2),
+            ('credible_with_render_frames', -1),
+            ('credible_with_render_frames', 0),
+            ('credible_without_render_frames', 1),
             ('render_frames', 0),
             ('voiced_after_pause_request_frames', 2),
             ('max_raw_correlation', float('nan')),
