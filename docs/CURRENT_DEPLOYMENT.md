@@ -1,6 +1,12 @@
 # 当前 CC8 部署与验收范围
 
-2026-11-05，实际运行 **Mac 后台 0.14.78／原签名 APK 0.9.34（code71）／协议 2**。源码为 main 的 `65082c3acf0443cecaf4ba307686ffd7afee43a9`，[主分支 CI](https://github.com/batipang/CC8/actions/runs/41959833980) 八项通过。回执 `deployment-d9e2c659.json` 用时 17.173 秒，保留原配置、配对和 APK，就绪时核对停采。独立问答 `device-20261105T031528Z-338a57a8.json` 匹配问题且播完，随后观察 20.017 秒并核对停采，前段声学匹配仍未确认。见 [问答时延采样](MEASUREMENT_RUNS.md#30-轮合成简单问答采样)。
+2026-11-05，实际运行 **Mac 后台 0.14.79／原签名 APK 0.9.34（code71）／协议 2**。源码为 main 的 `98910e11d5cd9d6ce6c0a5e202620e99ce430a11`，[主分支 CI](https://github.com/batipang/CC8/actions/runs/41962922343) 八项通过。回执 `deployment-b5868174.json` 用时 17.043 秒，保留原配置、配对和 APK，就绪时核对停采。
+
+固定工作树实机报告 `device-20261105T034404Z-fb5e817d.json` 确认同一回答播完，随后观察 20.019 秒并核对停采。声学探针返回 `response_prefix_reference_missing`，此次在检查独立房间模型之前就停止确认。句尾到设备播放回执 4.551 秒，声学起声时延缺测。
+
+## 0.14.78／code71 自动验收
+
+2026-11-05，当时运行 **Mac 后台 0.14.78／原签名 APK 0.9.34（code71）／协议 2**。源码为 main 的 `65082c3acf0443cecaf4ba307686ffd7afee43a9`，[主分支 CI](https://github.com/batipang/CC8/actions/runs/41959833980) 八项通过。回执 `deployment-d9e2c659.json` 用时 17.173 秒，保留原配置、配对和 APK，就绪时核对停采。独立问答 `device-20261105T031528Z-338a57a8.json` 匹配问题且播完，随后观察 20.017 秒并核对停采，前段声学匹配仍未确认。见 [问答时延采样](MEASUREMENT_RUNS.md#30-轮合成简单问答采样)。
 
 ## 0.14.77／code71 自动验收
 

@@ -146,6 +146,14 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
         report = phase.get('report')
         if phase.get('state') != 'passed' or not isinstance(report, dict):
             failure = {'phase': name, 'reason': 'phase_not_completed'}
+            if (
+                data.get('state') == 'failed'
+                and phase.get('state') == 'failed'
+                and 'report' not in phase
+                and phase.get('reason') == 'suite_source_changed'
+            ):
+                # The batch rejected this phase before collecting evidence.
+                failure['recorded_failure'] = 'suite_source_changed'
             break
         version, code = report.get('expected_apk_version'), report.get('expected_apk_code')
         if (

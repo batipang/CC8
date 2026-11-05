@@ -225,6 +225,24 @@ class AuditDeviceSuiteTests(unittest.TestCase):
         self.assertEqual(reviewed['reason'], 'phase_provenance_incomplete')
         self.assertEqual(reviewed['latencies_ms'][QA_PLAYOUT_METRIC]['samples'], 2)
 
+    def test_partial_audit_retains_only_the_known_precheck_failure(self):
+        data = saved_suite(qa=True)
+        data['state'] = 'failed'
+        phase = data['phases'][2]
+        phase.pop('report')
+        phase.update(state='failed', reason='suite_source_changed')
+        reviewed = audit(data)
+        self.assertFalse(reviewed['verified'])
+        self.assertEqual(reviewed['completed_phases'], 2)
+        self.assertEqual(reviewed['phase'], 'qa_03')
+        self.assertEqual(reviewed['reason'], 'phase_not_completed')
+        self.assertEqual(reviewed['recorded_failure'], 'suite_source_changed')
+
+        phase['reason'] = 'private-backend-message'
+        self.assertNotIn('recorded_failure', audit(data))
+        phase.update(state='running', reason='suite_source_changed')
+        self.assertNotIn('recorded_failure', audit(data))
+
     def test_self_playback_soak_recomputes_coverage_and_uses_one_pause_budget(self):
         data = saved_suite(echo_soak=True)
         data['echo_soak_totals'] = {'pause_requests': 0}
