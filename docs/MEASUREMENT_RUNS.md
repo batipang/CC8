@@ -97,14 +97,21 @@ stdout 只输出报告的绝对路径，提示写 stderr。退出 0 表示采集
 
 ### 30 轮合成简单问答采样
 
+开发期间从单独的固定提交工作树执行实机批次，直到保存终态报告再更新或移除该工作树。测试锁保护同一后台和设备。检查器或 Mac 合成音模块的源码摘要在轮次之间变化时，下一轮在触碰设备前停止。新工作树需按 [开发说明](DEVELOPMENT.md) 准备本地 Android SDK 路径。也可把仅含 SDK、JDK 和 Gradle 路径的 `.toolchains/cc8/paths.json` 复制过去，无需复制运行配置或凭据。报告保存到测试工作树的私有目录。
+
 ```sh
 ./cc8 verify-device --runtime-root /absolute/runtime --capture --qa-latency-suite
-./cc8 verify-device --runtime-root /absolute/runtime --capture --qa-latency-suite --execute
+git worktree add --detach /absolute/qa-checkout COMMIT
+mkdir -p /absolute/qa-checkout/.toolchains/cc8
+cp .toolchains/cc8/paths.json /absolute/qa-checkout/.toolchains/cc8/paths.json
+/absolute/qa-checkout/cc8 verify-device --runtime-root /absolute/runtime --capture --qa-latency-suite --execute
 ```
 
-第一条只打印计划。第二条要求后台至少 0.14.50，并为同一后台实例和 USB 目标持有贯穿全程的测试锁。每轮单独限时开麦和校准，由 Mac 播一次带“大黄蜂”唤醒词的固定加法问句。30 轮各用不同的有序加数组合，逐轮核对识别标题和同段播放回执。计划和报告绑定同一套题目的 SHA-256，只列用例编号。播完后继续观察 20 秒，再确认停采并回到前台。遇到失败、误唤醒导致的额外回合、缺少阶段回执或未确认停采时立即结束，已通过的样本仍保留。
+第一条只打印计划。执行批次要求后台至少 0.14.50，并为同一后台实例和 USB 目标持有贯穿全程的测试锁。每轮单独限时开麦和校准，由 Mac 播一次带“大黄蜂”唤醒词的固定加法问句。30 轮各用不同的有序加数组合，逐轮核对识别标题和同段播放回执。计划和报告绑定同一套题目的 SHA-256，只列用例编号。播完后继续观察 20 秒，再确认停采并回到前台。遇到失败、误唤醒导致的额外回合、缺少阶段回执或未确认停采时立即结束，已通过的样本仍保留。
 
-报告对已通过的简单问答样本给出句尾到 ASR、Dot 到首句、TTS 到首包和句尾到确认起播回执的样本数、P50 和 P95。统一使用这套固定语料对比版本间链路时延。实际扬声器出声、真人、答案语义、联网与工具任务各有独立验收。只在长稳观察结束后执行实机批次。
+报告对已通过的简单问答样本给出句尾到 ASR、Dot 到首句、TTS 到首包和句尾到确认起播回执的样本数、P50 和 P95。统一使用这套固定语料对比版本间链路时延。实际扬声器出声、真人、答案语义、联网与工具任务各有独立验收。实机批次与正式 72 小时观察分开执行。
+
+0.14.78 阶段时延批次 `device-suite-20261105T031707Z-eb460d0b.json` 在开发目录同步新版源码后触发 `suite_source_changed`，第 23 轮尚未启动。前 22 轮独立复核通过，第 22 轮结束确认停采。22 轮的句尾到播放回执 P50 为 3.523 秒、P95 为 4.817 秒，仅作诊断。离线复核在批次于单轮采集前触发此保护时，将原记录作为 `recorded_failure` 列出，整批仍标记未完成。
 
 使用含 0.14.55 断句计时的主机和诊断工具时，批次另报 `device_vad_tail_ms`。它只统计收音时钟连续且有声帧可定位的样本。旧后台或不连续的帧不补零，也不影响已验证的其他阶段。该项不加到声学出声时延中。[断句时间的定义](VOICE_GATE_OBSERVATIONS.md#capture已收尾句子的数值摘要)
 
@@ -134,7 +141,7 @@ stdout 只输出报告的绝对路径，提示写 stderr。退出 0 表示采集
 
 ### 联网与工具任务分别采样
 
-后台 0.14.62 起，`--latency-scenario` 可选择固定的联网查询题或本机只读计算题。以下命令各打印 30 轮计划。长稳观察结束后，可分别加 `--execute` 执行，需要声学对照时可同时加 `--response-acoustic-evidence`。
+后台 0.14.62 起，`--latency-scenario` 可选择固定的联网查询题或本机只读计算题。以下命令各打印 30 轮计划。可在固定工作树中分别加 `--execute` 执行，需要声学对照时可同时加 `--response-acoustic-evidence`。
 
 ```sh
 ./cc8 verify-device --runtime-root /absolute/runtime --capture --qa-latency-suite --latency-scenario web
