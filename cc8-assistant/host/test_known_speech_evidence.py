@@ -109,6 +109,20 @@ class KnownSpeechTests(unittest.TestCase):
         self.assertEqual(result['status'], 'observed')
         self.assertEqual(result['match_start_offset_frames'], 9600)
 
+    def test_nearly_silent_identical_shape_does_not_confirm_an_acoustic_window(self):
+        probe = self.probe()
+        pcm, _, _ = fixture()
+        mic = np.zeros(48000)
+        near = np.frombuffer(pcm, '<i2').astype(float) / 32768
+        mic[9600 : 9600 + len(near)] = near * 0.0001
+        far = np.random.default_rng(17).normal(0, 0.03, 48000)
+        self.feed(probe, mic, far)
+        result = probe.read()
+        self.assertEqual(result['status'], 'not_observed')
+        validate(result)
+        self.assertGreater(result['confidence'], 0.99)
+        self.assertNotIn('match_start_offset_frames', result)
+
     def test_incomplete_stale_discontinuous_and_unbounded_capture_remain_unconfirmed(self):
         for case, expected in (
             ('empty', 'capture_incomplete'),

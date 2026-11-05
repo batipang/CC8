@@ -30,6 +30,7 @@ from mac_voice import (
 from capture_evidence import validate as validate_capture, ONSET_PREFIX_COUNTS
 from known_speech_receipt import (
     validate as validate_known_speech,
+    validate_boundary as validate_known_boundary,
     valid_request as known_speech_request,
 )
 from diagnostics import (
@@ -826,6 +827,7 @@ class SmokeRun:
         response_acoustic_coverage=False,
         require_render_overlap=False,
         known_speech_evidence=False,
+        known_speech_room_model=False,
         synthetic_barge=False,
         synthetic_stop=False,
         stop_route='local',
@@ -855,6 +857,7 @@ class SmokeRun:
         self.response_acoustic_coverage = response_acoustic_coverage
         self.require_render_overlap = require_render_overlap
         self.known_speech_required = known_speech_evidence
+        self.known_speech_room_model = known_speech_room_model
         self.known_speech_evidence = None
         self.synthetic_barge = synthetic_barge
         self.synthetic_stop = synthetic_stop
@@ -941,6 +944,7 @@ class SmokeRun:
             'awake_dialogue_enabled': self.awake_dialogue,
             'require_render_overlap': self.require_render_overlap,
             'known_speech_evidence_required': self.known_speech_required,
+            'known_speech_room_model_enabled': self.known_speech_room_model,
             'known_speech_evidence': dict(self.known_speech_evidence)
             if self.known_speech_evidence is not None
             else None,
@@ -1013,6 +1017,10 @@ class SmokeRun:
         require(
             not self.known_speech_required or h.get('known_speech_evidence_supported') is True,
             'backend_known_speech_evidence_unsupported',
+        )
+        require(
+            not self.known_speech_room_model or h.get('causal_speech_model_supported') is True,
+            'backend_causal_speech_model_unsupported',
         )
         require(
             not self.leading_acoustic_evidence
@@ -2455,8 +2463,19 @@ class SmokeRun:
                     'known_speech_arm_unconfirmed',
                 )
                 known_token = armed['token']
-                # Obtain a short original-render window before near playback.
-                self.sleep(0.25)
+                # Freeze already-received far-only samples before permitting
+                # external speech. Never fit using the mixed test segment.
+                if self.known_speech_room_model:
+                    self.sleep(1.0)
+                    boundary = self.request(
+                        {'operation': 'known_speech_stimulus', 'token': known_token}
+                    )
+                    try:
+                        boundary = validate_known_boundary(boundary)
+                    except ValueError:
+                        raise CheckFailure('known_speech_boundary_unconfirmed') from None
+                else:
+                    self.sleep(0.25)
             prepared_options = (
                 {'expected_input': self.prepared_input} if self.prepared_input is not None else {}
             )
@@ -2480,6 +2499,16 @@ class SmokeRun:
                     'known_speech_input_mismatch',
                 )
                 self.known_speech_evidence = clean
+                if self.known_speech_room_model:
+                    transfer = clean.get('far_transfer')
+                    require(
+                        isinstance(transfer, dict)
+                        and all(
+                            transfer[k] == boundary[k]
+                            for k in ('pre_stimulus_mic_frames', 'pre_stimulus_render_frames')
+                        ),
+                        'known_speech_boundary_mismatch',
+                    )
             self.checkpoint(self.report('running'))
             remaining = min(
                 12 if local_stop else 30 if self.asr_stop else 75,
@@ -3150,6 +3179,11 @@ def main(argv=None):
         help='Corroborate one fixed near speech window during a separate synthetic barge run',
     )
     parser.add_argument(
+        '--known-speech-room-model',
+        action='store_true',
+        help='Add pre-stimulus held-out transfer diagnostics; does not relax the raw match gate',
+    )
+    parser.add_argument(
         '--latency-scenario',
         choices=tuple(SCENARIO_QUESTIONS),
         default='qa',
@@ -3260,6 +3294,8 @@ def main(argv=None):
         or args.self_playback_soak
     )
     asr_stop = args.stop_route == 'asr'
+    if args.known_speech_room_model and not args.known_speech_evidence:
+        parser.error('--known-speech-room-model requires --known-speech-evidence')
     if args.known_speech_evidence and (
         batch or not args.synthetic_barge or not args.capture or args.synthetic_stop
     ):
@@ -3409,6 +3445,9 @@ def main(argv=None):
         if args.known_speech_evidence:
             plan['known_speech_evidence'] = True
             plan['minimum_backend_version'] = '0.14.87'
+        if args.known_speech_room_model:
+            plan['known_speech_room_model'] = True
+            plan['minimum_backend_version'] = '0.14.88'
         print(json.dumps(plan, ensure_ascii=False, indent=2))
         return 0
     try:
@@ -3438,6 +3477,11 @@ def main(argv=None):
             require(
                 health.get('known_speech_evidence_supported') is True,
                 'backend_known_speech_evidence_unsupported',
+            )
+        if args.known_speech_room_model:
+            require(
+                health.get('causal_speech_model_supported') is True,
+                'backend_causal_speech_model_unsupported',
             )
         if args.require_render_overlap:
             require(
@@ -3577,6 +3621,7 @@ def main(argv=None):
                         ),
                         response_acoustic_coverage=args.collect_acoustic_coverage,
                         known_speech_evidence=args.known_speech_evidence,
+                        known_speech_room_model=args.known_speech_room_model,
                         require_render_overlap=(
                             args.require_render_overlap and 'synthetic_barge' in enabled
                         ),

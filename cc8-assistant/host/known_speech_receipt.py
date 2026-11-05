@@ -45,7 +45,7 @@ STATUSES = {
 def valid_request(value):
     if not isinstance(value, dict):
         return False
-    if value.get('operation') == 'known_speech_result':
+    if value.get('operation') in ('known_speech_result', 'known_speech_stimulus'):
         return (
             set(value) == {'operation', 'token'}
             and isinstance(value['token'], str)
@@ -84,6 +84,12 @@ def validate(value):
             else set()
         )
         | (OBSERVED if status == 'observed' else set())
+        | (
+            {'far_transfer'}
+            if 'far_transfer' in value
+            and status in ('observed', 'ambiguous', 'not_observed', 'reference_not_distinct')
+            else set()
+        )
     )
     if status not in STATUSES or set(value) != fields:
         raise ValueError('Invalid known speech receipt fields')
@@ -135,4 +141,136 @@ def validate(value):
             or value['render_similarity'] >= 0.45
         ):
             raise ValueError('Invalid known speech observed evidence')
+    if 'far_transfer' in value:
+        return {
+            **value,
+            'far_transfer': validate_transfer(
+                value['far_transfer'], value['captured_frames'], value['reference_frames']
+            ),
+        }
+    return dict(value)
+
+
+def validate_boundary(value):
+    if (
+        not isinstance(value, dict)
+        or set(value) != {'status', 'pre_stimulus_mic_frames', 'pre_stimulus_render_frames'}
+        or value['status'] != 'recorded'
+    ):
+        raise ValueError('Invalid known speech boundary')
+    for key in ('pre_stimulus_mic_frames', 'pre_stimulus_render_frames'):
+        if type(value[key]) is not int or not 12000 <= value[key] <= 96000:
+            raise ValueError('Invalid known speech boundary frames')
+    return dict(value)
+
+
+def validate_transfer(value, mic_frames, render_frames):
+    """Strict content-free diagnostics; never an alternative raw-match gate."""
+    base = {
+        'schema',
+        'status',
+        'pre_stimulus_mic_frames',
+        'pre_stimulus_render_frames',
+        'training_frames',
+        'held_out_frames',
+    }
+    alignment = {'alignment_confidence', 'alignment_rival'}
+    held = {'held_out_confidence', 'held_out_gain_valid', 'held_out_polarity_valid'}
+    residual = {
+        'residual_confidence',
+        'residual_rival',
+        'raw_at_residual_confidence',
+        'predicted_far_rms',
+        'residual_rms',
+        'residual_window_offset_frames',
+    }
+    statuses = {
+        'pre_stimulus_incomplete',
+        'reference_below_floor',
+        'alignment_unconfirmed',
+        'fit_unavailable',
+        'held_out_unconfirmed',
+        'mixed_window_incomplete',
+        'residual_observed',
+        'residual_unconfirmed',
+    }
+    if (
+        not isinstance(value, dict)
+        or not isinstance(value.get('status'), str)
+        or value['status'] not in statuses
+    ):
+        raise ValueError('Invalid far transfer status')
+    status = value['status']
+    # Early exits can occur before or after alignment, but never admit arbitrary
+    # keys or partial score groups. Later stages require all preceding evidence.
+    fields = base | (alignment if alignment <= value.keys() else set())
+    if status in (
+        'alignment_unconfirmed',
+        'fit_unavailable',
+        'held_out_unconfirmed',
+        'mixed_window_incomplete',
+        'residual_observed',
+        'residual_unconfirmed',
+    ):
+        fields |= alignment
+    if status in (
+        'held_out_unconfirmed',
+        'mixed_window_incomplete',
+        'residual_observed',
+        'residual_unconfirmed',
+    ):
+        fields |= held
+    if status in ('residual_observed', 'residual_unconfirmed'):
+        fields |= residual
+    if set(value) != fields or type(value['schema']) is not int or value['schema'] != 1:
+        raise ValueError('Invalid far transfer fields')
+    validate_boundary(
+        {
+            'status': 'recorded',
+            'pre_stimulus_mic_frames': value['pre_stimulus_mic_frames'],
+            'pre_stimulus_render_frames': value['pre_stimulus_render_frames'],
+        }
+    )
+    if (
+        value['pre_stimulus_mic_frames'] > mic_frames
+        or value['pre_stimulus_render_frames'] > render_frames
+    ):
+        raise ValueError('Invalid far transfer cutoff')
+    if any(
+        type(value[k]) is not int or value[k] != 3200
+        for k in ('training_frames', 'held_out_frames')
+    ):
+        raise ValueError('Invalid far transfer sample allocation')
+    for key in (
+        alignment | {'held_out_confidence'} | residual - {'residual_window_offset_frames'}
+    ) & fields:
+        number = value[key]
+        if type(number) not in (float, int) or not math.isfinite(number) or not 0 <= number <= 1:
+            raise ValueError('Invalid far transfer score')
+    if held <= fields and any(
+        type(value[k]) is not bool for k in ('held_out_gain_valid', 'held_out_polarity_valid')
+    ):
+        raise ValueError('Invalid held-out gain')
+    if residual <= fields:
+        offset = value['residual_window_offset_frames']
+        if (
+            type(offset) is not int
+            or offset % 2
+            or not value['pre_stimulus_mic_frames'] <= offset <= mic_frames - 3200
+        ):
+            raise ValueError('Invalid residual window')
+    if status in ('mixed_window_incomplete', 'residual_observed', 'residual_unconfirmed') and (
+        value['alignment_confidence'] < 0.55
+        or value['alignment_confidence'] - value['alignment_rival'] < 0.12 - 0.0001
+        or value['held_out_confidence'] < 0.8
+        or value['held_out_gain_valid'] is not True
+        or value['held_out_polarity_valid'] is not True
+    ):
+        raise ValueError('Invalid validated transfer')
+    if status == 'residual_observed' and (
+        value['residual_confidence'] < 0.55
+        or value['residual_confidence'] - value['residual_rival'] < 0.12 - 0.0001
+        or value['residual_rms'] < 0.002
+    ):
+        raise ValueError('Invalid residual match')
     return dict(value)

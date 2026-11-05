@@ -3090,6 +3090,10 @@ class DeviceAutomationTests(unittest.TestCase):
         for case, expected in (
             ('valid', None),
             ('known', None),
+            ('known_room', None),
+            ('known_room_raw_miss', 'known_speech_window_unconfirmed'),
+            ('known_room_boundary_invalid', 'known_speech_boundary_unconfirmed'),
+            ('known_room_boundary_mismatch', 'known_speech_boundary_mismatch'),
             ('known_miss', 'known_speech_window_unconfirmed'),
             ('known_bad_receipt', 'known_speech_evidence_invalid'),
             ('known_wrong_input', 'known_speech_input_mismatch'),
@@ -3137,6 +3141,7 @@ class DeviceAutomationTests(unittest.TestCase):
                     synthetic_barge=True,
                     require_render_overlap=strict,
                     known_speech_evidence=case.startswith('known'),
+                    known_speech_room_model=case.startswith('known_room'),
                 )
                 known = case.startswith('known')
                 if known:
@@ -3171,7 +3176,16 @@ class DeviceAutomationTests(unittest.TestCase):
                         match_start_offset_frames=3200,
                         matched_window_digital_render_ms=100,
                     )
-                    if case == 'known_miss':
+                    if case.startswith('known_room'):
+                        from test_causal_speech_model import signals, CUTOFF
+                        from causal_speech_model import analyse
+
+                        mic, far, template = signals()
+                        near_result.update(captured_frames=len(mic), reference_frames=len(far))
+                        near_result['far_transfer'] = analyse(
+                            mic, far, template[:3200], CUTOFF, CUTOFF
+                        )
+                    if case in ('known_miss', 'known_room_raw_miss'):
                         near_result['status'] = 'not_observed'
                         near_result.pop('match_start_offset_frames')
                         near_result.pop('matched_window_digital_render_ms')
@@ -3311,6 +3325,22 @@ class DeviceAutomationTests(unittest.TestCase):
                             payload, {'operation': 'known_speech_result', 'token': 'a' * 32}
                         )
                         return near_result
+                    if (
+                        case.startswith('known_room')
+                        and payload.get('operation') == 'known_speech_stimulus'
+                    ):
+                        self.assertEqual(
+                            payload, {'operation': 'known_speech_stimulus', 'token': 'a' * 32}
+                        )
+                        if case == 'known_room_boundary_invalid':
+                            return {'status': 'insufficient_audio'}
+                        self.assertEqual(now[0], 1.0)
+                        return dict(
+                            status='recorded',
+                            pre_stimulus_mic_frames=CUTOFF
+                            + (160 if case == 'known_room_boundary_mismatch' else 0),
+                            pre_stimulus_render_frames=CUTOFF,
+                        )
                     self.assertEqual(payload, {'operation': 'diagnostics'})
                     extra = (
                         [self.acoustic_row(request_id='extra')]
@@ -3324,7 +3354,9 @@ class DeviceAutomationTests(unittest.TestCase):
                 run.request = request
                 if expected is None:
                     run.interruption_probe()
-                    self.assertEqual(now[0], 20.25 if known else 20)
+                    self.assertEqual(
+                        now[0], 21 if case.startswith('known_room') else 20.25 if known else 20
+                    )
                     evidence = run.report('passed')['barge_evidence']
                     self.assertEqual(evidence['device_pause_from_trigger_ms'], 35.5)
                     self.assertEqual(
@@ -3360,7 +3392,12 @@ class DeviceAutomationTests(unittest.TestCase):
                     )
                 elif strict:
                     self.assertIsNone(evidence.get('onset_prefix'))
-                if case in ('early_voice', 'no_playout', 'known_bad_arm'):
+                if case in (
+                    'early_voice',
+                    'no_playout',
+                    'known_bad_arm',
+                    'known_room_boundary_invalid',
+                ):
                     device.speak_probe.assert_not_called()
                 else:
                     device.speak_probe.assert_called_once_with(
