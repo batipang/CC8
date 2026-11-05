@@ -47,6 +47,7 @@ from device_smoke import (
     planned_checks,
     rpc,
     run_device_suite,
+    run_english_wake_pair,
     summarize_capture_clock,
     summarize_response_acoustic,
     valid_leading_evidence,
@@ -2309,6 +2310,101 @@ class DeviceAutomationTests(unittest.TestCase):
             self.assertEqual(plan['wake_language'], 'en')
             self.assertEqual(plan['minimum_backend_version'], '0.14.67')
 
+    def test_english_pair_plan_does_not_prepare_audio_or_contact_device(self):
+        output = io.StringIO()
+        with (
+            patch('device_smoke.Device') as device,
+            patch('device_smoke.rpc') as query,
+            patch('device_smoke.PreparedSpeech') as prepare,
+            redirect_stdout(output),
+        ):
+            self.assertEqual(
+                main(['--runtime-root', '/unused', '--capture', '--english-wake-pair']), 0
+            )
+        device.assert_not_called()
+        query.assert_not_called()
+        prepare.assert_not_called()
+        plan = json.loads(output.getvalue())
+        self.assertTrue(plan['shared_prepared_input'])
+        self.assertEqual([phase['name'] for phase in plan['phases']], ['awake', 'standby'])
+        self.assertIn(AWAKE_DIALOGUE_CHECK, plan['phases'][0]['checks'])
+        self.assertIn('real_idle_black_screen', plan['phases'][1]['checks'])
+        for flags in ([], ['--capture', '--awake-dialogue'], ['--capture', '--p0-device-suite']):
+            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as stopped:
+                main(['--runtime-root', '/unused', '--english-wake-pair', *flags])
+            self.assertEqual(stopped.exception.code, 2)
+
+    def test_english_pair_reuses_fixture_and_stops_after_unsafe_control(self):
+        from test_prepared_speech import metadata
+
+        passed = {
+            'state': 'passed',
+            'cleanup_microphone_off_verified': True,
+            'english_fixture_played': True,
+        }
+        rejected = {
+            **passed,
+            'state': 'failed',
+            'checks': [
+                {'name': AWAKE_DIALOGUE_CHECK, 'reason': 'synthetic_acoustic_chain_not_confirmed'}
+            ],
+            'acoustic_evidence': {
+                'new_voice_requests': 1,
+                'rejected_voice_gates': {'wake_closed': 1},
+                'english_wake_detections': 0,
+                'admitted_voice_requests': 0,
+                'stage_counts': {'asr_start': 0},
+            },
+        }
+        for first, close_fails, second_runs, state in (
+            (passed, False, True, 'passed'),
+            (rejected, False, True, 'failed'),
+            ({**rejected, 'cleanup_microphone_off_verified': False}, False, False, 'failed'),
+            (
+                {
+                    **rejected,
+                    'acoustic_evidence': {
+                        **rejected['acoustic_evidence'],
+                        'stage_counts': {'asr_start': 1},
+                    },
+                },
+                False,
+                False,
+                'failed',
+            ),
+            ({**passed, 'english_fixture_played': False}, False, False, 'failed'),
+            (passed, True, True, 'cleanup_unconfirmed'),
+        ):
+            with self.subTest(first=first, close_fails=close_fails):
+                fixture = Mock(metadata=metadata())
+                if close_fails:
+                    fixture.close.side_effect = OSError
+                make_run = Mock(
+                    side_effect=(
+                        Mock(run=Mock(return_value=first)),
+                        Mock(run=Mock(return_value=passed)),
+                    )
+                )
+                with patch('device_smoke.PreparedSpeech', return_value=fixture) as prepare:
+                    report = run_english_wake_pair(make_run, lambda _: None)
+                prepare.assert_called_once_with(
+                    'Daniel', 'Bumblebee, what is three plus five?', rate=155
+                )
+                fixture.close.assert_called_once_with()
+                self.assertEqual(report['state'], state)
+                self.assertEqual(report['prepared_english_input'], fixture.metadata)
+                self.assertEqual(report['prepared_english_input_cleaned'], not close_fails)
+                self.assertEqual(make_run.call_count, 1 + int(second_runs))
+                self.assertTrue(
+                    all(
+                        call.kwargs['english_fixture'] is fixture
+                        for call in make_run.call_args_list
+                    )
+                )
+                self.assertEqual(
+                    report['phases'][1]['state'], 'passed' if second_runs else 'not_run'
+                )
+
     def test_english_wake_old_backend_and_missing_counter_stop_before_device_access(self):
         from dataclasses import replace
         from release_info import RELEASE
@@ -2381,6 +2477,27 @@ class DeviceAutomationTests(unittest.TestCase):
                     self.assertTrue(evidence['recognized_stimulus_matches'])
                     self.assertNotIn(title, json.dumps(evidence))
                 device.speak_probe.assert_called_once_with(question=ENGLISH_QUESTION, english=True)
+
+    def test_english_acoustic_probe_plays_injected_fixture_and_reports_receipt(self):
+        run, device, health, _ = self.acoustic_fixture(
+            lambda _: [self.acoustic_row()],
+            awake=True,
+            english_wake=True,
+            tasks=[{'generation': 8, 'status': 'completed', 'title': ENGLISH_QUESTION}],
+        )
+        health.update(local_wake_count=20, local_wake_english_count=12)
+        mark_spoken = device.speak_probe.side_effect
+
+        def play():
+            mark_spoken(question=ENGLISH_QUESTION, english=True)
+            health['local_wake_count'] += 1
+            health['local_wake_english_count'] += 1
+
+        run.english_fixture = Mock(play=Mock(side_effect=play))
+        run.acoustic_probe(awake=True)
+        run.english_fixture.play.assert_called_once_with()
+        device.speak_probe.assert_not_called()
+        self.assertTrue(run.report('passed')['english_fixture_played'])
 
     def test_awake_dialogue_runs_before_home_without_waiting_for_black_screen(self):
         old = self.acoustic_row(request_id='old')

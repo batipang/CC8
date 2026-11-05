@@ -76,6 +76,10 @@ STOP_QUERY = '停一下'
 ASR_STOP_QUERY = '大黄蜂，别说了。'
 ENGLISH_QUESTION = 'What is three plus five?'
 ENGLISH_WAKE_MIN_BACKEND = '0.14.67'
+ENGLISH_WAKE_PHASES = (
+    ('awake', frozenset(('capture', 'awake_dialogue'))),
+    ('standby', frozenset(('capture', 'standby', 'acoustic'))),
+)
 ACOUSTIC_QUESTION = QA_LATENCY_QUESTIONS[0]
 WAKE_SELF_TEXT = {
     'zh': '大黄蜂正在播报。现在只检查设备自己的声音。',
@@ -825,6 +829,7 @@ class SmokeRun:
         acoustic=False,
         awake_dialogue=False,
         english_wake=False,
+        english_fixture=None,
         latency_sample=False,
         latency_scenario='qa',
         qa_question=ACOUSTIC_QUESTION,
@@ -855,6 +860,8 @@ class SmokeRun:
         self.capture, self.standby, self.acoustic = capture, standby, acoustic
         self.awake_dialogue = awake_dialogue
         self.english_wake = english_wake
+        self.english_fixture = english_fixture
+        self.english_fixture_played = False
         self.latency_sample = latency_sample
         self.latency_scenario = latency_scenario
         self.qa_question = ENGLISH_QUESTION if english_wake else qa_question
@@ -948,6 +955,11 @@ class SmokeRun:
                 self.acoustic or self.awake_dialogue or self.interruption_enabled
             ),
             'awake_dialogue_enabled': self.awake_dialogue,
+            **(
+                {'english_fixture_played': self.english_fixture_played}
+                if self.english_fixture is not None
+                else {}
+            ),
             'require_render_overlap': self.require_render_overlap,
             'known_speech_evidence_required': self.known_speech_required,
             'known_speech_room_model_enabled': self.known_speech_room_model,
@@ -1004,7 +1016,8 @@ class SmokeRun:
 
     def preflight(self):
         if self.english_wake:
-            self.device.prepare_speech_probe(english=True)
+            if self.english_fixture is None:
+                self.device.prepare_speech_probe(english=True)
         elif self.acoustic or self.awake_dialogue or self.interruption_enabled:
             self.device.prepare_speech_probe()
         h = self.health()
@@ -1773,7 +1786,10 @@ class SmokeRun:
             )
         mic_before = h.get('mic_frames')
         wake_before = english_wake_counts(h) if self.english_wake else None
-        if self.english_wake:
+        if self.english_fixture is not None:
+            self.english_fixture.play()
+            self.english_fixture_played = True
+        elif self.english_wake:
             self.device.speak_probe(question=self.qa_question, english=True)
         else:
             self.device.speak_probe(question=self.qa_question)
@@ -2826,6 +2842,88 @@ def planned_checks(options, *, stop_route='local'):
     )
 
 
+def awake_english_gate_miss(result):
+    evidence = result.get('acoustic_evidence') or {}
+    last = result['checks'][-1]
+    return (
+        result['state'] == 'failed'
+        and last['name'] == AWAKE_DIALOGUE_CHECK
+        and last.get('reason') == 'synthetic_acoustic_chain_not_confirmed'
+        and evidence.get('new_voice_requests') == 1
+        and evidence.get('rejected_voice_gates', {}).get('wake_closed') == 1
+        and evidence.get('english_wake_detections') == 0
+        and evidence.get('admitted_voice_requests') == 0
+        and evidence.get('stage_counts', {}).get('asr_start') == 0
+    )
+
+
+def run_english_wake_pair(make_run, checkpoint):
+    """Own one fixed WAV across the awake control and real standby check."""
+    phases = [dict(name=name, state='not_run') for name, _ in ENGLISH_WAKE_PHASES]
+    report = {
+        'schema': 1,
+        'scope': 'english_wake_pair',
+        'state': 'running',
+        'phases': phases,
+        'prepared_english_input': None,
+        'prepared_english_input_cleaned': None,
+        'full_p0_acceptance': False,
+        'raw_audio_saved': False,
+        'contains_conversation_content': False,
+    }
+    checkpoint(report)
+    fixture = None
+    state = 'failed'
+    try:
+        fixture = PreparedSpeech('Daniel', 'Bumblebee, ' + ENGLISH_QUESTION.lower(), rate=155)
+        report['prepared_english_input'] = validate_prepared_speech(fixture.metadata)
+        report['prepared_english_input_cleaned'] = False
+        for phase, (_, options) in zip(phases, ENGLISH_WAKE_PHASES, strict=True):
+
+            def update(value, *, phase=phase):
+                phase.update(state=value['state'], report=value)
+                checkpoint(report)
+
+            result = make_run(options, update, english_fixture=fixture).run()
+            update(result)
+            if result['state'] == 'interrupted':
+                state = 'interrupted'
+                break
+            if not (
+                result['cleanup_microphone_off_verified'] is True
+                and result.get('english_fixture_played') is True
+            ):
+                break
+            # Continue an awake miss only if the local gate blocked the sole
+            # candidate before ASR. The pair still retains the awake failure.
+            if result['state'] != 'passed' and not (
+                phase['name'] == 'awake' and awake_english_gate_miss(result)
+            ):
+                break
+        else:
+            if all(phase['state'] == 'passed' for phase in phases):
+                state = 'passed'
+    except SpeechFixtureCleanupError as error:
+        fixture = error.fixture
+        report['reason'] = 'fixture_preparation_failed'
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+        report['reason'] = 'pair_operation_failed'
+    except KeyboardInterrupt:
+        state = 'interrupted'
+    finally:
+        if fixture is not None:
+            try:
+                fixture.close()
+                report['prepared_english_input_cleaned'] = True
+            except Exception:
+                report['prepared_english_input_cleaned'] = False
+                report['reason'] = 'cleanup_fixture_not_removed'
+                state = 'cleanup_unconfirmed'
+        report['state'] = state
+        checkpoint(report)
+    return report
+
+
 def matched_playout(evidence):
     timing = evidence.get('response_playout_timing')
     if not isinstance(timing, dict) or timing.get('status') != 'observed':
@@ -3277,6 +3375,11 @@ def main(argv=None):
         help='Use one fixed English wake and question stimulus in an individual speech check',
     )
     parser.add_argument(
+        '--english-wake-pair',
+        action='store_true',
+        help='Compare awake and real standby using one prepared English WAV',
+    )
+    parser.add_argument(
         '--synthetic-barge',
         action='store_true',
         help='Use one fixed Mac speech stimulus to interrupt a verified ongoing CC8 announcement',
@@ -3374,6 +3477,10 @@ def main(argv=None):
         parser.error(
             '--english-wake requires a separate --awake-dialogue or --standby --acoustic run'
         )
+    if args.english_wake_pair:
+        if batch or options != {'capture'} or args.english_wake or args.response_acoustic_evidence:
+            parser.error('--english-wake-pair requires --capture and no individual check flags')
+        args.english_wake = True
     bound_runtime = batch or asr_stop or args.english_wake or args.known_speech_evidence
     background_receipt = None
     if any((args.background_scenario, args.background_wav, args.background_sha256)):
@@ -3448,7 +3555,20 @@ def main(argv=None):
     elif args.response_acoustic_evidence:
         minimum_batch_backend = RESPONSE_ACOUSTIC_MIN_BACKEND
     if not args.execute:
-        if batch:
+        if args.english_wake_pair:
+            plan = {
+                'phases': [
+                    dict(name=name, checks=planned_checks(flags))
+                    for name, flags in ENGLISH_WAKE_PHASES
+                ],
+                'execute': False,
+                'capture': True,
+                'wake_language': 'en',
+                'shared_prepared_input': True,
+                'full_p0_acceptance': False,
+                'minimum_backend_version': ENGLISH_WAKE_MIN_BACKEND,
+            }
+        elif batch:
             plan = {
                 'phases': [
                     dict(name=name, checks=planned_checks(set(flags)))
@@ -3667,7 +3787,9 @@ def main(argv=None):
                             'device_stop_visual_timing_unsupported',
                         )
 
-                def make_run(enabled, checkpoint, *, qa_question=ACOUSTIC_QUESTION):
+                def make_run(
+                    enabled, checkpoint, *, qa_question=ACOUSTIC_QUESTION, english_fixture=None
+                ):
                     return SmokeRun(
                         device,
                         request,
@@ -3677,6 +3799,7 @@ def main(argv=None):
                         background=background,
                         stop_route=args.stop_route,
                         english_wake=args.english_wake,
+                        english_fixture=english_fixture,
                         response_acoustic_evidence=(
                             args.response_acoustic_evidence
                             or 'response_acoustic_evidence' in enabled
@@ -3694,14 +3817,18 @@ def main(argv=None):
                 print('自动设备检查已开始；结果仅保存状态，不留录音、图像或对话正文。', flush=True)
                 keep_awake = None
                 try:
-                    if (args.standby or batch) and sys.platform == 'darwin':
+                    if (
+                        args.standby or batch or args.english_wake_pair
+                    ) and sys.platform == 'darwin':
                         keep_awake = subprocess.Popen(
                             ['/usr/bin/caffeinate', '-i', '-w', str(os.getpid())],
                             stdin=subprocess.DEVNULL,
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                         )
-                    if batch:
+                    if args.english_wake_pair:
+                        result = run_english_wake_pair(make_run, save)
+                    elif batch:
                         result = run_device_suite(
                             make_run,
                             save,
@@ -3721,7 +3848,7 @@ def main(argv=None):
                     if keep_awake is not None and keep_awake.poll() is None:
                         keep_awake.terminate()
                         keep_awake.wait(timeout=5)
-                if batch:
+                if batch or args.english_wake_pair:
                     summary = {
                         'state': result['state'],
                         'phases': [
