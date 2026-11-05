@@ -21,7 +21,7 @@
 ./cc8 verify-device --runtime-root /absolute/live/workspace --execute --capture --standby --acoustic
 ```
 
-runtime-root 指**实际运行目录**。现场为 `/Volumes/AI/Codex/CC8-P0`，冻结运行源码1ab67a0：后台0.14.17 / 保留原签名APK0.9.13 code48；实际部署与验收范围见 [CURRENT_DEPLOYMENT](CURRENT_DEPLOYMENT.md)。自动检查脚本可来自另一份已验证源码；报告中的脚本摘要与受测后台版本分别记录。深层候选目录曾超出 macOS Unix socket 路径限制，已改为短路径并重新创建独立 venv。
+runtime-root 指**实际运行目录**。现场目录为 `/Volumes/AI/Codex/CC8-P0`；实际运行版本与验收范围见 [CURRENT_DEPLOYMENT](CURRENT_DEPLOYMENT.md)。自动检查脚本可来自另一份已验证源码；报告中的脚本摘要与受测后台版本分别记录。深层候选目录曾超出 macOS Unix socket 路径限制，已改为短路径并重新创建独立 venv。
 
 ## 收音启动失败与 Home 停采
 

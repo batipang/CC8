@@ -1,6 +1,6 @@
 # 大黄蜂统一待办：功能与工程质量
 
-更新：2026-11-04。原排期基线为 Android 0.8.6 / 后台 0.11.0；当前诊断部署为后台0.14.20 / 原签名APK0.9.14（code49），冻结源码26cf5fd；签名、数据和配置保留，部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)；P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)；复选框仍按完整验收标准关闭。
+更新：2026-11-05。原排期基线为 Android 0.8.6 / 后台 0.11.0；当前部署为后台 0.14.68 / 原签名 APK 0.9.34（code71），源码 b10c650；签名、数据和配置保留，部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)；P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)；复选框仍按完整验收标准关闭。
 
 依据：[竞品复盘](COMPETITOR_REVIEW_2026-11-01.md)、[当前架构](ARCHITECTURE.md)、[实机与回归记录](VALIDATION.md)。本次已合并 [ToFix](ToFix.md) 的 20 个工程条目；这是功能与工程质量的唯一详细清单；[ROADMAP](ROADMAP.md)保留完成情况和阶段概览。
 
