@@ -320,6 +320,58 @@ class MeasurementTests(unittest.TestCase):
             self.assertEqual(result['capture']['state'], 'partial')
             self.assertEqual(result['capture']['query_failures'], 1)
 
+    def test_a_receipt_window_discontinuity_is_not_clean_completion(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'run.json'
+            book = TraceBook(limit=1)
+            baseline = book.report()
+            first = book.begin('text', 101)
+            book.finish(first, 'completed')
+            before_gap = book.report()
+            second = book.begin('text', 102)
+            book.finish(second, 'completed')
+            snapshots = iter((baseline, before_gap, book.report()))
+
+            code, _ = self.execute(self.args(path), lambda *a, **k: next(snapshots))
+
+            result = json.loads(path.read_text())
+            self.assertEqual(result['coverage']['window_discontinuities'], 1)
+            self.assertEqual([row['request_id'] for row in result['requests']], [first, second])
+            self.assertEqual(result['capture']['query_failures'], 0)
+            self.assertEqual(result['capture']['state'], 'partial')
+            self.assertEqual(code, 2)
+
+    def test_a_late_snapshot_does_not_add_receipts_to_the_window(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'run.json'
+            args = self.args(path)
+            now = [0.0]
+            calls = 0
+            book = TraceBook()
+
+            def query(*a, **k):
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    book.finish(book.begin('text', 101), 'completed')
+                if calls == 3:
+                    now[0] = args.seconds + 0.1
+                    book.finish(book.begin('text', 102), 'completed')
+                return book.report()
+
+            def sleep(seconds):
+                now[0] += seconds
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                code = run(args, query_fn=query, clock=lambda: now[0], sleep=sleep)
+
+            result = json.loads(path.read_text())
+            self.assertEqual(result['coverage']['polls'], 2)
+            self.assertEqual(result['summary']['samples'], 1)
+            self.assertEqual(result['capture']['state'], 'partial')
+            self.assertIs(result['capture']['late_snapshot_discarded'], True)
+            self.assertEqual(code, 2)
+
     def test_bad_arguments_cannot_create_files_or_read_socket(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'run.json'
