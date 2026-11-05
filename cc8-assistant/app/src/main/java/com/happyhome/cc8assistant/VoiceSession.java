@@ -1744,7 +1744,9 @@ final class VoiceSession {
       try {
         if (t != null) {
           head = localHead(t);
-          if (!freeze && t.getPlayState() == AudioTrack.PLAYSTATE_PLAYING) level = levelAt(head);
+          // A running track may still be playing zeros before this clause's physical origin.
+          if (!freeze && head > 0 && t.getPlayState() == AudioTrack.PLAYSTATE_PLAYING)
+            level = levelAt(head);
         }
       } catch (IllegalStateException ignored) {
       }

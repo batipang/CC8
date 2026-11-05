@@ -9,6 +9,8 @@
   standalone requests. Late PCM cannot create an output owner.
 - Cancel the native lease before publishing the Player's stopped flag, so the
   session worker cannot consume the explicit command's applied-stop receipt.
+- Keep the mouth closed until the clause playback head advances beyond queued
+  warm samples; warm-track playback state alone does not indicate speech.
 - Recheck transport identity after control parsing and bind each player and its
   PCM to the original route, including same-generation transport handovers.
 - Backend 0.14.85 and protocol 2 remain unchanged. This is an integration

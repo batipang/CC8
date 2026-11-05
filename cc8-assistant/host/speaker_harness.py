@@ -258,6 +258,17 @@ public class VoiceSession implements AutoCloseable {
    yes(t.releases.get()==0&&t.flushes==0,"normal clause released track");
   }
  }
+ static void prefixVisuals()throws Exception{
+  try(VoiceSession s=new VoiceSession()){
+   Player p=s.make(2,3,false);AudioTrack track=s.attach(p);
+   short[] pcm=new short[700];Arrays.fill(pcm,(short)8192);yes(PcmPump.writeAll(pcm,p),"queued content");
+   track.manualHead=p.lease.base-160;
+   CaptionProgress waiting=p.visualFrame();
+   yes(waiting.level==0&&waiting.elapsedMs==0&&waiting.position==0,"mouth moved for queued warm samples");
+   track.manualHead=p.lease.base+100;
+   yes(p.visualFrame().level==.25f&&p.visualFrame().position==1,"mouth did not follow actual content");
+  }
+ }
  static void handover()throws Exception{
   try(VoiceSession s=new VoiceSession()){
    Player first=s.make(2,3,false);AtomicReference<Player> next=new AtomicReference<>();
@@ -365,6 +376,7 @@ public class VoiceSession implements AutoCloseable {
    case "controls":controls();break;
    case "visuals":visuals();break;
    case "accounting":accounting();break;
+   case "prefix_visuals":prefixVisuals();break;
    case "handover":handover();break;
    case "stopped":stopped();break;
    case "tasks":tasks();break;

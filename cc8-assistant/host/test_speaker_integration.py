@@ -62,3 +62,6 @@ class SpeakerIntegrationTests(unittest.TestCase):
             self.assertEqual(result.stdout.strip(), 'visuals passed')
         finally:
             fixture.close()
+
+    def test_mouth_stays_closed_while_warm_samples_are_still_ahead_of_content(self):
+        self.check('prefix_visuals')
