@@ -33,6 +33,9 @@ NEAR_MAX_DELAY = 17600  # 1.1 s at 16 kHz
 NEAR_FILTER_HALF = 96
 NEAR_HOLDOUT_START = 36000  # 2.25 s at 16 kHz
 NEAR_HOLDOUT_BLOCK = 3200
+NEAR_LOCAL_SHIFT = 160  # +/- 10 ms in the original 16 kHz capture
+NEAR_LOCAL_SHAPE_MIN = 0.8
+NEAR_LOCAL_RIVAL_GAP = 0.08
 STATUSES = {
     'observed',
     'ambiguous',
@@ -204,6 +207,7 @@ def validate_near_transfer(transfer, receipt):
     scores = {'envelope_confidence', 'envelope_rival'}
     fit = {'delay_frames'}
     holdout = {'held_out_blocks'}
+    shifted = {'held_out_alignment'}
     before_fit = {'status'} | scores
     after_fit = before_fit | fit
     allowed = {
@@ -211,8 +215,8 @@ def validate_near_transfer(transfer, receipt):
         'training_below_floor': ({'status'}, after_fit),
         'alignment_unconfirmed': (before_fit,),
         'fit_unavailable': (after_fit,),
-        'held_out_unconfirmed': (after_fit | holdout,),
-        'validated': (after_fit | holdout,),
+        'held_out_unconfirmed': (after_fit | holdout, after_fit | holdout | shifted),
+        'validated': (after_fit | holdout, after_fit | holdout | shifted),
     }
     if status not in NEAR_TRANSFER_STATUSES or fields not in allowed[status]:
         raise ValueError('Invalid near transfer fields')
@@ -242,8 +246,48 @@ def validate_near_transfer(transfer, receipt):
             or receipt['captured_frames'] < NEAR_HOLDOUT_START + 2 * NEAR_HOLDOUT_BLOCK + delay
         ):
             raise ValueError('Invalid near transfer holdout')
-        return {**transfer, 'held_out_blocks': list(blocks)}
+        clean = {**transfer, 'held_out_blocks': list(blocks)}
+        if shifted <= fields:
+            rows = transfer['held_out_alignment']
+            if not isinstance(rows, list) or len(rows) != 2:
+                raise ValueError('Invalid near transfer local alignment')
+            clean['held_out_alignment'] = [
+                validate_local_alignment(
+                    row,
+                    NEAR_HOLDOUT_START + delay + i * NEAR_HOLDOUT_BLOCK,
+                    receipt['captured_frames'],
+                )
+                for i, row in enumerate(rows)
+            ]
+        return clean
     return dict(transfer)
+
+
+def validate_local_alignment(row, start, captured_frames):
+    if row is None:
+        return None
+    scores = {'correlation', 'rival_correlation'}
+    if not isinstance(row, dict) or set(row) not in (scores, scores | {'offset_frames'}):
+        raise ValueError('Invalid near transfer local alignment fields')
+    if start < NEAR_LOCAL_SHIFT or start + NEAR_HOLDOUT_BLOCK + NEAR_LOCAL_SHIFT > captured_frames:
+        raise ValueError('Invalid near transfer local alignment coverage')
+    for key in scores:
+        item = row[key]
+        if type(item) not in (int, float) or not 0 <= item <= 1:
+            raise ValueError('Invalid near transfer local alignment score')
+    if row['rival_correlation'] > row['correlation']:
+        raise ValueError('Invalid near transfer local alignment rival')
+    if 'offset_frames' in row:
+        offset = row['offset_frames']
+        if (
+            type(offset) is not int
+            or not -NEAR_LOCAL_SHIFT < offset < NEAR_LOCAL_SHIFT
+            or offset % 2
+            or row['correlation'] < NEAR_LOCAL_SHAPE_MIN
+            or row['correlation'] - row['rival_correlation'] < NEAR_LOCAL_RIVAL_GAP - 0.0001
+        ):
+            raise ValueError('Invalid near transfer local alignment offset')
+    return dict(row)
 
 
 def validate_boundary(value):

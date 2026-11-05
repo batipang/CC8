@@ -6,12 +6,15 @@ from known_speech_receipt import (
     NEAR_FILTER_HALF,
     NEAR_HOLDOUT_BLOCK,
     NEAR_HOLDOUT_START,
+    NEAR_LOCAL_RIVAL_GAP,
+    NEAR_LOCAL_SHAPE_MIN,
+    NEAR_LOCAL_SHIFT,
     NEAR_MAX_DELAY,
 )
-from playback_evidence import MIN_REFERENCE_RMS, match_window, room_block_status
+from playback_evidence import MIN_CAPTURE_RMS, MIN_REFERENCE_RMS, match_window, room_block_status
 
 # These are decimated 8 kHz sample indices. The latest training alignment
-# ends before 2.207 s of capture, ahead of the earliest 2.244 s holdout.
+# ends before 2.207 s of capture, ahead of the earliest 2.234 s local search.
 BLOCK = 80
 HALF = NEAR_FILTER_HALF // 2
 TRAIN = 8800
@@ -19,6 +22,8 @@ MAX_DELAY = NEAR_MAX_DELAY // 2
 REFINE = 160
 HOLDOUT = NEAR_HOLDOUT_START // 2
 CHECK = NEAR_HOLDOUT_BLOCK // 2
+LOCAL_RADIUS = NEAR_LOCAL_SHIFT // 2
+LOCAL_RIVAL_RADIUS = 8  # 1 ms at 8 kHz
 REFERENCE_FRAMES = 2 * (HOLDOUT + 2 * CHECK + HALF)
 LOW_PASS = np.sinc(0.42 * np.arange(-8, 9)) * np.hamming(17)
 LOW_PASS /= LOW_PASS.sum()
@@ -29,11 +34,39 @@ def envelope(samples):
     return np.log1p(np.std(blocks, axis=1) * 1000)
 
 
+def local_alignment(expected, mic, start):
+    """Measure a late lag without re-fitting or altering the holdout verdict."""
+    left = start - LOCAL_RADIUS
+    right = start + CHECK + LOCAL_RADIUS
+    if left < 0 or right > len(mic) or np.std(expected) < MIN_CAPTURE_RMS:
+        return None
+    windows = np.lib.stride_tricks.sliding_window_view(mic[left:right], CHECK)
+    centered = windows - windows.mean(axis=1, keepdims=True)
+    expected_centered = expected - expected.mean()
+    norm = np.linalg.norm(centered, axis=1) * np.linalg.norm(expected_centered)
+    scores = np.clip(centered @ expected_centered / np.maximum(norm, 1e-12), 0, 1)
+    peak = int(np.argmax(scores))
+    score = float(scores[peak])
+    scores[max(0, peak - LOCAL_RIVAL_RADIUS) : peak + LOCAL_RIVAL_RADIUS + 1] = 0
+    rival = float(np.max(scores))
+    result = {'correlation': round(score, 4), 'rival_correlation': round(rival, 4)}
+    if (
+        0 < peak < 2 * LOCAL_RADIUS
+        and score >= NEAR_LOCAL_SHAPE_MIN
+        and score - rival >= NEAR_LOCAL_RIVAL_GAP
+        and room_block_status(expected, windows[peak], NEAR_LOCAL_SHAPE_MIN) == 'matched'
+    ):
+        result['offset_frames'] = 2 * (peak - LOCAL_RADIUS)
+    return result
+
+
 def analyse(reference, microphone):
     """Fit only in a fixed early prefix, then test two later 200 ms blocks."""
     if min(len(reference), len(microphone)) < REFERENCE_FRAMES:
         return {'status': 'coverage_incomplete'}
     ref, mic = (np.convolve(samples, LOW_PASS, 'same')[::2] for samples in (reference, microphone))
+    # Report coverage in complete pairs of original samples, like the receipt.
+    mic = mic[: len(microphone) // 2]
     train = ref[HALF : HALF + TRAIN]
     if np.std(train) < MIN_REFERENCE_RMS:
         return {'status': 'training_below_floor'}
@@ -91,4 +124,7 @@ def analyse(reference, microphone):
         **result,
         'status': 'validated' if checks == ['matched', 'matched'] else 'held_out_unconfirmed',
         'held_out_blocks': checks,
+        'held_out_alignment': [
+            local_alignment(predicted[i : i + CHECK], mic, HOLDOUT + shift + i) for i in (0, CHECK)
+        ],
     }

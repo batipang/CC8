@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-near-transfer-20261106.1",
+  "release_id": "p0-near-holdout-alignment-20261106.1",
   "backend": {
-    "version": "0.14.93"
+    "version": "0.14.94"
   },
   "assistant": {
     "version": "0.9.38",
