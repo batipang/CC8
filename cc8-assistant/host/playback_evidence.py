@@ -22,8 +22,62 @@ MIN_DELAY = -1280  # Render-clock estimates can be slightly ahead of capture.
 MAX_DELAY = 12800
 LEADING_BLOCK = 320  # 20 ms at 16 kHz.
 LEADING_LIMIT = 4000  # Search only the first 250 ms of the original reference.
+RESPONSE_PREFIX_LIMIT = LEADING_LIMIT + WINDOW
+PREFIX_AGREEMENT = 32  # 2 ms on the device capture clock.
+PREFIX_SEARCH_RADIUS = 1280  # Inspect competing matches within 80 ms of the projected block.
 MIN_REFERENCE_RMS = 0.01
 MIN_CAPTURE_RMS = 0.002
+
+
+def first_leading_block(reference):
+    return next(
+        (
+            i
+            for i in range(0, min(LEADING_LIMIT, len(reference) - LEADING_BLOCK + 1), LEADING_BLOCK)
+            if np.std(reference[i : i + LEADING_BLOCK]) >= MIN_REFERENCE_RMS
+        ),
+        None,
+    )
+
+
+def block_correlation(expected, measured):
+    expected = expected - expected.mean()
+    measured = measured - measured.mean()
+    if np.std(measured) < MIN_CAPTURE_RMS:
+        return 0.0
+    normalized = abs(np.dot(expected, measured)) / (
+        np.linalg.norm(expected) * np.linalg.norm(measured)
+    )
+    return float(np.clip(normalized, 0, 1))
+
+
+def match_window(audio, template):
+    template = template - template.mean()
+    # FFT convolution plus rolling variance gives gain/DC invariant NCC.
+    size = 1 << (len(audio) + len(template) - 1).bit_length()
+    covariance = np.fft.irfft(np.fft.rfft(audio, size) * np.fft.rfft(template[::-1], size), size)[
+        len(template) - 1 : len(audio)
+    ]
+    sums = np.r_[0.0, np.cumsum(audio)]
+    powers = np.r_[0.0, np.cumsum(audio * audio)]
+    count = len(template)
+    variance = powers[count:] - powers[:-count] - (sums[count:] - sums[:-count]) ** 2 / count
+    energy = np.dot(template, template)
+    scores = np.abs(covariance) / np.sqrt(np.maximum(variance * energy, 1e-18))
+    scores = np.clip(scores, 0, 1)
+    peak = int(np.argmax(scores))
+    confidence = float(scores[peak])
+    radius = round(0.03 * RATE / 2)
+    scores[max(0, peak - radius) : peak + radius + 1] = 0
+    rival = float(np.max(scores))
+    status = (
+        'observed'
+        if confidence >= 0.55 and confidence - rival >= 0.12
+        else 'ambiguous'
+        if confidence >= 0.55
+        else 'not_observed'
+    )
+    return peak * 2, confidence, rival, status
 
 
 @dataclass(eq=False)
@@ -43,11 +97,13 @@ class PlaybackEvidence:
         self.timer = None
         self.mic = np.empty(0)
         self.reference = np.empty(0)
+        self.response_prefix = np.empty(0)
         self.mic_start = None
         self.mic_end = None
         self.render_start = None
         self.render_end = None
         self.render_frame = None
+        self.segment_frame = 0
         self.template_start = None
         self.template_offset = None
         self.clock_resets = 0
@@ -87,10 +143,13 @@ class PlaybackEvidence:
         self.current = None
         self.mic.fill(0)
         self.reference.fill(0)
+        self.response_prefix.fill(0)
         self.mic = np.empty(0)
         self.reference = np.empty(0)
+        self.response_prefix = np.empty(0)
         self.mic_start = self.mic_end = None
         self.render_start = self.render_end = self.render_frame = None
+        self.segment_frame = 0
         self.template_start = self.template_offset = None
         probe.result = {
             'schema': 2,
@@ -122,6 +181,12 @@ class PlaybackEvidence:
             if self.render_frame is not None and frame != self.render_frame:
                 self._finish('render_gap')
                 return
+            if probe.input_end_ns is not None and frame < RESPONSE_PREFIX_LIMIT:
+                # Frame order is separate from timestamp estimates. This copy
+                # may only be used if its waveform matches continuous capture.
+                self.response_prefix = np.concatenate(
+                    (self.response_prefix, pcm[: RESPONSE_PREFIX_LIMIT - frame])
+                )
             if self.render_end is not None and abs(nanos - self.render_end) > 40_000_000:
                 # AudioTrack can refine its clock or actually underrun. Neither
                 # permits stitching old and new timestamps into one waveform.
@@ -135,6 +200,7 @@ class PlaybackEvidence:
                 self.reference = np.empty(0)
                 self.template_start = self.template_offset = None
                 self.render_start = nanos
+                self.segment_frame = frame
             if self.render_start is None:
                 self.render_start = nanos
             self.render_frame = frame + len(pcm)
@@ -180,45 +246,26 @@ class PlaybackEvidence:
             self.mic_start += round(dropped * 1e9 / RATE)
             self._analyze()
 
-    def _leading_evidence(self, aligned_origin):
-        if self.clock_resets:
-            return {'status': 'render_clock_discontinuous'}
-        offset = next(
-            (
-                i
-                for i in range(
-                    0, min(LEADING_LIMIT, len(self.reference) - LEADING_BLOCK + 1), LEADING_BLOCK
-                )
-                if np.std(self.reference[i : i + LEADING_BLOCK]) >= MIN_REFERENCE_RMS
-            ),
-            None,
-        )
+    def _leading_evidence(self, aligned_origin, reference, offset):
         if offset is None:
             return {'status': 'reference_not_found'}
         capture_offset = aligned_origin + offset
         end = offset + 2 * LEADING_BLOCK
         if capture_offset < 0 or capture_offset + 2 * LEADING_BLOCK > len(self.mic):
             return {'status': 'capture_prefix_missing'}
-        if end > len(self.reference):
+        if end > len(reference):
             return {'status': 'reference_not_sustained'}
 
         correlations = []
         # Check both leading blocks at the long-window alignment. Finding an
         # unrelated short peak at another delay cannot create onset evidence.
         for start in (offset, offset + LEADING_BLOCK):
-            expected = self.reference[start : start + LEADING_BLOCK][::2]
-            expected = expected - expected.mean()
+            expected = reference[start : start + LEADING_BLOCK][::2]
             if np.std(expected) < MIN_REFERENCE_RMS:
                 return {'status': 'reference_not_sustained'}
             start += aligned_origin
             measured = self.mic[start : start + LEADING_BLOCK][::2]
-            measured = measured - measured.mean()
-            if np.std(measured) < MIN_CAPTURE_RMS:
-                return {'status': 'leading_match_unconfirmed'}
-            normalized = abs(np.dot(expected, measured)) / (
-                np.linalg.norm(expected) * np.linalg.norm(measured)
-            )
-            correlations.append(float(np.clip(normalized, 0, 1)))
+            correlations.append(block_correlation(expected, measured))
         confidence = min(correlations)
         if confidence < 0.55:
             return {'status': 'leading_match_unconfirmed'}
@@ -229,13 +276,56 @@ class PlaybackEvidence:
             'consecutive_blocks': 2,
             'minimum_correlation': round(confidence, 4),
             'reference_block_start_ms': offset * 1000 // RATE,
-            'capture_minus_render_origin_ms': round((detected_nanos - self.render_start) / 1e6, 3),
         }
+        if not self.clock_resets:
+            evidence['capture_minus_render_origin_ms'] = round(
+                (detected_nanos - self.render_start) / 1e6, 3
+            )
         if self.current.input_end_ns is not None:
             elapsed = detected_nanos - self.current.input_end_ns
             if 0 <= elapsed <= 20_000_000_000:
                 evidence['last_voiced_to_confirmed_output_block_ms'] = round(elapsed / 1e6, 3)
         return evidence
+
+    def _response_leading_after_clock_jump(self, matched_capture_frame):
+        if self.current.input_end_ns is None:
+            return {'status': 'render_clock_discontinuous'}
+        offset = first_leading_block(self.response_prefix)
+        if offset is None or len(self.response_prefix) < offset + WINDOW:
+            return {'status': 'response_prefix_reference_missing'}
+        # An observed later segment gives an independent capture-time anchor.
+        # If the first waveform is contiguous with it, both matches project
+        # the same origin from their original render frame numbers.
+        projected = matched_capture_frame - (self.segment_frame + self.template_offset)
+        left = projected + offset - PREFIX_SEARCH_RADIUS
+        right = projected + offset + PREFIX_SEARCH_RADIUS + WINDOW
+        if left < 0 or right > len(self.mic):
+            return {'status': 'capture_prefix_missing'}
+        template = self.response_prefix[offset : offset + WINDOW][::2]
+        if np.std(template) < MIN_REFERENCE_RMS:
+            return {'status': 'response_prefix_reference_missing'}
+        peak, _, _, status = match_window(self.mic[left:right:2], template)
+        origin = left + peak - offset
+        if status != 'observed':
+            return {'status': 'response_prefix_match_unconfirmed'}
+        if abs(origin - projected) > PREFIX_AGREEMENT:
+            return {'status': 'response_prefix_alignment_mismatch'}
+        leading = self._leading_evidence(origin, self.response_prefix, offset)
+        if leading['status'] != 'observed':
+            return leading
+        # The aggregate can be high even when an audible block near the end
+        # of the prefix is missing. Verify each remaining energetic block.
+        for start in range(offset + 2 * LEADING_BLOCK, offset + WINDOW, LEADING_BLOCK):
+            expected = self.response_prefix[start : start + LEADING_BLOCK][::2]
+            capture = origin + start
+            measured = self.mic[capture : capture + LEADING_BLOCK][::2]
+            if (
+                np.std(expected) >= MIN_REFERENCE_RMS
+                and block_correlation(expected, measured) < 0.55
+            ):
+                return {'status': 'response_prefix_discontinuous'}
+        leading['alignment'] = 'matched_render_frames'
+        return leading
 
     def _analyze(self):
         if self.template_start is None or self.mic_start is None:
@@ -248,38 +338,17 @@ class PlaybackEvidence:
             self._finish('insufficient_capture_coverage')
             return
         template = self.reference[self.template_offset : self.template_offset + WINDOW][::2]
-        template = template - template.mean()
-        audio = self.mic[left:right:2]
-        # FFT convolution plus rolling variance gives gain/DC invariant NCC.
-        size = 1 << (len(audio) + len(template) - 1).bit_length()
-        covariance = np.fft.irfft(
-            np.fft.rfft(audio, size) * np.fft.rfft(template[::-1], size), size
-        )[len(template) - 1 : len(audio)]
-        sums = np.r_[0.0, np.cumsum(audio)]
-        powers = np.r_[0.0, np.cumsum(audio * audio)]
-        count = len(template)
-        variance = powers[count:] - powers[:-count] - (sums[count:] - sums[:-count]) ** 2 / count
-        energy = np.dot(template, template)
-        scores = np.abs(covariance) / np.sqrt(np.maximum(variance * energy, 1e-18))
-        scores = np.clip(scores, 0, 1)
-        peak = int(np.argmax(scores))
-        confidence = float(scores[peak])
-        rivals = scores.copy()
-        radius = round(0.03 * RATE / 2)
-        rivals[max(0, peak - radius) : peak + radius + 1] = 0
-        rival = float(np.max(rivals))
-        status = (
-            'observed'
-            if confidence >= 0.55 and confidence - rival >= 0.12
-            else 'ambiguous'
-            if confidence >= 0.55
-            else 'not_observed'
-        )
-        leading = (
-            self._leading_evidence(left + peak * 2 - self.template_offset)
-            if status == 'observed'
-            else {'status': 'not_checked'}
-        )
+        peak, confidence, rival, status = match_window(self.mic[left:right:2], template)
+        leading = {'status': 'not_checked'}
+        if status == 'observed':
+            if self.clock_resets:
+                leading = self._response_leading_after_clock_jump(left + peak)
+            else:
+                leading = self._leading_evidence(
+                    left + peak - self.template_offset,
+                    self.reference,
+                    first_leading_block(self.reference),
+                )
         self._finish(
             status,
             leading_acoustic_evidence=leading,
@@ -287,7 +356,7 @@ class PlaybackEvidence:
             competing_correlation=round(rival, 4),
             matching_window_ms=200,
             search_delay_ms=[-80, 800],
-            matched_window_delay_ms=round((MIN_DELAY + peak * 2) * 1000 / RATE, 3)
+            matched_window_delay_ms=round((MIN_DELAY + peak) * 1000 / RATE, 3)
             if status == 'observed'
             else None,
         )

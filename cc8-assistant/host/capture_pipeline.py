@@ -142,11 +142,14 @@ class CapturePipeline:
                 if reason == 'observed':
                     reason = 'interval_out_of_bounds'
             return {'status': 'unconfirmed', 'generation': probe.generation, 'reason': reason}
-        return {
+        receipt = {
             'status': 'observed',
             'generation': probe.generation,
             'last_voiced_to_confirmed_output_block_ms': measured,
         }
+        if 'alignment' in leading:
+            receipt['alignment'] = leading['alignment']
+        return receipt
 
     def clear_response_probe(self):
         if self.response_probe is not None:

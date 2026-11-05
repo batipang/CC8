@@ -229,6 +229,10 @@ RESPONSE_PROBE_REASONS = frozenset(
         'capture_prefix_missing',
         'reference_not_sustained',
         'leading_match_unconfirmed',
+        'response_prefix_reference_missing',
+        'response_prefix_match_unconfirmed',
+        'response_prefix_alignment_mismatch',
+        'response_prefix_discontinuous',
         'interval_out_of_bounds',
     )
 )
@@ -256,7 +260,12 @@ def summarize_response_acoustic(value, generation):
     elapsed = observed_response_interval(value)
     if elapsed is None:
         return {'status': 'unconfirmed', 'reason': 'invalid_interval'}
-    return {'status': 'observed', ACOUSTIC_RESPONSE_METRIC: elapsed}
+    timing = {'status': 'observed', ACOUSTIC_RESPONSE_METRIC: elapsed}
+    if 'alignment' in value:
+        if value['alignment'] != 'matched_render_frames':
+            return {'status': 'unconfirmed', 'reason': 'invalid_receipt'}
+        timing['alignment'] = 'matched_render_frames'
+    return timing
 
 
 def summarize_capture_clock(value):

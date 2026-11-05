@@ -2343,6 +2343,7 @@ class DeviceAutomationTests(unittest.TestCase):
                             'status': 'observed',
                             'generation': generation,
                             ACOUSTIC_RESPONSE_METRIC: 720,
+                            **({'alignment': 'matched_render_frames'} if case == 30 else {}),
                         }
                     return fixture_request(payload)
 
@@ -2350,6 +2351,8 @@ class DeviceAutomationTests(unittest.TestCase):
                 if report_reason is None:
                     run.acoustic_probe(awake=True)
                     expected = {'status': 'observed', ACOUSTIC_RESPONSE_METRIC: 720}
+                    if case == 30:
+                        expected['alignment'] = 'matched_render_frames'
                 else:
                     with self.assertRaisesRegex(
                         CheckFailure, 'response_acoustic_timing_unconfirmed'
