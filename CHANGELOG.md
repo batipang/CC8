@@ -1,5 +1,11 @@
 # Changelog
 
+## Backend 0.14.81 — corroborate reflection-sensitive response alignment
+
+- Recheck a small raw anchor disagreement against a room model fitted and
+  validated on later audio. Require the modeled prefix to locate the earlier
+  audio within the original tolerance and verify every energetic block.
+
 ## Backend 0.14.80 — wait for delayed playback reference in the acoustic probe
 
 - Keep the bounded response probe pending when the microphone window arrives
