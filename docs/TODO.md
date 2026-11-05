@@ -1,6 +1,6 @@
 # 大黄蜂统一待办：功能与工程质量
 
-更新：2026-11-05。原排期基线为 Android 0.8.6 / 后台 0.11.0；当前部署为后台 0.14.74 / 原签名 APK 0.9.34（code71），源码 da17749；签名、数据和配置保留，部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)；P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)；复选框仍按完整验收标准关闭。
+更新：2026-11-05。原排期基线为 Android 0.8.6 / 后台 0.11.0；当前部署为后台 0.14.75 / 原签名 APK 0.9.34（code71），源码 ac58a74；签名、数据和配置保留，部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)；P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)；复选框仍按完整验收标准关闭。
 
 依据：[竞品复盘](COMPETITOR_REVIEW_2026-11-01.md)、[当前架构](ARCHITECTURE.md)、[实机与回归记录](VALIDATION.md)。本次已合并 [ToFix](ToFix.md) 的 20 个工程条目；这是功能与工程质量的唯一详细清单；[ROADMAP](ROADMAP.md)保留完成情况和阶段概览。
 
@@ -29,6 +29,7 @@
 ## P0：稳定地听、说、运行
 
 - [ ] **P0-01 — 建立语音与运行基线、诊断报告**
+  - 0.14.75 实机问答确认输出时钟跳变导致声学计时缺测。0.14.76 候选用原始开头和稳定后段在设备收音时钟上的两次匹配确认连续播报。仍保留原失败批次。见 [问答时延采样](MEASUREMENT_RUNS.md#30-轮合成简单问答采样)。
   - 合成唤醒检查记录新收音帧、候选拒绝原因及 ASR 开始次数；只有唯一的新候选被唤醒门拒绝时才附声学数值。见 [自动设备检查](AUTOMATED_DEVICE_CHECKS.md#清醒状态合成问答)。
   - 同段计时（后台 0.14.50 候选）：P95 只使用同一段起播与播放完成回执配对的时间。旧报告保留确认段数和原始阶段耗时，无法配对的样本计入缺测。见 [已确认播放的语音回答](MEASUREMENT_RUNS.md#已确认播放的语音回答)。
   - 成功回答与时延覆盖：`measure` 单列有确认播放的语音回答，失败、取消和缺回执不混入其 P95。旧报告可只读重算，见 [已确认播放的语音回答](MEASUREMENT_RUNS.md#已确认播放的语音回答)。

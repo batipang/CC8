@@ -1,6 +1,10 @@
 # 当前 CC8 部署与验收范围
 
-2026-11-05，实际运行 **Mac 后台 0.14.74／原签名 APK 0.9.34（code71）／协议 2**。后台源码为 main 的 `da17749b8f78f6758d7a56805838b5ed326df9bb`，[主分支 CI](https://github.com/batipang/CC8/actions/runs/41950834671) 八项通过。只更新后台，保留配置、配对和已装 APK。回执 `deployment-6d94ae0e.json` 用时 16.480 秒，就绪时核对麦克风关闭。
+2026-11-05，实际运行 **Mac 后台 0.14.75／原签名 APK 0.9.34（code71）／协议 2**。后台源码为 main 的 `ac58a74937c0fddff7292fb116e710d34020d8cf`，[主分支 CI](https://github.com/batipang/CC8/actions/runs/41954326352) 八项通过。只更新后台，保留配置、配对和已装 APK。回执 `deployment-c1d8d0ce.json` 用时 17.864 秒，就绪时核对麦克风关闭。问答声学复测记录输出时钟跳变，回合正常播完，收尾停采。见 [问答时延采样](MEASUREMENT_RUNS.md#30-轮合成简单问答采样)。
+
+## 0.14.74／code71 自动验收
+
+2026-11-05，当时运行 **Mac 后台 0.14.74／原签名 APK 0.9.34（code71）／协议 2**。后台源码为 main 的 `da17749b8f78f6758d7a56805838b5ed326df9bb`，[主分支 CI](https://github.com/batipang/CC8/actions/runs/41950834671) 八项通过。只更新后台，保留配置、配对和已装 APK。回执 `deployment-6d94ae0e.json` 用时 16.480 秒，就绪时核对麦克风关闭。
 
 合入前以同一源码树试跑。英文亮屏问答 `device-20261105T014131Z-35c34a34.json`、中文亮屏问答 `device-20261105T014306Z-05f63fb0.json` 和中英文自播报 `device-20261105T014434Z-31b2e2ce.json` 各八项通过，结束都核对停采。前两个问答均命中固定问题并播完，自播报的两种语言均无唤醒或 ASR。试跑后恢复 0.14.73 的回执为 `deployment-f667bfbd.json`。真人召回、真实连续背景和正式长稳仍独立验收。
 

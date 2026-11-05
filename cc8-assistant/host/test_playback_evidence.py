@@ -248,6 +248,61 @@ class AcousticEvidenceTests(unittest.TestCase):
         self.assertEqual(probe.result['status'], 'expired')
         self.assertEqual(probe.result['render_clock_resets'], 1)
 
+    def test_response_prefix_requires_continuous_capture_across_render_clock_jump(self):
+        reference = public_signal()
+        for condition in ('projection', 'physical_gap', 'late_gap', 'missing_first_block'):
+            with self.subTest(condition=condition):
+                observer = PlaybackEvidence()
+                probe = observer.arm(101, 7, input_end_ns=START - 600_000_000)
+                split = 320 if condition == 'late_gap' else 1600
+                observer.render(101, 0, START + 300_000_000, reference[:split])
+                actual_gap = condition == 'physical_gap'
+                shift = 200_000_000 if actual_gap else 0
+                for frame in range(split, len(reference), 320):
+                    observer.render(
+                        101,
+                        frame,
+                        START + shift + round(frame * 1e9 / RATE),
+                        reference[frame : frame + 320],
+                    )
+                start = 3200 + 1920
+                mic = scene(reference)
+                if actual_gap:
+                    mic.fill(0)
+                    mic[start : start + 1600] = reference[:1600] * 0.3
+                    tail = start + 1600 + 3200
+                    mic[tail : tail + len(reference) - 1600] = reference[1600:] * 0.3
+                if condition == 'late_gap':
+                    mic.fill(0)
+                    cut = 2240
+                    mic[start : start + cut] = reference[:cut] * 0.3
+                    mic[start + cut + 320 : start + len(reference) + 320] = reference[cut:] * 0.3
+                if condition == 'missing_first_block':
+                    mic[start : start + 320] = 0
+                for frame in range(0, len(mic), 320):
+                    observer.microphone(
+                        7, START - 200_000_000 + round(frame * 1e9 / RATE), mic[frame : frame + 320]
+                    )
+                self.assertEqual(probe.result['status'], 'observed')
+                leading = probe.result['leading_acoustic_evidence']
+                metric = 'last_voiced_to_confirmed_output_block_ms'
+                if condition == 'projection':
+                    self.assertEqual(leading['status'], 'observed')
+                    self.assertEqual(leading['alignment'], 'matched_render_frames')
+                    self.assertAlmostEqual(leading[metric], 720, delta=1)
+                else:
+                    self.assertEqual(
+                        leading['status'],
+                        {
+                            'physical_gap': 'leading_match_unconfirmed',
+                            'late_gap': 'response_prefix_discontinuous',
+                            'missing_first_block': 'leading_match_unconfirmed',
+                        }[condition],
+                    )
+                    self.assertNotIn(metric, leading)
+                self.assertFalse(observer.response_prefix.size)
+                self.assertFalse(probe.result['first_audible_onset_measured'])
+
     def test_repeated_clock_refinements_can_still_produce_a_stable_later_window(self):
         observer = PlaybackEvidence()
         probe = observer.arm(101, 7)
