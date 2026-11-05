@@ -21,6 +21,7 @@ import uuid
 from private_output import PrivateOutput, private_directory
 from release_info import load_release
 from mac_voice import resolve_voice, __file__ as voice_source
+from capture_evidence import validate as validate_capture
 from diagnostics import (
     ASR_STOP_STAGE,
     INTERVALS,
@@ -246,9 +247,11 @@ def valid_leading_evidence(value, delay_ms):
     )
 
 
+REJECTED_VOICE_GATES = ('empty', 'echo_text', 'echo_render', 'weak_near', 'wake_closed')
+
+
 def classify_voice_records(rows):
     """A VAD trace exists before admission; never equate it with a dialogue."""
-    rejected_gates = ('empty', 'echo_text', 'echo_render', 'weak_near', 'wake_closed')
     groups = {name: [] for name in ('admitted', 'rejected', 'pending', 'invalid')}
     for row in rows:
         stages = row.get('stages', {})
@@ -263,14 +266,23 @@ def classify_voice_records(rows):
             category = 'admitted'
         elif generation is not None or row.get('error') is not None:
             category = 'invalid'
-        elif outcome is None and gate in (None, *rejected_gates):
+        elif outcome is None and gate in (None, *REJECTED_VOICE_GATES):
             category = 'pending'
-        elif outcome == 'rejected' and gate in rejected_gates:
+        elif outcome == 'rejected' and gate in REJECTED_VOICE_GATES:
             category = 'rejected'
         else:
             category = 'invalid'
         groups[category].append(row)
     return groups
+
+
+def summarize_wake_rejection_capture(row):
+    if 'capture' not in row:
+        return {'status': 'missing'}
+    try:
+        return {'status': 'observed', **validate_capture(row['capture'])}
+    except ValueError:
+        return {'status': 'malformed'}
 
 
 def response_playout_timing(row):
@@ -1408,6 +1420,7 @@ class SmokeRun:
                 and re.fullmatch('[a-f0-9]{32}', probe_token) is not None,
                 'response_acoustic_probe_not_armed',
             )
+        mic_before = h.get('mic_frames')
         wake_before = english_wake_counts(h) if self.english_wake else None
         if self.english_wake:
             self.device.speak_probe(question=self.qa_question, english=True)
@@ -1432,6 +1445,12 @@ class SmokeRun:
             ]
             groups = classify_voice_records(rows)
             admitted, rejected = groups['admitted'], groups['rejected']
+            mic_now = health.get('mic_frames')
+            wake_rejection = (
+                rejected[0]
+                if len(rows) == 1 and rejected and rejected[0]['gate'] == 'wake_closed'
+                else None
+            )
             completed = next(
                 (
                     r
@@ -1447,9 +1466,25 @@ class SmokeRun:
             # Keep only fixed counts, categories and timing. A completed task
             # is not a played answer.
             self.acoustic_evidence = {
+                'new_mic_frames': (
+                    mic_now - mic_before
+                    if type(mic_now) is int
+                    and type(mic_before) is int
+                    and 0 <= mic_before <= mic_now
+                    else None
+                ),
                 'new_voice_requests': len(rows),
                 'admitted_voice_requests': len(admitted),
                 'rejected_voice_candidates': len(rejected),
+                'rejected_voice_gates': {
+                    gate: sum(row['gate'] == gate for row in rejected)
+                    for gate in REJECTED_VOICE_GATES
+                },
+                'sole_wake_rejection_capture': (
+                    summarize_wake_rejection_capture(wake_rejection)
+                    if wake_rejection is not None
+                    else None
+                ),
                 'pending_voice_candidates': len(groups['pending']),
                 'unclassified_terminal_candidates': len(groups['invalid']),
                 'rejected_pause_count': sum('pause_ack' in r.get('stages', {}) for r in rejected),
@@ -1480,6 +1515,7 @@ class SmokeRun:
                     stage: sum(stage in r.get('stages', {}) for r in rows)
                     for stage in (
                         'wake_detected',
+                        'asr_start',
                         'asr_end',
                         'brain_start',
                         'playout_ack',
