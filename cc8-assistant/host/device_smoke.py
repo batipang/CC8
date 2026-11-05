@@ -35,6 +35,7 @@ from known_speech_receipt import (
     valid_request as known_speech_request,
 )
 from diagnostics import (
+    ASR_INPUT_SAMPLES,
     ASR_STOP_STAGE,
     INTERVALS,
     MAX_CONFIRMED_PLAYBACK_CLAUSES,
@@ -42,6 +43,7 @@ from diagnostics import (
     ROUTE_COMPLETION_STAGES,
     VAD_ONSET_PAUSE,
     percentiles,
+    valid_asr_input_samples,
 )
 from diagnostic_run import receipt
 from soak_background import Background, KINDS as BACKGROUND_KINDS, valid_background
@@ -2266,23 +2268,25 @@ class SmokeRun:
             admitted = groups['admitted']
             announcement = announcements[0] if len(announcements) == 1 else {}
             replacement = admitted[0] if len(admitted) == 1 else {}
+            try:
+                captured = validate_capture(replacement.get('capture'))
+            except ValueError:
+                captured = {}
+            if not stop_only:
+                evidence['replacement_capture'] = captured or None
+                samples = replacement.get(ASR_INPUT_SAMPLES)
+                evidence[ASR_INPUT_SAMPLES] = samples if valid_asr_input_samples(samples) else None
             if self.require_render_overlap:
-                try:
-                    captured = validate_capture(replacement.get('capture'))
-                except ValueError:
-                    overlap = None
-                    prefix = None
-                else:
-                    overlap = captured.get('credible_with_render_frames')
-                    prefix = (
-                        {key: captured[key] for key in ONSET_PREFIX_COUNTS}
-                        if ONSET_PREFIX_COUNTS <= captured.keys()
-                        else None
-                    )
-                evidence['credible_render_overlap_frames'] = overlap
+                evidence['credible_render_overlap_frames'] = captured.get(
+                    'credible_with_render_frames'
+                )
                 # Pre-VAD observations explain coverage; they do not satisfy
                 # the existing onset-to-end strict interruption requirement.
-                evidence['onset_prefix'] = prefix
+                evidence['onset_prefix'] = (
+                    {key: captured[key] for key in ONSET_PREFIX_COUNTS}
+                    if ONSET_PREFIX_COUNTS <= captured.keys()
+                    else None
+                )
             elapsed = replacement.get('device_pause_from_trigger_ms')
             onset = replacement.get(VAD_ONSET_PAUSE)
             old_generation = announcement.get('generation')
@@ -2574,18 +2578,6 @@ class SmokeRun:
         require(not evidence['pending_voice_candidates'], 'interruption_unresolved_voice')
         d, ui = self.device.status()
         self.capture_status((d, ui))
-        if not stop_only:
-            transcript = d.get('test_interruption_transcript')
-            require(
-                isinstance(transcript, dict)
-                and set(transcript) == {'generation', 'matched'}
-                and type(transcript['generation']) is int
-                and transcript['generation'] == replacement['generation']
-                and type(transcript['matched']) is bool,
-                'interruption_transcript_receipt_missing',
-            )
-            evidence['transcript_matches_stimulus'] = transcript['matched']
-            require(transcript['matched'], 'interruption_transcript_mismatch')
         if stop_supported:
             cancel_generation = (
                 announcement_generation + 1 if stop_only else replacement['generation']
@@ -2599,6 +2591,19 @@ class SmokeRun:
                 and stop['cancel_generation'] == cancel_generation
             )
             evidence['device_stop_applied'] = valid_stop
+        if not stop_only:
+            transcript = d.get('test_interruption_transcript')
+            require(
+                isinstance(transcript, dict)
+                and set(transcript) == {'generation', 'matched'}
+                and type(transcript['generation']) is int
+                and transcript['generation'] == replacement['generation']
+                and type(transcript['matched']) is bool,
+                'interruption_transcript_receipt_missing',
+            )
+            evidence['transcript_matches_stimulus'] = transcript['matched']
+            require(transcript['matched'], 'interruption_transcript_mismatch')
+        if stop_supported:
             require_evidence(valid_stop, 'interruption_device_stop_not_confirmed')
             if local_stop:
                 timing = active_health().get('fast_stop_observation')

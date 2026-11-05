@@ -3168,6 +3168,7 @@ class DeviceAutomationTests(unittest.TestCase):
             ('extra_voice', 'interruption_unexpected_voice'),
             ('lost_capture', 'interruption_capture_or_usb_lost'),
             ('wrong_transcript', 'interruption_transcript_mismatch'),
+            ('wrong_transcript_bad_stop', 'interruption_transcript_mismatch'),
             ('stale_transcript', 'interruption_transcript_receipt_missing'),
             ('transcript_content', 'interruption_transcript_receipt_missing'),
             ('missing_transcript', 'interruption_transcript_receipt_missing'),
@@ -3251,7 +3252,7 @@ class DeviceAutomationTests(unittest.TestCase):
                     phase='speaking',
                     playback_paused=False,
                 )
-                if case.endswith('_stop') or '_stop_' in case:
+                if case.endswith('_stop') or '_stop_' in case or case == 'wrong_transcript':
                     d['test_playback_stop_supported'] = True
                 old = self.acoustic_row(request_id='old')
                 announcement = {
@@ -3266,7 +3267,7 @@ class DeviceAutomationTests(unittest.TestCase):
                 )
                 del voice['text']
                 voice.update(gate='accepted', generation=20 if case == 'wrong_generation' else 21)
-                if strict and case != 'missing_capture':
+                if (strict and case != 'missing_capture') or case.startswith('wrong_transcript'):
                     from test_capture_evidence import evidence as capture_evidence
 
                     captured = capture_evidence()
@@ -3286,6 +3287,9 @@ class DeviceAutomationTests(unittest.TestCase):
                     elif case == 'invalid_capture':
                         captured['credible_with_render_frames'] = True
                     voice['capture'] = captured
+                if case == 'wrong_transcript':
+                    voice['asr_input_samples'] = 8160
+                    voice['stages']['asr_start'] = 1
                 voice['stages'].update(
                     pause_request=20,
                     pause_ack=40,
@@ -3330,7 +3334,7 @@ class DeviceAutomationTests(unittest.TestCase):
                     if case != 'missing_transcript':
                         transcript = {
                             'generation': 20 if case == 'stale_transcript' else 21,
-                            'matched': case != 'wrong_transcript',
+                            'matched': not case.startswith('wrong_transcript'),
                         }
                         if case == 'transcript_content':
                             transcript['text'] = 'content must never enter a report'
@@ -3339,7 +3343,7 @@ class DeviceAutomationTests(unittest.TestCase):
                         d['test_playback_stop'] = {
                             'generation': 19 if case == 'wrong_stop_generation' else 20,
                             'cancel_generation': 22
-                            if case == 'wrong_stop_cancel_generation'
+                            if case in ('wrong_stop_cancel_generation', 'wrong_transcript_bad_stop')
                             else 21,
                             'playback_id': True if case == 'invalid_stop_id' else 678901,
                             'nanos': 9876543210,
@@ -3469,6 +3473,15 @@ class DeviceAutomationTests(unittest.TestCase):
                     self.assertNotIn('private-content', json.dumps(run.report('failed')))
                     if case == 'known_miss':
                         self.assertEqual(now[0], 20.25)
+                    if case.startswith('wrong_transcript'):
+                        self.assertIs(evidence['transcript_matches_stimulus'], False)
+                        self.assertIs(evidence['device_stop_applied'], case == 'wrong_transcript')
+                        self.assertEqual(evidence['replacement_capture']['frames'], 2)
+                        self.assertEqual(
+                            evidence['asr_input_samples'],
+                            8160 if case == 'wrong_transcript' else None,
+                        )
+                        self.assertNotIn('9876543210', json.dumps(evidence))
                 if case in ('prefix_and_render', 'prefix_only'):
                     self.assertEqual(
                         evidence['onset_prefix'], dict.fromkeys(ONSET_PREFIX_COUNTS, 13)

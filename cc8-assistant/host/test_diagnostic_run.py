@@ -3,7 +3,7 @@
 from copy import deepcopy
 import json
 import unittest
-from diagnostic_run import DiagnosticRun, RunCapacityError
+from diagnostic_run import DiagnosticRun, RunCapacityError, receipt
 from diagnostics import TraceBook
 
 
@@ -34,6 +34,30 @@ class DiagnosticRunTests(unittest.TestCase):
             report['summary']['latencies']['asr_ms'], {'samples': 1, 'p50': 200, 'p95': 200}
         )
         self.assertFalse(report['render_ack_is_audible_onset'])
+
+    def test_asr_input_count_is_optional_bounded_and_immutable(self):
+        ident = self.book.begin('voice')
+        self.run.ingest(self.book.report())
+        self.book.asr_start(ident, 51200)
+        self.run.ingest(self.book.report())
+        row = self.run.report()['requests'][0]
+        self.assertEqual(row['asr_input_samples'], 51200)
+        for changed in (
+            dict(row, origin='text'),
+            dict(row, stages={}),
+            *(dict(row, asr_input_samples=count) for count in (True, -1, 208001, 'private')),
+        ):
+            with self.subTest(changed=changed), self.assertRaisesRegex(ValueError, 'ASR input'):
+                receipt(changed)
+        for replacement in (None, 51201):
+            snapshot = self.book.report()
+            if replacement is None:
+                snapshot['requests'][0].pop('asr_input_samples')
+            else:
+                snapshot['requests'][0]['asr_input_samples'] = replacement
+            with self.assertRaisesRegex(ValueError, 'Conflicting diagnostic result'):
+                self.run.ingest(snapshot)
+        self.assertEqual(self.run.report()['requests'][0], row)
 
     def test_initial_inflight_and_completed_requests_remain_excluded(self):
         ident = self.request()

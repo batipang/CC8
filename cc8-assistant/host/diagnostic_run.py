@@ -5,6 +5,7 @@ from copy import deepcopy
 import math
 import re
 from diagnostics import (
+    ASR_INPUT_SAMPLES,
     ORIGINS,
     SCENARIOS,
     OUTCOMES,
@@ -16,6 +17,7 @@ from diagnostics import (
     percentiles,
     summarize_requests,
     summarize_dot_contexts,
+    valid_asr_input_samples,
 )
 from capture_evidence import validate as validate_capture, DECISIONS
 from operation_failure import STAGES as ERROR_STAGES
@@ -46,6 +48,7 @@ ROW_FIELDS = frozenset(
         'dot_rpc_reused',
         'dot_context_reused',
         'capture',
+        ASR_INPUT_SAMPLES,
         'gate',
         'confirmed_playback_clauses',
         'device_pause_from_trigger_ms',
@@ -166,6 +169,15 @@ def receipt(value):
         if value['origin'] != 'voice':
             raise ValueError('Capture evidence requires voice origin')
         result['capture'] = validate_capture(value['capture'])
+    if ASR_INPUT_SAMPLES in value:
+        samples = value[ASR_INPUT_SAMPLES]
+        if (
+            value['origin'] != 'voice'
+            or 'asr_start' not in clean_stages
+            or not valid_asr_input_samples(samples)
+        ):
+            raise ValueError('Invalid ASR input sample count')
+        result[ASR_INPUT_SAMPLES] = samples
     if 'gate' in value:
         if value['origin'] != 'voice' or not enum(value['gate'], DECISIONS):
             raise ValueError('Invalid gate receipt')
@@ -284,6 +296,7 @@ class DiagnosticRun:
                     'dot_rpc_reused',
                     'dot_context_reused',
                     'capture',
+                    ASR_INPUT_SAMPLES,
                     'gate',
                     'device_pause_from_trigger_ms',
                     VAD_ONSET_PAUSE,

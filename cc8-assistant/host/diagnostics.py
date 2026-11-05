@@ -77,6 +77,11 @@ INTERVALS = {
 }
 MAX_DEVICE_PAUSE_MS = 60_000
 VAD_ONSET_PAUSE = 'device_pause_from_vad_onset_ms'
+ASR_INPUT_SAMPLES = 'asr_input_samples'
+
+
+def valid_asr_input_samples(value):
+    return type(value) is int and 0 <= value <= 13 * 16000
 
 
 def error_kind(error):
@@ -225,6 +230,12 @@ class TraceBook:
         with self.lock:
             row = self._row(key)
             return deepcopy(row.get('capture')) if row else None
+
+    def asr_start(self, key, samples):
+        with self.lock:
+            if valid_asr_input_samples(samples):
+                self._voice_detail(key, ASR_INPUT_SAMPLES, samples)
+            self.mark(key, 'asr_start')
 
     def gate(self, key, value):
         if not isinstance(value, str) or value not in DECISIONS:
