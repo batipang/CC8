@@ -14,6 +14,9 @@ COUNTS = frozenset(
         'residual_correlated_frames',
     )
 )
+TEMPORAL_COUNTS = frozenset(
+    ('max_credible_run_frames', 'credible_with_render_frames', 'credible_without_render_frames')
+)
 LEVELS = frozenset(('raw_peak_dbfs', 'cleaned_peak_dbfs', 'render_peak_dbfs'))
 CORRELATIONS = frozenset(('max_raw_correlation', 'max_residual_correlation'))
 FLAGS = frozenset(('echo_risk', 'during_playback', 'local_wake'))
@@ -39,9 +42,12 @@ DECISIONS = frozenset(
 
 
 def validate(value):
-    if not isinstance(value, dict) or set(value) - {VAD_TAIL} != FIELDS:
+    if not isinstance(value, dict) or set(value) - {VAD_TAIL} - TEMPORAL_COUNTS != FIELDS:
         raise ValueError('Invalid capture evidence fields')
-    for key in COUNTS:
+    temporal = value.keys() & TEMPORAL_COUNTS
+    if temporal and temporal != TEMPORAL_COUNTS:
+        raise ValueError('Incomplete temporal capture evidence')
+    for key in COUNTS | temporal:
         if type(value[key]) is not int or not 0 <= value[key] <= 2000:
             raise ValueError('Invalid capture frame count')
     frames = value['frames']
@@ -49,6 +55,15 @@ def validate(value):
         raise ValueError('Invalid capture frame coverage')
     if value['credible_frames'] > value['voiced_frames']:
         raise ValueError('Invalid credible frame count')
+    if temporal and (
+        value['credible_with_render_frames'] + value['credible_without_render_frames']
+        != value['credible_frames']
+        or value['credible_with_render_frames'] > value['render_frames']
+        or value['credible_without_render_frames'] > frames - value['render_frames']
+        or value['max_credible_run_frames'] > value['credible_frames']
+        or bool(value['max_credible_run_frames']) != bool(value['credible_frames'])
+    ):
+        raise ValueError('Invalid temporal capture coverage')
     if value['voiced_after_pause_request_frames'] > min(
         value['voiced_frames'], value['pause_requested_frames']
     ):
@@ -88,11 +103,12 @@ class CaptureEvidence:
         from dsp import level
 
         self.level = level
-        self.values = {key: 0 for key in COUNTS | CORRELATIONS}
+        self.values = {key: 0 for key in COUNTS | CORRELATIONS | TEMPORAL_COUNTS}
         self.values.update({key: -120.0 for key in LEVELS})
         self.previous_ns = None
         self.last_voiced_ns = None
         self.contiguous = True
+        self.credible_run = 0
 
     def feed(self, frame, near, *, voiced, credible, pause_requested):
         raw, cleaned, render = (self.level(x) for x in (frame.raw, frame.cleaned, frame.reference))
@@ -104,7 +120,10 @@ class CaptureEvidence:
         value = self.values
         stamp = frame.nanos
         if self.previous_ns is not None:
-            self.contiguous &= abs(stamp - self.previous_ns - FRAME_NS) <= FRAME_JITTER_NS
+            contiguous = abs(stamp - self.previous_ns - FRAME_NS) <= FRAME_JITTER_NS
+            self.contiguous &= contiguous
+            if not contiguous:
+                self.credible_run = 0
         self.previous_ns = stamp
         if voiced:
             self.last_voiced_ns = stamp
@@ -115,6 +134,10 @@ class CaptureEvidence:
         value['voiced_after_pause_request_frames'] += int(pause_requested and voiced)
         rendering = render > -60
         value['render_frames'] += int(rendering)
+        value['credible_with_render_frames'] += int(credible and rendering)
+        value['credible_without_render_frames'] += int(credible and not rendering)
+        self.credible_run = self.credible_run + 1 if credible else 0
+        value['max_credible_run_frames'] = max(value['max_credible_run_frames'], self.credible_run)
         value['raw_correlated_frames'] += int(rendering and near.correlation > 0.78)
         value['residual_correlated_frames'] += int(rendering and near.residual_correlation > 0.60)
         for key, db in zip(
