@@ -21,7 +21,7 @@ import uuid
 from private_output import PrivateOutput, private_directory
 from release_info import load_release
 from mac_voice import resolve_voice, __file__ as voice_source
-from capture_evidence import validate as validate_capture
+from capture_evidence import validate as validate_capture, ONSET_PREFIX_COUNTS
 from diagnostics import (
     ASR_STOP_STAGE,
     INTERVALS,
@@ -2119,9 +2119,18 @@ class SmokeRun:
                     captured = validate_capture(replacement.get('capture'))
                 except ValueError:
                     overlap = None
+                    prefix = None
                 else:
                     overlap = captured.get('credible_with_render_frames')
+                    prefix = (
+                        {key: captured[key] for key in ONSET_PREFIX_COUNTS}
+                        if ONSET_PREFIX_COUNTS <= captured.keys()
+                        else None
+                    )
                 evidence['credible_render_overlap_frames'] = overlap
+                # Pre-VAD observations explain coverage; they do not satisfy
+                # the existing onset-to-end strict interruption requirement.
+                evidence['onset_prefix'] = prefix
             elapsed = replacement.get('device_pause_from_trigger_ms')
             onset = replacement.get(VAD_ONSET_PAUSE)
             old_generation = announcement.get('generation')

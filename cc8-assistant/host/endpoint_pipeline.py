@@ -6,7 +6,7 @@ import time
 from typing import Callable, Protocol
 import numpy as np
 from diagnostics import TraceBook
-from capture_evidence import CaptureEvidence, FRAME_NS, FRAME_JITTER_NS
+from capture_evidence import CaptureEvidence, OnsetPrefix, FRAME_NS, FRAME_JITTER_NS
 from dsp import VoiceDetector, ReferenceCapture, NearSpeechDetector, level
 from fast_stop import can_fast_stop
 from protocol import JsonValue
@@ -83,6 +83,7 @@ class EndpointPipeline:
     def reset_voice_onset(self):
         self.voice_onset_ns = None
         self.last_voice_frame_ns = None
+        self.onset_prefix = OnsetPrefix()
 
     def observe_voice_onset(self, stamp, voiced):
         previous = self.last_voice_frame_ns
@@ -203,6 +204,7 @@ class EndpointPipeline:
         voiced, credible = self.near_speech.feed(cleaned, frame.raw, reference)
         self.observe_voice_onset(stamp, voiced)
         self.vad.external_voice = voiced
+        was_talking = self.vad.talking
         began, utterance, _ = self.vad.feed(cleaned)
         render_audio = self.reference_capture.feed(reference, began, utterance is not None)
         claimed_wake = (
@@ -210,7 +212,10 @@ class EndpointPipeline:
         )
         if began:
             self.cancel_partial_trace()
-            self.capture_evidence = CaptureEvidence()
+            self.capture_evidence = CaptureEvidence(
+                onset_prefix=self.onset_prefix.before(stamp, voiced=voiced)
+            )
+            self.onset_prefix = OnsetPrefix()
             self.turn_local_wake = claimed_wake
             self.voice_trace = self.hooks.diagnostics().begin('voice')
             self.hooks.diagnostics().mark(self.voice_trace, 'voice_detected')
@@ -230,6 +235,8 @@ class EndpointPipeline:
                 self.hooks.status('listening', '我在听，你继续说')
         elif claimed_wake:
             self.turn_local_wake = True
+        if not was_talking and not began:
+            self.onset_prefix.feed(frame, voiced=voiced, credible=credible)
         if claimed_wake and self.voice_trace is not None:
             self.hooks.diagnostics().mark(self.voice_trace, 'wake_detected')
         if (

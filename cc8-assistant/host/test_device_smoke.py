@@ -3085,6 +3085,8 @@ class DeviceAutomationTests(unittest.TestCase):
             ('valid_stop', None),
             ('render_overlap', None),
             ('no_render_overlap', 'interruption_render_overlap_unconfirmed'),
+            ('prefix_and_render', None),
+            ('prefix_only', 'interruption_render_overlap_unconfirmed'),
             ('missing_capture', 'interruption_render_overlap_unconfirmed'),
             ('legacy_capture', 'interruption_render_overlap_unconfirmed'),
             ('invalid_capture', 'interruption_replacement_playout_unconfirmed'),
@@ -3111,6 +3113,8 @@ class DeviceAutomationTests(unittest.TestCase):
                 strict = case in (
                     'render_overlap',
                     'no_render_overlap',
+                    'prefix_and_render',
+                    'prefix_only',
                     'missing_capture',
                     'legacy_capture',
                     'invalid_capture',
@@ -3147,7 +3151,11 @@ class DeviceAutomationTests(unittest.TestCase):
                     from test_capture_evidence import evidence as capture_evidence
 
                     captured = capture_evidence()
-                    if case == 'no_render_overlap':
+                    if case in ('prefix_and_render', 'prefix_only'):
+                        from capture_evidence import ONSET_PREFIX_COUNTS
+
+                        captured.update(dict.fromkeys(ONSET_PREFIX_COUNTS, 13))
+                    if case in ('no_render_overlap', 'prefix_only'):
                         captured.update(
                             credible_with_render_frames=0, credible_without_render_frames=1
                         )
@@ -3256,6 +3264,15 @@ class DeviceAutomationTests(unittest.TestCase):
                         run.interruption_probe()
                     evidence = run.report('failed')['barge_evidence']
                     self.assertNotIn('content must never enter a report', json.dumps(evidence))
+                if case in ('prefix_and_render', 'prefix_only'):
+                    self.assertEqual(
+                        evidence['onset_prefix'], dict.fromkeys(ONSET_PREFIX_COUNTS, 13)
+                    )
+                    self.assertEqual(
+                        evidence['credible_render_overlap_frames'], int(case == 'prefix_and_render')
+                    )
+                elif strict:
+                    self.assertIsNone(evidence.get('onset_prefix'))
                 if case in ('early_voice', 'no_playout'):
                     device.speak_probe.assert_not_called()
                 else:
