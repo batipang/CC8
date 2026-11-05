@@ -388,12 +388,54 @@ class HandoverTests(unittest.TestCase):
         b.session.transport_kind = 'usb'
         return b
 
-    def hellos(self, channel):
-        events = [
+    def events(self, channel):
+        return [
             decode_event(receive(SimpleNamespace(recv=io.BytesIO(raw).read)).data)
             for raw in channel.sent
         ]
-        return [event for event in events if event['event'] == 'hello']
+
+    def hellos(self, channel):
+        return [event for event in self.events(channel) if event['event'] == 'hello']
+
+    def test_failed_screen_wake_reaches_replacement_without_restarting_capture(self):
+        class WakeWriteFails(FakeChannel):
+            def sendall(self, raw):
+                event = decode_event(receive(SimpleNamespace(recv=io.BytesIO(raw).read)).data)
+                if event['event'] == 'screen_wake':
+                    raise BrokenPipeError('fixture lost screen wake')
+                super().sendall(raw)
+
+        for all_routes_lost, sleeps_again in ((False, False), (True, False), (False, True)):
+            with self.subTest(all_routes_lost=all_routes_lost, sleeps_again=sleeps_again):
+                b = self.bridge()
+                b.session.active = True
+                b.session.screen_sleeping = True
+                b.session.connection = WakeWriteFails('usb')
+                with self.assertRaises(BrokenPipeError):
+                    b.session.touch_activity()
+                if all_routes_lost:
+                    b.change_transport(None)
+                failed_route = WakeWriteFails('wifi')
+                b.change_transport(failed_route)
+                ready = {'event': 'device_ready', 'capture_active': not all_routes_lost}
+                with self.assertRaises(BrokenPipeError):
+                    b.on_event(ready)
+                if sleeps_again:
+                    with patch(
+                        'session_controller.time.monotonic',
+                        return_value=b.session.last_interaction + 901,
+                    ):
+                        b.session.idle_tick()
+                restored = FakeChannel('usb')
+                b.change_transport(restored)
+                b.on_event(ready)
+                b.on_event(ready)
+                self.assertEqual(
+                    sum(event['event'] == 'screen_wake' for event in self.events(restored)),
+                    int(not sleeps_again),
+                )
+                self.assertEqual(b.session.screen_sleeping, sleeps_again)
+                self.assertEqual(b.session.active, not all_routes_lost)
 
     def test_interrupted_playback_notice_reaches_new_route_and_keeps_task_complete(self):
         for active in (False, True):
