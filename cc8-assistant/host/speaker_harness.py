@@ -328,8 +328,11 @@ public class VoiceSession implements AutoCloseable {
  }
  static void route()throws Exception{
   try(VoiceSession s=new VoiceSession()){
-   Player old=s.make(2,3,false);AudioTrack track=s.attach(old);int pauses=track.pauses;
+   Player old=s.make(2,3,false);AudioTrack track=s.attach(old);
    s.routeEpoch=2;
+   // The output worker independently cancels a lease whose route is gone.
+   // Observe its complete reset before checking that stale controls add nothing.
+   waitFor(()->track.flushes>=2);int pauses=track.pauses;
    old.pauseForVoice(10);old.resumeAfterNoise(10);
    old.failPlayback(new IOException("obsolete route"));
    yes(!old.allowed()&&track.pauses==pauses&&s.events.isEmpty(),"stale route applied controls");
