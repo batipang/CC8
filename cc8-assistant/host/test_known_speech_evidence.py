@@ -148,17 +148,33 @@ class KnownSpeechTests(unittest.TestCase):
         self.assertEqual(result['status'], 'not_observed')
         transfer = result['near_transfer']
         self.assertEqual(transfer['status'], 'validated')
+        self.assertEqual([row['offset_frames'] for row in transfer['held_out_alignment']], [0, 0])
         self.assertTrue(all(not np.any(audio) for audio in held))
         for changed in (
             dict(transfer, pcm='private'),
             dict(transfer, delay_frames=1),
             dict(transfer, envelope_confidence=float('nan')),
             dict(transfer, held_out_blocks=['matched', 'shape_mismatch']),
+            dict(transfer, held_out_alignment=[None]),
+            dict(transfer, held_out_alignment=[None, {'offset_frames': 0, 'pcm': 'private'}]),
+            dict(
+                transfer,
+                held_out_alignment=[
+                    None,
+                    {'correlation': 0.9, 'rival_correlation': 0.1, 'offset_frames': 160},
+                ],
+            ),
         ):
             with self.subTest(changed=changed), self.assertRaises(ValueError):
                 validate(dict(result, near_transfer=changed), near_only=True)
         with self.assertRaises(ValueError):
             validate(dict(result, captured_frames=100), near_only=True)
+        legacy = {key: value for key, value in transfer.items() if key != 'held_out_alignment'}
+        self.assertEqual(
+            validate(dict(result, near_transfer=legacy), near_only=True)['near_transfer'], legacy
+        )
+        transfer['held_out_alignment'][0].clear()
+        self.assertEqual(probe.read()['near_transfer']['held_out_alignment'][0]['offset_frames'], 0)
         transfer['held_out_blocks'].clear()
         self.assertEqual(probe.read()['near_transfer']['held_out_blocks'], ['matched', 'matched'])
 
