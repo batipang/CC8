@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-response-anchor-diagnostics-20261105.1",
+  "release_id": "p0-response-acoustic-room-fit-20261105.1",
   "backend": {
-    "version": "0.14.77"
+    "version": "0.14.78"
   },
   "assistant": {
     "version": "0.9.34",
