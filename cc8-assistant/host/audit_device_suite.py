@@ -11,6 +11,7 @@ from device_smoke import (
     ECHO_SOAK_SCOPE,
     POST_DIALOGUE_SECONDS,
     ROUTED_LATENCY_MIN_BACKEND,
+    RENDER_OVERLAP_MIN_BACKEND,
     STANDBY_SECONDS,
     device_suite_phases,
     matched_playout,
@@ -78,11 +79,21 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
     extended = data.get('extended_voice_evidence', False)
     room_latency = data.get('response_acoustic_evidence', False)
     room_coverage = data.get('response_acoustic_coverage', False)
+    render_overlap = data.get('require_render_overlap', False)
     scenario = data.get('latency_scenario', 'qa')
     if (
         type(extended) is not bool
         or type(room_latency) is not bool
         or type(room_coverage) is not bool
+        or type(render_overlap) is not bool
+        or (
+            render_overlap
+            and (
+                not interruption
+                or tuple(map(int, backend.split('.')))
+                < tuple(map(int, RENDER_OVERLAP_MIN_BACKEND.split('.')))
+            )
+        )
         or (room_coverage and not room_latency)
         or ((qa_latency or interruption or echo_soak) and extended)
         or (
@@ -132,6 +143,8 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
         'completed_phases': 0,
         'expected_phases': len(plan),
     }
+    if render_overlap:
+        result['require_render_overlap'] = True
     if expect_backend is not None and backend != expect_backend:
         return {**result, 'reason': 'backend_version_mismatch'}
 
@@ -221,6 +234,7 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
         qa_latency=qa_latency,
         response_acoustic=room_latency,
         response_acoustic_coverage=room_coverage,
+        require_render_overlap=render_overlap,
         extended_voice=extended,
         latency_scenario=scenario,
         interruption=interruption,

@@ -430,6 +430,31 @@ class AuditDeviceSuiteTests(unittest.TestCase):
             dict.fromkeys((BARGE_DEVICE_METRIC, FAST_STOP_DEVICE_METRIC, STOP_VISUAL_METRIC), 1),
         )
 
+    def test_strict_render_overlap_is_rechecked_from_every_interruption_phase(self):
+        data = saved_suite(interruption=True)
+        self.assertTrue(audit(data)['verified'])
+        data.update(require_render_overlap=True, backend_version='0.14.83')
+        self.assertFalse(audit(data)['verified'])
+        for phase in data['phases'][::2]:
+            phase['report']['require_render_overlap'] = True
+            phase['report']['barge_evidence']['credible_render_overlap_frames'] = 3
+        reviewed = audit(data)
+        self.assertTrue(reviewed['verified'])
+        self.assertTrue(reviewed['require_render_overlap'])
+        report = data['phases'][2]['report']
+        for invalid in (None, 0, -1, True, 1.5, 2001, '3'):
+            with self.subTest(value=invalid):
+                report['barge_evidence']['credible_render_overlap_frames'] = invalid
+                reviewed = audit(data)
+                self.assertFalse(reviewed['verified'])
+                self.assertEqual(reviewed['completed_phases'], 2)
+        report['barge_evidence']['credible_render_overlap_frames'] = 3
+        report['require_render_overlap'] = False
+        self.assertFalse(audit(data)['verified'])
+        data['require_render_overlap'] = 'true'
+        with self.assertRaises(ValueError):
+            audit(data)
+
     def test_claims_cannot_cover_missing_evidence_or_mix_runs(self):
         for case, reason in (
             ('unfinished', 'report_not_completed'),

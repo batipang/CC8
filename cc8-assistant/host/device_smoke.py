@@ -108,6 +108,7 @@ RESPONSE_ACOUSTIC_MIN_BACKEND = '0.14.57'
 EXTENDED_VOICE_MIN_BACKEND = '0.14.60'
 ASR_STOP_MIN_BACKEND = '0.14.66'
 ROUTED_LATENCY_MIN_BACKEND = '0.14.62'
+RENDER_OVERLAP_MIN_BACKEND = '0.14.83'
 STOP_RECEIPT_MIN_APK_CODE = 69
 STOP_VISUAL_MIN_APK_CODE = 71
 SMOKE_OPTIONS = (
@@ -713,6 +714,7 @@ class SmokeRun:
         qa_question=ACOUSTIC_QUESTION,
         response_acoustic_evidence=False,
         response_acoustic_coverage=False,
+        require_render_overlap=False,
         synthetic_barge=False,
         synthetic_stop=False,
         stop_route='local',
@@ -740,6 +742,7 @@ class SmokeRun:
         self.qa_question = ENGLISH_QUESTION if english_wake else qa_question
         self.response_acoustic_evidence = response_acoustic_evidence
         self.response_acoustic_coverage = response_acoustic_coverage
+        self.require_render_overlap = require_render_overlap
         self.synthetic_barge = synthetic_barge
         self.synthetic_stop = synthetic_stop
         self.asr_stop = synthetic_stop and stop_route == 'asr'
@@ -820,6 +823,7 @@ class SmokeRun:
                 self.acoustic or self.awake_dialogue or self.interruption_enabled
             ),
             'awake_dialogue_enabled': self.awake_dialogue,
+            'require_render_overlap': self.require_render_overlap,
             'multi_clause_evidence': self.multi_clause_evidence,
             'raw_audio_saved': False,
             'contains_conversation_content': False,
@@ -2085,6 +2089,14 @@ class SmokeRun:
             admitted = groups['admitted']
             announcement = announcements[0] if len(announcements) == 1 else {}
             replacement = admitted[0] if len(admitted) == 1 else {}
+            if self.require_render_overlap:
+                try:
+                    captured = validate_capture(replacement.get('capture'))
+                except ValueError:
+                    overlap = None
+                else:
+                    overlap = captured.get('credible_with_render_frames')
+                evidence['credible_render_overlap_frames'] = overlap
             elapsed = replacement.get('device_pause_from_trigger_ms')
             onset = replacement.get(VAD_ONSET_PAUSE)
             old_generation = announcement.get('generation')
@@ -2361,6 +2373,12 @@ class SmokeRun:
             and (not stop_only or d.get('announcement_active') is False),
             'interruption_device_not_ready_after_response',
         )
+        if self.require_render_overlap:
+            overlap = evidence.get('credible_render_overlap_frames')
+            require_evidence(
+                type(overlap) is int and 0 < overlap <= 2000,
+                'interruption_render_overlap_unconfirmed',
+            )
 
     def cleanup(self):
         if not self.touched:
@@ -2538,12 +2556,15 @@ def run_device_suite(
     qa_latency=False,
     response_acoustic=False,
     response_acoustic_coverage=False,
+    require_render_overlap=False,
     extended_voice=False,
     latency_scenario='qa',
     interruption=False,
     echo_soak=False,
     background=None,
 ):
+    if require_render_overlap and not interruption:
+        raise ValueError('Render overlap requires an interruption suite')
     if response_acoustic_coverage and (
         not (qa_latency and response_acoustic) or extended_voice or interruption or echo_soak
     ):
@@ -2593,6 +2614,8 @@ def run_device_suite(
             suite['math_answers'] = dict.fromkeys(
                 ('matched', 'mismatch', 'unconfirmed', 'unreported'), 0
             )
+    if require_render_overlap:
+        suite['require_render_overlap'] = True
     interruption_samples = {}
     if interruption:
         interruption_samples = {
@@ -2681,6 +2704,12 @@ def run_device_suite(
                 if 'synthetic_barge' in options:
                     if not (
                         isinstance(evidence, dict)
+                        and (
+                            not require_render_overlap
+                            or result.get('require_render_overlap') is True
+                            and type(evidence.get('credible_render_overlap_frames')) is int
+                            and 0 < evidence['credible_render_overlap_frames'] <= 2000
+                        )
                         and all(
                             evidence.get(key) is True
                             for key in (
@@ -2926,6 +2955,11 @@ def main(argv=None):
         help='Use one fixed Mac speech stimulus to interrupt a verified ongoing CC8 announcement',
     )
     parser.add_argument(
+        '--require-render-overlap',
+        action='store_true',
+        help='Require energetic render reference in credible frames of a synthetic interruption',
+    )
+    parser.add_argument(
         '--synthetic-stop',
         action='store_true',
         help='Verify a fixed local stop word and device stop without a new voice request',
@@ -3041,6 +3075,8 @@ def main(argv=None):
         parser.error('--awake-dialogue requires --capture and a separate run from --standby')
     if args.synthetic_barge and (not args.capture or args.standby):
         parser.error('--synthetic-barge requires --capture and a separate run from --standby')
+    if args.require_render_overlap and not (args.synthetic_barge or args.interruption_suite):
+        parser.error('--require-render-overlap requires --synthetic-barge or --interruption-suite')
     if args.synthetic_stop and (
         not args.capture or args.standby or args.synthetic_barge or args.awake_dialogue
     ):
@@ -3068,7 +3104,9 @@ def main(argv=None):
     if args.leading_acoustic_evidence and not args.playback_evidence:
         parser.error('--leading-acoustic-evidence requires --playback-evidence')
     minimum_batch_backend = PAIRED_PLAYOUT_MIN_BACKEND
-    if args.self_playback_soak:
+    if args.require_render_overlap:
+        minimum_batch_backend = RENDER_OVERLAP_MIN_BACKEND
+    elif args.self_playback_soak:
         minimum_batch_backend = ECHO_SOAK_MIN_BACKEND
     elif args.latency_scenario != 'qa':
         minimum_batch_backend = ROUTED_LATENCY_MIN_BACKEND
@@ -3130,6 +3168,9 @@ def main(argv=None):
                 )
             if args.english_wake:
                 plan.update(wake_language='en', minimum_backend_version=ENGLISH_WAKE_MIN_BACKEND)
+        if args.require_render_overlap:
+            plan['require_render_overlap'] = True
+            plan['minimum_backend_version'] = RENDER_OVERLAP_MIN_BACKEND
         print(json.dumps(plan, ensure_ascii=False, indent=2))
         return 0
     try:
@@ -3155,6 +3196,12 @@ def main(argv=None):
             'runtime_source_version_mismatch',
         )
         instance = health.get('runtime_instance')
+        if args.require_render_overlap:
+            require(
+                tuple(map(int, manifest.backend_version.split('.')))
+                >= tuple(map(int, RENDER_OVERLAP_MIN_BACKEND.split('.'))),
+                'runtime_render_overlap_evidence_unsupported',
+            )
         if args.english_wake:
             require(
                 tuple(map(int, manifest.backend_version.split('.')))
@@ -3282,6 +3329,9 @@ def main(argv=None):
                             or 'response_acoustic_evidence' in enabled
                         ),
                         response_acoustic_coverage=args.collect_acoustic_coverage,
+                        require_render_overlap=(
+                            args.require_render_overlap and 'synthetic_barge' in enabled
+                        ),
                         expected_apk=(manifest.assistant.version, manifest.assistant.version_code),
                         **dict.fromkeys(enabled - {'response_acoustic_evidence'}, True),
                     )
@@ -3303,6 +3353,7 @@ def main(argv=None):
                             qa_latency=args.qa_latency_suite,
                             response_acoustic=args.response_acoustic_evidence,
                             response_acoustic_coverage=args.collect_acoustic_coverage,
+                            require_render_overlap=args.require_render_overlap,
                             extended_voice=args.extended_voice_evidence,
                             latency_scenario=args.latency_scenario,
                             interruption=args.interruption_suite,
