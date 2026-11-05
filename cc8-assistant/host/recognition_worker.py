@@ -14,7 +14,7 @@ from unicodedata import category
 from typing import Callable, ContextManager, Mapping, Pattern, Protocol
 import numpy as np
 from diagnostics import ASR_STOP_STAGE, TraceBook
-from dsp import RATE, resembles_playback
+from dsp import RATE, STOP_COMMANDS, resembles_playback
 from reply_types import Reply
 from session_ports import EventSink, MetricSink
 from vision import visual_request
@@ -68,9 +68,6 @@ class RecognitionHooks:
     bind_response_probe: Callable[[str, int, int | None], None] = lambda *_: None
 
 
-STOP_COMMANDS = frozenset(
-    ('停', '停下', '停一下', '停止', '暂停', '打住', '等等', '别说了', '听我说')
-)
 MIN_ECHO_RISK_CREDIBLE_FRAMES = 5
 WAKE_PREFIX_SEPARATORS = ' \t\r\n，。,！!：:'
 WAKE_QUOTES = {'“': '”', '「': '」', '『': '』', '"': '"'}

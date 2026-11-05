@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-capture-temporal-evidence-20261105.1",
+  "release_id": "p0-listen-interruption-command-20261105.1",
   "backend": {
-    "version": "0.14.83"
+    "version": "0.14.84"
   },
   "assistant": {
     "version": "0.9.34",
