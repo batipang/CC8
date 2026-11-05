@@ -20,7 +20,8 @@ from endpoint_pipeline import EndpointPipeline, EndpointHooks
 from recognition_worker import RecognitionWorker, RecognitionHooks
 from response_worker import ResponseWorker, ResponseHooks
 from fast_stop import FastStopDetector
-from session_controller import SessionController, SessionHooks
+from session_controller import SessionController
+from session_ports import SessionHooks
 from status_reporter import StatusReporter, ReportingHooks
 from wake_controller import WakeController, WakeHooks, Detector as WakeDetectorPort
 from announcement_controller import AnnouncementController, AnnouncementHooks
