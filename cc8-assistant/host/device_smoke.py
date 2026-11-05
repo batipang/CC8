@@ -82,8 +82,10 @@ WAKE_SELF_TEXT = {
     'en': 'Bumblebee is speaking. This is a playback check.',
 }
 WAKE_SELF_TIMEOUT = 30
-ECHO_SOAK_SECONDS = 900
-ECHO_SOAK_CAPTURE_MS = 1320000
+ECHO_SOAK_SECONDS = 600
+ECHO_SOAK_CAPTURE_MS = 900000
+LEGACY_ECHO_SOAK_SECONDS = 900
+LEGACY_ECHO_SOAK_CAPTURE_MS = 1320000
 ECHO_SOAK_QUIET_SECONDS = 2
 ECHO_SOAK_MIN_BACKEND = '0.14.63'
 ECHO_SOAK_COUNTERS = ('barge_in_pauses', 'barge_in_resumed', 'fast_stop_count')
@@ -167,7 +169,7 @@ QA_LATENCY_PHASES = tuple(
     for index in range(1, len(QA_LATENCY_QUESTIONS) + 1)
 )
 ECHO_SOAK_PHASES = tuple(
-    (f'self_playback_{index}', ('capture', 'awake_dialogue', 'echo_soak')) for index in (1, 2)
+    (f'self_playback_{index}', ('capture', 'awake_dialogue', 'echo_soak')) for index in (1, 2, 3)
 )
 INTERRUPTION_PHASES = tuple(
     (f'{kind}_{index:02}', ('capture', f'synthetic_{kind}'))
@@ -2842,9 +2844,11 @@ def matched_playout(evidence):
     )
 
 
-def device_suite_phases(*, qa_latency, extended_voice, interruption=False, echo_soak=False):
+def device_suite_phases(
+    *, qa_latency, extended_voice, interruption=False, echo_soak=False, legacy_echo_soak=False
+):
     if echo_soak:
-        return ECHO_SOAK_PHASES
+        return ECHO_SOAK_PHASES[:2] if legacy_echo_soak else ECHO_SOAK_PHASES
     if interruption:
         return INTERRUPTION_PHASES
     if qa_latency:
@@ -2865,6 +2869,7 @@ def run_device_suite(
     interruption=False,
     echo_soak=False,
     background=None,
+    legacy_echo_soak=False,
 ):
     if require_render_overlap and not interruption:
         raise ValueError('Render overlap requires an interruption suite')
@@ -2877,6 +2882,7 @@ def run_device_suite(
         extended_voice=extended_voice,
         interruption=interruption,
         echo_soak=echo_soak,
+        legacy_echo_soak=legacy_echo_soak,
     )
     scope = 'synthetic_qa_latency' if qa_latency else 'fixed_device_suite'
     if interruption:
@@ -2928,6 +2934,10 @@ def run_device_suite(
             name: percentiles(values) for name, values in interruption_samples.items()
         }
     if echo_soak:
+        echo_seconds = LEGACY_ECHO_SOAK_SECONDS if legacy_echo_soak else ECHO_SOAK_SECONDS
+        echo_limit = LEGACY_ECHO_SOAK_CAPTURE_MS if legacy_echo_soak else ECHO_SOAK_CAPTURE_MS
+        if not legacy_echo_soak:
+            suite['self_playback_seconds_per_phase'] = echo_seconds
         if background is not None:
             suite['background'] = background
         suite['echo_soak_totals'] = dict.fromkeys(
@@ -3146,10 +3156,14 @@ def run_device_suite(
         if phase['state'] == 'passed' and echo_soak:
             evidence = result.get('echo_soak_evidence')
             totals = suite['echo_soak_totals']
+            phase_elapsed = result.get('elapsed_seconds')
             if not (
                 isinstance(evidence, dict)
                 and type(evidence.get('elapsed_seconds')) in (int, float)
-                and ECHO_SOAK_SECONDS <= evidence['elapsed_seconds'] <= ECHO_SOAK_CAPTURE_MS / 1000
+                and echo_seconds <= evidence['elapsed_seconds'] <= echo_limit / 1000
+                and type(phase_elapsed) in (int, float)
+                and isfinite(phase_elapsed)
+                and evidence['elapsed_seconds'] <= phase_elapsed
                 and all(
                     type(evidence.get(key)) is int and evidence[key] >= 0
                     for key in totals

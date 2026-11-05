@@ -10,6 +10,8 @@ from device_smoke import (
     ECHO_SOAK_MIN_BACKEND,
     CheckFailure,
     ECHO_SOAK_SCOPE,
+    ECHO_SOAK_SECONDS,
+    LEGACY_ECHO_SOAK_SECONDS,
     POST_DIALOGUE_SECONDS,
     ROUTED_LATENCY_MIN_BACKEND,
     RENDER_OVERLAP_MIN_BACKEND,
@@ -77,6 +79,9 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
     qa_latency = scope == 'synthetic_qa_latency'
     interruption = scope == 'synthetic_interruption_latency'
     echo_soak = scope == ECHO_SOAK_SCOPE
+    has_soak_duration = 'self_playback_seconds_per_phase' in data
+    soak_duration = data.get('self_playback_seconds_per_phase')
+    legacy_echo_soak = echo_soak and not has_soak_duration
     background = data.get('background')
     extended = data.get('extended_voice_evidence', False)
     room_latency = data.get('response_acoustic_evidence', False)
@@ -109,6 +114,14 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
             < tuple(map(int, ECHO_SOAK_MIN_BACKEND.split('.')))
         )
         or (background is not None and (not echo_soak or not valid_background(background)))
+        or (
+            has_soak_duration
+            and (
+                not echo_soak
+                or type(soak_duration) is not int
+                or soak_duration != ECHO_SOAK_SECONDS
+            )
+        )
         or (room_latency and not qa_latency)
         or not isinstance(scenario, str)
         or scenario not in SCENARIO_DIGESTS
@@ -134,6 +147,7 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
         extended_voice=extended,
         interruption=interruption,
         echo_soak=echo_soak,
+        legacy_echo_soak=legacy_echo_soak,
     )
     phases = data.get('phases')
     if not isinstance(phases, list) or len(phases) != len(plan):
@@ -147,6 +161,10 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
     }
     if render_overlap:
         result['require_render_overlap'] = True
+    if echo_soak:
+        result['self_playback_seconds_per_phase'] = (
+            LEGACY_ECHO_SOAK_SECONDS if legacy_echo_soak else ECHO_SOAK_SECONDS
+        )
     if expect_backend is not None and backend != expect_backend:
         return {**result, 'reason': 'backend_version_mismatch'}
 
@@ -262,6 +280,7 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
         interruption=interruption,
         echo_soak=echo_soak,
         background=background,
+        legacy_echo_soak=legacy_echo_soak,
     )
     result['completed_phases'] = sum(p['state'] == 'passed' for p in reviewed['phases'])
     if room_coverage:
