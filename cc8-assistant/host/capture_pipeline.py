@@ -14,6 +14,7 @@ from session_ports import EventSink, MetricSink
 from echo_pipeline import EchoPipeline
 from endpoint_pipeline import EndpointPipeline
 from playback_evidence import PlaybackEvidence, Probe
+from known_speech_evidence import KnownSpeechWindow
 from qa_speech import ALL_QUESTIONS, normalize_question
 
 
@@ -53,12 +54,33 @@ class CapturePipeline:
         self.evidence = PlaybackEvidence()
         self.probe = None
         self.response_probe: ResponseAcoustic | None = None
+        self.known_speech: KnownSpeechWindow | None = None
         self.measuring = False
         self.last_received_mic_end = 0
         self.discard_endpoint_before_ns = 0
 
+    def arm_known_speech(self, pcm, metadata, generation, epoch):
+        if (
+            self.known_speech is not None
+            or self.probe is not None
+            or self.live_response_probe() is not None
+        ):
+            raise RuntimeError('Acoustic measurement already active')
+        owner = KnownSpeechWindow(pcm, metadata, generation, epoch)
+        self.known_speech = owner
+        return owner.token
+
+    def clear_known_speech(self, reason='cancelled'):
+        owner, self.known_speech = self.known_speech, None
+        if owner is not None:
+            owner.cancel(reason)
+
     def begin_probe(self, generation, epoch):
-        if self.probe is not None or self.live_response_probe() is not None:
+        if (
+            self.known_speech is not None
+            or self.probe is not None
+            or self.live_response_probe() is not None
+        ):
             raise RuntimeError('Playback measurement already active')
         # Publish suppression before arm/timer creation can yield to ingress.
         self.measuring = True
@@ -85,6 +107,7 @@ class CapturePipeline:
             raise ValueError('Invalid public QA case')
         if (
             not self.hooks.active()
+            or self.known_speech is not None
             or self.probe is not None
             or self.live_response_probe() is not None
         ):
@@ -198,6 +221,7 @@ class CapturePipeline:
             probe.render_clock.accept(generation, playback_id, value, expected_frames)
 
     def reset_transport(self, kind):
+        self.clear_known_speech('transport_changed')
         self.clear_response_probe()
         self.end_probe(status='transport_changed')
         self.evidence.cancel('transport_changed')
@@ -210,6 +234,7 @@ class CapturePipeline:
         self.next_read_gap = None
 
     def reset_session(self):
+        self.clear_known_speech('session_changed')
         self.clear_response_probe()
         self.end_probe(status='session_changed')
         self.evidence.cancel('session_changed')
@@ -221,6 +246,7 @@ class CapturePipeline:
         self.pending_mic.clear()
 
     def close(self):
+        self.clear_known_speech('capture_closed')
         self.clear_response_probe()
         self.end_probe(status='capture_closed')
         self.evidence.cancel('capture_closed')
@@ -234,6 +260,8 @@ class CapturePipeline:
         if epoch is None:
             # Legacy device events had no epoch or following packet identity.
             self.evidence.cancel('capture_read_gap')
+            if owner := self.known_speech:
+                owner.cancel('capture_gap')
         elif self.hooks.active() and epoch == self.hooks.epoch():
             self.next_read_gap = sequence
 
@@ -248,14 +276,20 @@ class CapturePipeline:
         if sequence_gap or read_gap:
             self.evidence.cancel('capture_read_gap' if read_gap else 'capture_packet_gap')
             self.endpoint.discard_capture_gap()
+            if owner := self.known_speech:
+                owner.cancel('capture_gap')
         mic = np.frombuffer(packet.data, dtype='<i2').astype(float) / 32768
         if len(mic) % FRAME:
             self.evidence.cancel('invalid_capture')
             if not (sequence_gap or read_gap):
                 self.endpoint.discard_capture_gap()
             self.hooks.log('unaligned_capture_frame', frames=len(mic))
+            if owner := self.known_speech:
+                owner.cancel('invalid_audio')
             return
         self.evidence.microphone(packet.generation, packet.nanos, mic)
+        if owner := self.known_speech:
+            owner.microphone(packet.generation, packet.nanos, mic)
         self.hooks.add_metric('mic_frames', len(mic))
         for offset in range(0, len(mic), FRAME):
             stamp = packet.nanos + round(offset * 1e9 / RATE)
@@ -282,6 +316,8 @@ class CapturePipeline:
             self.hooks.diagnostics().mark(p.generation, 'render_ack')
             pcm = np.frombuffer(p.data, dtype='<i2').astype(float) / 32768
             self.evidence.render(p.generation, p.frame, p.nanos, pcm)
+            if owner := self.known_speech:
+                owner.reference(p.generation, p.frame, p.nanos, pcm)
             self.echo.add_render(p, pcm)
             self.hooks.add_metric('render_frames', len(pcm))
             self.hooks.metric('render_clock_discontinuities', self.echo.timeline.discontinuities)

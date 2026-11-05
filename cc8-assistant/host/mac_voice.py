@@ -142,7 +142,7 @@ class PreparedSpeech:
 
     MAX_WAV_BYTES = 1024 * 1024
 
-    def __init__(self, voice, text, *, rate=None):
+    def __init__(self, voice, text, *, rate=None, directory=None):
         if (
             not isinstance(text, str)
             or not 0 < len(text) <= 120
@@ -153,7 +153,7 @@ class PreparedSpeech:
             raise ValueError('Invalid explicit synthetic speech input')
         self._closed = False
         self._pcm = b''
-        self._temporary = TemporaryDirectory(prefix='cc8-public-speech-')
+        self._temporary = TemporaryDirectory(prefix='cc8-public-speech-', dir=directory)
         self._path = Path(self._temporary.name) / 'source.wav'
         try:
             pcm = synthesize(self._path.parent, voice, rate, text)
@@ -194,6 +194,12 @@ class PreparedSpeech:
     @property
     def metadata(self):
         return dict(self._metadata)
+
+    @property
+    def directory_name(self):
+        if self._closed:
+            raise ValueError('Synthetic fixture already closed')
+        return self._path.parent.name
 
     @property
     def pcm(self):
