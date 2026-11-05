@@ -91,6 +91,13 @@ class AudioRecord {
 }
 class VoiceSession {
  final Context context=new Context();
+ final SpeakerOwner speakerOwner=new SpeakerOwner(()->new SpeakerSession.Device(){
+  public void play(){}public void pause(){}public void flush(){}public void release(){}
+  public int write(short[] data,int offset,int count){
+   try{Thread.sleep(1);}catch(InterruptedException error){Thread.currentThread().interrupt();return 0;}
+   return count;
+  }
+ },()->this.foreground);
  final Object captureResourceLock=new Object(),routeLock=new Object();
  volatile boolean foreground=true,recording,announcement,textSession;
  volatile int epoch,minimumGeneration;
@@ -455,6 +462,8 @@ class CaptureWindowTests(unittest.TestCase):
                     str(JAVA / 'CaptureWindow.java'),
                     str(JAVA / 'CaptureClockStats.java'),
                     str(JAVA / 'OpenVoiceGate.java'),
+                    str(JAVA / 'SpeakerSession.java'),
+                    str(JAVA / 'SpeakerOwner.java'),
                     str(path / source_name),
                 ],
                 capture_output=True,

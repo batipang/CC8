@@ -66,6 +66,7 @@ final class VoiceSession {
   private final Object routeLock = new Object();
   private final Object captureResourceLock = new Object();
   private final LanConnector lan;
+  private final SpeakerOwner speakerOwner;
   private volatile Link activeLink, usbLink, wifiLink;
   private volatile String wifiError = "";
   private boolean receiverRegistered;
@@ -109,6 +110,7 @@ final class VoiceSession {
     this.context = context.getApplicationContext();
     this.listener = listener;
     this.lan = new LanConnector(this.context);
+    this.speakerOwner = new SpeakerOwner(NativeSpeaker::new, () -> foreground);
   }
 
   boolean isRecording() {
@@ -309,6 +311,7 @@ final class VoiceSession {
           listener.vision(false, "连接切换，请重新看图", false);
         }
         cancelPlayback();
+        speakerOwner.endTasksThrough(Integer.MAX_VALUE);
         announcement = false;
         textSession = false;
         listener.playback(false);
@@ -493,269 +496,291 @@ final class VoiceSession {
     if (route < 0 || !currentRoute(route)) return;
     if (p.type == Wire.EVENT) {
       JSONObject j = Wire.json(p);
-      String event = j.optString("event");
-      if ("hello".equals(event)) {
-        dotChatSupported = Boolean.TRUE.equals(j.opt("supports_dot_chat_handoff"));
-        savedTasksSupported = Boolean.TRUE.equals(j.opt("supports_saved_task_results"));
-        listener.recognition(j.optString("asr_engine", "sensevoice"));
-        synchronized (routeLock) {
-          if (!foreground || !currentRoute(route) || p.generation < minimumGeneration) return;
-          if (Boolean.TRUE.equals(j.opt("playback_interrupted_by_transport"))) {
-            if (!statusFeedback.transportInterruption(p.generation)) return;
-            phase = "error";
-            listener.state(phase, j.optString("message", "播报因连接切换中断，可在任务页查看已完成结果。"));
-          } else if (!statusFeedback.transportInterrupted(p.generation)) {
-            listener.state(
-                recording ? "listening" : "idle", j.optString("message", "Mac 已连接，点击开始语音"));
+      synchronized (routeLock) {
+        // Parsing may outlive a transport activation. Publish controls only on their original
+        // route.
+        if (!foreground || !currentRoute(route)) return;
+        String event = j.optString("event");
+        if ("hello".equals(event)) {
+          dotChatSupported = Boolean.TRUE.equals(j.opt("supports_dot_chat_handoff"));
+          savedTasksSupported = Boolean.TRUE.equals(j.opt("supports_saved_task_results"));
+          listener.recognition(j.optString("asr_engine", "sensevoice"));
+          synchronized (routeLock) {
+            if (!foreground || !currentRoute(route) || p.generation < minimumGeneration) return;
+            if (Boolean.TRUE.equals(j.opt("playback_interrupted_by_transport"))) {
+              if (!statusFeedback.transportInterruption(p.generation)) return;
+              phase = "error";
+              listener.state(phase, j.optString("message", "播报因连接切换中断，可在任务页查看已完成结果。"));
+            } else if (!statusFeedback.transportInterrupted(p.generation)) {
+              listener.state(
+                  recording ? "listening" : "idle", j.optString("message", "Mac 已连接，点击开始语音"));
+            }
           }
-        }
-      } else if ("capture_rejected".equals(event)) {
-        rejectCapture(j.opt("capture_id"), route);
-      } else if ("screen_sleep".equals(event)) {
-        if (recording) listener.screen(true);
-      } else if ("screen_wake".equals(event)) {
-        listener.screen(false);
-      } else if ("device_control".equals(event)) {
-        deviceControl(j);
-      } else if ("text_begin".equals(event)) {
-        if (foreground && p.generation >= minimumGeneration && statusFeedback.begin(p.generation)) {
-          textSession = true;
-          textGeneration = p.generation;
-          listener.playback(true);
-          listener.heard(j.optString("text"));
-          listener.caption("已收到文字指令。\n正在处理…", "attentive");
-        }
-      } else if ("text_done".equals(event)) {
-        if (textSession && p.generation == textGeneration) {
-          textSession = false;
+        } else if ("capture_rejected".equals(event)) {
+          rejectCapture(j.opt("capture_id"), route);
+        } else if ("screen_sleep".equals(event)) {
+          if (recording) listener.screen(true);
+        } else if ("screen_wake".equals(event)) {
+          listener.screen(false);
+        } else if ("device_control".equals(event)) {
+          deviceControl(j);
+        } else if ("text_begin".equals(event)) {
+          if (foreground
+              && p.generation >= minimumGeneration
+              && statusFeedback.begin(p.generation)) {
+            textSession = true;
+            textGeneration = p.generation;
+            beginTaskOutput("text", p.generation);
+            listener.playback(true);
+            listener.heard(j.optString("text"));
+            listener.caption("已收到文字指令。\n正在处理…", "attentive");
+          }
+        } else if ("text_done".equals(event)) {
+          if (textSession && p.generation == textGeneration) {
+            textSession = false;
+            speakerOwner.endTask(p.generation);
+            if (!foreground
+                || p.generation < minimumGeneration
+                || !statusFeedback.current(p.generation)) return;
+            listener.playback(false);
+            // Finishing a failed task still releases controls, but must leave
+            // the actionable error visible until the next explicit interaction.
+            if (!statusFeedback.failed(p.generation)) {
+              phase = recording ? "listening" : "idle";
+              listener.state(phase, recording ? "我在听" : "任务已结束 · 麦克风关闭");
+            }
+          }
+        } else if ("workspace".equals(event)) {
+          if (foreground) listener.workspace(j, route);
+        } else if ("workspace_result".equals(event)) {
+          if (foreground)
+            listener.workspaceResult(j.optBoolean("ok"), j.optString("message"), route);
+        } else if ("vision_begin".equals(event)) {
+          String nonce = j.optString("nonce");
           if (!foreground
               || p.generation < minimumGeneration
-              || !statusFeedback.current(p.generation)) return;
-          listener.playback(false);
-          // Finishing a failed task still releases controls, but must leave
-          // the actionable error visible until the next explicit interaction.
-          if (!statusFeedback.failed(p.generation)) {
-            phase = recording ? "listening" : "idle";
-            listener.state(phase, recording ? "我在听" : "任务已结束 · 麦克风关闭");
-          }
-        }
-      } else if ("workspace".equals(event)) {
-        if (foreground) listener.workspace(j, route);
-      } else if ("workspace_result".equals(event)) {
-        if (foreground) listener.workspaceResult(j.optBoolean("ok"), j.optString("message"), route);
-      } else if ("vision_begin".equals(event)) {
-        String nonce = j.optString("nonce");
-        if (!foreground
-            || p.generation < minimumGeneration
-            || (visual && p.generation == visualGeneration)) return;
-        boolean desktop = "desktop".equals(j.optString("origin"));
-        if (desktop
-            && !lan.authorizeDesktopCamera(
-                desktopCameraAuth, nonce, p.generation, j.optString("camera_auth"))) return;
-        if (!desktop
-            && ((!recording && !nonce.equals(pendingVisionNonce))
-                || (nonce.isEmpty() && !recording))) return;
-        if (!statusFeedback.begin(p.generation)) return;
-        desktopVisionNonce = desktop ? nonce : "";
-        visual = true;
-        visualGeneration = p.generation;
-        visionRequestId = "";
-        listener.dotResult("", false, "");
-        listener.caption(
-            desktop ? "Dot 请求拍照，请调整画面；预览 5 秒后拍摄并返回当前聊天。" : "请调整画面，预览 5 秒后自动拍摄并交给 Dot 分析。",
-            "attentive");
-        listener.screen(false);
-        listener.vision(true, "请调整画面 · 预览 5 秒后拍摄", false);
-        final int waitingGeneration = visualGeneration;
-        new android.os.Handler(android.os.Looper.getMainLooper())
-            .postDelayed(
-                () -> {
-                  if (visual
-                      && visualGeneration == waitingGeneration
-                      && visionRequestId.isEmpty()) {
-                    cancelVision();
-                    listener.state(recording ? "listening" : "idle", "拍摄请求超时，请重试");
-                  }
-                },
-                15000);
-      } else if ("camera_capture".equals(event)) {
-        if (!foreground
-            || !visual
-            || p.generation != visualGeneration
-            || p.generation < minimumGeneration) return;
-        String nonce = j.optString("nonce");
-        String ident = j.optString("request_id");
-        if (!visionRequestId.isEmpty() || !ident.matches("[a-f0-9]{32}")) return;
-        visionRequestId = ident;
-        Wire.put(j, "vision_generation", p.generation);
-        boolean allowed =
-            "desktop".equals(j.optString("origin"))
-                ? !nonce.isEmpty() && nonce.equals(desktopVisionNonce) && ident.equals(nonce)
-                : "button".equals(j.optString("origin"))
-                    ? !nonce.isEmpty() && nonce.equals(pendingVisionNonce)
-                    : "voice".equals(j.optString("origin")) && recording;
-        pendingVisionNonce = "";
-        desktopVisionNonce = "";
-        if (!allowed) {
-          cameraFailed(j, "request_not_authorized");
-          return;
-        }
-        Wire.put(j, "vision_generation", p.generation);
-        listener.cameraCapture(j);
-      } else if ("vision_done".equals(event)) {
-        if (visual && p.generation == visualGeneration) {
-          visual = false;
+              || (visual && p.generation == visualGeneration)) return;
+          boolean desktop = "desktop".equals(j.optString("origin"));
+          if (desktop
+              && !lan.authorizeDesktopCamera(
+                  desktopCameraAuth, nonce, p.generation, j.optString("camera_auth"))) return;
+          if (!desktop
+              && ((!recording && !nonce.equals(pendingVisionNonce))
+                  || (nonce.isEmpty() && !recording))) return;
+          if (!statusFeedback.begin(p.generation)) return;
+          desktopVisionNonce = desktop ? nonce : "";
+          visual = true;
+          visualGeneration = p.generation;
+          if (!desktop) beginTaskOutput("vision", p.generation);
+          visionRequestId = "";
+          listener.dotResult("", false, "");
+          listener.caption(
+              desktop ? "Dot 请求拍照，请调整画面；预览 5 秒后拍摄并返回当前聊天。" : "请调整画面，预览 5 秒后自动拍摄并交给 Dot 分析。",
+              "attentive");
+          listener.screen(false);
+          listener.vision(true, "请调整画面 · 预览 5 秒后拍摄", false);
+          final int waitingGeneration = visualGeneration;
+          new android.os.Handler(android.os.Looper.getMainLooper())
+              .postDelayed(
+                  () -> {
+                    if (visual
+                        && visualGeneration == waitingGeneration
+                        && visionRequestId.isEmpty()) {
+                      cancelVision();
+                      listener.state(recording ? "listening" : "idle", "拍摄请求超时，请重试");
+                    }
+                  },
+                  15000);
+        } else if ("camera_capture".equals(event)) {
+          if (!foreground
+              || !visual
+              || p.generation != visualGeneration
+              || p.generation < minimumGeneration) return;
+          String nonce = j.optString("nonce");
+          String ident = j.optString("request_id");
+          if (!visionRequestId.isEmpty() || !ident.matches("[a-f0-9]{32}")) return;
+          visionRequestId = ident;
+          Wire.put(j, "vision_generation", p.generation);
+          boolean allowed =
+              "desktop".equals(j.optString("origin"))
+                  ? !nonce.isEmpty() && nonce.equals(desktopVisionNonce) && ident.equals(nonce)
+                  : "button".equals(j.optString("origin"))
+                      ? !nonce.isEmpty() && nonce.equals(pendingVisionNonce)
+                      : "voice".equals(j.optString("origin")) && recording;
           pendingVisionNonce = "";
           desktopVisionNonce = "";
-          if (!foreground
-              || p.generation < minimumGeneration
-              || !statusFeedback.current(p.generation)) return;
-          boolean desktop = "desktop".equals(j.optString("origin"));
-          if (desktop && "completed".equals(j.optString("result")))
-            listener.caption("照片已交给 Mac，请在 Dot 查看本次拍照结果。", "friendly");
-          listener.vision(
-              false,
-              "completed".equals(j.optString("result"))
-                  ? desktop ? "拍照完成 · 摄像头关闭" : "看图已结束 · 摄像头关闭"
-                  : "看图未完成 · 摄像头关闭",
-              statusFeedback.failed(p.generation));
-        }
-      } else if ("vision_unavailable".equals(event)) {
-        visual = false;
-        pendingVisionNonce = "";
-        listener.vision(false, j.optString("message", "看图暂不可用"), false);
-      } else if ("caption_timing".equals(event)) {
-        Player current = player;
-        if (current != null
-            && current.generation == p.generation
-            && current.playbackId == j.optInt("playback_id", -1))
-          current.timings = timings(j.optJSONArray("timings"), current.text.length());
-      } else if ("ping".equals(event)) {
-        send(Wire.event("pong"));
-      } else if ("status".equals(event)) {
-        String nextPhase = j.optString("phase", "listening");
-        boolean permitted =
-            recording
-                || (announcement && p.generation == announcementGeneration)
-                || (visual && p.generation == visualGeneration)
-                || (textSession && p.generation == textGeneration)
-                // Playback failure first cancels output, then reports why.
-                // Admit that one terminal error only for the request we owned.
-                || ("error".equals(nextPhase) && statusFeedback.cancelled(p.generation));
-        if (foreground
-            && permitted
-            && p.generation >= minimumGeneration
-            && statusFeedback.accept(p.generation, nextPhase)) {
-          phase = nextPhase;
-          listener.state(phase, j.optString("message"));
-        }
-      } else if ("transcript".equals(event)) {
-        if (recording && p.generation >= minimumGeneration && currentRoute(route)) {
-          String text = j.optString("text");
-          CaptureWindow window = captureWindow;
-          if (window != null)
-            window.observeTranscript(route, p.generation, text, SystemClock.elapsedRealtime());
-          listener.heard(text);
-        }
-      } else if ("announcement_begin".equals(event)) {
-        if (foreground && p.generation >= minimumGeneration && statusFeedback.begin(p.generation)) {
-          announcement = true;
-          announcementGeneration = p.generation;
-          listener.announcement();
-          listener.playback(true);
-        }
-      } else if ("announcement_done".equals(event)) {
-        if (announcement && p.generation == announcementGeneration) {
-          announcement = false;
-          if (!foreground
-              || p.generation < minimumGeneration
-              || !statusFeedback.current(p.generation)) return;
-          listener.playback(false);
-          if (!statusFeedback.failed(p.generation)) {
-            phase = recording ? "listening" : "idle";
-            listener.state(
-                phase,
-                "completed".equals(j.optString("result"))
-                    ? (recording ? "播报已结束，我在听" : "播报已结束 · 麦克风关闭")
-                    : (recording ? "播报未完成，我在听" : "播报未完成 · 麦克风关闭"));
+          if (!allowed) {
+            cameraFailed(j, "request_not_authorized");
+            return;
           }
-        }
-      } else if ("brain_provider".equals(event)) {
-        listener.brain(j.optString("provider", "minimax"));
-      } else if ("dot_result".equals(event)) {
-        if ((recording || visual || textSession) && p.generation >= minimumGeneration)
-          listener.dotResult(
-              j.optString("text"), j.optBoolean("truncated"), j.optString("handoff_source_title"));
-      } else if ("dot_chat_state".equals(event)) {
-        dotChatSupported = true;
-        if (foreground) listener.dotChats(j);
-      } else if ("saved_task_result".equals(event)) {
-        if (foreground) listener.savedTasks(j);
-      } else if ("web_sources".equals(event)) {
-        if ((recording || visual || textSession) && p.generation >= minimumGeneration)
-          listener.sources(j.optJSONArray("items"), j.optString("retrieved_at"));
-      } else if ("cancel".equals(event)) {
-        if (p.generation < minimumGeneration
-            || (visual && p.generation < visualGeneration)
-            || !statusFeedback.cancel(
-                p.generation, recording || announcement || visual || textSession)) return;
-        minimumGeneration = Math.max(minimumGeneration, p.generation);
-        if (visual) {
+          Wire.put(j, "vision_generation", p.generation);
+          listener.cameraCapture(j);
+        } else if ("vision_done".equals(event)) {
+          if (visual && p.generation == visualGeneration) {
+            visual = false;
+            speakerOwner.endTask(p.generation);
+            pendingVisionNonce = "";
+            desktopVisionNonce = "";
+            if (!foreground
+                || p.generation < minimumGeneration
+                || !statusFeedback.current(p.generation)) return;
+            boolean desktop = "desktop".equals(j.optString("origin"));
+            if (desktop && "completed".equals(j.optString("result")))
+              listener.caption("照片已交给 Mac，请在 Dot 查看本次拍照结果。", "friendly");
+            listener.vision(
+                false,
+                "completed".equals(j.optString("result"))
+                    ? desktop ? "拍照完成 · 摄像头关闭" : "看图已结束 · 摄像头关闭"
+                    : "看图未完成 · 摄像头关闭",
+                statusFeedback.failed(p.generation));
+          }
+        } else if ("vision_unavailable".equals(event)) {
           visual = false;
-          listener.vision(false, "已停止看图 · 摄像头关闭", false);
-        }
-        announcement = false;
-        textSession = false;
-        listener.playback(false);
-        cancelPlaybackForCommand(p.generation, route);
-        listener.caption("", "attentive");
-        if (recording) listener.state("listening", "我在听，你继续说");
-        else {
-          phase = "idle";
-          listener.state("idle", "播报已停止 · 麦克风关闭");
-        }
-      } else if ("playback_pause".equals(event)) {
-        Player current = player;
-        if (recording
-            && current != null
-            && current.generation == p.generation
-            && p.generation >= minimumGeneration) current.pauseForVoice(j.optInt("token"));
-      } else if ("playback_resume".equals(event)) {
-        Player current = player;
-        if (recording
-            && current != null
-            && current.generation == p.generation
-            && p.generation >= minimumGeneration) current.resumeAfterNoise(j.optInt("token"));
-      } else if ("play_begin".equals(event)) {
-        boolean permitted =
-            recording
-                || (textSession && p.generation == textGeneration)
-                || (visual && p.generation == visualGeneration)
-                || (announcement
-                    && p.generation == announcementGeneration
-                    && "announcement".equals(j.optString("role")));
-        if (!foreground || !permitted || p.generation < minimumGeneration) return;
-        cancelPlayback();
-        Player next =
-            new Player(
-                p.generation,
+          speakerOwner.endTask(p.generation);
+          pendingVisionNonce = "";
+          listener.vision(false, j.optString("message", "看图暂不可用"), false);
+        } else if ("caption_timing".equals(event)) {
+          Player current = player;
+          if (current != null
+              && current.generation == p.generation
+              && current.playbackId == j.optInt("playback_id", -1))
+            current.timings = timings(j.optJSONArray("timings"), current.text.length());
+        } else if ("ping".equals(event)) {
+          send(Wire.event("pong"));
+        } else if ("status".equals(event)) {
+          String nextPhase = j.optString("phase", "listening");
+          boolean permitted =
+              recording
+                  || (announcement && p.generation == announcementGeneration)
+                  || (visual && p.generation == visualGeneration)
+                  || (textSession && p.generation == textGeneration)
+                  // Playback failure first cancels output, then reports why.
+                  // Admit that one terminal error only for the request we owned.
+                  || ("error".equals(nextPhase) && statusFeedback.cancelled(p.generation));
+          if (foreground
+              && permitted
+              && p.generation >= minimumGeneration
+              && statusFeedback.accept(p.generation, nextPhase)) {
+            phase = nextPhase;
+            listener.state(phase, j.optString("message"));
+          }
+        } else if ("transcript".equals(event)) {
+          if (recording && p.generation >= minimumGeneration && currentRoute(route)) {
+            String text = j.optString("text");
+            CaptureWindow window = captureWindow;
+            if (window != null)
+              window.observeTranscript(route, p.generation, text, SystemClock.elapsedRealtime());
+            listener.heard(text);
+          }
+        } else if ("announcement_begin".equals(event)) {
+          if (foreground
+              && p.generation >= minimumGeneration
+              && statusFeedback.begin(p.generation)) {
+            announcement = true;
+            announcementGeneration = p.generation;
+            beginTaskOutput("announcement", p.generation);
+            listener.announcement();
+            listener.playback(true);
+          }
+        } else if ("announcement_done".equals(event)) {
+          if (announcement && p.generation == announcementGeneration) {
+            announcement = false;
+            speakerOwner.endTask(p.generation);
+            if (!foreground
+                || p.generation < minimumGeneration
+                || !statusFeedback.current(p.generation)) return;
+            listener.playback(false);
+            if (!statusFeedback.failed(p.generation)) {
+              phase = recording ? "listening" : "idle";
+              listener.state(
+                  phase,
+                  "completed".equals(j.optString("result"))
+                      ? (recording ? "播报已结束，我在听" : "播报已结束 · 麦克风关闭")
+                      : (recording ? "播报未完成，我在听" : "播报未完成 · 麦克风关闭"));
+            }
+          }
+        } else if ("brain_provider".equals(event)) {
+          listener.brain(j.optString("provider", "minimax"));
+        } else if ("dot_result".equals(event)) {
+          if ((recording || visual || textSession) && p.generation >= minimumGeneration)
+            listener.dotResult(
                 j.optString("text"),
-                j.optString("mood", "friendly"),
-                j.optString("role", "assistant"),
-                j.optInt("playback_id"),
-                timings(j.optJSONArray("timings"), j.optString("text").length()),
-                PlayoutProbe.requested(j.opt("playout_receipt_version")),
-                Boolean.TRUE.equals(j.opt("report_audio_clock")));
-        player = next;
-        next.start();
-      } else if ("play_end".equals(event)) {
-        Player current = player;
-        if (current != null && current.generation == p.generation) current.ended = true;
+                j.optBoolean("truncated"),
+                j.optString("handoff_source_title"));
+        } else if ("dot_chat_state".equals(event)) {
+          dotChatSupported = true;
+          if (foreground) listener.dotChats(j);
+        } else if ("saved_task_result".equals(event)) {
+          if (foreground) listener.savedTasks(j);
+        } else if ("web_sources".equals(event)) {
+          if ((recording || visual || textSession) && p.generation >= minimumGeneration)
+            listener.sources(j.optJSONArray("items"), j.optString("retrieved_at"));
+        } else if ("cancel".equals(event)) {
+          if (p.generation < minimumGeneration
+              || (visual && p.generation < visualGeneration)
+              || !statusFeedback.cancel(
+                  p.generation, recording || announcement || visual || textSession)) return;
+          minimumGeneration = Math.max(minimumGeneration, p.generation);
+          if (visual) {
+            visual = false;
+            listener.vision(false, "已停止看图 · 摄像头关闭", false);
+          }
+          announcement = false;
+          textSession = false;
+          listener.playback(false);
+          cancelPlaybackForCommand(p.generation, route);
+          speakerOwner.endTasksThrough(p.generation);
+          listener.caption("", "attentive");
+          if (recording) listener.state("listening", "我在听，你继续说");
+          else {
+            phase = "idle";
+            listener.state("idle", "播报已停止 · 麦克风关闭");
+          }
+        } else if ("playback_pause".equals(event)) {
+          Player current = player;
+          if (recording
+              && current != null
+              && current.generation == p.generation
+              && p.generation >= minimumGeneration) current.pauseForVoice(j.optInt("token"));
+        } else if ("playback_resume".equals(event)) {
+          Player current = player;
+          if (recording
+              && current != null
+              && current.generation == p.generation
+              && p.generation >= minimumGeneration) current.resumeAfterNoise(j.optInt("token"));
+        } else if ("play_begin".equals(event)) {
+          boolean permitted =
+              recording
+                  || (textSession && p.generation == textGeneration)
+                  || (visual && p.generation == visualGeneration)
+                  || (announcement
+                      && p.generation == announcementGeneration
+                      && "announcement".equals(j.optString("role")));
+          if (!foreground || !permitted || p.generation < minimumGeneration) return;
+          cancelPlayback();
+          Player next =
+              new Player(
+                  p.generation,
+                  j.optString("text"),
+                  j.optString("mood", "friendly"),
+                  j.optString("role", "assistant"),
+                  j.optInt("playback_id"),
+                  timings(j.optJSONArray("timings"), j.optString("text").length()),
+                  PlayoutProbe.requested(j.opt("playout_receipt_version")),
+                  Boolean.TRUE.equals(j.opt("report_audio_clock")));
+          player = next;
+          next.start();
+        } else if ("play_end".equals(event)) {
+          Player current = player;
+          if (current != null && current.generation == p.generation) current.ended = true;
+        }
       }
     } else if (p.type == Wire.SPEAKER) {
       Player current = player;
       if ((recording || announcement || visual || textSession)
           && current != null
+          && current.playbackRoute == route
+          && currentRoute(route)
           && current.generation == p.generation
           && p.generation >= minimumGeneration) current.offer(p.data);
     }
@@ -904,6 +929,7 @@ final class VoiceSession {
     desktopVisionNonce = "";
     if (had) {
       cancelPlayback();
+      speakerOwner.endTask(stoppedGeneration);
       JSONObject stopped = Wire.event("vision_cancel");
       Wire.put(stopped, "vision_generation", stoppedGeneration);
       Wire.put(stopped, "nonce", stoppedNonce);
@@ -987,6 +1013,7 @@ final class VoiceSession {
     textSession = false;
     listener.playback(false);
     cancelPlayback();
+    speakerOwner.endTasksThrough(Integer.MAX_VALUE);
     listener.caption("", "attentive");
     send(Wire.event("interrupt"));
     if (recording) listener.state("listening", "我在听，你继续说");
@@ -1028,6 +1055,7 @@ final class VoiceSession {
       renderFrames = 0;
       minimumGeneration = 0;
       statusFeedback.reset();
+      speakerOwner.beginVoice(mine, () -> recording && epoch == mine);
     }
     listener.microphone(true);
     listener.state("calibrating", "正在准备音频，请保持安静");
@@ -1194,6 +1222,7 @@ final class VoiceSession {
                     if (owned) {
                       recording = false;
                       captureWindow = null;
+                      speakerOwner.endVoice(mine);
                     }
                   }
                   if (owned) {
@@ -1239,8 +1268,10 @@ final class VoiceSession {
       r = recorder;
       recorder = null;
       phase = expected == null ? "idle" : "error";
+      announcement = false;
+      cancelPlayback();
+      speakerOwner.close();
     }
-    announcement = false;
     listener.playback(false);
     inputLevel = 0;
     if (r != null)
@@ -1248,7 +1279,6 @@ final class VoiceSession {
         r.stop();
       } catch (RuntimeException ignored) {
       }
-    cancelPlayback();
     listener.microphone(false);
     JSONObject stopped = Wire.event("session_stop");
     Wire.put(stopped, "epoch", stoppedEpoch);
@@ -1262,6 +1292,19 @@ final class VoiceSession {
     playbackPresentation = null;
     lastCaption = CaptionProgress.empty();
     if (p != null) p.cancel();
+  }
+
+  private synchronized void beginTaskOutput(String role, int generation) {
+    if (recording) return;
+    cancelPlayback();
+    speakerOwner.beginTask(
+        generation,
+        () ->
+            "text".equals(role)
+                ? textSession && textGeneration == generation
+                : "vision".equals(role)
+                    ? visual && visualGeneration == generation
+                    : announcement && announcementGeneration == generation);
   }
 
   private void cancelPlaybackForCommand(int cancelGeneration, long route) {
@@ -1334,7 +1377,7 @@ final class VoiceSession {
     Player p = player;
     AudioTrack t = p == null ? null : p.track;
     try {
-      return t == null ? 0 : t.getPlaybackHeadPosition() & 0xffffffffL;
+      return t == null ? 0 : p.localHead(t);
     } catch (IllegalStateException ignored) {
       return 0;
     }
@@ -1497,6 +1540,7 @@ final class VoiceSession {
             0);
       } else if ("stop".equals(action)) {
         cancelPlayback();
+        speakerOwner.endTasksThrough(Integer.MAX_VALUE);
         listener.playback(false);
       } else if ("wake_screen".equals(action)) listener.screen(false);
       else if (!"status".equals(action)) throw new IllegalArgumentException("unknown action");
@@ -1522,10 +1566,12 @@ final class VoiceSession {
   private final class Player extends Thread implements PlaybackDrain.Sink {
     // 播放头决定字幕、嘴型和完成回执；队列中已有数据不能被当成已经发声。
     final int generation, playbackId;
+    final long playbackRoute;
     final boolean reportPlayout;
     final RenderClockStats clockStats;
     final PlayoutProbe playout = new PlayoutProbe();
     final String text, mood, role;
+    final SpeakerOwner.Ticket outputOwner;
     volatile CaptionTimeline timings;
     long renderSequence;
     long writeNanos;
@@ -1535,10 +1581,10 @@ final class VoiceSession {
     volatile CaptionProgress frozenCaption;
     volatile int pauseToken;
     volatile AudioTrack track;
+    volatile SpeakerSession.Lease lease;
     volatile long written = 0;
     volatile long resumeCount = 0;
     volatile long cancelAppliedNanos;
-    int configuredBufferFrames;
     final PlaybackDrain drain = new PlaybackDrain();
 
     Player(
@@ -1552,9 +1598,11 @@ final class VoiceSession {
         boolean reportClock) {
       super("cc8-speaker");
       generation = g;
+      playbackRoute = routeEpoch;
       text = t;
       mood = m;
       this.role = role;
+      outputOwner = speakerOwner.forPlayback(g);
       playbackId = id;
       timings = line;
       reportPlayout = report;
@@ -1575,18 +1623,18 @@ final class VoiceSession {
 
     void cancel() {
       cancelAppliedNanos = 0;
-      stopped = true;
       frozenCaption = null;
       queue.clear();
-      AudioTrack t = track;
-      if (t != null)
-        try {
-          t.pause();
-          t.flush();
-          cancelAppliedNanos = System.nanoTime();
-        } catch (RuntimeException ignored) {
-        }
-      interrupt();
+      try {
+        if (outputOwner != null && lease != null)
+          cancelAppliedNanos = outputOwner.output().cancel(lease);
+      } catch (RuntimeException ignored) {
+      } finally {
+        // Cancel the lease before publishing stopped: its worker also observes allowed().
+        // Otherwise that worker can win the flush and consume our applied-stop witness.
+        stopped = true;
+        interrupt();
+      }
     }
 
     void pauseForVoice(int token) {
@@ -1605,8 +1653,8 @@ final class VoiceSession {
     }
 
     private void pauseTrack(AudioTrack t, int token) {
-      t.pause();
-      long nanos = System.nanoTime();
+      long nanos = outputOwner.output().pause(lease);
+      if (nanos == 0) return;
       if (!allowed()) return;
       frozenCaption = sampleFrame(t, true);
       publishPlayback(this, text, "listening", "听到你说话，正在听…");
@@ -1629,14 +1677,14 @@ final class VoiceSession {
           paused = false; // A withdrawn pending pause never changed AudioTrack.
           return;
         }
+        final long nanos;
         try {
-          t.play();
+          nanos = outputOwner.output().resume(lease);
         } catch (IllegalStateException error) {
           failPlayback(error);
           return;
         }
-        long nanos = System.nanoTime();
-        if (!allowed()) return;
+        if (nanos == 0 || !allowed()) return;
         paused = false;
         frozenCaption = null;
         resumeCount++;
@@ -1648,11 +1696,12 @@ final class VoiceSession {
       }
     }
 
-    private boolean startTrack(AudioTrack t) {
+    private boolean startTrack(SpeakerSession.Lease acquired) {
       // Serialize startup and control messages without holding a lock during PCM writes.
       synchronized (routeLock) {
         if (!allowed()) return false;
-        t.play();
+        lease = acquired;
+        AudioTrack t = ((NativeSpeaker) acquired.device).track;
         track = t;
         if (paused) pauseTrack(t, pauseToken);
         return allowed();
@@ -1661,7 +1710,7 @@ final class VoiceSession {
 
     private void failPlayback(Exception error) {
       synchronized (routeLock) {
-        if (stopped || !foreground) return;
+        if (!allowed()) return;
         cancel();
         publishPlayback(this, null, "error", "播放已停止：" + error.getMessage());
         JSONObject failure = Wire.event("playback_error");
@@ -1694,8 +1743,10 @@ final class VoiceSession {
       float level = 0;
       try {
         if (t != null) {
-          head = t.getPlaybackHeadPosition() & 0xffffffffL;
-          if (!freeze && t.getPlayState() == AudioTrack.PLAYSTATE_PLAYING) level = levelAt(head);
+          head = localHead(t);
+          // A running track may still be playing zeros before this clause's physical origin.
+          if (!freeze && head > 0 && t.getPlayState() == AudioTrack.PLAYSTATE_PLAYING)
+            level = levelAt(head);
         }
       } catch (IllegalStateException ignored) {
       }
@@ -1725,6 +1776,9 @@ final class VoiceSession {
     public boolean allowed() {
       return !stopped
           && foreground
+          && currentRoute(playbackRoute)
+          && outputOwner != null
+          && outputOwner.allows()
           && (recording
               || (textSession && generation == textGeneration)
               || (visual && generation == visualGeneration)
@@ -1741,25 +1795,28 @@ final class VoiceSession {
       waitIfPaused();
     }
 
-    public int write(short[] samples, int offset, int count) {
+    public int write(short[] samples, int offset, int count) throws IOException {
       writeNanos = System.nanoTime();
-      return track.write(samples, offset, count);
+      return outputOwner.output().write(lease, samples, offset, count);
     }
 
     public void accepted(short[] samples, int offset, int count) throws IOException {
       AudioTrack t = track;
-      long now = System.nanoTime(), head = t.getPlaybackHeadPosition() & 0xffffffffL;
+      SpeakerSession speaker = outputOwner.output();
+      long now = System.nanoTime();
+      long head = speaker.absolutePosition(t.getPlaybackHeadPosition() & 0xffffffffL);
+      long target = lease.base + written;
       AudioTimestamp stamp = new AudioTimestamp();
       boolean valid = t.getTimestamp(stamp);
-      long speakerTime =
-          PlaybackClock.estimate(now, written, head, valid, stamp.framePosition, stamp.nanoTime);
+      long position = speaker.absolutePosition(stamp.framePosition);
+      long speakerTime = PlaybackClock.estimate(now, target, head, valid, position, stamp.nanoTime);
       if (clockStats != null)
         clockStats.observe(
             SystemClock.elapsedRealtime(),
             written,
             count,
             speakerTime,
-            PlaybackClock.source(now, written, valid, stamp.framePosition, stamp.nanoTime));
+            PlaybackClock.source(now, target, valid, position, stamp.nanoTime));
       double power = 0;
       short[] accepted = new short[count];
       System.arraycopy(samples, offset, accepted, 0, count);
@@ -1785,7 +1842,7 @@ final class VoiceSession {
       if (!reportPlayout || !playout.pending()) return;
       PlayoutProbe.Observation seen =
           playout.observe(
-              t.getPlaybackHeadPosition() & 0xffffffffL,
+              localHead(t),
               System.nanoTime(),
               t.getPlayState() == AudioTrack.PLAYSTATE_PLAYING,
               paused,
@@ -1823,11 +1880,17 @@ final class VoiceSession {
     }
 
     public long head() {
-      return track.getPlaybackHeadPosition() & 0xffffffffL;
+      return localHead(track);
+    }
+
+    private long localHead(AudioTrack t) {
+      return t == null || outputOwner == null
+          ? 0
+          : outputOwner.output().localHead(lease, t.getPlaybackHeadPosition() & 0xffffffffL);
     }
 
     public int bufferFrames() {
-      return Build.VERSION.SDK_INT >= 23 ? track.getBufferSizeInFrames() : configuredBufferFrames;
+      return ((NativeSpeaker) lease.device).bufferFrames();
     }
 
     public long resumeSerial() {
@@ -1844,23 +1907,12 @@ final class VoiceSession {
 
     @Override
     public void run() {
-      AudioTrack t = null;
+      SpeakerSession.Lease acquired = null;
       try {
-        int min =
-            AudioTrack.getMinBufferSize(
-                16000, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
-        configuredBufferFrames = Math.max(min * 2, 3200) / 2;
-        t =
-            new AudioTrack(
-                AudioManager.STREAM_MUSIC,
-                16000,
-                AudioFormat.CHANNEL_OUT_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
-                Math.max(min * 2, 3200),
-                AudioTrack.MODE_STREAM);
-        if (t.getState() != AudioTrack.STATE_INITIALIZED) throw new IOException("播放初始化失败");
-        t.setVolume(.35f);
-        if (!startTrack(t)) return;
+        if (!allowed()) return;
+        acquired = outputOwner.output().acquire(generation, playbackId, this::allowed);
+        if (!startTrack(acquired)) return;
+        AudioTrack t = track;
         waitIfPaused();
         if (!allowed()) return;
         synchronized (routeLock) {
@@ -1876,7 +1928,6 @@ final class VoiceSession {
                         ? "正在播报 · 点击打断可停止"
                         : visual && !recording ? "正在看图回答 · 点击停止看图可打断" : "正在回答 · 你可以开口打断");
         }
-        long sequence = 0;
         while (allowed()) {
           waitIfPaused();
           if (!allowed()) break;
@@ -1888,7 +1939,18 @@ final class VoiceSession {
           }
           if (!PcmPump.writeAll(Wire.samples(bytes), this)) break;
         }
-        if (!drain.drain(written, this)) return;
+        long finalHead = 0;
+        boolean finished = false;
+        while (allowed() && !finished) {
+          if (!drain.drain(written, this)) return;
+          synchronized (routeLock) {
+            if (!allowed()) return;
+            if (paused) continue;
+            finalHead = localHead(t);
+            if (!outputOwner.output().finish(acquired)) throw new IOException("播放会话已结束");
+            finished = true;
+          }
+        }
         if (allowed()) {
           synchronized (VoiceSession.this) {
             if (player == this)
@@ -1909,7 +1971,7 @@ final class VoiceSession {
           Wire.put(done, "generation", generation);
           Wire.put(done, "role", role);
           Wire.put(done, "playback_id", playbackId);
-          Wire.put(done, "played_frames", t.getPlaybackHeadPosition() & 0xffffffffL);
+          Wire.put(done, "played_frames", finalHead);
           if (clockStats != null) {
             Wire.put(done, "render_clock", clockReport());
           }
@@ -1923,14 +1985,14 @@ final class VoiceSession {
       } finally {
         synchronized (routeLock) {
           track = null;
+          lease = null;
           frozenCaption = null;
         }
-        if (t != null) {
+        if (acquired != null) {
           try {
-            t.stop();
+            outputOwner.output().cancel(acquired);
           } catch (RuntimeException ignored) {
           }
-          t.release();
         }
         synchronized (VoiceSession.this) {
           if (player == this) {

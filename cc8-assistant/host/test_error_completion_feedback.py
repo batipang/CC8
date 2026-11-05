@@ -370,6 +370,9 @@ class FeedbackCheck {
   void vision(boolean active,String message,boolean preserve){visionCalls++;preserveVisionError=preserve;}
   void recognition(String engine){} void heard(String text){} void caption(String text,String mood){} void announcement(){}}
  final Listener listener=new Listener();
+ static class Output {void endTask(int generation){}void endTasksThrough(int generation){}}
+ final Output speakerOwner=new Output();
+ void beginTaskOutput(String role,int generation){}
  void cancelPlaybackForCommand(int generation,long route){}
  static void yes(boolean value,String message){if(!value)throw new AssertionError(message);}
 """

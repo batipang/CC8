@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "p0-capture-clock-reasons-20261105.1",
+  "release_id": "p0-speaker-lifetime-20261105.1",
   "backend": {
     "version": "0.14.85"
   },
   "assistant": {
-    "version": "0.9.35",
-    "version_code": 72,
+    "version": "0.9.37",
+    "version_code": 74,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {
