@@ -2319,6 +2319,9 @@ class DeviceAutomationTests(unittest.TestCase):
         ):
             with self.subTest(case=case, generation=generation, probe_reason=probe_reason):
                 question = ALL_QUESTIONS[case - 1]
+                alignment = {30: 'matched_render_frames', 31: 'matched_render_frames_room_fit'}.get(
+                    case
+                )
                 run, device, _, _ = self.acoustic_fixture(
                     lambda _: [self.acoustic_row()],
                     awake=True,
@@ -2344,7 +2347,7 @@ class DeviceAutomationTests(unittest.TestCase):
                             'status': 'observed',
                             'generation': generation,
                             ACOUSTIC_RESPONSE_METRIC: 720,
-                            **({'alignment': 'matched_render_frames'} if case == 30 else {}),
+                            **({'alignment': alignment} if alignment else {}),
                         }
                     return fixture_request(payload)
 
@@ -2352,8 +2355,8 @@ class DeviceAutomationTests(unittest.TestCase):
                 if report_reason is None:
                     run.acoustic_probe(awake=True)
                     expected = {'status': 'observed', ACOUSTIC_RESPONSE_METRIC: 720}
-                    if case == 30:
-                        expected['alignment'] = 'matched_render_frames'
+                    if alignment:
+                        expected['alignment'] = alignment
                 else:
                     with self.assertRaisesRegex(
                         CheckFailure, 'response_acoustic_timing_unconfirmed'

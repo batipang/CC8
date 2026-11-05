@@ -27,6 +27,12 @@ PREFIX_AGREEMENT = 32  # 2 ms on the device capture clock.
 PREFIX_SEARCH_RADIUS = 1280  # Inspect competing matches within 80 ms of the projected block.
 MIN_REFERENCE_RMS = 0.01
 MIN_CAPTURE_RMS = 0.002
+# Room estimation uses the same decimated 8 kHz signal as window matching.
+ROOM_HALF_TAPS = 48  # +/- 6 ms.
+ROOM_TRAIN = 800
+ROOM_CHECK = 320
+ROOM_SPAN = ROOM_TRAIN + ROOM_CHECK
+ROOM_REFERENCE_LIMIT = RESPONSE_PREFIX_LIMIT + 2 * (ROOM_SPAN + 2 * ROOM_HALF_TAPS)
 
 
 def first_leading_block(reference):
@@ -49,6 +55,34 @@ def block_correlation(expected, measured):
         np.linalg.norm(expected) * np.linalg.norm(measured)
     )
     return float(np.clip(normalized, 0, 1))
+
+
+def room_block_matches(predicted, measured, minimum):
+    predicted = predicted - predicted.mean()
+    measured = measured - measured.mean()
+    predicted_power = np.linalg.norm(predicted)
+    measured_power = np.linalg.norm(measured)
+    return (
+        np.std(measured) >= MIN_CAPTURE_RMS
+        and 0.5 * predicted_power <= measured_power <= 2 * predicted_power
+        and np.dot(predicted, measured) >= minimum * predicted_power * measured_power
+    )
+
+
+def fit_room_response(reference, measured):
+    windows = np.lib.stride_tricks.sliding_window_view(reference, 2 * ROOM_HALF_TAPS + 1)
+    train = windows[:ROOM_TRAIN] - windows[:ROOM_TRAIN].mean(axis=0)
+    target = measured[:ROOM_TRAIN] - measured[:ROOM_TRAIN].mean()
+    gram = train.T @ train
+    power = np.trace(gram) / len(gram)
+    if power < 1e-6:
+        return None
+    try:
+        weights = np.linalg.solve(gram + np.eye(len(gram)) * power * 0.05, train.T @ target)
+    except np.linalg.LinAlgError:
+        return None
+    predicted = windows[ROOM_TRAIN:] @ weights
+    return weights if room_block_matches(predicted, measured[ROOM_TRAIN:], 0.8) else None
 
 
 def match_window(audio, template):
@@ -205,11 +239,12 @@ class PlaybackEvidence:
                 self.render_start = nanos
             self.render_frame = frame + len(pcm)
             self.render_end = nanos + round(len(pcm) * 1e9 / RATE)
-            keep = (
-                REFERENCE_LIMIT
-                if self.template_offset is None
-                else LEADING_LIMIT + 2 * LEADING_BLOCK
-            )
+            if self.template_offset is None:
+                keep = REFERENCE_LIMIT
+            elif probe.input_end_ns is not None and self.clock_resets:
+                keep = ROOM_REFERENCE_LIMIT
+            else:
+                keep = LEADING_LIMIT + 2 * LEADING_BLOCK
             if len(self.reference) < keep:
                 self.reference = np.concatenate((self.reference, pcm[: keep - len(self.reference)]))
             if self.template_offset is None:
@@ -323,9 +358,53 @@ class PlaybackEvidence:
                     'prefix_block_status': leading['status'],
                 },
             }
-        if leading['status'] == 'observed':
+        if leading['status'] == 'response_prefix_discontinuous' and self._room_matches_prefix(
+            origin, offset
+        ):
+            leading = self._leading_evidence(origin, self.response_prefix, offset)
+            leading['alignment'] = 'matched_render_frames_room_fit'
+        elif leading['status'] == 'observed':
             leading['alignment'] = 'matched_render_frames'
         return leading
+
+    def _room_matches_prefix(self, origin, offset):
+        context = 2 * ROOM_HALF_TAPS
+        # Use only the stable segment, with all fit and holdout samples
+        # strictly after the original prefix being tested.
+        start = max(
+            self.segment_frame + max(self.template_offset, context),
+            offset + WINDOW + context,
+        )
+        start += start % 2
+        local = start - self.segment_frame
+        stop = local + 2 * ROOM_SPAN + context
+        capture = origin + start
+        capture_stop = capture + 2 * ROOM_SPAN
+        if (
+            stop > len(self.reference)
+            or capture < 0
+            or capture_stop > len(self.mic)
+            or offset + WINDOW + context > len(self.response_prefix)
+        ):
+            return False
+        weights = fit_room_response(
+            self.reference[local - context : stop : 2], self.mic[capture:capture_stop:2]
+        )
+        if weights is None:
+            return False
+        prefix = np.pad(self.response_prefix[::2], (ROOM_HALF_TAPS, 0))
+        windows = np.lib.stride_tricks.sliding_window_view(prefix, len(weights))
+        predicted = windows @ weights
+        for start in range(offset + 2 * LEADING_BLOCK, offset + WINDOW, LEADING_BLOCK):
+            raw = self.response_prefix[start : start + LEADING_BLOCK : 2]
+            capture = origin + start
+            measured = self.mic[capture : capture + LEADING_BLOCK : 2]
+            expected = predicted[start // 2 : (start + LEADING_BLOCK) // 2]
+            if np.std(raw) >= MIN_REFERENCE_RMS and not room_block_matches(
+                expected, measured, 0.55
+            ):
+                return False
+        return True
 
     def _verify_response_prefix(self, origin, offset):
         leading = self._leading_evidence(origin, self.response_prefix, offset)

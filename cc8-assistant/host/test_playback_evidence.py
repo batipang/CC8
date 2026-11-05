@@ -303,6 +303,42 @@ class AcousticEvidenceTests(unittest.TestCase):
                 self.assertFalse(observer.response_prefix.size)
                 self.assertFalse(probe.result['first_audible_onset_measured'])
 
+    def test_room_fit_recovers_reflected_prefix_but_keeps_missing_audio_unconfirmed(self):
+        reference = public_signal()
+        reference[640:960] = 0.12 * np.sin(2 * np.pi * 250 * np.arange(320) / RATE)
+        room = np.zeros(25)
+        room[0], room[-1] = 0.55, 0.5
+        for condition in ('continuous', 'first_missing', 'late_gap'):
+            with self.subTest(condition=condition):
+                observer = PlaybackEvidence()
+                probe = observer.arm(101, 7, input_end_ns=START - 600_000_000)
+                for frame in range(0, len(reference), 320):
+                    clock_step = 120_000_000 if frame < 640 else 0
+                    stamp = START + round(frame * 1e9 / RATE) + clock_step
+                    observer.render(101, frame, stamp, reference[frame : frame + 320])
+                audible = reference.copy()
+                if condition == 'first_missing':
+                    audible[:320] = 0
+                if condition == 'late_gap':
+                    audible = np.concatenate((audible[:2240], np.zeros(320), audible[2240:]))
+                echoed = np.convolve(audible, room)
+                mic = np.zeros(32000)
+                mic[5120 : 5120 + len(echoed)] = echoed * 0.35
+                for frame in range(0, len(mic), 320):
+                    observer.microphone(
+                        7, START - 200_000_000 + round(frame * 1e9 / RATE), mic[frame : frame + 320]
+                    )
+                evidence = probe.result['leading_acoustic_evidence']
+                metric = 'last_voiced_to_confirmed_output_block_ms'
+                if condition == 'continuous':
+                    self.assertEqual(evidence['status'], 'observed')
+                    self.assertEqual(evidence['alignment'], 'matched_render_frames_room_fit')
+                    self.assertAlmostEqual(evidence[metric], 720, delta=1)
+                else:
+                    self.assertNotEqual(evidence['status'], 'observed')
+                    self.assertNotIn(metric, evidence)
+                self.assertFalse(observer.response_prefix.size or observer.mic.size)
+
     def test_repeated_clock_refinements_can_still_produce_a_stable_later_window(self):
         observer = PlaybackEvidence()
         probe = observer.arm(101, 7)
