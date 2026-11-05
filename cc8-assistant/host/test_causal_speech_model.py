@@ -83,13 +83,39 @@ class CausalSpeechModelTests(unittest.TestCase):
         probe.reference(12, 0, 1_000_000_000, far[:CUTOFF])
         probe.microphone(7, 1_060_000_000, mic[960 : 960 + CUTOFF])
         checked = validate_far_preflight(probe.mark_stimulus(verify_far=True))
-        self.assertEqual(checked['transfer']['status'], 'alignment_unconfirmed')
+        self.assertEqual(checked['transfer']['status'], 'validated')
         self.assertEqual(checked['coverage']['estimated_mic_start_relative_to_render_frames'], 960)
         self.assertEqual(checked['coverage']['estimated_overlap_frames'], CUTOFF - 960)
         self.assertGreater(checked['coverage']['overlap_reference_rms'], 0.1)
         checked['coverage']['estimated_overlap_frames'] += 1
         with self.assertRaises(ValueError):
             validate_far_preflight(checked)
+
+    def test_field_scale_mic_lead_waits_for_overlap_and_preserves_residual_offset(self):
+        mic, far, _ = signals()
+        pcm, metadata, _ = fixture()
+        probe = KnownSpeechWindow(pcm, metadata, 12, 7, timer=Mock())
+        self.addCleanup(probe.cancel)
+        # Match the field overlap and keep one frame of clock rounding error.
+        lead = 7208
+        early_mic = np.r_[np.zeros(lead), mic]
+        stamp = 1_000_000_000
+        ref_stamp = stamp + 7209 * 62500
+        probe.reference(12, 0, ref_stamp, far[:16384])
+        probe.microphone(7, stamp, early_mic[:16000])
+        pending = validate_far_preflight(probe.mark_stimulus(verify_far=True))
+        self.assertEqual(pending['status'], 'awaiting_overlap')
+        self.assertEqual(pending['coverage']['estimated_overlap_frames'], 8791)
+        self.assertIsNone(probe.stimulus_boundary)
+        probe.microphone(7, stamp + 16000 * 62500, early_mic[16000:22400])
+        ready = validate_far_preflight(probe.mark_stimulus(verify_far=True))
+        self.assertEqual(ready['transfer']['status'], 'validated')
+        self.assertGreater(ready['transfer']['held_out_confidence'], 0.99)
+        probe.microphone(7, stamp + 22400 * 62500, early_mic[22400:])
+        probe.reference(12, 16384, ref_stamp + 16384 * 62500, far[16384:])
+        transfer = validate(probe.read())['far_transfer']
+        self.assertEqual(transfer['status'], 'residual_observed')
+        self.assertEqual(transfer['residual_window_offset_frames'], NEAR_START + lead)
 
     def test_far_preflight_discards_cancelled_result_and_clears_snapshot(self):
         mic, far, _ = signals(near=False)
@@ -100,13 +126,13 @@ class CausalSpeechModelTests(unittest.TestCase):
         analyse = model.analyse
         snapshots = []
 
-        def cancel_while_fitting(captured, reference, *args):
+        def cancel_while_fitting(captured, reference, *args, **kwargs):
             snapshots.extend((captured, reference))
             self.assertEqual(probe.read()['status'], 'analysing')
             self.feed(probe, mic, far, CUTOFF, CUTOFF + 160)
             self.assertEqual(probe.mic_count, CUTOFF + 160)
             probe.cancel('transport_changed')
-            return analyse(captured, reference, *args)
+            return analyse(captured, reference, *args, **kwargs)
 
         with patch.object(model, 'analyse', side_effect=cancel_while_fitting):
             self.assertEqual(probe.mark_stimulus(verify_far=True), {'status': 'unavailable'})
@@ -251,10 +277,10 @@ class CausalSpeechModelTests(unittest.TestCase):
             held = probe.mic, probe.render, probe.template
             original_analyse = model.analyse
 
-            def analyse(*args):
+            def analyse(*args, **kwargs):
                 if cancel:
                     probe.cancel('transport_changed')
-                    return original_analyse(*args)
+                    return original_analyse(*args, **kwargs)
                 raise RuntimeError('synthetic failure')
 
             with patch('causal_speech_model.analyse', side_effect=analyse):

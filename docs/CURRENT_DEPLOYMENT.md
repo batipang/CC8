@@ -1,5 +1,11 @@
 # 当前 CC8 部署与验收范围
 
+2026-11-06，运行后台 **0.14.89／原签名 APK 0.9.38（code75）／协议 2**，源码 `7285498`。后台维护 18.317 秒，设备端 APK 摘要与维护前一致。 [PR #254](https://github.com/batipang/CC8/pull/254) [主分支 CI](https://github.com/batipang/CC8/actions/runs/42068207052)
+
+单轮报告 `device-20261105T165318Z-0bbeaff6.json` 用时 84.069 秒。远端预检冻结 MIC 16,000 帧与 RENDER 16,384 帧。设备估算 MIC 起点领先 7,209 帧（450.56 毫秒），共同覆盖 8,791 帧（549.44 毫秒），参考有效值 0.078469。对齐峰 0.0811，竞争峰 0.0732，流程因 `known_speech_far_reference_unconfirmed` 在近端播放前结束。收尾确认关麦，临时输入文件已删除。 [预检说明](KNOWN_SPEECH_EVIDENCE.md#01489-远端参考预检)
+
+## 0.14.88／code75 部署
+
 2026-11-06，实际运行 **Mac 后台 0.14.88／原签名 APK 0.9.38（code75）／协议 2**，源码 `2454d99bd4f6bdbcb0e10a7d16ed6c1bc8d8f74c`。[PR #252](https://github.com/batipang/CC8/pull/252) 与 [主分支 CI](https://github.com/batipang/CC8/actions/runs/42061900674) 各八项通过。维护回执 `deployment-967fdf34.json` 用时 17.750 秒、五步通过，只切换后台；保留原签名 APK 摘要 `3a558d553e156cb9c1fd68f065141f6e7f203ec5cb3d84cec6ba06f45dee857a`、配置、配对和模型，维护未开麦。
 
 ## 0.14.88／code75：刺激前对齐未确认

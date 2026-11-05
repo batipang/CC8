@@ -7,6 +7,8 @@ No samples after that boundary may select alignment, fit or validate the model.
 
 import numpy as np
 
+from known_speech_receipt import MIN_COMMON_FRAMES, estimated_overlap
+
 from playback_evidence import match_window, block_correlation, MIN_REFERENCE_RMS, MIN_CAPTURE_RMS
 
 # All computations below use decimated 8 kHz samples. Alignment is established
@@ -17,9 +19,10 @@ GAP = 1600
 CHECK = 1600
 SPAN = TRAIN + GAP + CHECK
 MIN_PRE_FRAMES = 12000
+ORIGIN_MARGIN = 800  # 100 ms in the decimated reference
 
 
-def analyse(mic, render, template, mic_cutoff, render_cutoff):
+def analyse(mic, render, template, mic_cutoff, render_cutoff, *, estimated_delta=None):
     """Return numeric diagnostics; a residual match never upgrades the raw gate."""
     result = {
         'schema': 1,
@@ -31,7 +34,17 @@ def analyse(mic, render, template, mic_cutoff, render_cutoff):
     }
     if min(mic_cutoff, render_cutoff) < MIN_PRE_FRAMES:
         return result
-    before_mic, before_render = mic[:mic_cutoff:2], render[:render_cutoff:2]
+    mic_origin = render_origin = 0
+    if estimated_delta is not None:
+        if estimated_overlap(mic_cutoff, render_cutoff, estimated_delta) < MIN_COMMON_FRAMES:
+            return result
+        # Snap both origins to the original decimation grid. The clock estimate
+        # locates a search region and the waveform still determines the match.
+        delta = estimated_delta // 2
+        mic_origin = max(0, -delta)
+        render_origin = max(0, delta) + ORIGIN_MARGIN
+    before_mic = mic[2 * mic_origin : mic_cutoff : 2]
+    before_render = render[2 * render_origin : render_cutoff : 2]
     # The fit, validation and alignment windows are fixed before seeing any
     # mixed audio. Reject missing/quiet reference rather than searching later.
     if len(before_render) < SPAN + 2 * HALF:
@@ -46,8 +59,8 @@ def analyse(mic, render, template, mic_cutoff, render_cutoff):
     if status != 'observed':
         return {**result, 'status': 'alignment_unconfirmed'}
     # peak is in original 16 kHz frames; the reference window starts at HALF.
-    shift = peak // 2 - HALF
-    start = HALF + shift
+    start = peak // 2
+    shift = mic_origin + start - render_origin - HALF
     if start < 0 or start + SPAN > len(before_mic):
         return {**result, 'status': 'pre_stimulus_incomplete'}
     windows = np.lib.stride_tricks.sliding_window_view(

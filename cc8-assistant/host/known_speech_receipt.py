@@ -293,14 +293,30 @@ def validate_transfer(value, mic_frames, render_frames, *, preflight=False):
     return dict(value)
 
 
+# Allow 200 ms to the match start, then 600 ms for training, gap and holdout.
+# Two extra frames cover rounding to the even decimation grid.
+MIN_COMMON_FRAMES = 12802
+
+
+def estimated_overlap(mic, render, delta):
+    return max(0, min(render, delta + mic) - max(0, delta))
+
+
 def validate_far_preflight(value):
-    if (
-        not isinstance(value, dict)
-        or set(value) != {'status', 'boundary', 'coverage', 'transfer'}
-        or value['status'] != 'checked'
-    ):
+    if not isinstance(value, dict) or value.get('status') not in ('checked', 'awaiting_overlap'):
         raise ValueError('Invalid far preflight receipt')
-    boundary = validate_boundary(value['boundary'])
+    pending = value['status'] == 'awaiting_overlap'
+    fields = {'status', 'boundary', 'coverage'}
+    if not pending:
+        fields.add('transfer')
+    if set(value) != fields:
+        raise ValueError('Invalid far preflight fields')
+    boundary = value['boundary']
+    if not isinstance(boundary, dict) or boundary.get('status') != (
+        'pending' if pending else 'recorded'
+    ):
+        raise ValueError('Invalid far preflight boundary')
+    validate_boundary({**boundary, 'status': 'recorded'})
     mic = boundary['pre_stimulus_mic_frames']
     render = boundary['pre_stimulus_render_frames']
     coverage = value['coverage']
@@ -317,18 +333,17 @@ def validate_far_preflight(value):
         type(delta) is not int
         or abs(delta) > 2**63
         or type(overlap) is not int
-        or overlap != max(0, min(render, delta + mic) - max(0, delta))
-        or type(rms) not in (int, float)
-        or not 0 <= rms <= 1
-        or (overlap == 0 and rms != 0)
+        or overlap != estimated_overlap(mic, render, delta)
     ):
         raise ValueError('Invalid far preflight coverage values')
+    result = {'status': value['status'], 'boundary': dict(boundary), 'coverage': dict(coverage)}
+    if pending:
+        if rms is not None or overlap >= MIN_COMMON_FRAMES:
+            raise ValueError('Invalid pending overlap')
+        return result
+    if type(rms) not in (int, float) or not 0 <= rms <= 1 or (overlap == 0 and rms != 0):
+        raise ValueError('Invalid far reference RMS')
     transfer = validate_transfer(value['transfer'], mic, render, preflight=True)
     if any(transfer[k] != boundary[k] for k in boundary if k != 'status'):
         raise ValueError('Invalid far preflight cutoff')
-    return {
-        'status': 'checked',
-        'boundary': boundary,
-        'coverage': dict(coverage),
-        'transfer': transfer,
-    }
+    return {**result, 'transfer': transfer}
