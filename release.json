@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-speaker-lifetime-20261105.1",
+  "release_id": "p0-onset-prefix-evidence-20261105.1",
   "backend": {
-    "version": "0.14.85"
+    "version": "0.14.86"
   },
   "assistant": {
     "version": "0.9.37",

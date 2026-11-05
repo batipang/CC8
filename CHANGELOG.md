@@ -1,5 +1,14 @@
 # Changelog
 
+## Backend 0.14.86 — distinguish pre-VAD playback coverage
+
+- Record separate bounded counters for continuous locally voiced frames before
+  VAD begins an utterance. Discard pending flags on silence, clock gaps and
+  lifecycle resets, and never retain PCM in this observer.
+- Preserve the existing capture counters and strict interruption requirement;
+  export prefix coverage for diagnosis without treating it as strict success.
+  Older reports retain unknown prefix coverage rather than manufactured zeros.
+
 ## Assistant 0.9.37 — reuse a foreground session's output clock
 
 - Keep one warmed AudioTrack across clause leases, with separate physical and

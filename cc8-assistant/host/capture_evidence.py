@@ -1,5 +1,6 @@
 """Fixed, content-free acoustic observations, never a speaker/intent classifier."""
 
+from collections import deque
 import math
 
 COUNTS = frozenset(
@@ -17,6 +18,18 @@ COUNTS = frozenset(
 TEMPORAL_COUNTS = frozenset(
     ('max_credible_run_frames', 'credible_with_render_frames', 'credible_without_render_frames')
 )
+ONSET_PREFIX_COUNTS = frozenset(
+    (
+        'onset_prefix_frames',
+        'onset_prefix_credible_frames',
+        'onset_prefix_render_frames',
+        'onset_prefix_credible_with_render_frames',
+    )
+)
+# VAD retains at most 50 pre-roll frames including the frame that begins the
+# utterance. These separate counters cover only earlier continuous voiced
+# frames; they never enlarge or replace the onset-to-end capture counters.
+MAX_ONSET_PREFIX_FRAMES = 49
 LEVELS = frozenset(('raw_peak_dbfs', 'cleaned_peak_dbfs', 'render_peak_dbfs'))
 CORRELATIONS = frozenset(('max_raw_correlation', 'max_residual_correlation'))
 FLAGS = frozenset(('echo_risk', 'during_playback', 'local_wake'))
@@ -42,8 +55,14 @@ DECISIONS = frozenset(
 
 
 def validate(value):
-    if not isinstance(value, dict) or set(value) - {VAD_TAIL} - TEMPORAL_COUNTS != FIELDS:
+    if (
+        not isinstance(value, dict)
+        or set(value) - {VAD_TAIL} - TEMPORAL_COUNTS - ONSET_PREFIX_COUNTS != FIELDS
+    ):
         raise ValueError('Invalid capture evidence fields')
+    prefix = value.keys() & ONSET_PREFIX_COUNTS
+    if prefix:
+        validate_onset_prefix({k: value[k] for k in prefix})
     temporal = value.keys() & TEMPORAL_COUNTS
     if temporal and temporal != TEMPORAL_COUNTS:
         raise ValueError('Incomplete temporal capture evidence')
@@ -96,14 +115,73 @@ def validate(value):
     return dict(value)
 
 
+def validate_onset_prefix(value):
+    if (
+        not isinstance(value, dict)
+        or set(value) != ONSET_PREFIX_COUNTS
+        or any(
+            type(value[k]) is not int or not 0 <= value[k] <= MAX_ONSET_PREFIX_FRAMES
+            for k in ONSET_PREFIX_COUNTS
+        )
+    ):
+        raise ValueError('Invalid onset prefix counts')
+    frames = value['onset_prefix_frames']
+    credible = value['onset_prefix_credible_frames']
+    render = value['onset_prefix_render_frames']
+    overlap = value['onset_prefix_credible_with_render_frames']
+    if (
+        max(credible, render) > frames
+        or overlap > min(credible, render)
+        or overlap < credible + render - frames
+    ):
+        raise ValueError('Invalid onset prefix coverage')
+    return dict(value)
+
+
+class OnsetPrefix:
+    """Hold at most 49 pairs of flags before VAD starts, never PCM or text."""
+
+    def __init__(self):
+        self.frames = deque(maxlen=MAX_ONSET_PREFIX_FRAMES)
+        self.previous_ns = None
+
+    def continuous(self, stamp):
+        return (
+            self.previous_ns is not None
+            and abs(stamp - self.previous_ns - FRAME_NS) <= FRAME_JITTER_NS
+        )
+
+    def feed(self, frame, *, voiced, credible):
+        from dsp import level
+
+        if not voiced or not self.continuous(frame.nanos):
+            self.frames.clear()
+        self.previous_ns = frame.nanos
+        if voiced:
+            self.frames.append((bool(credible), level(frame.reference) > -60))
+
+    def before(self, stamp, *, voiced):
+        frames = self.frames if voiced and self.continuous(stamp) else ()
+        return validate_onset_prefix(
+            dict(
+                onset_prefix_frames=len(frames),
+                onset_prefix_credible_frames=sum(c for c, r in frames),
+                onset_prefix_render_frames=sum(r for c, r in frames),
+                onset_prefix_credible_with_render_frames=sum(c and r for c, r in frames),
+            )
+        )
+
+
 class CaptureEvidence:
     """Aggregate onset-to-end frames only; no PCM/pre-roll retention or decisions."""
 
-    def __init__(self):
+    def __init__(self, *, onset_prefix=None):
         from dsp import level
 
         self.level = level
         self.values = {key: 0 for key in COUNTS | CORRELATIONS | TEMPORAL_COUNTS}
+        if onset_prefix is not None:
+            self.values.update(validate_onset_prefix(onset_prefix))
         self.values.update({key: -120.0 for key in LEVELS})
         self.previous_ns = None
         self.last_voiced_ns = None
