@@ -51,6 +51,7 @@ from device_smoke import (
     rpc,
     run_device_suite,
     summarize_capture_clock,
+    summarize_response_acoustic,
     valid_leading_evidence,
 )
 from diagnostics import ASR_STOP_STAGE, VAD_ONSET_PAUSE
@@ -2364,6 +2365,38 @@ class DeviceAutomationTests(unittest.TestCase):
                 self.assertFalse(report['acoustic_latency_asserted'])
                 self.assertNotIn(token, json.dumps(report))
                 self.assertNotIn('private-backend-error-body', json.dumps(report))
+
+    def test_response_anchor_diagnostic_is_bounded_and_owned(self):
+        diagnostic = {
+            'prefix_minus_projected_ms': -60,
+            'reference_anchor_spacing_ms': 240,
+            'prefix_correlation': 0.99,
+            'prefix_competing_correlation': 0.2,
+            'prefix_block_status': 'observed',
+        }
+        reason = 'response_prefix_alignment_mismatch'
+        receipt = {'status': 'unconfirmed', 'generation': 8, 'reason': reason}
+        expected = {'status': 'unconfirmed', 'reason': reason}
+        self.assertEqual(summarize_response_acoustic(receipt, 8), expected)
+        self.assertEqual(
+            summarize_response_acoustic({**receipt, 'anchor_diagnostic': diagnostic}, 8),
+            {**expected, 'anchor_diagnostic': diagnostic},
+        )
+        self.assertEqual(
+            summarize_response_acoustic({**receipt, 'anchor_diagnostic': diagnostic}, 9),
+            {'status': 'unconfirmed', 'reason': 'generation_mismatch'},
+        )
+        for patch_values in (
+            {'prefix_minus_projected_ms': True},
+            {'prefix_minus_projected_ms': 81},
+            {'prefix_minus_projected_ms': -2},
+            {'prefix_correlation': float('nan')},
+            {'prefix_block_status': 'private-backend-error'},
+            {'capture_timestamp': 1700000000},
+        ):
+            with self.subTest(patch_values=patch_values):
+                value = {**receipt, 'anchor_diagnostic': {**diagnostic, **patch_values}}
+                self.assertEqual(summarize_response_acoustic(value, 8), expected)
 
     def test_synthetic_barge_dry_plan_has_no_side_effects(self):
         output = io.StringIO()

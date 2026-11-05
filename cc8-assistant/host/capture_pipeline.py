@@ -141,7 +141,10 @@ class CapturePipeline:
                 reason = leading['status']
                 if reason == 'observed':
                     reason = 'interval_out_of_bounds'
-            return {'status': 'unconfirmed', 'generation': probe.generation, 'reason': reason}
+            receipt = {'status': 'unconfirmed', 'generation': probe.generation, 'reason': reason}
+            if reason == 'response_prefix_alignment_mismatch':
+                receipt['anchor_diagnostic'] = leading['anchor_diagnostic']
+            return receipt
         receipt = {
             'status': 'observed',
             'generation': probe.generation,

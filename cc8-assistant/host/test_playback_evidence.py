@@ -482,6 +482,38 @@ class ProbeIntegrationTests(unittest.TestCase):
                 self.assertFalse(capture.evidence.mic.size)
                 self.assertEqual(capture.read_response_probe(token), {'status': 'unavailable'})
 
+    def test_passive_probe_reports_signed_anchor_difference_without_accepting_a_gap(self):
+        bridge = self.bridge()
+        bridge.session.active = True
+        bridge.session.epoch = 7
+        capture = bridge.capture
+        token = capture.arm_response_probe(1)
+        capture.bind_response_probe('一加一等于几？', 101, START - 600_000_000)
+        reference = public_signal()
+        split, gap = 3840, 960
+        observer = capture.evidence
+        for frame in range(0, len(reference), 320):
+            stamp = START + round((frame + (gap if frame >= split else 0)) * 1e9 / RATE)
+            observer.render(101, frame, stamp, reference[frame : frame + 320])
+        mic = np.zeros(32000)
+        start = 5120
+        mic[start : start + split] = reference[:split] * 0.3
+        mic[start + split + gap : start + len(reference) + gap] = reference[split:] * 0.3
+        for frame in range(0, len(mic), 320):
+            observer.microphone(
+                7, START - 200_000_000 + round(frame * 1e9 / RATE), mic[frame : frame + 320]
+            )
+        receipt = capture.read_response_probe(token)
+        self.assertEqual(receipt['status'], 'unconfirmed')
+        self.assertEqual(receipt['reason'], 'response_prefix_alignment_mismatch')
+        self.assertEqual(receipt['generation'], 101)
+        self.assertNotIn('last_voiced_to_confirmed_output_block_ms', receipt)
+        self.assertEqual(receipt['anchor_diagnostic']['prefix_minus_projected_ms'], -60)
+        self.assertEqual(receipt['anchor_diagnostic']['reference_anchor_spacing_ms'], 240)
+        self.assertEqual(receipt['anchor_diagnostic']['prefix_block_status'], 'observed')
+        self.assertGreater(receipt['anchor_diagnostic']['prefix_correlation'], 0.99)
+        self.assertFalse(observer.response_prefix.size or observer.mic.size)
+
     def test_server_deadline_and_invalid_shape_never_open_capture(self):
         from announce import Announcement
 
