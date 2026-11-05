@@ -1,5 +1,10 @@
 # Changelog
 
+## Backend 0.14.79 — separate response acoustic fit failures
+
+- Report bounded reasons for insufficient room-fit coverage, an unconfirmed
+  model, or a failed prefix block. Keep response acoustic acceptance unchanged.
+
 ## Backend 0.14.64 — report captured voice onset to device pause
 
 - Pair the first frame of the contiguous voiced run with the same applied

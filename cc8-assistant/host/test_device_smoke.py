@@ -2401,6 +2401,40 @@ class DeviceAutomationTests(unittest.TestCase):
                 value = {**receipt, 'anchor_diagnostic': {**diagnostic, **patch_values}}
                 self.assertEqual(summarize_response_acoustic(value, 8), expected)
 
+    def test_response_room_fit_status_is_allowlisted_and_owned(self):
+        receipt = {
+            'status': 'unconfirmed',
+            'generation': 8,
+            'reason': 'response_prefix_discontinuous',
+        }
+        expected = {'status': 'unconfirmed', 'reason': 'response_prefix_discontinuous'}
+        for status in (
+            'reference_coverage_missing',
+            'capture_coverage_missing',
+            'model_unconfirmed',
+            'prefix_capture_below_floor',
+            'prefix_gain_out_of_range',
+            'prefix_shape_mismatch',
+        ):
+            with self.subTest(status=status):
+                self.assertEqual(
+                    summarize_response_acoustic({**receipt, 'room_fit_status': status}, 8),
+                    {**expected, 'room_fit_status': status},
+                )
+        for invalid in (None, True, 'matched', 'private-provider-message', {'pcm': [1]}):
+            self.assertEqual(
+                summarize_response_acoustic({**receipt, 'room_fit_status': invalid}, 8), expected
+            )
+        value = {**receipt, 'room_fit_status': 'prefix_shape_mismatch'}
+        self.assertEqual(
+            summarize_response_acoustic(value, 9),
+            {'status': 'unconfirmed', 'reason': 'generation_mismatch'},
+        )
+        self.assertEqual(
+            summarize_response_acoustic({**value, 'reason': 'expired'}, 8),
+            {'status': 'unconfirmed', 'reason': 'expired'},
+        )
+
     def test_synthetic_barge_dry_plan_has_no_side_effects(self):
         output = io.StringIO()
         with (

@@ -291,6 +291,17 @@ def summarize_response_acoustic(value, generation):
             diagnostic = summarize_response_anchor(value.get('anchor_diagnostic'))
             if diagnostic is not None:
                 timing['anchor_diagnostic'] = diagnostic
+        if reason == 'response_prefix_discontinuous':
+            room_status = value.get('room_fit_status')
+            if room_status in (
+                'reference_coverage_missing',
+                'capture_coverage_missing',
+                'model_unconfirmed',
+                'prefix_capture_below_floor',
+                'prefix_gain_out_of_range',
+                'prefix_shape_mismatch',
+            ):
+                timing['room_fit_status'] = room_status
         return timing
     elapsed = observed_response_interval(value)
     if elapsed is None:
