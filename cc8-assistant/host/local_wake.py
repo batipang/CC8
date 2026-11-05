@@ -39,6 +39,7 @@ class EnglishWake(StreamingKeywords):
             keywords_file=str(RESOURCES / 'wake-english-keywords.txt'),
             num_threads=1,
             provider='cpu',
+            max_active_paths=8,
             keywords_score=1.0,
             keywords_threshold=0.25,
             num_trailing_blanks=1,
