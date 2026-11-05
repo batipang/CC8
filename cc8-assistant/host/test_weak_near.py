@@ -132,6 +132,12 @@ class WeakNearTests(unittest.TestCase):
             ('大黄蜂，停一下。', True, True, True),
             ('大黄蜂，暂停。', True, False, True),
             ('Bumblebee，暂停。', True, False, True),
+            ('听一下。', True, False, True),
+            ('听一下。', False, False, True),
+            ('大黄蜂，听一下。', True, False, True),
+            ('Bumblebee，听一下。', True, False, True),
+            ('听一下这首歌。', True, False, False),
+            ('请解释“听一下”的意思。', True, False, False),
             ('大黄蜂，展厅怎么走？', True, False, False),
         ]
         for text, risky, local_wake, stop in cases:
@@ -139,7 +145,7 @@ class WeakNearTests(unittest.TestCase):
                 b, key, _, replies, _, _, _ = self.start(
                     text,
                     capture=captured(
-                        credible=30 if '展厅' in text else 2,
+                        credible=30 if any(s in text for s in ('展厅', '这首歌', '请解释')) else 2,
                         risky=risky,
                         local_wake=local_wake,
                     ),
@@ -156,12 +162,17 @@ class WeakNearTests(unittest.TestCase):
                     self.assertNotIn(ASR_STOP_STAGE, row['stages'])
 
     def test_asr_stop_matching_playback_needs_confirmed_near_speech(self):
-        for count, gate in ((2, 'echo_text'), (30, 'accepted')):
-            with self.subTest(credible_frames=count):
+        for command, count, gate in (
+            ('暂停', 2, 'echo_text'),
+            ('暂停', 30, 'accepted'),
+            ('听一下', 2, 'echo_text'),
+            ('听一下', 30, 'accepted'),
+        ):
+            with self.subTest(command=command, credible_frames=count):
                 b, key, generation, replies, _, _, _ = self.start(
-                    '暂停。',
+                    command + '。',
                     capture=captured(credible=count),
-                    references=['你可以说“暂停”来打断我。'],
+                    references=['你可以说“' + command + '”来打断我。'],
                 )
                 row = self.wait(b, key)
                 self.assertEqual(row['gate'], gate)

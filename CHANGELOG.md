@@ -1,5 +1,10 @@
 # Changelog
 
+## Backend 0.14.84 — pause narration for a standalone listening request
+
+- Treat a standalone “听一下” as a stop-and-listen command in the utterance
+  recognition route. Share its command vocabulary with the playback-text check.
+
 ## Backend 0.14.83 — record contiguous near-speech and playback overlap
 
 - Include the longest credible frame run and the credible frame counts with and
