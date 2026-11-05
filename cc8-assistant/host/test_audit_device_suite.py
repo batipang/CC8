@@ -30,6 +30,8 @@ def saved_suite(
     fail_at=None,
     echo_soak=False,
     background=None,
+    acoustic_coverage=False,
+    missing_acoustic=(),
 ):
     index = 0
 
@@ -107,6 +109,9 @@ def saved_suite(
         if {'awake_dialogue', 'acoustic'} & options:
             report['acoustic_evidence'] = {
                 'recognized_stimulus_matches': True,
+                'admitted_voice_requests': 1,
+                'pending_voice_candidates': 0,
+                'unresumed_rejected_pauses': 0,
                 'post_playback_quiet_seconds': 20,
                 'response_playout_timing': timing,
                 'latency_scenario': scenario,
@@ -117,6 +122,11 @@ def saved_suite(
                     ACOUSTIC_RESPONSE_METRIC: response,
                 },
             }
+            if index in missing_acoustic:
+                report['acoustic_evidence']['response_acoustic_timing'] = {
+                    'status': 'unconfirmed',
+                    'reason': 'response_prefix_alignment_mismatch',
+                }
         return SimpleNamespace(
             source_sha256='a' * 64, speech_source_sha256='b' * 64, run=lambda: report
         )
@@ -126,6 +136,7 @@ def saved_suite(
         lambda _: None,
         qa_latency=qa,
         response_acoustic=qa,
+        response_acoustic_coverage=acoustic_coverage,
         extended_voice=extended,
         latency_scenario=scenario,
         interruption=interruption,
@@ -139,6 +150,61 @@ def saved_suite(
 
 
 class AuditDeviceSuiteTests(unittest.TestCase):
+    def test_acoustic_coverage_keeps_only_observed_samples_and_remains_unverified(self):
+        data = saved_suite(qa=True, acoustic_coverage=True, missing_acoustic=(2, 15))
+        self.assertEqual(data['state'], 'acoustic_incomplete')
+        self.assertTrue(all(phase['state'] == 'passed' for phase in data['phases']))
+        self.assertEqual(data['latencies_ms'][QA_PLAYOUT_METRIC]['samples'], 30)
+        self.assertEqual(data['latencies_ms'][ACOUSTIC_RESPONSE_METRIC]['samples'], 28)
+        data['response_acoustic_unconfirmed'] = {}
+        result = audit(data)
+        self.assertFalse(result['verified'])
+        self.assertFalse(result['full_p0_acceptance'])
+        self.assertEqual(result['completed_phases'], 30)
+        self.assertEqual(result['reason'], 'suite_qa_acoustic_coverage_incomplete')
+        self.assertEqual(result['latencies_ms'][ACOUSTIC_RESPONSE_METRIC]['samples'], 28)
+        self.assertEqual(
+            result['response_acoustic_unconfirmed'], {'response_prefix_alignment_mismatch': 2}
+        )
+        strict = saved_suite(qa=True, missing_acoustic=(2, 15))
+        self.assertEqual(strict['state'], 'failed')
+        self.assertEqual(strict['phases'][2]['state'], 'not_run')
+
+    def test_acoustic_coverage_requires_valid_phase_and_same_generation_receipt(self):
+        for field, value in (
+            ('cleanup_microphone_off_verified', False),
+            ('pending_voice_candidates', 1),
+            (
+                'response_acoustic_timing',
+                {'status': 'unconfirmed', 'reason': 'generation_mismatch'},
+            ),
+            (
+                'response_acoustic_timing',
+                {
+                    'status': 'unconfirmed',
+                    'reason': 'response_prefix_alignment_mismatch',
+                    ACOUSTIC_RESPONSE_METRIC: 1,
+                },
+            ),
+        ):
+            with self.subTest(field=field, value=value):
+                data = saved_suite(qa=True, acoustic_coverage=True, missing_acoustic=(2,))
+                row = data['phases'][1]['report']
+                if field in row:
+                    row[field] = value
+                else:
+                    row['acoustic_evidence'][field] = value
+                result = audit(data)
+                self.assertFalse(result['verified'])
+                self.assertEqual(result['completed_phases'], 1)
+                self.assertEqual(result['phase'], 'qa_02')
+                self.assertEqual(result['response_acoustic_unconfirmed'], {})
+        data = saved_suite(qa=True, acoustic_coverage=True)
+        self.assertTrue(audit(data)['verified'])
+        data['response_acoustic_evidence'] = False
+        with self.assertRaisesRegex(ValueError, 'Invalid suite mode'):
+            audit(data)
+
     def test_fixed_and_extended_batches_recheck_every_phase(self):
         for extended, count in ((False, 6), (True, 7)):
             with self.subTest(extended=extended):

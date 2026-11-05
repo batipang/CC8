@@ -2413,6 +2413,61 @@ class DeviceAutomationTests(unittest.TestCase):
                 value = {**receipt, 'anchor_diagnostic': {**diagnostic, **patch_values}}
                 self.assertEqual(summarize_response_acoustic(value, 8), expected)
 
+    def test_acoustic_coverage_accepts_only_measurement_misses_for_the_current_response(self):
+        for generation, reason, expected_error in (
+            (8, 'response_prefix_alignment_mismatch', None),
+            (9, 'response_prefix_alignment_mismatch', 'response_acoustic_timing_unconfirmed'),
+            (8, 'capture_clock_gap', 'response_acoustic_timing_unconfirmed'),
+        ):
+            with self.subTest(generation=generation, reason=reason):
+                run, _, _, now = self.acoustic_fixture(lambda _: [self.acoustic_row()], awake=True)
+                run.response_acoustic_evidence = True
+                run.response_acoustic_coverage = True
+                run.latency_sample = True
+                original_request = run.request
+
+                def request(payload):
+                    if payload == {'operation': 'response_probe_arm', 'case': 1}:
+                        return {'status': 'armed', 'token': 'a' * 32}
+                    if payload == {'operation': 'response_probe_result', 'token': 'a' * 32}:
+                        return {'status': 'unconfirmed', 'generation': generation, 'reason': reason}
+                    return original_request(payload)
+
+                run.request = request
+                if expected_error:
+                    with self.assertRaisesRegex(CheckFailure, expected_error):
+                        run.acoustic_probe(awake=True)
+                else:
+                    run.acoustic_probe(awake=True)
+                    self.assertEqual(
+                        run.acoustic_evidence['response_acoustic_timing'],
+                        {'status': 'unconfirmed', 'reason': reason},
+                    )
+                self.assertEqual(now[0], POST_DIALOGUE_SECONDS)
+
+    def test_acoustic_coverage_plan_is_explicit_and_requires_the_acoustic_batch(self):
+        base = ['--runtime-root', '/unused', '--capture', '--collect-acoustic-coverage']
+        output = io.StringIO()
+        with (
+            patch('device_smoke.Device') as device,
+            redirect_stdout(output),
+            redirect_stderr(io.StringIO()),
+        ):
+            for mode in (
+                ['--qa-latency-suite'],
+                ['--awake-dialogue', '--response-acoustic-evidence'],
+            ):
+                with self.subTest(mode=mode), self.assertRaises(SystemExit) as rejected:
+                    main(base + mode)
+                self.assertEqual(rejected.exception.code, 2)
+            self.assertEqual(main(base + ['--qa-latency-suite', '--response-acoustic-evidence']), 0)
+            device.assert_not_called()
+        plan = json.loads(output.getvalue())
+        self.assertFalse(plan['execute'])
+        self.assertTrue(plan['response_acoustic_evidence'])
+        self.assertTrue(plan['response_acoustic_coverage'])
+        self.assertEqual(len(plan['phases']), 30)
+
     def test_response_room_fit_status_is_allowlisted_and_owned(self):
         receipt = {
             'status': 'unconfirmed',

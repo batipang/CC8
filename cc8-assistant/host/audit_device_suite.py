@@ -77,10 +77,13 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
     background = data.get('background')
     extended = data.get('extended_voice_evidence', False)
     room_latency = data.get('response_acoustic_evidence', False)
+    room_coverage = data.get('response_acoustic_coverage', False)
     scenario = data.get('latency_scenario', 'qa')
     if (
         type(extended) is not bool
         or type(room_latency) is not bool
+        or type(room_coverage) is not bool
+        or (room_coverage and not room_latency)
         or ((qa_latency or interruption or echo_soak) and extended)
         or (
             interruption
@@ -217,6 +220,7 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
         lambda _value: None,
         qa_latency=qa_latency,
         response_acoustic=room_latency,
+        response_acoustic_coverage=room_coverage,
         extended_voice=extended,
         latency_scenario=scenario,
         interruption=interruption,
@@ -224,12 +228,21 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
         background=background,
     )
     result['completed_phases'] = sum(p['state'] == 'passed' for p in reviewed['phases'])
+    if room_coverage:
+        result['response_acoustic_unconfirmed'] = reviewed['response_acoustic_unconfirmed']
     if (qa_latency or interruption) and result['completed_phases']:
         result['latencies_ms'] = reviewed['latencies_ms']
         if 'math_answers' in reviewed:
             result['math_answers'] = reviewed['math_answers']
         if scenario != 'qa':
             result['latency_scenario'] = scenario
+    if reviewed['state'] == 'acoustic_incomplete':
+        return {
+            **result,
+            'reason': 'suite_qa_acoustic_coverage_incomplete'
+            if data.get('state') == 'acoustic_incomplete'
+            else 'report_not_completed',
+        }
     if reviewed['state'] != 'passed':
         if failure is not None and result['completed_phases'] == len(reports):
             return {**result, **failure}
