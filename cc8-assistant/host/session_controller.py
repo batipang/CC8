@@ -90,6 +90,7 @@ class SessionController:
         self.awake = True
         self.last_interaction = time.monotonic()
         self.screen_sleeping = False
+        self.screen_wake_pending = False
 
     def snapshot(self) -> SessionView:
         return SessionView(
@@ -180,7 +181,13 @@ class SessionController:
             self.hooks.wake_touch()
             if self.screen_sleeping:
                 self.screen_sleeping = False
-                self.hooks.event('screen_wake')
+                self.screen_wake_pending = True
+            self._flush_screen_wake()
+
+    def _flush_screen_wake(self):
+        if self.screen_wake_pending and self.connection is not None:
+            self.hooks.event('screen_wake')
+            self.screen_wake_pending = False
 
     def idle_tick(self):
         self.hooks.reminder_tick()
@@ -196,6 +203,7 @@ class SessionController:
             ):
                 self.set_awake(False)
                 self.screen_sleeping = True
+                self.screen_wake_pending = False
                 self.hooks.event('screen_sleep')
                 self.hooks.log('screen_idle_sleep')
 
@@ -338,6 +346,9 @@ class SessionController:
         )
         # A failed send leaves the notice for the next authenticated route.
         self.playback_interrupted_by_transport = False
+        with self.guard:
+            # Replay only an unsent wake, without changing capture ownership.
+            self._flush_screen_wake()
         self.hooks.log('device_handshake_verified', transport=self.transport_kind)
         self.hooks.event(
             'brain_provider', provider=getattr(self.hooks.brain(), 'selected', 'minimax')

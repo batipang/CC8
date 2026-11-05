@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-echo-result-ownership-20261105.1",
+  "release_id": "p0-screen-wake-handover-20261105.1",
   "backend": {
-    "version": "0.14.69"
+    "version": "0.14.70"
   },
   "assistant": {
     "version": "0.9.34",
