@@ -59,14 +59,14 @@ class CapturePipeline:
         self.last_received_mic_end = 0
         self.discard_endpoint_before_ns = 0
 
-    def arm_known_speech(self, pcm, metadata, generation, epoch):
+    def arm_known_speech(self, pcm, metadata, generation, epoch, *, near_only=False):
         if (
             self.known_speech is not None
             or self.probe is not None
             or self.live_response_probe() is not None
         ):
             raise RuntimeError('Acoustic measurement already active')
-        owner = KnownSpeechWindow(pcm, metadata, generation, epoch)
+        owner = KnownSpeechWindow(pcm, metadata, generation, epoch, near_only=near_only)
         self.known_speech = owner
         return owner.token
 

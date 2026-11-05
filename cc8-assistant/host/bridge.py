@@ -245,27 +245,44 @@ class Bridge:
         with self.guard:
             return self.capture.read_response_probe(token)
 
-    def arm_known_speech(self, root, directory, metadata, generation):
+    def arm_known_speech(self, root, directory, metadata, generation, *, near_only=False):
         from known_speech_evidence import load_fixture
 
         def ready():
+            if (
+                type(generation) is not int
+                or generation != self.generation
+                or epoch != self.session.epoch
+                or not self.session.active
+                or self.calibration.active
+            ):
+                return False
+            if not near_only:
+                return self.playback.playing
             return (
-                type(generation) is int
-                and generation == self.generation
-                and self.session.active
-                and self.playback.playing
-                and not self.calibration.active
+                self.session.awake
+                and not self.playback.playing
+                and not self.recognition.busy
+                and not self.response.busy
+                and self.recognition.queue.empty()
+                and self.response.queue.empty()
+                and not self.capture.endpoint.vad.talking
             )
 
         with self.guard:
+            if near_only:
+                generation = self.generation
+            epoch = self.session.epoch
             if not ready():
-                raise RuntimeError('Known speech probe requires ongoing playback and capture')
+                raise RuntimeError('Known speech probe requires the selected active capture state')
         # Do not hold the session lock while reading a bounded public fixture.
         pcm = load_fixture(root, directory, metadata)
         with self.guard:
             if not ready():
                 raise RuntimeError('Known speech probe owner changed')
-            token = self.capture.arm_known_speech(pcm, metadata, generation, self.session.epoch)
+            token = self.capture.arm_known_speech(
+                pcm, metadata, generation, epoch, near_only=near_only
+            )
             return {'status': 'armed', 'token': token}
 
     def mark_known_speech_stimulus(self, token, *, verify_far=False):
@@ -301,6 +318,8 @@ class Bridge:
                 or owner.epoch != self.session.epoch
             ):
                 return {'status': 'unavailable'}
+            if owner.near_only and self.playback.playing:
+                owner.cancel('unexpected_render')
         # FFT work runs on this IPC caller, outside the ingress/session lock.
         release = True
         try:

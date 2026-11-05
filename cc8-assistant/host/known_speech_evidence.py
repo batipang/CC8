@@ -74,7 +74,7 @@ def load_fixture(root, directory, metadata):
 class KnownSpeechWindow:
     """One six-second raw capture window, independently of VAD and recognition."""
 
-    def __init__(self, pcm, metadata, generation, epoch, *, timer=threading.Timer):
+    def __init__(self, pcm, metadata, generation, epoch, *, near_only=False, timer=threading.Timer):
         clean = validate_prepared_speech(metadata)
         if (
             not isinstance(pcm, bytes)
@@ -98,12 +98,13 @@ class KnownSpeechWindow:
         self.lock = threading.RLock()
         self.token = uuid.uuid4().hex
         self.generation, self.epoch = generation, epoch
+        self.near_only = near_only
         self.template = reference[offset : offset + WINDOW].copy()
         reference.fill(0)
         self.offset = offset
         self.input_digest = clean['pcm_sha256']
         self.mic = np.empty(MAX_FRAMES)
-        self.render = np.empty(MAX_FRAMES)
+        self.render = np.empty(0 if near_only else MAX_FRAMES)
         self.mic_count = self.render_count = 0
         self.mic_start = self.render_start = None
         self.render_frame = None
@@ -171,6 +172,10 @@ class KnownSpeechWindow:
 
     def reference(self, generation, frame, nanos, pcm):
         with self.lock:
+            if self.near_only:
+                if self.cancelled is None and self.result is None:
+                    self.cancel('unexpected_render')
+                return
             if generation != self.generation or self.cancelled or self.analysing or self.result:
                 return
             if (
@@ -195,7 +200,8 @@ class KnownSpeechWindow:
 
         with self.lock:
             if (
-                self.cancelled
+                self.near_only
+                or self.cancelled
                 or self.analysing
                 or self.result
                 or self.stimulus_boundary is not None
@@ -296,14 +302,17 @@ class KnownSpeechWindow:
             'raw_audio_saved': False,
             'first_audible_onset_measured': False,
             'physical_double_talk_confirmed': False,
+            **({'near_only': True} if self.near_only else {}),
             **fields,
         }
 
     def _analyse(self, mic, render, template):
-        if len(mic) < WINDOW + 320 or len(render) < WINDOW + 320:
+        if len(mic) < WINDOW + 320 or (not self.near_only and len(render) < WINDOW + 320):
             return self._receipt('capture_incomplete')
         peak, confidence, rival, status = match_window(mic[::2], template[::2])
-        _, cross, _, _ = match_window(render[::2], template[::2])
+        cross = 0.0
+        if not self.near_only:
+            _, cross, _, _ = match_window(render[::2], template[::2])
         fields = dict(
             confidence=round(confidence, 4),
             rival_confidence=round(rival, 4),
@@ -319,14 +328,16 @@ class KnownSpeechWindow:
             return self._receipt('not_observed', **fields)
         # Describe energetic digital reference over the matched capture window.
         # No acoustic far-end delay is assumed or subtracted here.
-        start = self.mic_start + round(peak * 1e9 / RATE)
-        render_offset = round((start - self.render_start) * RATE / 1e9)
-        left, right = max(0, render_offset), min(len(render), render_offset + WINDOW)
-        overlap = sum(
-            min(160, right - i)
-            for i in range(left, max(left, right), 160)
-            if np.sqrt(np.mean(render[i : min(i + 160, right)] ** 2)) > 0.001
-        )
+        overlap = 0
+        if not self.near_only:
+            start = self.mic_start + round(peak * 1e9 / RATE)
+            render_offset = round((start - self.render_start) * RATE / 1e9)
+            left, right = max(0, render_offset), min(len(render), render_offset + WINDOW)
+            overlap = sum(
+                min(160, right - i)
+                for i in range(left, max(left, right), 160)
+                if np.sqrt(np.mean(render[i : min(i + 160, right)] ** 2)) > 0.001
+            )
         return self._receipt(
             'observed',
             match_start_offset_frames=peak,

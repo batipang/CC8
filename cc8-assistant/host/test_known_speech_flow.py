@@ -164,6 +164,81 @@ class KnownSpeechFlowTests(unittest.TestCase):
         self.assertIsNotNone(b.capture.known_speech)
         self.assertEqual(b.read_known_speech(result['token'])['status'], 'capture_incomplete')
 
+    def test_near_only_arm_rechecks_idle_capture_and_epoch_after_fixture_read(self):
+        for change in ('valid', 'already_playing', 'waiting', 'epoch', 'playing_during_read'):
+            with self.subTest(change=change):
+                b = self.bridge()
+                b.playback.playing = change == 'already_playing'
+                b.session.awake = change != 'waiting'
+                pcm, metadata, _ = fixture()
+
+                def load(*_):
+                    if change == 'epoch':
+                        b.session.epoch += 1
+                    if change == 'playing_during_read':
+                        b.playback.playing = True
+                    return pcm
+
+                def arm():
+                    return b.arm_known_speech(
+                        Path('/unused'),
+                        'cc8-public-speech-abcdefgh',
+                        metadata,
+                        None,
+                        near_only=True,
+                    )
+
+                with patch('known_speech_evidence.load_fixture', side_effect=load) as reader:
+                    if change == 'valid':
+                        result = arm()
+                        self.assertTrue(b.capture.known_speech.near_only)
+                        b.playback.playing = True
+                        self.assertEqual(
+                            b.read_known_speech(result['token'])['status'], 'unexpected_render'
+                        )
+                    else:
+                        with self.assertRaises(RuntimeError):
+                            arm()
+                    self.assertEqual(
+                        reader.call_count, int(change not in ('already_playing', 'waiting'))
+                    )
+                self.assertIsNone(b.capture.known_speech)
+
+    def test_near_only_capture_collects_normal_packets_and_rejects_a_render_packet(self):
+        from known_speech_receipt import validate
+
+        for render in (False, True):
+            with self.subTest(render=render):
+                b = self.bridge()
+                b.playback.playing = False
+                pcm, metadata, _ = fixture()
+                with patch('known_speech_evidence.load_fixture', return_value=pcm):
+                    armed = b.arm_known_speech(
+                        Path('/unused'),
+                        'cc8-public-speech-abcdefgh',
+                        metadata,
+                        None,
+                        near_only=True,
+                    )
+                samples = b'\0' * 19200 + pcm + b'\0' * 3200
+                for sequence, offset in enumerate(range(0, len(samples), 320)):
+                    b.on_packet(
+                        Packet(
+                            MIC,
+                            7,
+                            sequence,
+                            offset // 2,
+                            1_000_000_000 + offset * 31250,
+                            samples[offset : offset + 320],
+                        )
+                    )
+                if render:
+                    b.on_packet(Packet(RENDER, b.generation, 0, 0, 2_000_000_000, b'\0' * 320))
+                result = validate(b.read_known_speech(armed['token']), near_only=True)
+                self.assertEqual(result['status'], 'unexpected_render' if render else 'observed')
+                self.assertEqual(result['reference_frames'], 0)
+                self.assertIsNone(b.capture.known_speech)
+
     def test_stimulus_boundary_requires_the_live_original_playback_owner(self):
         for case in ('valid', 'token', 'epoch', 'generation', 'capture', 'playing', 'calibration'):
             with self.subTest(case=case):
@@ -235,6 +310,12 @@ class KnownSpeechFlowTests(unittest.TestCase):
             ({**arm, 'text': 'private'}, 'invalid_request'),
             ({**arm, 'directory': '../escape'}, 'invalid_request'),
             (arm, 'armed'),
+            ({**arm, 'near_only': True}, 'invalid_request'),
+            (
+                {k: v for k, v in {**arm, 'near_only': 1}.items() if k != 'generation'},
+                'invalid_request',
+            ),
+            ({k: v for k, v in {**arm, 'near_only': True}.items() if k != 'generation'}, 'armed'),
             (
                 {'operation': 'known_speech_result', 'token': 'a' * 32, 'text': 'x'},
                 'invalid_request',
@@ -262,8 +343,24 @@ class KnownSpeechFlowTests(unittest.TestCase):
                     writer.sendall((json.dumps(payload) + '\n').encode())
                     server.handle(reader)
                     self.assertEqual(json.loads(writer.recv(4096))['status'], expected)
-        bridge.arm_known_speech.assert_called_once_with(
-            Path('/owner/private/public-speech-fixtures'), arm['directory'], arm['metadata'], 12
+        self.assertEqual(
+            bridge.arm_known_speech.call_args_list,
+            [
+                call(
+                    Path('/owner/private/public-speech-fixtures'),
+                    arm['directory'],
+                    arm['metadata'],
+                    12,
+                    near_only=False,
+                ),
+                call(
+                    Path('/owner/private/public-speech-fixtures'),
+                    arm['directory'],
+                    arm['metadata'],
+                    None,
+                    near_only=True,
+                ),
+            ],
         )
         bridge.read_known_speech.assert_called_once_with('a' * 32)
         self.assertEqual(

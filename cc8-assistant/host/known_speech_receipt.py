@@ -39,6 +39,7 @@ STATUSES = {
     'transport_changed',
     'session_changed',
     'capture_closed',
+    'unexpected_render',
 }
 
 
@@ -58,18 +59,20 @@ def valid_request(value):
             and isinstance(value['token'], str)
             and re.fullmatch('[a-f0-9]{32}', value['token']) is not None
         )
-    if value.get('operation') != 'known_speech_arm' or set(value) != {
-        'operation',
-        'directory',
-        'metadata',
-        'generation',
-    }:
+    fields = {'operation', 'directory', 'metadata'}
+    if value.get('operation') != 'known_speech_arm' or set(value) not in (
+        fields | {'generation'},
+        fields | {'near_only'},
+    ):
+        return False
+    if 'near_only' in value:
+        if value['near_only'] is not True:
+            return False
+    elif type(value['generation']) is not int or not 0 < value['generation'] < 2**31:
         return False
     if (
         not isinstance(value['directory'], str)
         or re.fullmatch(r'cc8-public-speech-[a-z0-9_-]{6,64}', value['directory']) is None
-        or type(value['generation']) is not int
-        or not 0 < value['generation'] < 2**31
     ):
         return False
     try:
@@ -79,12 +82,13 @@ def valid_request(value):
     return True
 
 
-def validate(value):
+def validate(value, *, near_only=False):
     if not isinstance(value, dict) or not isinstance(value.get('status'), str):
         raise ValueError('Invalid known speech receipt')
     status = value['status']
     fields = (
         BASE
+        | ({'near_only'} if near_only else set())
         | (
             MATCH
             if status in ('observed', 'ambiguous', 'not_observed', 'reference_not_distinct')
@@ -93,13 +97,25 @@ def validate(value):
         | (OBSERVED if status == 'observed' else set())
         | (
             {'far_transfer'}
-            if 'far_transfer' in value
+            if not near_only
+            and 'far_transfer' in value
             and status in ('observed', 'ambiguous', 'not_observed', 'reference_not_distinct')
             else set()
         )
     )
     if status not in STATUSES or set(value) != fields:
         raise ValueError('Invalid known speech receipt fields')
+    if near_only:
+        if (
+            value['near_only'] is not True
+            or value['reference_frames'] != 0
+            or value.get('render_similarity', 0) != 0
+            or value.get('matched_window_digital_render_ms', 0) != 0
+            or status in ('reference_not_distinct', 'render_discontinuous', 'render_limit_exceeded')
+        ):
+            raise ValueError('Invalid near-only speech receipt')
+    elif status == 'unexpected_render':
+        raise ValueError('Unexpected render is specific to near-only observation')
     if type(value['schema']) is not int or value['schema'] != 1 or value['method'] != METHOD:
         raise ValueError('Invalid known speech receipt method')
     if not isinstance(value['input_pcm_sha256'], str) or not re.fullmatch(
@@ -139,7 +155,7 @@ def validate(value):
             or start % 2 != 0
             or value['captured_frames'] < 3520
             or not 0 <= start <= value['captured_frames'] - 3200
-            or value['reference_frames'] < 3520
+            or (not near_only and value['reference_frames'] < 3520)
             or type(overlap) not in (int, float)
             or not math.isfinite(overlap)
             or not 0 <= overlap <= 200
