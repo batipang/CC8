@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import unittest
 
 from audit_device_suite import audit
+from copy import deepcopy
 from diagnostics import VAD_ONSET_PAUSE
 from device_smoke import (
     ACOUSTIC_RESPONSE_METRIC,
@@ -19,6 +20,40 @@ from device_smoke import (
     planned_checks,
     run_device_suite,
 )
+
+
+class PreparedInputAuditTests(unittest.TestCase):
+    def test_new_input_metadata_requires_valid_shape_scope_and_cleanup(self):
+        from test_prepared_speech import metadata
+
+        original = saved_suite(interruption=True)
+        self.assertIs(audit(original)['verified'], True)
+        for change in ('valid', 'text', 'kind', 'physical_claim', 'no_cleanup', 'wrong_scope'):
+            with self.subTest(change=change):
+                data = deepcopy(original)
+                report = data['phases'][0]['report']
+                report['prepared_interruption_input'] = {
+                    **metadata(),
+                    'kind': 'barge',
+                    'voice_family': 'Tingting',
+                }
+                report['prepared_interruption_input_cleaned'] = True
+                value = report['prepared_interruption_input']
+                if change == 'text':
+                    value['text'] = 'private-content'
+                elif change == 'kind':
+                    value['kind'] = 'local_stop'
+                elif change == 'physical_claim':
+                    value['acoustic_playback_confirmed'] = True
+                elif change == 'no_cleanup':
+                    report['prepared_interruption_input_cleaned'] = False
+                elif change == 'wrong_scope':
+                    data = saved_suite(qa=True)
+                    data['phases'][0]['report'].update(report)
+                reviewed = audit(data)
+                self.assertIs(reviewed['verified'], change == 'valid')
+                if change != 'valid':
+                    self.assertEqual(reviewed['reason'], 'prepared_input_evidence_invalid')
 
 
 def saved_suite(

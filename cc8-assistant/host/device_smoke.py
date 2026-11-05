@@ -20,7 +20,13 @@ import uuid
 
 from private_output import PrivateOutput, private_directory
 from release_info import load_release
-from mac_voice import resolve_voice, __file__ as voice_source
+from mac_voice import (
+    PreparedSpeech,
+    SpeechFixtureCleanupError,
+    resolve_voice,
+    validate_prepared_speech,
+    __file__ as voice_source,
+)
 from capture_evidence import validate as validate_capture, ONSET_PREFIX_COUNTS
 from diagnostics import (
     ASR_STOP_STAGE,
@@ -632,6 +638,23 @@ def rpc(path, request, timeout=5):
     return result
 
 
+def interruption_input(value, *, stop=False, asr_stop=False):
+    require(not asr_stop or stop, 'invalid_prepared_interruption_input')
+    kind = 'asr_stop' if asr_stop else 'local_stop' if stop else 'barge'
+    require(isinstance(value, dict), 'invalid_prepared_interruption_input')
+    require(
+        value.get('kind') == kind and value.get('voice_family') == 'Tingting',
+        'invalid_prepared_interruption_input',
+    )
+    try:
+        clean = validate_prepared_speech(
+            {key: item for key, item in value.items() if key not in ('kind', 'voice_family')}
+        )
+    except ValueError:
+        raise CheckFailure('invalid_prepared_interruption_input') from None
+    return {**clean, 'kind': kind, 'voice_family': 'Tingting'}
+
+
 class Device:
     def __init__(self):
         sys.path.insert(0, str(ROOT / 'device-access'))
@@ -679,6 +702,29 @@ class Device:
     def prepare_speech_probe(self, *, english=False):
         return resolve_voice('Daniel' if english else 'Tingting')
 
+    def prepare_interruption_probe(self, *, stop=False, asr_stop=False):
+        require(not asr_stop or stop, 'unknown_synthetic_probe')
+        self.close_speech_probe()
+        phrase = ASR_STOP_QUERY if asr_stop else STOP_QUERY if stop else BARGE_QUERY
+        try:
+            prepared = PreparedSpeech('Tingting', phrase)
+        except SpeechFixtureCleanupError as error:
+            self._prepared_interruption = error.fixture
+            raise
+        self._prepared_interruption = prepared
+        self._prepared_kind = 'asr_stop' if asr_stop else 'local_stop' if stop else 'barge'
+        return interruption_input(
+            {**prepared.metadata, 'kind': self._prepared_kind, 'voice_family': 'Tingting'},
+            stop=stop,
+            asr_stop=asr_stop,
+        )
+
+    def close_speech_probe(self):
+        prepared = getattr(self, '_prepared_interruption', None)
+        if prepared is not None:
+            prepared.close()
+            self._prepared_interruption = None
+
     def speak_probe(
         self,
         *,
@@ -687,17 +733,40 @@ class Device:
         asr_stop=False,
         english=False,
         question=ACOUSTIC_QUESTION,
+        expected_input=None,
     ):
         require(
             question == ENGLISH_QUESTION if english else question in ALL_QUESTIONS,
             'unknown_synthetic_probe',
         )
+        require(
+            not (interruption and stop)
+            and not (english and (interruption or stop))
+            and (not asr_stop or stop),
+            'unknown_synthetic_probe',
+        )
+        if interruption or stop:
+            prepared = getattr(self, '_prepared_interruption', None)
+            kind = 'asr_stop' if asr_stop else 'local_stop' if stop else 'barge'
+            require(
+                prepared is not None and getattr(self, '_prepared_kind', None) == kind,
+                'synthetic_interruption_not_prepared',
+            )
+            if expected_input is not None:
+                current = interruption_input(
+                    {**prepared.metadata, 'kind': kind, 'voice_family': 'Tingting'},
+                    stop=stop,
+                    asr_stop=asr_stop,
+                )
+                require(
+                    current == interruption_input(expected_input, stop=stop, asr_stop=asr_stop),
+                    'synthetic_interruption_receipt_changed',
+                )
+            prepared.play()
+            return
+        require(expected_input is None, 'unknown_synthetic_probe')
         voice = self.prepare_speech_probe(english=True) if english else self.prepare_speech_probe()
         phrase = ACOUSTIC_WAKE + '，' + question
-        if interruption:
-            phrase = BARGE_QUERY
-        if stop:
-            phrase = ASR_STOP_QUERY if asr_stop else STOP_QUERY
         if english:
             phrase = 'Bumblebee, ' + question.lower()
         subprocess.run(
@@ -803,6 +872,9 @@ class SmokeRun:
         self.expected_apk = expected_apk
         self.acoustic_evidence = None
         self.standby_evidence = None
+        self.prepared_input = None
+        self.prepared_input_cleaned = None
+        self.preparation_attempted = False
 
     def health(self):
         if self.runtime_change_reason is not None:
@@ -850,6 +922,10 @@ class SmokeRun:
             'awake_dialogue_enabled': self.awake_dialogue,
             'require_render_overlap': self.require_render_overlap,
             'multi_clause_evidence': self.multi_clause_evidence,
+            'prepared_interruption_input': (
+                dict(self.prepared_input) if self.prepared_input is not None else None
+            ),
+            'prepared_interruption_input_cleaned': self.prepared_input_cleaned,
             'raw_audio_saved': False,
             'contains_conversation_content': False,
             'physical_usb_unplug_tested': False,
@@ -1012,6 +1088,45 @@ class SmokeRun:
         require(
             t.get('wifi_ready') is True and t.get('usb_ready') is True, 'standby_route_not_ready'
         )
+        if self.interruption_enabled:
+            self.preparation_attempted = True
+            self.prepared_input = interruption_input(
+                self.device.prepare_interruption_probe(
+                    stop=self.synthetic_stop, asr_stop=self.asr_stop
+                ),
+                stop=self.synthetic_stop,
+                asr_stop=self.asr_stop,
+            )
+            # Synthesis happens with capture off and may take time. Do not
+            # launch maintenance UI over a request or capture started meanwhile.
+            h = self.health()
+            require(
+                h.get('connected') is True
+                and h.get('transport') == 'usb'
+                and h.get('microphone_active') is False
+                and h.get('playing') is False
+                and h.get('calibrating') is False,
+                'owner_state_changed_during_synthesis',
+            )
+            device, ui = self.device.status()
+            require(
+                device.get('foreground') is True
+                and device.get('microphone_active') is False
+                and device.get('vision_active') is False
+                and ui.get('camera_open') is False
+                and ui.get('wake_checked') is True
+                and all(row.get('outcome') is not None for row in self.diagnostic_requests()),
+                'owner_state_changed_during_synthesis',
+            )
+            require(
+                self.expected_apk is None or self.device.version() == self.expected_apk,
+                'device_source_version_mismatch',
+            )
+            transport = self.request({'operation': 'transport_status'})
+            require(
+                transport.get('usb_ready') is True and transport.get('wifi_ready') is True,
+                'owner_state_changed_during_synthesis',
+            )
 
     def inactive(self):
         h = self.health()
@@ -2295,12 +2410,15 @@ class SmokeRun:
             reply = pool.submit(self.request, {'text': BARGE_ANNOUNCEMENT})
             self.wait(started, 25, 'interruption_playout_not_observed')
             evidence['announcement_started'] = True
+            prepared_options = (
+                {'expected_input': self.prepared_input} if self.prepared_input is not None else {}
+            )
             if self.asr_stop:
-                self.device.speak_probe(stop=True, asr_stop=True)
+                self.device.speak_probe(stop=True, asr_stop=True, **prepared_options)
             elif stop_only:
-                self.device.speak_probe(stop=True)
+                self.device.speak_probe(stop=True, **prepared_options)
             else:
-                self.device.speak_probe(interruption=True)
+                self.device.speak_probe(interruption=True, **prepared_options)
             evidence['stimulus_played'] = True
             self.checkpoint(self.report('running'))
             remaining = min(
@@ -2514,6 +2632,14 @@ class SmokeRun:
                 self.cleanup()
             except Exception:
                 state = 'cleanup_unconfirmed'
+            finally:
+                if self.preparation_attempted:
+                    self.prepared_input_cleaned = False
+                    try:
+                        self.device.close_speech_probe()
+                        self.prepared_input_cleaned = True
+                    except Exception:
+                        state = 'cleanup_unconfirmed'
             self.checkpoint(self.report(state))
         return self.report(state)
 
