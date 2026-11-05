@@ -573,7 +573,7 @@ class DeviceAutomationTests(unittest.TestCase):
         self.assertEqual(plan['qa_corpus_sha256'], QA_CORPUS_SHA256)
         self.assertEqual(len(plan['phases']), 30)
 
-    def test_self_playback_soak_plan_is_read_only_and_keeps_two_full_windows(self):
+    def test_self_playback_soak_plan_is_read_only_and_keeps_thirty_total_minutes(self):
         with (
             patch('device_smoke.Device') as device,
             patch('device_smoke.rpc') as request,
@@ -585,10 +585,11 @@ class DeviceAutomationTests(unittest.TestCase):
         device.assert_not_called()
         request.assert_not_called()
         plan = json.loads(output.getvalue())
-        self.assertEqual(plan['self_playback_seconds_per_phase'], 900)
+        self.assertEqual(plan['self_playback_seconds_per_phase'], 600)
         self.assertEqual(plan['minimum_backend_version'], '0.14.63')
         self.assertEqual(
-            [p['name'] for p in plan['phases']], ['self_playback_1', 'self_playback_2']
+            [p['name'] for p in plan['phases']],
+            ['self_playback_1', 'self_playback_2', 'self_playback_3'],
         )
 
     def test_background_soak_dry_plan_keeps_path_private_and_never_opens_it(self):
@@ -650,8 +651,8 @@ class DeviceAutomationTests(unittest.TestCase):
                 d, _ = device.status.return_value
                 d.update(
                     microphone_active=True,
-                    test_capture_limit_ms=1320000,
-                    test_capture_remaining_ms=1320000,
+                    test_capture_limit_ms=run.capture_limit_ms,
+                    test_capture_remaining_ms=run.capture_limit_ms,
                 )
                 rows = [self.acoustic_row(request_id='old')]
                 cycles = []

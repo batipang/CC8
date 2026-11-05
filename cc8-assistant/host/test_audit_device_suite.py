@@ -79,6 +79,7 @@ def saved_suite(
     interruption=False,
     fail_at=None,
     echo_soak=False,
+    legacy_echo_soak=False,
     background=None,
     acoustic_coverage=False,
     missing_acoustic=(),
@@ -130,9 +131,10 @@ def saved_suite(
         }
         if 'echo_soak' in options:
             pauses = int(index == 2 or fail_at == index)
-            report['elapsed_seconds'] = 955
+            echo_elapsed = 902 if legacy_echo_soak else 602
+            report['elapsed_seconds'] = echo_elapsed + 53
             report['echo_soak_evidence'] = {
-                'elapsed_seconds': 902,
+                'elapsed_seconds': echo_elapsed,
                 'completed_announcements': 39,
                 'render_samples': 12300000,
                 'pause_requests': pauses,
@@ -142,7 +144,8 @@ def saved_suite(
             }
         if background is not None:
             report['echo_soak_evidence'].update(
-                background=background, background_observed_seconds=902
+                background=background,
+                background_observed_seconds=report['echo_soak_evidence']['elapsed_seconds'],
             )
         if 'synthetic_barge' in options:
             report['barge_evidence'] = {
@@ -192,6 +195,7 @@ def saved_suite(
         interruption=interruption,
         echo_soak=echo_soak,
         background=background,
+        legacy_echo_soak=legacy_echo_soak,
     )
     backend = '0.14.60' if scenario == 'qa' else '0.14.62'
     if echo_soak:
@@ -413,12 +417,38 @@ class AuditDeviceSuiteTests(unittest.TestCase):
         data['echo_soak_totals'] = {'pause_requests': 0}
         reviewed = audit(data)
         self.assertTrue(reviewed['verified'])
-        self.assertEqual(reviewed['echo_soak_totals']['elapsed_seconds'], 1804)
+        self.assertEqual(reviewed['echo_soak_totals']['elapsed_seconds'], 1806)
+        self.assertEqual(reviewed['completed_phases'], 3)
+        self.assertEqual(reviewed['self_playback_seconds_per_phase'], 600)
         self.assertEqual(reviewed['echo_soak_totals']['pause_requests'], 1)
         bad = saved_suite(echo_soak=True, fail_at=1)
         self.assertEqual(bad['state'], 'failed')
         self.assertEqual(bad['phases'][1]['reason'], 'suite_echo_soak_false_pause_limit')
+        bad_third = saved_suite(echo_soak=True, fail_at=3)
+        self.assertEqual(bad_third['state'], 'failed')
+        self.assertEqual(bad_third['phases'][2]['reason'], 'suite_echo_soak_false_pause_limit')
+        data['phases'][0]['report']['echo_soak_evidence']['elapsed_seconds'] = 599
+        self.assertEqual(audit(data)['reason'], 'suite_echo_soak_evidence_incomplete')
+
+    def test_legacy_soak_uses_its_two_nine_hundred_second_windows(self):
+        data = saved_suite(echo_soak=True, legacy_echo_soak=True)
+        self.assertNotIn('self_playback_seconds_per_phase', data)
+        reviewed = audit(data)
+        self.assertTrue(reviewed['verified'])
+        self.assertEqual(reviewed['completed_phases'], 2)
+        self.assertEqual(reviewed['self_playback_seconds_per_phase'], 900)
+        self.assertEqual(reviewed['echo_soak_totals']['elapsed_seconds'], 1804)
         data['phases'][0]['report']['echo_soak_evidence']['elapsed_seconds'] = 899
+        self.assertEqual(audit(data)['reason'], 'suite_echo_soak_evidence_incomplete')
+
+    def test_soak_rejects_shortened_plan_and_observation_larger_than_its_phase(self):
+        data = saved_suite(echo_soak=True)
+        with self.assertRaisesRegex(ValueError, 'suite length'):
+            audit({**data, 'phases': data['phases'][:2]})
+        for duration in (0, 600.0, None, 900):
+            with self.subTest(duration=duration), self.assertRaisesRegex(ValueError, 'suite mode'):
+                audit({**data, 'self_playback_seconds_per_phase': duration})
+        data['phases'][1]['report']['elapsed_seconds'] = 601
         self.assertEqual(audit(data)['reason'], 'suite_echo_soak_evidence_incomplete')
 
     def test_background_report_requires_matching_fixture_and_full_player_coverage(self):
@@ -430,7 +460,7 @@ class AuditDeviceSuiteTests(unittest.TestCase):
         evidence = data['phases'][0]['report']['echo_soak_evidence']
         evidence['background_observed_seconds'] = 1
         self.assertEqual(audit(data)['reason'], 'suite_echo_soak_evidence_incomplete')
-        evidence['background_observed_seconds'] = 902
+        evidence['background_observed_seconds'] = evidence['elapsed_seconds']
         evidence['background'] = {**background, 'kind': 'low-noise'}
         self.assertEqual(audit(data)['reason'], 'suite_echo_soak_evidence_incomplete')
 
