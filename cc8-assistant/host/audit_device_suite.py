@@ -209,6 +209,7 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
         # no fixed batch may silently claim its additional evidence scope.
         if (
             report.get('known_speech_evidence_required', False) is not False
+            or report.get('known_speech_room_model_enabled', False) is not False
             or report.get('known_speech_evidence') is not None
         ):
             failure = {'phase': name, 'reason': 'unexpected_known_speech_scope'}

@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-normal-tail-priming-20261105.1",
+  "release_id": "p0-causal-speech-model-20261105.1",
   "backend": {
-    "version": "0.14.87"
+    "version": "0.14.88"
   },
   "assistant": {
     "version": "0.9.38",

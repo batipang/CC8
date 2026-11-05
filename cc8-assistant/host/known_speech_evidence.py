@@ -6,6 +6,7 @@ particular, overlapping digital render samples do not prove loudspeaker sound.
 """
 
 import hashlib
+import copy
 import io
 import os
 from pathlib import Path
@@ -18,7 +19,7 @@ import wave
 import numpy as np
 from dsp import RATE
 from mac_voice import _read_pcm, validate_prepared_speech
-from playback_evidence import match_window, WINDOW, MIN_REFERENCE_RMS
+from playback_evidence import match_window, WINDOW, MIN_REFERENCE_RMS, MIN_CAPTURE_RMS
 from known_speech_receipt import METHOD, STATUSES
 
 MAX_FRAMES = RATE * 6
@@ -109,6 +110,7 @@ class KnownSpeechWindow:
         self.result = None
         self.cancelled = None
         self.analysing = False
+        self.stimulus_boundary = None
         self.timer = timer(8, lambda: self.cancel('expired'))
         self.timer.daemon = True
         try:
@@ -180,13 +182,38 @@ class KnownSpeechWindow:
             if self.cancelled is None:
                 self.render_frame = frame + len(pcm)
 
+    def mark_stimulus(self):
+        """Freeze samples already received before the client may start playback.
+
+        No fitting occurs under the audio lock. Repeated calls cannot move the
+        causal boundary into later mixed speech or reuse a completed owner.
+        """
+        from causal_speech_model import MIN_PRE_FRAMES
+
+        with self.lock:
+            if (
+                self.cancelled
+                or self.analysing
+                or self.result
+                or self.stimulus_boundary is not None
+            ):
+                return {'status': 'unavailable'}
+            if min(self.mic_count, self.render_count) < MIN_PRE_FRAMES:
+                return {'status': 'insufficient_audio'}
+            self.stimulus_boundary = (self.mic_count, self.render_count)
+            return {
+                'status': 'recorded',
+                'pre_stimulus_mic_frames': self.mic_count,
+                'pre_stimulus_render_frames': self.render_count,
+            }
+
     def read(self):
         # Transfer buffers to this IPC caller; no FFT on the audio ingress path.
         with self.lock:
             if self.cancelled is not None:
                 return self._receipt(self.cancelled)
             if self.result is not None:
-                return dict(self.result)
+                return copy.deepcopy(self.result)
             if self.analysing:
                 return self._receipt('analysing')
             self.analysing = True
@@ -195,12 +222,21 @@ class KnownSpeechWindow:
             self.mic = self.render = self.template = np.empty(0)
         try:
             result = self._analyse(mic[: self.mic_count], render[: self.render_count], template)
+            if self.stimulus_boundary is not None:
+                from causal_speech_model import analyse
+
+                result['far_transfer'] = analyse(
+                    mic[: self.mic_count],
+                    render[: self.render_count],
+                    template,
+                    *self.stimulus_boundary,
+                )
         finally:
             for audio in (mic, render, template):
                 audio.fill(0)
         with self.lock:
             self.result = self._receipt(self.cancelled) if self.cancelled else result
-            return dict(self.result)
+            return copy.deepcopy(self.result)
 
     def _receipt(self, status, **fields):
         return {
@@ -232,6 +268,10 @@ class KnownSpeechWindow:
             return self._receipt('reference_not_distinct', **fields)
         if status != 'observed':
             return self._receipt(status, **fields)
+        # NCC ignores amplitude. An almost silent copy of the fixture must not
+        # become acoustic confirmation solely because its shape is identical.
+        if np.std(mic[peak : peak + WINDOW]) < MIN_CAPTURE_RMS:
+            return self._receipt('not_observed', **fields)
         # Describe energetic digital reference over the matched capture window.
         # No acoustic far-end delay is assumed or subtracted here.
         start = self.mic_start + round(peak * 1e9 / RATE)

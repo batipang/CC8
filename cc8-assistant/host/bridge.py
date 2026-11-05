@@ -268,6 +268,21 @@ class Bridge:
             token = self.capture.arm_known_speech(pcm, metadata, generation, self.session.epoch)
             return {'status': 'armed', 'token': token}
 
+    def mark_known_speech_stimulus(self, token):
+        with self.guard:
+            owner = self.capture.known_speech
+            if (
+                owner is None
+                or token != owner.token
+                or not self.session.active
+                or owner.epoch != self.session.epoch
+                or owner.generation != self.generation
+                or not self.playback.playing
+                or self.calibration.active
+            ):
+                return {'status': 'unavailable'}
+            return owner.mark_stimulus()
+
     def read_known_speech(self, token):
         with self.guard:
             owner = self.capture.known_speech

@@ -27,6 +27,8 @@ class PreparedInputAuditTests(unittest.TestCase):
         for field, value in (
             ('known_speech_evidence_required', True),
             ('known_speech_evidence_required', 1),
+            ('known_speech_room_model_enabled', True),
+            ('known_speech_room_model_enabled', 'false'),
             ('known_speech_evidence', {'text': 'private'}),
         ):
             with self.subTest(field=field):

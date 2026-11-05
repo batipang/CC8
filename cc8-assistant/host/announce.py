@@ -125,6 +125,10 @@ class AnnouncementServer:
                             request['metadata'],
                             request['generation'],
                         )
+                    elif request.get('operation') == 'known_speech_stimulus':
+                        if not known_speech_request(request):
+                            raise ValueError('Known speech boundary requires its token')
+                        result = self.bridge.mark_known_speech_stimulus(request['token'])
                     elif request.get('operation') == 'known_speech_result':
                         if not known_speech_request(request):
                             raise ValueError('Known speech probe requires its token')

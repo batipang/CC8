@@ -164,6 +164,34 @@ class KnownSpeechFlowTests(unittest.TestCase):
         self.assertIsNotNone(b.capture.known_speech)
         self.assertEqual(b.read_known_speech(result['token'])['status'], 'capture_incomplete')
 
+    def test_stimulus_boundary_requires_the_live_original_playback_owner(self):
+        for case in ('valid', 'token', 'epoch', 'generation', 'capture', 'playing', 'calibration'):
+            with self.subTest(case=case):
+                b = self.bridge()
+                pcm, metadata, _ = fixture()
+                token = b.capture.arm_known_speech(pcm, metadata, b.generation, 7)
+                owner = b.capture.known_speech
+                block = np.ones(14400) * 0.02
+                owner.reference(b.generation, 0, 1_000_000_000, block)
+                owner.microphone(7, 1_000_000_000, block)
+                if case == 'token':
+                    token = 'f' * 32
+                elif case == 'epoch':
+                    b.session.epoch += 1
+                elif case == 'generation':
+                    b.session.generation += 1
+                elif case == 'capture':
+                    b.session.active = False
+                elif case == 'playing':
+                    b.playback.playing = False
+                elif case == 'calibration':
+                    b.calibration.active = True
+                result = b.mark_known_speech_stimulus(token)
+                self.assertEqual(result['status'], 'recorded' if case == 'valid' else 'unavailable')
+                self.assertEqual(
+                    owner.stimulus_boundary, (14400, 14400) if case == 'valid' else None
+                )
+
     def test_measurement_leases_are_exclusive_in_both_directions(self):
         b = self.bridge()
         pcm, metadata, _ = fixture()
@@ -195,6 +223,7 @@ class KnownSpeechFlowTests(unittest.TestCase):
         bridge = Mock()
         bridge.arm_known_speech.return_value = {'status': 'armed', 'token': 'a' * 32}
         bridge.read_known_speech.return_value = {'status': 'expired'}
+        bridge.mark_known_speech_stimulus.return_value = {'status': 'insufficient_audio'}
         server = AnnouncementServer(bridge, Path('/owner/private/announce.sock'))
         arm = dict(
             operation='known_speech_arm',
@@ -211,6 +240,11 @@ class KnownSpeechFlowTests(unittest.TestCase):
                 'invalid_request',
             ),
             ({'operation': 'known_speech_result', 'token': 'a' * 32}, 'expired'),
+            ({'operation': 'known_speech_stimulus', 'token': 'a' * 32}, 'insufficient_audio'),
+            (
+                {'operation': 'known_speech_stimulus', 'token': 'a' * 32, 'text': 'x'},
+                'invalid_request',
+            ),
         )
         for payload, expected in requests:
             with self.subTest(expected=expected):
@@ -224,6 +258,7 @@ class KnownSpeechFlowTests(unittest.TestCase):
             Path('/owner/private/public-speech-fixtures'), arm['directory'], arm['metadata'], 12
         )
         bridge.read_known_speech.assert_called_once_with('a' * 32)
+        bridge.mark_known_speech_stimulus.assert_called_once_with('a' * 32)
         bridge.announce.assert_not_called()
         bridge.control_device.assert_not_called()
 
@@ -261,12 +296,52 @@ class KnownSpeechFlowTests(unittest.TestCase):
         device.assert_not_called()
         files.assert_not_called()
         for bad in (
+            ['--known-speech-room-model'],
             ['--known-speech-evidence'],
             ['--capture', '--synthetic-stop', '--known-speech-evidence'],
             ['--capture', '--interruption-suite', '--known-speech-evidence'],
         ):
             with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 main(['--runtime-root', '/unused', *bad])
+
+    def test_room_model_plan_and_capability_are_checked_before_device_access(self):
+        flags = [
+            '--runtime-root',
+            str(Path.cwd()),
+            '--capture',
+            '--synthetic-barge',
+            '--known-speech-evidence',
+            '--known-speech-room-model',
+        ]
+        output = io.StringIO()
+        with (
+            patch('device_smoke.Device') as device,
+            patch('device_smoke.rpc') as rpc,
+            redirect_stdout(output),
+        ):
+            self.assertEqual(main(flags), 0)
+            device.assert_not_called()
+            rpc.assert_not_called()
+        plan = json.loads(output.getvalue())
+        self.assertTrue(plan['known_speech_room_model'])
+        self.assertEqual(plan['minimum_backend_version'], '0.14.88')
+        from release_info import RELEASE
+
+        health = dict(
+            bridge_version=RELEASE.backend_version,
+            protocol_version=RELEASE.protocol_version,
+            known_speech_evidence_supported=True,
+        )
+        with (
+            patch('device_smoke.Device') as device,
+            patch('device_smoke.rpc', return_value=health),
+            patch('device_smoke.private_directory') as files,
+            redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit),
+        ):
+            main([*flags, '--execute'])
+        device.assert_not_called()
+        files.assert_not_called()
 
 
 if __name__ == '__main__':

@@ -1,5 +1,20 @@
 # Changelog
 
+## Backend 0.14.88 — causal transfer diagnostics for known-speech QA
+
+- Add an opt-in pre-stimulus boundary to the known-source interruption check.
+  Freeze already received MIC/render lengths before external speech starts;
+  alignment selection and training cannot inspect held-out or mixed samples.
+- Validate a fixed far-end transfer on an independent 200 ms window before
+  examining raw and residual near-source scores at the same mixed window.
+  Reject ambiguous alignment, changed gain/polarity and missing reference.
+- Preserve raw NCC/ambiguity gates and reject below-floor raw/residual copies
+  that normalized correlation alone could confirm. VAD/AEC/ASR and interruption
+  behavior are unchanged.
+  Residual matches are numerical diagnostics, not physical double-talk or
+  first-audible-onset proof. Cancelled owners cannot publish a stale model;
+  no microphone recording is persisted. APK and protocol are unchanged.
+
 ## APK 0.9.38 / code75 — recover a stalled streaming tail
 
 - If the speech endpoint is still unplayed and the playback head has stopped
