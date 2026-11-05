@@ -1,40 +1,30 @@
 """Authenticated LAN standby and verified USB priority for the CC8 packet stream."""
 
 from __future__ import annotations
-import hashlib
 import hmac
-import ipaddress
 import json
-import os
-from pathlib import Path
 import queue
 import re
-import secrets
 import socket
 import ssl
 import subprocess
 import threading
 import time
-import uuid
-from typing import Callable, Literal, Protocol, TypeAlias
-from protocol import Packet, receive, EVENT, decode_event, decode_json_object, JsonValue, JsonObject
-from release_info import RELEASE
+from typing import Callable, Protocol
+from protocol import Packet, receive, EVENT, decode_json_object, JsonValue, JsonObject
 from tls_stream import TLSStream
+from transport_channel import Channel as Channel, DuplexStream, TransportEvent, TransportKind
+from transport_pairing import (
+    PAIR_DIR as PAIR_DIR,
+    TLS_PORT,
+    Pairing as Pairing,
+    local_addresses as local_addresses,
+    private_ipv4 as private_ipv4,
+    signature as signature,
+)
 
-ROOT = Path(__file__).resolve().parents[2]
-PAIR_DIR = ROOT / '.toolchains/cc8/transport'
-TLS_PORT = 18766
 DISCOVERY_PORT = 18767
-TransportKind: TypeAlias = Literal['usb', 'wifi']
-TransportEvent: TypeAlias = tuple[Literal['up', 'down', 'packet'], 'Channel', Packet | None]
 CHANNEL_PRIORITY: tuple[TransportKind, ...] = ('usb', 'wifi')
-
-
-class DuplexStream(Protocol):
-    def recv(self, count: int, /) -> bytes: ...
-    def sendall(self, data: bytes, /) -> None: ...
-    def shutdown(self, how: int, /) -> None: ...
-    def close(self) -> None: ...
 
 
 class LogSink(Protocol):
@@ -43,248 +33,6 @@ class LogSink(Protocol):
 
 def quiet_log(event: str, **fields: JsonValue) -> None:
     pass
-
-
-def private_ipv4(value: str) -> bool:
-    try:
-        ip = ipaddress.ip_address(value)
-        return ip.version == 4 and (
-            ip.is_loopback
-            or any(
-                ip in ipaddress.ip_network(n)
-                for n in ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16']
-            )
-        )
-    except ValueError:
-        return False
-
-
-def signature(token: str, message: str) -> str:
-    return hmac.new(bytes.fromhex(token), message.encode(), hashlib.sha256).hexdigest()
-
-
-def local_addresses() -> list[str]:
-    values = []
-    try:
-        text = subprocess.run(['/sbin/ifconfig'], capture_output=True, text=True, timeout=3).stdout
-        values = [
-            value
-            for value in re.findall(r'\binet (\d+\.\d+\.\d+\.\d+)', text)
-            if private_ipv4(value) and not value.startswith('127.')
-        ]
-    except (OSError, subprocess.SubprocessError):
-        pass
-    return list(dict.fromkeys(values))[:8]
-
-
-class Pairing:
-    # 私有文件保存共享密钥与 TLS 证书；USB 负责初次交付设备侧配对信息。
-    def __init__(self, folder: str | Path = PAIR_DIR, port: int = TLS_PORT) -> None:
-        if type(port) is not int or not 0 <= port <= 65535:
-            raise ValueError('Invalid TLS port')
-        self.port = port
-        self.folder = Path(folder)
-        self.folder.mkdir(parents=True, exist_ok=True)
-        os.chmod(self.folder, 0o700)
-        cert = self.folder / 'server.pem'
-        key = self.folder / 'server-key.pem'
-        config = self.folder / 'pairing.json'
-        if not cert.exists() or not key.exists():
-            subprocess.run(
-                [
-                    '/usr/bin/openssl',
-                    'req',
-                    '-x509',
-                    '-newkey',
-                    'rsa:2048',
-                    '-sha256',
-                    '-nodes',
-                    '-days',
-                    '3650',
-                    '-subj',
-                    '/CN=Bumblebee Local Bridge',
-                    '-keyout',
-                    str(key),
-                    '-out',
-                    str(cert),
-                ],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=True,
-                timeout=20,
-            )
-        os.chmod(key, 0o600)
-        os.chmod(cert, 0o600)
-        if config.exists():
-            data = decode_json_object(config.read_bytes(), max_bytes=4096)
-        else:
-            data = {'server_id': secrets.token_hex(16), 'token': secrets.token_hex(32)}
-            fd = os.open(config, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, 'w') as out:
-                json.dump(data, out)
-        os.chmod(config, 0o600)
-        server_id, token = data.get('server_id'), data.get('token')
-        if (
-            not isinstance(server_id, str)
-            or not re.fullmatch('[0-9a-f]{32}', server_id)
-            or not isinstance(token, str)
-            or not re.fullmatch('[0-9a-f]{64}', token)
-        ):
-            raise ValueError('Invalid local transport pairing file')
-        self.server_id = server_id
-        self.token = token
-        der = ssl.PEM_cert_to_DER_cert(cert.read_text())
-        self.pin = hashlib.sha256(der).hexdigest()
-        self.context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        self.context.minimum_version = ssl.TLSVersion.TLSv1_2
-        self.context.load_cert_chain(str(cert), str(key))
-
-    def device_config(self) -> JsonObject:
-        hosts: list[JsonValue] = [*local_addresses()]
-        return {
-            'server_id': self.server_id,
-            'token': self.token,
-            'certificate_sha256': self.pin,
-            'port': self.port,
-            'hosts': hosts,
-        }
-
-    def offer(self, data: object) -> JsonObject | None:
-        if not isinstance(data, dict) or data.get('type') != 'cc8_discover':
-            return None
-        nonce = data.get('nonce', '')
-        mac = data.get('mac', '')
-        if (
-            not isinstance(nonce, str)
-            or not re.fullmatch('[0-9a-f]{32}', nonce)
-            or not isinstance(mac, str)
-            or not re.fullmatch('[0-9a-f]{64}', mac)
-        ):
-            return None
-        if not hmac.compare_digest(signature(self.token, 'discover:' + nonce), mac):
-            return None
-        return {
-            'type': 'cc8_offer',
-            'nonce': nonce,
-            'server_id': self.server_id,
-            'port': self.port,
-            'mac': signature(
-                self.token, 'offer:' + nonce + ':' + self.server_id + ':' + str(self.port)
-            ),
-        }
-
-
-class Channel:
-    # USB 与 TLS 统一为包流；读线程投递事件，主循环选择唯一生效的通道。
-    def __init__(
-        self, stream: DuplexStream, kind: TransportKind, events: queue.Queue[TransportEvent]
-    ) -> None:
-        self.stream = stream
-        self.kind = kind
-        self.events = events
-        self.ident = uuid.uuid4().hex
-        self.lock = threading.RLock()
-        self.state_lock = threading.Lock()
-        self.reader: threading.Thread | None = None
-        self.reader_running = False
-        self.io_closed = False
-        self.closed = False
-        self.ready = False
-        self.last_rx = time.monotonic()
-
-    def start(self) -> None:
-        with self.state_lock:
-            if self.closed:
-                return
-            if self.reader is not None:
-                raise RuntimeError('Channel reader already started')
-            self.reader_running = True
-            self.reader = threading.Thread(
-                target=self.read, daemon=True, name='cc8-' + self.kind + '-reader'
-            )
-        self.reader.start()
-
-    def sendall(self, raw: bytes) -> None:
-        with self.lock:
-            if self.closed:
-                raise EOFError('Transport closed')
-            try:
-                self.stream.sendall(raw)
-            except (OSError, EOFError):
-                # Invalidate before another writer can append to a partial frame.
-                self.close()
-                raise
-
-    def event(self, name: str, generation: int = 0, **fields: JsonValue) -> None:
-        self.sendall(Packet.event(name, generation, **fields).encode())
-
-    def read(self) -> None:
-        with self.state_lock:
-            self.reader_running = True
-        try:
-            if self.closed:
-                return
-            first = receive(self.stream)
-            hello = decode_event(first.data) if first.kind == EVENT else None
-            if (
-                not isinstance(hello, dict)
-                or hello.get('event') != 'transport_hello'
-                or not RELEASE.compatible(hello.get('protocol'))
-            ):
-                raise ValueError('Missing transport hello')
-            self.ready = True
-            self.last_rx = time.monotonic()
-            self.events.put(('up', self, None), timeout=0.2)
-            while not self.closed:
-                packet = receive(self.stream)
-                self.last_rx = time.monotonic()
-                if packet.kind == EVENT:
-                    event = decode_event(packet.data)
-                    if event.get('event') == 'transport_pong':
-                        continue
-                self.events.put(('packet', self, packet), timeout=0.2)
-        except (OSError, EOFError, ValueError, queue.Full):
-            pass
-        finally:
-            self.close()
-            # A foreign thread may shutdown() to wake recv(), but must not release the
-            # TLS descriptor while SSL_read is still using it. Only this reader finalizes it.
-            self._finish_close()
-            with self.state_lock:
-                self.reader_running = False
-            try:
-                self.events.put(('down', self, None), timeout=0.2)
-            except queue.Full:
-                pass
-
-    def shutdown(self, *unused: object) -> None:
-        self.close()
-
-    def close(self) -> None:
-        with self.state_lock:
-            if self.closed:
-                return
-            self.closed = True
-            self.ready = False
-            finish = not self.reader_running
-        try:
-            self.stream.shutdown(socket.SHUT_RDWR)
-        except (OSError, AttributeError):
-            pass
-        if finish:
-            self._finish_close()
-
-    def _finish_close(self) -> None:
-        with self.state_lock:
-            if self.io_closed:
-                return
-            self.io_closed = True
-        with self.lock:
-            try:
-                self.stream.close()
-            except OSError:
-                pass
 
 
 class TransportHub:
