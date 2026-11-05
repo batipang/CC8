@@ -1,5 +1,18 @@
 # Changelog
 
+## Device checks — prepare fixed interruption audio before capture
+
+- Synthesize and validate one bounded private WAV before opening capture; play
+  that file for the fixed new question or stop phrase, with PCM/file digests
+  bound to the preparation receipt. Ordinary wake/question probes keep their
+  existing speech path.
+- Recheck owner activity, wake mode, transports and APK identity after
+  preparation; release the temporary fixture after capture cleanup, including
+  preflight failure, partial construction and later test failures.
+- Audit optional preparation metadata and cleanup without changing strict
+  render-overlap requirements or treating process exit as acoustic evidence.
+  Production backend/APK/protocol and voice-processing settings are unchanged.
+
 ## Backend 0.14.86 — distinguish pre-VAD playback coverage
 
 - Record separate bounded counters for continuous locally voiced frames before

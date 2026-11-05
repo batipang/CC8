@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 from device_smoke import (
     ECHO_SOAK_MIN_BACKEND,
+    CheckFailure,
     ECHO_SOAK_SCOPE,
     POST_DIALOGUE_SECONDS,
     ROUTED_LATENCY_MIN_BACKEND,
@@ -15,6 +16,7 @@ from device_smoke import (
     STANDBY_SECONDS,
     device_suite_phases,
     matched_playout,
+    interruption_input,
     STOP_VISUAL_MIN_APK_CODE,
     EXTENDED_VOICE_MIN_BACKEND,
     planned_checks,
@@ -202,6 +204,17 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
         ):
             failure = {'phase': name, 'reason': 'standby_duration_unconfirmed'}
             break
+        prepared = report.get('prepared_interruption_input')
+        if prepared is not None:
+            try:
+                if not {'synthetic_barge', 'synthetic_stop'} & set(options):
+                    raise ValueError('Prepared input outside interruption scope')
+                interruption_input(prepared, stop='synthetic_stop' in options)
+                if report.get('prepared_interruption_input_cleaned') is not True:
+                    raise ValueError('Prepared input cleanup unconfirmed')
+            except (ValueError, CheckFailure):
+                failure = {'phase': name, 'reason': 'prepared_input_evidence_invalid'}
+                break
         if {'awake_dialogue', 'acoustic'} & set(options):
             evidence = report.get('acoustic_evidence')
             quiet = (

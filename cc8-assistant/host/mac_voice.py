@@ -5,8 +5,12 @@ status is insufficient evidence of the intended synthetic speaker.
 """
 
 from functools import lru_cache
+import hashlib
+import io
+from pathlib import Path
 import re
 import subprocess
+from tempfile import TemporaryDirectory
 import wave
 
 
@@ -61,8 +65,7 @@ def synthesize(folder, voice, rate, text):
         [
             '/usr/bin/say',
             *(['-v', resolved] if resolved is not None else []),
-            '-r',
-            str(rate),
+            *(['-r', str(rate)] if rate is not None else []),
             '-o',
             str(source),
             text,
@@ -94,8 +97,138 @@ def synthesize(folder, voice, rate, text):
     return read_pcm(output)
 
 
+def validate_prepared_speech(value):
+    fields = {
+        'schema',
+        'sample_rate',
+        'channels',
+        'sample_width_bytes',
+        'frames',
+        'pcm_sha256',
+        'wav_sha256',
+        'acoustic_playback_confirmed',
+    }
+    if not isinstance(value, dict) or set(value) != fields:
+        raise ValueError('Invalid prepared speech fields')
+    for key, expected in (
+        ('schema', 1),
+        ('sample_rate', 16000),
+        ('channels', 1),
+        ('sample_width_bytes', 2),
+    ):
+        if type(value[key]) is not int or value[key] != expected:
+            raise ValueError('Invalid prepared speech format')
+    if type(value['frames']) is not int or not 0 < value['frames'] <= 160000:
+        raise ValueError('Invalid prepared speech duration')
+    if (
+        any(
+            not isinstance(value[key], str) or not re.fullmatch('[a-f0-9]{64}', value[key])
+            for key in ('pcm_sha256', 'wav_sha256')
+        )
+        or value['acoustic_playback_confirmed'] is not False
+    ):
+        raise ValueError('Invalid prepared speech evidence')
+    return dict(value)
+
+
+class SpeechFixtureCleanupError(RuntimeError):
+    def __init__(self, fixture):
+        super().__init__('Synthetic fixture cleanup unconfirmed')
+        self.fixture = fixture
+
+
+class PreparedSpeech:
+    """Own one bounded public synthetic fixture until playback and cleanup finish."""
+
+    MAX_WAV_BYTES = 1024 * 1024
+
+    def __init__(self, voice, text, *, rate=None):
+        if (
+            not isinstance(text, str)
+            or not 0 < len(text) <= 120
+            or text.startswith('-')
+            or any(ord(char) < 32 for char in text)
+            or resolve_voice(voice) is None
+        ):
+            raise ValueError('Invalid explicit synthetic speech input')
+        self._closed = False
+        self._pcm = b''
+        self._temporary = TemporaryDirectory(prefix='cc8-public-speech-')
+        self._path = Path(self._temporary.name) / 'source.wav'
+        try:
+            pcm = synthesize(self._path.parent, voice, rate, text)
+            artifact = self._read_artifact()
+            if not pcm or not any(pcm) or pcm != _read_pcm(io.BytesIO(artifact)):
+                raise ValueError('Invalid prepared speech samples')
+            self._path.chmod(0o600)
+            self._pcm = pcm
+            self._metadata = validate_prepared_speech(
+                dict(
+                    schema=1,
+                    sample_rate=16000,
+                    channels=1,
+                    sample_width_bytes=2,
+                    frames=len(pcm) // 2,
+                    pcm_sha256=hashlib.sha256(pcm).hexdigest(),
+                    wav_sha256=hashlib.sha256(artifact).hexdigest(),
+                    acoustic_playback_confirmed=False,
+                )
+            )
+        except BaseException:
+            try:
+                self.close()
+            except BaseException:
+                # Preserve cleanup ownership even when construction fails.
+                raise SpeechFixtureCleanupError(self) from None
+            raise
+
+    def _read_artifact(self):
+        if self._path.is_symlink() or not self._path.is_file():
+            raise ValueError('Invalid synthetic fixture file')
+        with self._path.open('rb') as source:
+            data = source.read(self.MAX_WAV_BYTES + 1)
+        if not 0 < len(data) <= self.MAX_WAV_BYTES:
+            raise ValueError('Synthetic fixture file exceeds bound')
+        return data
+
+    @property
+    def metadata(self):
+        return dict(self._metadata)
+
+    @property
+    def pcm(self):
+        if self._closed:
+            raise ValueError('Synthetic fixture already closed')
+        return self._pcm
+
+    def play(self):
+        if self._closed:
+            raise ValueError('Synthetic fixture already closed')
+        if hashlib.sha256(self._read_artifact()).hexdigest() != self._metadata['wav_sha256']:
+            raise ValueError('Synthetic fixture changed after preparation')
+        subprocess.run(
+            ['/usr/bin/afplay', str(self._path)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True,
+            timeout=20,
+        )
+
+    def close(self):
+        self._closed = True
+        self._pcm = b''
+        if self._temporary is not None:
+            self._temporary.cleanup()
+            self._temporary = None
+
+
 def read_pcm(path):
-    with wave.open(str(path), 'rb') as audio:
+    return _read_pcm(str(path))
+
+
+def _read_pcm(source):
+    with wave.open(source, 'rb') as audio:
         if (audio.getframerate(), audio.getnchannels(), audio.getsampwidth()) != (16000, 1, 2):
             raise ValueError('Invalid synthetic fixture format')
         if not 0 < audio.getnframes() <= 16000 * 10:

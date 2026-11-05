@@ -20,16 +20,13 @@ from device_smoke import (
     ALL_ROUTE_LOSS_CHECK,
     ALL_ROUTE_LOSS_REQUEST,
     ASR_STOP_CHECK,
-    ASR_STOP_QUERY,
     AWAKE_DIALOGUE_CHECK,
     BARGE_ANNOUNCEMENT,
     BARGE_CHECK,
     BARGE_PRIME_CHECK,
-    BARGE_QUERY,
     ENGLISH_QUESTION,
     FAST_STOP_DEVICE_METRIC,
     STOP_CHECK,
-    STOP_QUERY,
     STOP_VISUAL_METRIC,
     WAKE_SELF_CHECK,
     WAKE_SELF_TEXT,
@@ -112,17 +109,14 @@ class DeviceAutomationTests(unittest.TestCase):
             device.speak_probe()
             resolve.assert_called_once_with('Tingting')
             self.assertEqual(command.call_args.args[0][1:3], ['-v', 'Tingting (Chinese CN)'])
-            device.speak_probe(interruption=True)
-            self.assertEqual(command.call_args.args[0][-1], BARGE_QUERY)
-            device.speak_probe(stop=True)
-            self.assertEqual(command.call_args.args[0][-1], STOP_QUERY)
-            device.speak_probe(stop=True, asr_stop=True)
-            self.assertEqual(command.call_args.args[0][-1], ASR_STOP_QUERY)
+            for flags in ({'interruption': True}, {'stop': True}, {'stop': True, 'asr_stop': True}):
+                with self.assertRaisesRegex(CheckFailure, 'synthetic_interruption_not_prepared'):
+                    device.speak_probe(**flags)
             device.speak_probe(question=QA_LATENCY_QUESTIONS[-1])
             self.assertEqual(command.call_args.args[0][-1], '大黄蜂，六加五等于几？')
             with self.assertRaisesRegex(CheckFailure, 'unknown_synthetic_probe'):
                 device.speak_probe(question='任意内容')
-            self.assertEqual(command.call_count, 5)
+            self.assertEqual(command.call_count, 2)
 
     def test_english_stimulus_has_fixed_voice_rate_and_question(self):
         device = Device.__new__(Device)
@@ -154,6 +148,17 @@ class DeviceAutomationTests(unittest.TestCase):
     def fixture(self, **options):
         now = [0.0]
         device = Mock()
+
+        def prepare_interruption(*, stop=False, asr_stop=False):
+            from test_prepared_speech import metadata
+
+            return {
+                **metadata(),
+                'kind': 'asr_stop' if asr_stop else 'local_stop' if stop else 'barge',
+                'voice_family': 'Tingting',
+            }
+
+        device.prepare_interruption_probe.side_effect = prepare_interruption
         device.status.return_value = (
             {
                 'foreground': True,
@@ -181,6 +186,8 @@ class DeviceAutomationTests(unittest.TestCase):
                 return dict(health)
             if p == {'operation': 'transport_status'}:
                 return {'ok': True, 'usb_ready': True, 'wifi_ready': True}
+            if p == {'operation': 'diagnostics'}:
+                return {'requests': []}
             raise AssertionError('Unexpected operation')
 
         def sleep(seconds):
