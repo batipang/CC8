@@ -1,5 +1,17 @@
 # Changelog
 
+## APK 0.9.38 / code75 — recover a stalled streaming tail
+
+- If the speech endpoint is still unplayed and the playback head has stopped
+  advancing for 100 ms, allow the existing bounded silence priming path even
+  without an explicit pause/resume. Normally advancing playback is unchanged.
+- Keep the one-buffer padding cap, cancellation, pause-aware deadline and real
+  speech endpoint checks. Padding is never counted as speech/reference audio;
+  a permanently stuck track still fails instead of reporting completion.
+- Record the prior 0.14.87/code74 playback-ACK timeout before capture. The new
+  known-speech observer was not armed in that run; physical cause and the APK
+  candidate remain unverified until separate hardware checks.
+
 ## Backend 0.14.87 — corroborate one known near speech window
 
 - Add an opt-in, bounded observer of existing capture during a fixed synthetic

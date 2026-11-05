@@ -2,7 +2,7 @@ package com.happyhome.cc8assistant;
 
 import java.io.IOException;
 
-/** Drain the real speech endpoint; post-speech zeros only prime a resumed streaming track. */
+/** Drain the real speech endpoint; bounded zeros may restart a starved streaming tail. */
 final class PlaybackDrain {
   interface Sink extends PcmPump.Sink {
     long now();
@@ -27,6 +27,7 @@ final class PlaybackDrain {
 
   boolean drain(long speechFrames, Sink sink) throws IOException, InterruptedException {
     long deadline = sink.now() + 3000;
+    long lastHead = -1, unchangedSince = sink.now();
     while (sink.allowed()) {
       long before = sink.now();
       sink.awaitReady();
@@ -36,8 +37,14 @@ final class PlaybackDrain {
       sink.probe();
       if (!sink.allowed()) return false;
       if (head >= speechFrames) return true;
+      if (head != lastHead) {
+        lastHead = head;
+        unchangedSince = sink.now();
+      }
       long resumed = sink.resumeSerial();
-      if (resumed > lastResume) {
+      // A streaming underrun may also occur without an explicit pause/resume.
+      // Leave normally advancing playback alone; never pad beyond one buffer.
+      if (resumed > lastResume || sink.now() - unchangedSince >= 100) {
         lastResume = resumed;
         int buffer = sink.bufferFrames();
         if (buffer < 1 || buffer > 32000) throw new IOException("Invalid drain buffer size");

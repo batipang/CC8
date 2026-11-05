@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "p0-known-speech-window-20261105.1",
+  "release_id": "p0-normal-tail-priming-20261105.1",
   "backend": {
     "version": "0.14.87"
   },
   "assistant": {
-    "version": "0.9.37",
-    "version_code": 74,
+    "version": "0.9.38",
+    "version_code": 75,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {

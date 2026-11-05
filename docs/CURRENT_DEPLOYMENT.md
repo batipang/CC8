@@ -1,5 +1,17 @@
 # 当前 CC8 部署与验收范围
 
+2026-11-05，实际运行 **Mac 后台 0.14.87／原签名 APK 0.9.37（code74）／协议 2**，源码 `6edf8513b2a08437b79950dba36b56d2f49e75d7`。[PR #249](https://github.com/batipang/CC8/pull/249) 及 [主分支 CI](https://github.com/batipang/CC8/actions/runs/42044078321) 八项通过。维护回执 `deployment-583beb49.json` 用时 17.825 秒、五步通过；没有重装 APK、开麦或改动原配置／配对／模型。实际 APK 摘要仍为 `345f0295bfe838c8b274cc5d06994337aa27ca8d0c90444106601ae778ec7dc8`。
+
+## 0.14.87／code74：预备播报超时
+
+冻结运行与检查源码均为 `6edf851`。`device-20261105T142716Z-59ad5e9b.json` 在 33.234 秒结束，两项通过，`announcement_and_playout` 因 `announcement_not_completed` 失败，后续检查未执行。后台同条播报记录的阶段为 first PCM 306.3 毫秒、RENDER 398.5 毫秒、设备起播回执 705.1 毫秒，终态错误为 playback／timeout；没有播放完成回执。这些是同条任务的 Mac 阶段计时，不是声学起声时延。
+
+已知插话观察尚未启动，实际收音也未开始，不能据此判定新观察的现场匹配效果。准备的固定 WAV 已删除；清理及独立随访确认设备前台、USB 已连接、双端关麦、镜头关闭、没有播放。收尾状态里的上次语音帧数为 22,849、补零为 0，但字段没有此次播报代次，保留为线索，不当作该次播放头的证明。
+
+离线排空模型发现“不经显式暂停的欠载”缺少恢复路径，0.9.38／code75 候选提供有上限的处理，见 [短尾排空](PLAYBACK_DRAIN_RECOVERY.md)。该 APK 尚未安装，现场根因仍未确认；原超时保留，未直接重跑同版语音检查。完整 P0 和最终 72 小时仍开放。
+
+## 0.14.86／code74 部署
+
 2026-11-05，实际运行 **Mac 后台 0.14.86／原签名 APK 0.9.37（code74）／协议 2**。源码为 main 的 `9a5798fe33ccc880f0aa19e36bd9208ec88aacfd`，[PR #244](https://github.com/batipang/CC8/pull/244) 和 [主分支 CI](https://github.com/batipang/CC8/actions/runs/42019819611) 八项通过。回执 `deployment-5df37df8.json` 用时 17.749 秒，五个维护步骤通过；原 APK、配置、配对和签名保留，更新过程中未开麦。实际安装 APK 的 SHA-256 仍为 `345f0295bfe838c8b274cc5d06994337aa27ca8d0c90444106601ae778ec7dc8`。本批只补充 VAD 成句前的覆盖统计，声音处理及严格插话通过条件保持，见 [收音观察](VOICE_GATE_OBSERVATIONS.md)。
 
 ## 预生成插话输入的单轮实测
