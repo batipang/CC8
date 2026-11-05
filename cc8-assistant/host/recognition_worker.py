@@ -171,7 +171,7 @@ class RecognitionWorker:
                         continue
                     if not self.hooks.playing():
                         self.hooks.status('thinking', '正在识别语音…')
-                    self.hooks.diagnostics().mark(trace_id, 'asr_start')
+                    self.hooks.diagnostics().asr_start(trace_id, len(audio))
                     self.hooks.metric('voice_asr_attempts', increment=True)
                 text = self.hooks.speech().recognize(audio)
                 self.hooks.diagnostics().mark(trace_id, 'asr_end')

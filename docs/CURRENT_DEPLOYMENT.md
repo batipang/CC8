@@ -1,5 +1,9 @@
 # 当前 CC8 部署与验收范围
 
+2026-11-06，实际运行 **后台 0.14.90／原签名 APK 0.9.38（code75）／协议 2**，源码 `4310365`，仅切换后台。单轮报告 `device-20261105T171223Z-bf833edc.json` 用时 100.981 秒，远端预检通过，识别文字不匹配，严格数字参考重叠为 0。该轮完成替代回答，触发至设备暂停回执 119.5 毫秒，连续有声起点至暂停回执 249.5 毫秒；没有执行后续独立设备停播回执检查。一次相同刺激的空闲对照 `near-control-20261105T171845Z.json` 识别匹配，五项通过。两个报告均确认停采及临时文件清理。 [PR #255](https://github.com/batipang/CC8/pull/255) [主分支 CI](https://github.com/batipang/CC8/actions/runs/42071562825) [现场测量](KNOWN_SPEECH_EVIDENCE.md#01490-共同参考窗口)
+
+## 0.14.89／code75 部署
+
 2026-11-06，运行后台 **0.14.89／原签名 APK 0.9.38（code75）／协议 2**，源码 `7285498`。后台维护 18.317 秒，设备端 APK 摘要与维护前一致。 [PR #254](https://github.com/batipang/CC8/pull/254) [主分支 CI](https://github.com/batipang/CC8/actions/runs/42068207052)
 
 单轮报告 `device-20261105T165318Z-0bbeaff6.json` 用时 84.069 秒。远端预检冻结 MIC 16,000 帧与 RENDER 16,384 帧。设备估算 MIC 起点领先 7,209 帧（450.56 毫秒），共同覆盖 8,791 帧（549.44 毫秒），参考有效值 0.078469。对齐峰 0.0811，竞争峰 0.0732，流程因 `known_speech_far_reference_unconfirmed` 在近端播放前结束。收尾确认关麦，临时输入文件已删除。 [预检说明](KNOWN_SPEECH_EVIDENCE.md#01489-远端参考预检)

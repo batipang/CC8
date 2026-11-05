@@ -403,6 +403,7 @@ class CaptureDiagnosticsTests(unittest.TestCase):
         job = bridge.recognition.queue.get_nowait()
         row = next(r for r in bridge.diagnostics.report()['requests'] if r['request_id'] == job[6])
         self.assertEqual(row['capture']['device_vad_tail_ms'], 800)
+        self.assertEqual(len(job[1]) // FRAME - row['capture']['frames'], 13)
         self.assertEqual(
             job[4]['input_end_ns'], frame.nanos + VoiceDetector.ONSET_FRAMES * 10_000_000
         )
@@ -541,7 +542,7 @@ class CaptureDiagnosticsTests(unittest.TestCase):
                         True,
                         ['这是参考内容'],
                         {'echo_risk': True, 'captured_at': time.monotonic()},
-                        np.ones(RATE) if rendered else None,
+                        np.ones(2 * RATE) if rendered else None,
                         key,
                     )
                 )
@@ -554,6 +555,7 @@ class CaptureDiagnosticsTests(unittest.TestCase):
                         break
                     threading.Event().wait(0.01)
                 self.assertEqual(row.get('gate'), expected)
+                self.assertEqual(row.get('asr_input_samples'), RATE)
                 self.assertEqual(len(replies), int(expected == 'accepted'))
                 self.assertNotIn('SECRET', json.dumps(b.diagnostics.report()))
 
