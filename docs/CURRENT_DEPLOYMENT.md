@@ -1,6 +1,10 @@
 # 当前 CC8 部署与验收范围
 
-2026-11-05，实际运行 **Mac 后台 0.14.77／原签名 APK 0.9.34（code71）／协议 2**。源码为 main 的 `1ccf8df29ffdfd849d2556b5aebabb1821035f92`，[主分支 CI](https://github.com/batipang/CC8/actions/runs/41957865607) 八项通过。回执 `deployment-5df5e690.json` 用时 17.940 秒，保留原配置、配对和 APK，就绪时核对停采。两次问答均正常播完，但前段有声块匹配未通过，收尾停采。见 [问答时延采样](MEASUREMENT_RUNS.md#30-轮合成简单问答采样)。
+2026-11-05，实际运行 **Mac 后台 0.14.78／原签名 APK 0.9.34（code71）／协议 2**。源码为 main 的 `65082c3acf0443cecaf4ba307686ffd7afee43a9`，[主分支 CI](https://github.com/batipang/CC8/actions/runs/41959833980) 八项通过。回执 `deployment-d9e2c659.json` 用时 17.173 秒，保留原配置、配对和 APK，就绪时核对停采。独立问答 `device-20261105T031528Z-338a57a8.json` 匹配问题且播完，随后观察 20.017 秒并核对停采，前段声学匹配仍未确认。见 [问答时延采样](MEASUREMENT_RUNS.md#30-轮合成简单问答采样)。
+
+## 0.14.77／code71 自动验收
+
+2026-11-05，当时运行 **Mac 后台 0.14.77／原签名 APK 0.9.34（code71）／协议 2**。源码为 main 的 `1ccf8df29ffdfd849d2556b5aebabb1821035f92`，[主分支 CI](https://github.com/batipang/CC8/actions/runs/41957865607) 八项通过。回执 `deployment-5df5e690.json` 用时 17.940 秒，保留原配置、配对和 APK，就绪时核对停采。两次问答均正常播完，但前段有声块匹配未通过，收尾停采。见 [问答时延采样](MEASUREMENT_RUNS.md#30-轮合成简单问答采样)。
 
 ## 0.14.76／code71 自动验收
 

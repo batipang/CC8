@@ -144,6 +144,8 @@ class CapturePipeline:
             receipt = {'status': 'unconfirmed', 'generation': probe.generation, 'reason': reason}
             if reason == 'response_prefix_alignment_mismatch':
                 receipt['anchor_diagnostic'] = leading['anchor_diagnostic']
+            if reason == 'response_prefix_discontinuous' and 'room_fit_status' in leading:
+                receipt['room_fit_status'] = leading['room_fit_status']
             return receipt
         receipt = {
             'status': 'observed',

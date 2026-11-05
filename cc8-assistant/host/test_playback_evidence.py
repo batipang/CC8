@@ -518,6 +518,64 @@ class ProbeIntegrationTests(unittest.TestCase):
                 self.assertFalse(capture.evidence.mic.size)
                 self.assertEqual(capture.read_response_probe(token), {'status': 'unavailable'})
 
+    def test_response_receipt_keeps_room_fit_failure_separate_from_prefix_match(self):
+        reference = public_signal()
+        reference[640:960] = 0.12 * np.sin(2 * np.pi * 250 * np.arange(320) / RATE)
+        room = np.zeros(25)
+        room[0], room[-1] = 0.55, 0.5
+        for condition, expected in (
+            ('reference', 'reference_coverage_missing'),
+            ('fit', 'model_unconfirmed'),
+            ('silence', 'prefix_capture_below_floor'),
+            ('gain', 'prefix_gain_out_of_range'),
+            ('shape', 'prefix_shape_mismatch'),
+        ):
+            with self.subTest(condition=condition):
+                bridge = self.bridge()
+                bridge.session.active = True
+                bridge.session.epoch = 7
+                capture = bridge.capture
+                token = capture.arm_response_probe(1)
+                capture.bind_response_probe('一加一等于几？', 101, START - 600_000_000)
+                observer = capture.evidence
+                render_end = 3840 if condition == 'reference' else len(reference)
+                for frame in range(0, render_end, 320):
+                    stamp = START + round(frame * 1e9 / RATE)
+                    observer.render(
+                        101,
+                        frame,
+                        stamp + (120_000_000 if frame < 640 else 0),
+                        reference[frame : frame + 320],
+                    )
+                mic = np.zeros(32000)
+                echoed = np.convolve(reference, room)
+                mic[5120 : 5120 + len(echoed)] = echoed * 0.35
+                prefix_block = mic[5120 + 640 : 5120 + 960]
+                if condition == 'silence':
+                    prefix_block.fill(0)
+                if condition == 'gain':
+                    prefix_block *= 0.25
+                if condition == 'shape':
+                    prefix_block *= -1
+                if condition == 'fit':
+                    # The 200 ms prefix is followed by context, training and holdout.
+                    mic[5120 + 3200 + 1696 : 5120 + 3200 + 2336] = 0
+                for frame in range(0, len(mic), 320):
+                    observer.microphone(
+                        7, START - 200_000_000 + round(frame * 1e9 / RATE), mic[frame : frame + 320]
+                    )
+                self.assertEqual(
+                    capture.read_response_probe(token),
+                    {
+                        'status': 'unconfirmed',
+                        'generation': 101,
+                        'reason': 'response_prefix_discontinuous',
+                        'room_fit_status': expected,
+                    },
+                )
+                self.assertEqual(capture.read_response_probe(token), {'status': 'unavailable'})
+                self.assertFalse(observer.response_prefix.size or observer.mic.size)
+
     def test_passive_probe_reports_signed_anchor_difference_without_accepting_a_gap(self):
         bridge = self.bridge()
         bridge.session.active = True

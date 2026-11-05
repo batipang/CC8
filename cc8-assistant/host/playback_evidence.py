@@ -57,16 +57,18 @@ def block_correlation(expected, measured):
     return float(np.clip(normalized, 0, 1))
 
 
-def room_block_matches(predicted, measured, minimum):
+def room_block_status(predicted, measured, minimum):
     predicted = predicted - predicted.mean()
     measured = measured - measured.mean()
+    if not np.std(measured) >= MIN_CAPTURE_RMS:
+        return 'capture_below_floor'
     predicted_power = np.linalg.norm(predicted)
     measured_power = np.linalg.norm(measured)
-    return (
-        np.std(measured) >= MIN_CAPTURE_RMS
-        and 0.5 * predicted_power <= measured_power <= 2 * predicted_power
-        and np.dot(predicted, measured) >= minimum * predicted_power * measured_power
-    )
+    if not 0.5 * predicted_power <= measured_power <= 2 * predicted_power:
+        return 'gain_out_of_range'
+    if np.dot(predicted, measured) >= minimum * predicted_power * measured_power:
+        return 'matched'
+    return 'shape_mismatch'
 
 
 def fit_room_response(reference, measured):
@@ -82,7 +84,9 @@ def fit_room_response(reference, measured):
     except np.linalg.LinAlgError:
         return None
     predicted = windows[ROOM_TRAIN:] @ weights
-    return weights if room_block_matches(predicted, measured[ROOM_TRAIN:], 0.8) else None
+    return (
+        weights if room_block_status(predicted, measured[ROOM_TRAIN:], 0.8) == 'matched' else None
+    )
 
 
 def match_window(audio, template):
@@ -358,16 +362,18 @@ class PlaybackEvidence:
                     'prefix_block_status': leading['status'],
                 },
             }
-        if leading['status'] == 'response_prefix_discontinuous' and self._room_matches_prefix(
-            origin, offset
-        ):
-            leading = self._leading_evidence(origin, self.response_prefix, offset)
-            leading['alignment'] = 'matched_render_frames_room_fit'
+        if leading['status'] == 'response_prefix_discontinuous':
+            room_status = self._room_prefix_status(origin, offset)
+            if room_status == 'matched':
+                leading = self._leading_evidence(origin, self.response_prefix, offset)
+                leading['alignment'] = 'matched_render_frames_room_fit'
+            else:
+                leading['room_fit_status'] = room_status
         elif leading['status'] == 'observed':
             leading['alignment'] = 'matched_render_frames'
         return leading
 
-    def _room_matches_prefix(self, origin, offset):
+    def _room_prefix_status(self, origin, offset):
         context = 2 * ROOM_HALF_TAPS
         # Use only the stable segment, with all fit and holdout samples
         # strictly after the original prefix being tested.
@@ -380,18 +386,15 @@ class PlaybackEvidence:
         stop = local + 2 * ROOM_SPAN + context
         capture = origin + start
         capture_stop = capture + 2 * ROOM_SPAN
-        if (
-            stop > len(self.reference)
-            or capture < 0
-            or capture_stop > len(self.mic)
-            or offset + WINDOW + context > len(self.response_prefix)
-        ):
-            return False
+        if stop > len(self.reference) or offset + WINDOW + context > len(self.response_prefix):
+            return 'reference_coverage_missing'
+        if capture < 0 or capture_stop > len(self.mic):
+            return 'capture_coverage_missing'
         weights = fit_room_response(
             self.reference[local - context : stop : 2], self.mic[capture:capture_stop:2]
         )
         if weights is None:
-            return False
+            return 'model_unconfirmed'
         prefix = np.pad(self.response_prefix[::2], (ROOM_HALF_TAPS, 0))
         windows = np.lib.stride_tricks.sliding_window_view(prefix, len(weights))
         predicted = windows @ weights
@@ -400,11 +403,11 @@ class PlaybackEvidence:
             capture = origin + start
             measured = self.mic[capture : capture + LEADING_BLOCK : 2]
             expected = predicted[start // 2 : (start + LEADING_BLOCK) // 2]
-            if np.std(raw) >= MIN_REFERENCE_RMS and not room_block_matches(
-                expected, measured, 0.55
-            ):
-                return False
-        return True
+            if np.std(raw) >= MIN_REFERENCE_RMS:
+                status = room_block_status(expected, measured, 0.55)
+                if status != 'matched':
+                    return f'prefix_{status}'
+        return 'matched'
 
     def _verify_response_prefix(self, origin, offset):
         leading = self._leading_evidence(origin, self.response_prefix, offset)
