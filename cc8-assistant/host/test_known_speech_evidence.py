@@ -115,7 +115,7 @@ class KnownSpeechTests(unittest.TestCase):
         for render in (False, True):
             with self.subTest(render=render):
                 probe = KnownSpeechWindow(pcm, metadata, 12, 7, near_only=True)
-                held = probe.mic
+                held = (probe.mic, probe.near_reference)
                 self.assertEqual(probe.mark_stimulus(), {'status': 'unavailable'})
                 probe.microphone(7, 1_000_000_000, mic)
                 if render:
@@ -127,9 +127,40 @@ class KnownSpeechTests(unittest.TestCase):
                     self.assertGreater(result['confidence'], 0.85)
                     self.assertEqual(result['match_start_offset_frames'], 9600)
                     self.assertEqual(result['matched_window_digital_render_ms'], 0)
-                self.assertFalse(np.any(held))
+                    self.assertEqual(result['near_transfer'], {'status': 'coverage_incomplete'})
+                else:
+                    self.assertNotIn('near_transfer', result)
+                self.assertTrue(all(not np.any(audio) for audio in held))
                 with self.assertRaises(ValueError):
                     validate(result)
+
+    def test_near_transfer_is_strictly_validated_without_upgrading_the_raw_gate(self):
+        from test_near_speech_transfer import fixture as transfer_fixture
+
+        source, mic = transfer_fixture()
+        pcm = (source * 32768).astype('<i2').tobytes()
+        _, metadata, _ = fixture()
+        metadata.update(frames=len(source), pcm_sha256=hashlib.sha256(pcm).hexdigest())
+        probe = KnownSpeechWindow(pcm, metadata, 12, 7, near_only=True)
+        held = (probe.mic, probe.template, probe.near_reference)
+        probe.microphone(7, 1_000_000_000, mic)
+        result = validate(probe.read(), near_only=True)
+        self.assertEqual(result['status'], 'not_observed')
+        transfer = result['near_transfer']
+        self.assertEqual(transfer['status'], 'validated')
+        self.assertTrue(all(not np.any(audio) for audio in held))
+        for changed in (
+            dict(transfer, pcm='private'),
+            dict(transfer, delay_frames=1),
+            dict(transfer, envelope_confidence=float('nan')),
+            dict(transfer, held_out_blocks=['matched', 'shape_mismatch']),
+        ):
+            with self.subTest(changed=changed), self.assertRaises(ValueError):
+                validate(dict(result, near_transfer=changed), near_only=True)
+        with self.assertRaises(ValueError):
+            validate(dict(result, captured_frames=100), near_only=True)
+        transfer['held_out_blocks'].clear()
+        self.assertEqual(probe.read()['near_transfer']['held_out_blocks'], ['matched', 'matched'])
 
     def test_nearly_silent_identical_shape_does_not_confirm_an_acoustic_window(self):
         probe = self.probe()

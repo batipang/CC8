@@ -100,6 +100,11 @@ class KnownSpeechWindow:
         self.generation, self.epoch = generation, epoch
         self.near_only = near_only
         self.template = reference[offset : offset + WINDOW].copy()
+        self.near_reference = np.empty(0)
+        if near_only:
+            from near_speech_transfer import REFERENCE_FRAMES
+
+            self.near_reference = reference[:REFERENCE_FRAMES].copy()
         reference.fill(0)
         self.offset = offset
         self.input_digest = clean['pcm_sha256']
@@ -135,9 +140,9 @@ class KnownSpeechWindow:
         with self.lock:
             self.cancelled = reason
             self.timer.cancel()
-            for audio in (self.mic, self.render, self.template):
+            for audio in (self.mic, self.render, self.template, self.near_reference):
                 audio.fill(0)
-            self.mic = self.render = self.template = np.empty(0)
+            self.mic = self.render = self.template = self.near_reference = np.empty(0)
 
     def _receive(self, kind, nanos, pcm):
         if self.cancelled is not None or self.analysing or self.result is not None:
@@ -268,10 +273,19 @@ class KnownSpeechWindow:
                 return self._receipt('analysing')
             self.analysing = True
             self.timer.cancel()
-            mic, render, template = self.mic, self.render, self.template
-            self.mic = self.render = self.template = np.empty(0)
+            mic, render, template, near_reference = (
+                self.mic,
+                self.render,
+                self.template,
+                self.near_reference,
+            )
+            self.mic = self.render = self.template = self.near_reference = np.empty(0)
         try:
             result = self._analyse(mic[: self.mic_count], render[: self.render_count], template)
+            if self.near_only:
+                from near_speech_transfer import analyse
+
+                result['near_transfer'] = analyse(near_reference, mic[: self.mic_count])
             if self.stimulus_boundary is not None:
                 from causal_speech_model import analyse
 
@@ -283,7 +297,7 @@ class KnownSpeechWindow:
                     estimated_delta=self.stimulus_delta,
                 )
         finally:
-            for audio in (mic, render, template):
+            for audio in (mic, render, template, near_reference):
                 audio.fill(0)
         with self.lock:
             self.result = self._receipt(self.cancelled) if self.cancelled else result
