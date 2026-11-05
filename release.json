@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-response-room-alignment-20261105.1",
+  "release_id": "p0-response-local-agreement-20261105.1",
   "backend": {
-    "version": "0.14.81"
+    "version": "0.14.82"
   },
   "assistant": {
     "version": "0.9.34",

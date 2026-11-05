@@ -386,6 +386,56 @@ class AcousticEvidenceTests(unittest.TestCase):
                     self.assertNotIn(metric, evidence)
                 self.assertFalse(observer.response_prefix.size or observer.mic.size)
 
+    def test_room_alignment_cannot_hide_a_local_pause_in_a_voiced_prefix(self):
+        rng = np.random.default_rng(1168)
+        seconds = np.arange(RATE) / RATE
+        knots = np.arange(0, RATE + 1, 1600) / RATE
+        frequency = np.interp(seconds, knots, rng.uniform(150, 320, size=len(knots)))
+        pitch = 2 * np.pi * np.cumsum(frequency) / RATE
+        envelope = np.interp(seconds, knots, rng.uniform(0.02, 1, size=len(knots)))
+        reference = envelope * sum(
+            amplitude * np.sin(harmonic * pitch + rng.uniform(0, np.pi))
+            for harmonic, amplitude in enumerate(rng.uniform(0.01, 0.1, size=9), 1)
+        )
+        reference += 0.0002 * rng.normal(size=RATE)
+        room = np.zeros(65)
+        room[0], room[-1] = 0.55, 0.52
+        for gap in (False, True):
+            with self.subTest(gap=gap):
+                observer = PlaybackEvidence()
+                probe = observer.arm(101, 7, input_end_ns=START - 600_000_000)
+                for frame in range(0, len(reference), 320):
+                    step = 120_000_000 if frame < 640 else 0
+                    observer.render(
+                        101,
+                        frame,
+                        START + round(frame * 1e9 / RATE) + step,
+                        reference[frame : frame + 320],
+                    )
+                audible = (
+                    np.concatenate((reference[:640], np.zeros(70), reference[640:]))
+                    if gap
+                    else reference
+                )
+                echoed = np.convolve(audible, room)
+                mic = np.zeros(48000)
+                mic[5120 : 5120 + len(echoed)] = echoed * 0.35
+                for frame in range(0, len(mic), 320):
+                    observer.microphone(
+                        7,
+                        START - 200_000_000 + round(frame * 1e9 / RATE),
+                        mic[frame : frame + 320],
+                    )
+                evidence = probe.result['leading_acoustic_evidence']
+                metric = 'last_voiced_to_confirmed_output_block_ms'
+                if gap:
+                    self.assertEqual(evidence['status'], 'response_prefix_alignment_mismatch')
+                    self.assertNotIn(metric, evidence)
+                else:
+                    self.assertEqual(evidence['status'], 'observed')
+                    self.assertIn(metric, evidence)
+                self.assertFalse(observer.response_prefix.size or observer.mic.size)
+
     def test_response_probe_waits_for_late_render_reference_after_clock_jump(self):
         for outcome in ('complete', 'expired', 'render_gap', 'no_leading_block'):
             with self.subTest(outcome=outcome):

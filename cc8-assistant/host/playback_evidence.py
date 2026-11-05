@@ -439,6 +439,27 @@ class PlaybackEvidence:
                 status = room_block_status(expected, measured, 0.55)
                 if status != 'matched':
                     return f'prefix_{status}'
+        if confirm_alignment:
+            # A long voiced window can stay correlated across a short pause.
+            # Independently locate overlapping 40 ms portions of the modeled
+            # prefix, so a good aggregate cannot conceal a local time shift.
+            checked = 0
+            span = 2 * LEADING_BLOCK
+            for start in range(offset, offset + WINDOW - span + 1, LEADING_BLOCK):
+                raw = self.response_prefix[start : start + span : 2]
+                expected = predicted[start // 2 : (start + span) // 2]
+                if np.std(raw) < MIN_REFERENCE_RMS or np.std(expected) < MIN_CAPTURE_RMS:
+                    continue
+                left = origin + start - 2 * ROOM_HALF_TAPS
+                right = origin + start + span + 2 * ROOM_HALF_TAPS
+                if left < 0 or right > len(self.mic):
+                    return 'alignment_unconfirmed'
+                peak, confidence, _, _ = match_window(self.mic[left:right:2], expected)
+                if confidence < 0.55 or abs(peak - 2 * ROOM_HALF_TAPS) > PREFIX_AGREEMENT:
+                    return 'alignment_unconfirmed'
+                checked += 1
+            if checked < 2:
+                return 'alignment_unconfirmed'
         return 'matched'
 
     def _verify_response_prefix(self, origin, offset):

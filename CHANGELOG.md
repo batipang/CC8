@@ -1,5 +1,11 @@
 # Changelog
 
+## Backend 0.14.82 — check local response alignment before accepting room compensation
+
+- Locate overlapping short portions of the predicted prefix independently before
+  accepting room-based realignment. Preserve an unconfirmed result when local
+  timing disagrees despite a strong long-window correlation.
+
 ## Backend 0.14.81 — corroborate reflection-sensitive response alignment
 
 - Recheck a small raw anchor disagreement against a room model fitted and

@@ -1,6 +1,6 @@
 # 大黄蜂统一待办：功能与工程质量
 
-更新：2026-11-05。原排期基线为 Android 0.8.6 / 后台 0.11.0；当前部署为后台 0.14.77 / 原签名 APK 0.9.34（code71），源码 1ccf8df；签名、数据和配置保留，部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)；P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)；复选框仍按完整验收标准关闭。
+更新：2026-11-05。原排期基线为 Android 0.8.6 / 后台 0.11.0；当前部署为后台 0.14.80 / 原签名 APK 0.9.34（code71），源码 afb3f81；签名、数据和配置保留，部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)；P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)；复选框仍按完整验收标准关闭。
 
 依据：[竞品复盘](COMPETITOR_REVIEW_2026-11-01.md)、[当前架构](ARCHITECTURE.md)、[实机与回归记录](VALIDATION.md)。本次已合并 [ToFix](ToFix.md) 的 20 个工程条目；这是功能与工程质量的唯一详细清单；[ROADMAP](ROADMAP.md)保留完成情况和阶段概览。
 
@@ -104,6 +104,7 @@
   - 依赖：P0-01；常驻体验依赖 P0-02。范围：Mac 首版，CC8 端部署只做可行性评估，不承诺硬件低功耗唤醒。MiniMax ASR / TTS 和 Dot 分工不变。
 
 - [ ] **P0-04 — 降低听错、截句和误打断，保持普通音量插话**
+  - 0.14.80 联网批次前 24 轮通过，第 25 轮出现额外准入并暂停原回答，已自动停采。额外候选累计六帧 credible，超过现用五帧门槛，来源仍待定位。原失败保留，门槛保持现值，后续补足时序证据。见 [当前部署](CURRENT_DEPLOYMENT.md)。
   - 播报参考窗口（后台 0.14.73 已部署）：仅在新段发布时更新上一段参考文字和窗口，覆盖暂停与取消导致的过早过期或覆盖。见 [本地唤醒](LOCAL_WAKE.md#等待对话与停止)。
   - 回声比较归属（后台 0.14.69 候选）：取消期间的旧结果不会覆盖新请求的状态；参考音识别开始前重新核对代次。三处并发交叉点有回归，见 [失败反馈](FAILURE_FEEDBACK.md#01469-回声比较结果与请求归属)。
   - 空识别反馈（后台 0.14.68 候选）：确认有近端人声、当前对话已唤醒且无播放回声风险时，识别为空会在屏幕提示重说。播报期间的空识别沿用原暂停恢复回执，不派发任务或播放提示音。
