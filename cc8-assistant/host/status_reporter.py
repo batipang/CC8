@@ -96,6 +96,7 @@ class StatusReporter:
                 playback.device_can_report_playout and playback.device_can_report_completion
             ),
             'playback_evidence_supported': True,
+            'known_speech_evidence_supported': True,
             'leading_acoustic_evidence_supported': True,
             'response_acoustic_evidence_supported': True,
             'render_clock_evidence_supported': playback.device_can_report_clock,

@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-onset-prefix-evidence-20261105.1",
+  "release_id": "p0-known-speech-window-20261105.1",
   "backend": {
-    "version": "0.14.86"
+    "version": "0.14.87"
   },
   "assistant": {
     "version": "0.9.37",

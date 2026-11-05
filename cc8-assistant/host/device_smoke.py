@@ -28,6 +28,10 @@ from mac_voice import (
     __file__ as voice_source,
 )
 from capture_evidence import validate as validate_capture, ONSET_PREFIX_COUNTS
+from known_speech_receipt import (
+    validate as validate_known_speech,
+    valid_request as known_speech_request,
+)
 from diagnostics import (
     ASR_STOP_STAGE,
     INTERVALS,
@@ -591,6 +595,7 @@ def rpc(path, request, timeout=5):
         or request == {'operation': 'transport_test', 'seconds': 12}
         or request == ALL_ROUTE_LOSS_REQUEST
         or request == {'operation': 'playback_probe'}
+        or known_speech_request(request)
         or (
             request.get('operation') == 'response_probe_arm'
             and set(request) == {'operation', 'case'}
@@ -656,13 +661,14 @@ def interruption_input(value, *, stop=False, asr_stop=False):
 
 
 class Device:
-    def __init__(self):
+    def __init__(self, *, fixture_directory=None):
         sys.path.insert(0, str(ROOT / 'device-access'))
         import cc8_install
 
         self.access = cc8_install
         self.transport = self.access.target()
         self.access.probe(self.transport)
+        self.fixture_directory = fixture_directory
 
     def shell(self, command):
         # Recheck the physical target before each operation, never choose a new
@@ -707,7 +713,12 @@ class Device:
         self.close_speech_probe()
         phrase = ASR_STOP_QUERY if asr_stop else STOP_QUERY if stop else BARGE_QUERY
         try:
-            prepared = PreparedSpeech('Tingting', phrase)
+            directory = getattr(self, 'fixture_directory', None)
+            prepared = PreparedSpeech(
+                'Tingting',
+                phrase,
+                directory=private_directory(directory) if directory is not None else None,
+            )
         except SpeechFixtureCleanupError as error:
             self._prepared_interruption = error.fixture
             raise
@@ -724,6 +735,11 @@ class Device:
         if prepared is not None:
             prepared.close()
             self._prepared_interruption = None
+
+    def interruption_fixture(self):
+        prepared = getattr(self, '_prepared_interruption', None)
+        require(prepared is not None, 'synthetic_interruption_not_prepared')
+        return {'directory': prepared.directory_name, 'metadata': prepared.metadata}
 
     def speak_probe(
         self,
@@ -809,6 +825,7 @@ class SmokeRun:
         response_acoustic_evidence=False,
         response_acoustic_coverage=False,
         require_render_overlap=False,
+        known_speech_evidence=False,
         synthetic_barge=False,
         synthetic_stop=False,
         stop_route='local',
@@ -837,6 +854,8 @@ class SmokeRun:
         self.response_acoustic_evidence = response_acoustic_evidence
         self.response_acoustic_coverage = response_acoustic_coverage
         self.require_render_overlap = require_render_overlap
+        self.known_speech_required = known_speech_evidence
+        self.known_speech_evidence = None
         self.synthetic_barge = synthetic_barge
         self.synthetic_stop = synthetic_stop
         self.asr_stop = synthetic_stop and stop_route == 'asr'
@@ -921,6 +940,10 @@ class SmokeRun:
             ),
             'awake_dialogue_enabled': self.awake_dialogue,
             'require_render_overlap': self.require_render_overlap,
+            'known_speech_evidence_required': self.known_speech_required,
+            'known_speech_evidence': dict(self.known_speech_evidence)
+            if self.known_speech_evidence is not None
+            else None,
             'multi_clause_evidence': self.multi_clause_evidence,
             'prepared_interruption_input': (
                 dict(self.prepared_input) if self.prepared_input is not None else None
@@ -986,6 +1009,10 @@ class SmokeRun:
         require(
             not self.playback_evidence or h.get('playback_evidence_supported') is True,
             'backend_playback_evidence_unsupported',
+        )
+        require(
+            not self.known_speech_required or h.get('known_speech_evidence_supported') is True,
+            'backend_known_speech_evidence_unsupported',
         )
         require(
             not self.leading_acoustic_evidence
@@ -2410,6 +2437,26 @@ class SmokeRun:
             reply = pool.submit(self.request, {'text': BARGE_ANNOUNCEMENT})
             self.wait(started, 25, 'interruption_playout_not_observed')
             evidence['announcement_started'] = True
+            known_token = None
+            if self.known_speech_required:
+                armed = self.request(
+                    {
+                        'operation': 'known_speech_arm',
+                        'generation': announcement_generation,
+                        **self.device.interruption_fixture(),
+                    }
+                )
+                require(
+                    isinstance(armed, dict)
+                    and set(armed) == {'status', 'token'}
+                    and armed['status'] == 'armed'
+                    and isinstance(armed['token'], str)
+                    and re.fullmatch('[a-f0-9]{32}', armed['token']),
+                    'known_speech_arm_unconfirmed',
+                )
+                known_token = armed['token']
+                # Obtain a short original-render window before near playback.
+                self.sleep(0.25)
             prepared_options = (
                 {'expected_input': self.prepared_input} if self.prepared_input is not None else {}
             )
@@ -2420,6 +2467,19 @@ class SmokeRun:
             else:
                 self.device.speak_probe(interruption=True, **prepared_options)
             evidence['stimulus_played'] = True
+            if known_token is not None:
+                value = self.request({'operation': 'known_speech_result', 'token': known_token})
+                try:
+                    clean = validate_known_speech(value)
+                except ValueError:
+                    raise CheckFailure('known_speech_evidence_invalid') from None
+                require(
+                    clean['input_pcm_sha256'] == self.prepared_input['pcm_sha256']
+                    and clean['template_offset_frames'] + clean['template_frames']
+                    <= self.prepared_input['frames'],
+                    'known_speech_input_mismatch',
+                )
+                self.known_speech_evidence = clean
             self.checkpoint(self.report('running'))
             remaining = min(
                 12 if local_stop else 30 if self.asr_stop else 75,
@@ -2530,6 +2590,12 @@ class SmokeRun:
             require_evidence(
                 type(overlap) is int and 0 < overlap <= 2000,
                 'interruption_render_overlap_unconfirmed',
+            )
+        if self.known_speech_required:
+            require_evidence(
+                isinstance(self.known_speech_evidence, dict)
+                and self.known_speech_evidence.get('status') == 'observed',
+                'known_speech_window_unconfirmed',
             )
 
     def cleanup(self):
@@ -3079,6 +3145,11 @@ def main(argv=None):
     parser.add_argument('--background-wav', type=Path)
     parser.add_argument('--background-sha256')
     parser.add_argument(
+        '--known-speech-evidence',
+        action='store_true',
+        help='Corroborate one fixed near speech window during a separate synthetic barge run',
+    )
+    parser.add_argument(
         '--latency-scenario',
         choices=tuple(SCENARIO_QUESTIONS),
         default='qa',
@@ -3189,6 +3260,10 @@ def main(argv=None):
         or args.self_playback_soak
     )
     asr_stop = args.stop_route == 'asr'
+    if args.known_speech_evidence and (
+        batch or not args.synthetic_barge or not args.capture or args.synthetic_stop
+    ):
+        parser.error('--known-speech-evidence requires a separate --capture --synthetic-barge run')
     if asr_stop and not args.synthetic_stop:
         parser.error('--stop-route asr requires --synthetic-stop')
     if args.english_wake and (
@@ -3201,7 +3276,7 @@ def main(argv=None):
         parser.error(
             '--english-wake requires a separate --awake-dialogue or --standby --acoustic run'
         )
-    bound_runtime = batch or asr_stop or args.english_wake
+    bound_runtime = batch or asr_stop or args.english_wake or args.known_speech_evidence
     background_receipt = None
     if any((args.background_scenario, args.background_wav, args.background_sha256)):
         background_receipt = {'kind': args.background_scenario, 'sha256': args.background_sha256}
@@ -3331,6 +3406,9 @@ def main(argv=None):
         if args.require_render_overlap:
             plan['require_render_overlap'] = True
             plan['minimum_backend_version'] = RENDER_OVERLAP_MIN_BACKEND
+        if args.known_speech_evidence:
+            plan['known_speech_evidence'] = True
+            plan['minimum_backend_version'] = '0.14.87'
         print(json.dumps(plan, ensure_ascii=False, indent=2))
         return 0
     try:
@@ -3356,6 +3434,11 @@ def main(argv=None):
             'runtime_source_version_mismatch',
         )
         instance = health.get('runtime_instance')
+        if args.known_speech_evidence:
+            require(
+                health.get('known_speech_evidence_supported') is True,
+                'backend_known_speech_evidence_unsupported',
+            )
         if args.require_render_overlap:
             require(
                 tuple(map(int, manifest.backend_version.split('.')))
@@ -3461,7 +3544,11 @@ def main(argv=None):
                         }
                     )
 
-                device = Device()
+                device = (
+                    Device(fixture_directory=socket_path.parent / 'public-speech-fixtures')
+                    if args.known_speech_evidence
+                    else Device()
+                )
                 if args.extended_voice_evidence or args.interruption_suite:
                     device_status, _ = device.status()
                     require(
@@ -3489,6 +3576,7 @@ def main(argv=None):
                             or 'response_acoustic_evidence' in enabled
                         ),
                         response_acoustic_coverage=args.collect_acoustic_coverage,
+                        known_speech_evidence=args.known_speech_evidence,
                         require_render_overlap=(
                             args.require_render_overlap and 'synthetic_barge' in enabled
                         ),

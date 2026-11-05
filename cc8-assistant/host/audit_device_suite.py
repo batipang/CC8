@@ -205,6 +205,14 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
             failure = {'phase': name, 'reason': 'standby_duration_unconfirmed'}
             break
         prepared = report.get('prepared_interruption_input')
+        # Known-speech corroboration is currently an explicit individual run;
+        # no fixed batch may silently claim its additional evidence scope.
+        if (
+            report.get('known_speech_evidence_required', False) is not False
+            or report.get('known_speech_evidence') is not None
+        ):
+            failure = {'phase': name, 'reason': 'unexpected_known_speech_scope'}
+            break
         if prepared is not None:
             try:
                 if not {'synthetic_barge', 'synthetic_stop'} & set(options):

@@ -245,6 +245,57 @@ class Bridge:
         with self.guard:
             return self.capture.read_response_probe(token)
 
+    def arm_known_speech(self, root, directory, metadata, generation):
+        from known_speech_evidence import load_fixture
+
+        def ready():
+            return (
+                type(generation) is int
+                and generation == self.generation
+                and self.session.active
+                and self.playback.playing
+                and not self.calibration.active
+            )
+
+        with self.guard:
+            if not ready():
+                raise RuntimeError('Known speech probe requires ongoing playback and capture')
+        # Do not hold the session lock while reading a bounded public fixture.
+        pcm = load_fixture(root, directory, metadata)
+        with self.guard:
+            if not ready():
+                raise RuntimeError('Known speech probe owner changed')
+            token = self.capture.arm_known_speech(pcm, metadata, generation, self.session.epoch)
+            return {'status': 'armed', 'token': token}
+
+    def read_known_speech(self, token):
+        with self.guard:
+            owner = self.capture.known_speech
+            if (
+                owner is None
+                or token != owner.token
+                or not self.session.active
+                or owner.epoch != self.session.epoch
+            ):
+                return {'status': 'unavailable'}
+        # FFT work runs on this IPC caller, outside the ingress/session lock.
+        release = True
+        try:
+            result = owner.read()
+            release = result.get('status') != 'analysing'
+            with self.guard:
+                if (
+                    self.capture.known_speech is not owner
+                    or not self.session.active
+                    or owner.epoch != self.session.epoch
+                ):
+                    return {'status': 'unavailable'}
+                return result
+        finally:
+            with self.guard:
+                if release and self.capture.known_speech is owner:
+                    self.capture.clear_known_speech()
+
     def cancel_playback_observation(self):
         self.capture.end_probe()
         self.capture.evidence.cancel()

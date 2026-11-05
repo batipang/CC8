@@ -3089,6 +3089,12 @@ class DeviceAutomationTests(unittest.TestCase):
     def test_interruption_probe_requires_new_pause_and_replacement_receipts(self):
         for case, expected in (
             ('valid', None),
+            ('known', None),
+            ('known_miss', 'known_speech_window_unconfirmed'),
+            ('known_bad_receipt', 'known_speech_evidence_invalid'),
+            ('known_wrong_input', 'known_speech_input_mismatch'),
+            ('known_bad_template', 'known_speech_input_mismatch'),
+            ('known_bad_arm', 'known_speech_arm_unconfirmed'),
             ('valid_stop', None),
             ('render_overlap', None),
             ('no_render_overlap', 'interruption_render_overlap_unconfirmed'),
@@ -3127,8 +3133,54 @@ class DeviceAutomationTests(unittest.TestCase):
                     'invalid_capture',
                 )
                 run, device, health, now = self.fixture(
-                    capture=True, synthetic_barge=True, require_render_overlap=strict
+                    capture=True,
+                    synthetic_barge=True,
+                    require_render_overlap=strict,
+                    known_speech_evidence=case.startswith('known'),
                 )
+                known = case.startswith('known')
+                if known:
+                    from test_prepared_speech import metadata
+                    from known_speech_receipt import METHOD
+
+                    reference_metadata = {**metadata(), 'frames': 12800}
+                    run.prepared_input = {
+                        **reference_metadata,
+                        'kind': 'barge',
+                        'voice_family': 'Tingting',
+                    }
+                    device.interruption_fixture.return_value = {
+                        'directory': 'cc8-public-speech-abcdefgh',
+                        'metadata': reference_metadata,
+                    }
+                    near_result = dict(
+                        schema=1,
+                        method=METHOD,
+                        status='observed',
+                        captured_frames=10000,
+                        reference_frames=10000,
+                        template_offset_frames=0,
+                        template_frames=3200,
+                        input_pcm_sha256='a' * 64,
+                        raw_audio_saved=False,
+                        first_audible_onset_measured=False,
+                        physical_double_talk_confirmed=False,
+                        confidence=0.9,
+                        rival_confidence=0.1,
+                        render_similarity=0.1,
+                        match_start_offset_frames=3200,
+                        matched_window_digital_render_ms=100,
+                    )
+                    if case == 'known_miss':
+                        near_result['status'] = 'not_observed'
+                        near_result.pop('match_start_offset_frames')
+                        near_result.pop('matched_window_digital_render_ms')
+                    elif case == 'known_bad_receipt':
+                        near_result['text'] = 'private-content'
+                    elif case == 'known_wrong_input':
+                        near_result['input_pcm_sha256'] = 'd' * 64
+                    elif case == 'known_bad_template':
+                        near_result['template_offset_frames'] = 12800
                 health.update(microphone_active=True, waiting_for_wake=False)
                 d, ui = device.status.return_value
                 d.update(
@@ -3203,7 +3255,13 @@ class DeviceAutomationTests(unittest.TestCase):
                     return reply
 
                 def stimulus(**kwargs):
-                    self.assertEqual(kwargs, {'interruption': True})
+                    self.assertEqual(
+                        kwargs,
+                        {
+                            'interruption': True,
+                            **({'expected_input': run.prepared_input} if known else {}),
+                        },
+                    )
                     health['playing'] = False
                     announcement['outcome'] = (
                         'completed' if case == 'completed_announcement' else 'cancelled'
@@ -3234,6 +3292,25 @@ class DeviceAutomationTests(unittest.TestCase):
                 def request(payload):
                     if payload == {'operation': 'health'}:
                         return dict(health)
+                    if known and payload.get('operation') == 'known_speech_arm':
+                        self.assertEqual(
+                            payload,
+                            {
+                                'operation': 'known_speech_arm',
+                                'generation': 20,
+                                **device.interruption_fixture.return_value,
+                            },
+                        )
+                        return {
+                            'status': 'armed',
+                            'token': 'a' * 32,
+                            **({'path': 'private'} if case == 'known_bad_arm' else {}),
+                        }
+                    if known and payload.get('operation') == 'known_speech_result':
+                        self.assertEqual(
+                            payload, {'operation': 'known_speech_result', 'token': 'a' * 32}
+                        )
+                        return near_result
                     self.assertEqual(payload, {'operation': 'diagnostics'})
                     extra = (
                         [self.acoustic_row(request_id='extra')]
@@ -3247,7 +3324,7 @@ class DeviceAutomationTests(unittest.TestCase):
                 run.request = request
                 if expected is None:
                     run.interruption_probe()
-                    self.assertEqual(now[0], 20)
+                    self.assertEqual(now[0], 20.25 if known else 20)
                     evidence = run.report('passed')['barge_evidence']
                     self.assertEqual(evidence['device_pause_from_trigger_ms'], 35.5)
                     self.assertEqual(
@@ -3271,6 +3348,9 @@ class DeviceAutomationTests(unittest.TestCase):
                         run.interruption_probe()
                     evidence = run.report('failed')['barge_evidence']
                     self.assertNotIn('content must never enter a report', json.dumps(evidence))
+                    self.assertNotIn('private-content', json.dumps(run.report('failed')))
+                    if case == 'known_miss':
+                        self.assertEqual(now[0], 20.25)
                 if case in ('prefix_and_render', 'prefix_only'):
                     self.assertEqual(
                         evidence['onset_prefix'], dict.fromkeys(ONSET_PREFIX_COUNTS, 13)
@@ -3280,10 +3360,13 @@ class DeviceAutomationTests(unittest.TestCase):
                     )
                 elif strict:
                     self.assertIsNone(evidence.get('onset_prefix'))
-                if case in ('early_voice', 'no_playout'):
+                if case in ('early_voice', 'no_playout', 'known_bad_arm'):
                     device.speak_probe.assert_not_called()
                 else:
-                    device.speak_probe.assert_called_once_with(interruption=True)
+                    device.speak_probe.assert_called_once_with(
+                        interruption=True,
+                        **({'expected_input': run.prepared_input} if known else {}),
+                    )
 
     def test_awake_dialogue_rejects_unready_wake_or_capture_before_speaking(self):
         for case in ('wake', 'short_budget', 'pending'):

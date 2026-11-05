@@ -23,6 +23,19 @@ from device_smoke import (
 
 
 class PreparedInputAuditTests(unittest.TestCase):
+    def test_individual_known_speech_scope_cannot_be_relabelled_as_a_batch(self):
+        for field, value in (
+            ('known_speech_evidence_required', True),
+            ('known_speech_evidence_required', 1),
+            ('known_speech_evidence', {'text': 'private'}),
+        ):
+            with self.subTest(field=field):
+                data = saved_suite(interruption=True)
+                data['phases'][0]['report'][field] = value
+                result = audit(data)
+                self.assertFalse(result['verified'])
+                self.assertEqual(result['reason'], 'unexpected_known_speech_scope')
+
     def test_new_input_metadata_requires_valid_shape_scope_and_cleanup(self):
         from test_prepared_speech import metadata
 

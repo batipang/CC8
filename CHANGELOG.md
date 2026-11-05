@@ -1,5 +1,20 @@
 # Changelog
 
+## Backend 0.14.87 — corroborate one known near speech window
+
+- Add an opt-in, bounded observer of existing capture during a fixed synthetic
+  interruption. Match a known 200 ms input window against raw microphone audio,
+  reject competing matches and resemblance to the original digital render, and
+  report only numerical evidence. Keep VAD, AEC, recognition and interruption
+  decisions unchanged.
+- Read the hashed public WAV only from an owner-private fixture directory under
+  this runtime. Bind observation to the capture epoch and original playback;
+  clear buffers on timeout, capture gaps, session/transport changes or completion.
+  Perform FFT work on the IPC caller outside the session lock.
+- Expose a separate `--known-speech-evidence` check; old backends are rejected
+  before device access. A matched window does not measure first audible onset
+  or establish physical double talk. APK and wire protocol remain unchanged.
+
 ## Device checks — prepare fixed interruption audio before capture
 
 - Synthesize and validate one bounded private WAV before opening capture; play

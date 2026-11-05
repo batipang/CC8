@@ -15,6 +15,7 @@ import stat
 import sys
 import threading
 from vision import jpeg_dimensions
+from known_speech_receipt import valid_request as known_speech_request
 
 SOCKET = Path(__file__).resolve().parents[2] / 'device-access/private/voice-runtime/announce.sock'
 
@@ -115,6 +116,19 @@ class AnnouncementServer:
                         if set(request) != {'operation', 'token'}:
                             raise ValueError('Response probe requires its token')
                         result = self.bridge.read_response_probe(request['token'])
+                    elif request.get('operation') == 'known_speech_arm':
+                        if not known_speech_request(request):
+                            raise ValueError('Known speech probe accepts only a public fixture')
+                        result = self.bridge.arm_known_speech(
+                            self.path.parent / 'public-speech-fixtures',
+                            request['directory'],
+                            request['metadata'],
+                            request['generation'],
+                        )
+                    elif request.get('operation') == 'known_speech_result':
+                        if not known_speech_request(request):
+                            raise ValueError('Known speech probe requires its token')
+                        result = self.bridge.read_known_speech(request['token'])
                     elif request.get('operation') == 'device_control':
                         from voice_tools import VoiceTools
 
