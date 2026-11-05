@@ -2526,6 +2526,55 @@ class DeviceAutomationTests(unittest.TestCase):
             ],
         )
 
+    def test_render_overlap_plan_is_explicit_and_old_backend_stops_before_device_access(self):
+        from dataclasses import replace
+        from release_info import RELEASE
+
+        for mode in ('--synthetic-barge', '--interruption-suite'):
+            output = io.StringIO()
+            with patch('device_smoke.Device') as device, redirect_stdout(output):
+                self.assertEqual(
+                    main(
+                        ['--runtime-root', '/unused', '--capture', mode, '--require-render-overlap']
+                    ),
+                    0,
+                )
+                device.assert_not_called()
+            plan = json.loads(output.getvalue())
+            self.assertTrue(plan['require_render_overlap'])
+            self.assertEqual(plan['minimum_backend_version'], '0.14.83')
+        older = replace(RELEASE, backend_version='0.14.82')
+        health = dict(bridge_version='0.14.82', protocol_version=older.protocol_version)
+        with (
+            patch('device_smoke.load_release', return_value=older),
+            patch('device_smoke.rpc', return_value=health),
+            patch('device_smoke.Device') as device,
+            redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit) as stopped,
+        ):
+            main(
+                [
+                    '--runtime-root',
+                    '/unused',
+                    '--execute',
+                    '--capture',
+                    '--synthetic-barge',
+                    '--require-render-overlap',
+                ]
+            )
+        self.assertEqual(stopped.exception.code, 2)
+        device.assert_not_called()
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            main(
+                [
+                    '--runtime-root',
+                    '/unused',
+                    '--capture',
+                    '--awake-dialogue',
+                    '--require-render-overlap',
+                ]
+            )
+
     def test_synthetic_stop_dry_plan_and_capability_gate(self):
         output = io.StringIO()
         with patch('device_smoke.Device') as mock, redirect_stdout(output):
@@ -2991,6 +3040,11 @@ class DeviceAutomationTests(unittest.TestCase):
         for case, expected in (
             ('valid', None),
             ('valid_stop', None),
+            ('render_overlap', None),
+            ('no_render_overlap', 'interruption_render_overlap_unconfirmed'),
+            ('missing_capture', 'interruption_render_overlap_unconfirmed'),
+            ('legacy_capture', 'interruption_render_overlap_unconfirmed'),
+            ('invalid_capture', 'interruption_replacement_playout_unconfirmed'),
             ('missing_stop', 'interruption_device_stop_not_confirmed'),
             ('wrong_stop_generation', 'interruption_device_stop_not_confirmed'),
             ('wrong_stop_cancel_generation', 'interruption_device_stop_not_confirmed'),
@@ -3011,7 +3065,16 @@ class DeviceAutomationTests(unittest.TestCase):
             ('missing_transcript', 'interruption_transcript_receipt_missing'),
         ):
             with self.subTest(case=case), patch('device_smoke.ThreadPoolExecutor') as executor:
-                run, device, health, now = self.fixture(capture=True, synthetic_barge=True)
+                strict = case in (
+                    'render_overlap',
+                    'no_render_overlap',
+                    'missing_capture',
+                    'legacy_capture',
+                    'invalid_capture',
+                )
+                run, device, health, now = self.fixture(
+                    capture=True, synthetic_barge=True, require_render_overlap=strict
+                )
                 health.update(microphone_active=True, waiting_for_wake=False)
                 d, ui = device.status.return_value
                 d.update(
@@ -3037,6 +3100,22 @@ class DeviceAutomationTests(unittest.TestCase):
                 )
                 del voice['text']
                 voice.update(gate='accepted', generation=20 if case == 'wrong_generation' else 21)
+                if strict and case != 'missing_capture':
+                    from test_capture_evidence import evidence as capture_evidence
+
+                    captured = capture_evidence()
+                    if case == 'no_render_overlap':
+                        captured.update(
+                            credible_with_render_frames=0, credible_without_render_frames=1
+                        )
+                    elif case == 'legacy_capture':
+                        from capture_evidence import TEMPORAL_COUNTS
+
+                        for field in TEMPORAL_COUNTS:
+                            captured.pop(field)
+                    elif case == 'invalid_capture':
+                        captured['credible_with_render_frames'] = True
+                    voice['capture'] = captured
                 voice['stages'].update(
                     pause_request=20,
                     pause_ack=40,
@@ -3120,6 +3199,8 @@ class DeviceAutomationTests(unittest.TestCase):
                     self.assertTrue(evidence['replacement_completed'])
                     self.assertEqual(evidence['response_playout_timing'][QA_PLAYOUT_METRIC], 25)
                     self.assertIs(evidence['transcript_matches_stimulus'], True)
+                    if strict:
+                        self.assertEqual(evidence['credible_render_overlap_frames'], 1)
                     self.assertNotIn('announcement-id', json.dumps(evidence))
                     if case == 'valid_stop':
                         self.assertIs(evidence['device_stop_applied'], True)

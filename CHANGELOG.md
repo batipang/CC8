@@ -5,6 +5,8 @@
 - Include the longest credible frame run and the credible frame counts with and
   without an energetic playback reference in bounded utterance diagnostics.
   Preserve legacy reports with unknown temporal coverage.
+- Add an opt-in strict interruption check for energetic playback reference in
+  credible near-speech frames, with matching saved-suite audit requirements.
 
 ## Backend 0.14.82 — check local response alignment before accepting room compensation
 

@@ -180,6 +180,15 @@ USB 激活失败由尝试激活的通道处理。即使触发路由复查的是 
 
 通过须观察到同一短文被取消、新代次的语音回合有设备暂停回执及录音触发时延，且任务完成并收到播完回执。CC8 在同一次限时录音内比较收到的识别文字，接受“三加五等于几”的等价数字和标点写法。回执只含代次和匹配布尔值，过期录音与旧通道的回执不可用。脚本只接受新回答对应的匹配值，报告只保存匹配布尔值、计数及耗时。
 
+P0 的重叠采样另加 `--require-render-overlap`，后台须为 0.14.83 或更新版本。该模式检查已被接纳的新问题，要求至少一个 credible 帧同时具有高于 −60dBFS 的数字播放参考。报告保存 `credible_render_overlap_frames` 和本次严格模式声明。缺少整组捕获观察、旧格式计数或零覆盖时，完成操作与收尾后以 `interruption_render_overlap_unconfirmed` 保留未确认。
+
+```sh
+./cc8 verify-device --runtime-root /absolute/live/workspace --capture --synthetic-barge --require-render-overlap
+./cc8 verify-device --runtime-root /absolute/live/workspace --capture --interruption-suite --require-render-overlap
+```
+
+以上先打印计划，实际执行追加 `--execute`。固定插话批次逐轮核对严格模式和覆盖计数，独立审计会重新检查并返回严格模式声明。已有操作报告仍按原范围复核。数字参考覆盖只是现场声音重叠的必要证据，扬声器实际出声与停声仍需声学观察。
+
 播完后观察 20 秒，额外准入、被拒绝的候选发起暂停、未决候选或采集断开均会失败。固定问题的识别核对覆盖数字和运算符。回答正文的正确性、现场声音强度、扬声器实际停声及声画同步时延仍需各自的证据。
 
 APK 0.9.32（code 69）为合成插话验收增加 `test_playback_stop` 设备回执。它只在显式限时收音中可见，记录停止的播放器代次和 ID、取消代次，以及 Android 完成 AudioTrack 暂停和清队列后的单调时钟。收音到期、退出或换通道后，旧回执不可读。无播放器、未建立 AudioTrack 或调用异常时不产生回执。测试将旧播报和替代回答与回执核对，报告只写 `device_stop_applied`。这里确认的是播放器操作应用时刻，声学停声仍需独立测量。当前候选尚未部署。
