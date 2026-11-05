@@ -462,6 +462,25 @@ class HandoverTests(unittest.TestCase):
                 self.assertEqual(b.session.epoch, 12)
                 self.assertTrue(b.response.queue.empty())
 
+    def test_handover_publishes_unconfirmed_task_result_without_replaying(self):
+        b = self.bridge()
+        task = b.workspace.task_start(b.generation, '固定在途工具')
+        b.workspace.task_stage(task, 'tool', 'Dot 正在执行任务', 'running')
+        for kind in ('wifi', 'usb'):
+            with self.subTest(kind=kind):
+                channel = FakeChannel(kind)
+                b.change_transport(channel)
+                b.on_event({'event': 'device_ready', 'capture_active': False})
+                snapshot = [e for e in self.events(channel) if e['event'] == 'workspace'][-1]
+                self.assertEqual(len(snapshot['tasks']), 1)
+                receipt = snapshot['tasks'][0]
+                self.assertEqual(receipt['id'], task)
+                self.assertEqual(receipt['status'], 'cancelled')
+                self.assertEqual(receipt['stage'], '连接已切换，执行结果待核对。请确认后再试。')
+                self.assertEqual(receipt['result'], '')
+                self.assertTrue(b.response.queue.empty())
+                b.workspace.task_finish(task, 'completed', '迟到结果')
+
     def test_notice_survives_all_routes_lost_and_a_failed_hello(self):
         b = self.bridge()
         b.session.active = True
