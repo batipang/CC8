@@ -183,6 +183,31 @@ class AuditDeviceSuiteTests(unittest.TestCase):
                 self.assertEqual(reviewed['latencies_ms'][name]['samples'], 1)
                 second.pop(key)
 
+    def test_qa_audit_recounts_math_answer_evidence_for_completed_rounds(self):
+        data = saved_suite(qa=True)
+        data['math_answers'] = {'matched': 30}
+        first, second, third, fourth = [
+            phase['report']['acoustic_evidence'] for phase in data['phases'][:4]
+        ]
+        first['math_answer_status'] = 'matched'
+        second['math_answer_status'] = 'mismatch'
+        third['math_answer_status'] = 'unconfirmed'
+        self.assertEqual(
+            audit(data)['math_answers'],
+            {'matched': 1, 'mismatch': 1, 'unconfirmed': 1, 'unreported': 27},
+        )
+        fourth['math_answer_status'] = 'private-body'
+        reviewed = audit(data)
+        self.assertFalse(reviewed['verified'])
+        self.assertEqual(reviewed['completed_phases'], 3)
+        self.assertEqual(reviewed['reason'], 'suite_math_answer_evidence_invalid')
+        self.assertEqual(
+            reviewed['math_answers'],
+            {'matched': 1, 'mismatch': 1, 'unconfirmed': 1, 'unreported': 0},
+        )
+        self.assertNotIn('private-body', json.dumps(reviewed))
+        self.assertNotIn('math_answers', audit(saved_suite(qa=True, scenario='web')))
+
     def test_routed_latency_rejects_a_mixed_corpus_or_receipt(self):
         data = saved_suite(qa=True, scenario='web')
         reviewed = audit(data)

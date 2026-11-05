@@ -3307,6 +3307,44 @@ class DeviceAutomationTests(unittest.TestCase):
                 run.playback.assert_not_called()
                 device.speak_probe.assert_called_once_with(question=ACOUSTIC_QUESTION)
 
+    def test_fixed_math_reports_only_current_completed_answer_category(self):
+        for question, scenario, answer, expected in (
+            (ACOUSTIC_QUESTION, 'qa', '一加一等于 **二**。', 'matched'),
+            (ACOUSTIC_QUESTION, 'qa', '答案是 12。', 'mismatch'),
+            (ACOUSTIC_QUESTION, 'qa', '二或三 private body', 'unconfirmed'),
+            (ACOUSTIC_QUESTION, 'qa', None, 'unconfirmed'),
+            (SCENARIO_QUESTIONS['tool'][-1], 'tool', '５＋６＝十一。', 'matched'),
+            (SCENARIO_QUESTIONS['tool'][-1], 'tool', '1 1', 'unconfirmed'),
+            (SCENARIO_QUESTIONS['tool'][-1], 'tool', '5 + 5 = 11', 'mismatch'),
+            (SCENARIO_QUESTIONS['web'][0], 'web', '答案是二', None),
+        ):
+            with self.subTest(scenario=scenario, answer=answer):
+                row = self.acoustic_row(scenario=scenario)
+                run, _, _, now = self.acoustic_fixture(
+                    lambda _: [row],
+                    awake=True,
+                    tasks=[
+                        {'generation': 7, 'status': 'completed', 'title': question, 'result': '二'},
+                        {
+                            'generation': 8,
+                            'status': 'completed',
+                            'title': question,
+                            'result': answer,
+                        },
+                    ],
+                )
+                run.latency_sample = True
+                run.qa_question = question
+                run.latency_scenario = scenario
+                run.acoustic_probe(awake=True)
+                self.assertEqual(now[0], POST_DIALOGUE_SECONDS)
+                evidence = run.report('passed')['acoustic_evidence']
+                self.assertEqual(evidence.get('math_answer_status'), expected)
+                if scenario == 'web':
+                    self.assertNotIn('math_answer_status', evidence)
+                if answer:
+                    self.assertNotIn(answer, json.dumps(evidence, ensure_ascii=False))
+
     def test_acoustic_cancelled_narration_is_not_a_completed_answer(self):
         row = self.acoustic_row(outcome='cancelled')
         row['stages'].pop('playback_done')
