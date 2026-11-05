@@ -90,7 +90,7 @@ class SessionController:
         self.awake = True
         self.last_interaction = time.monotonic()
         self.screen_sleeping = False
-        self.screen_wake_pending = False
+        self.pending_screen_event = None
 
     def snapshot(self) -> SessionView:
         return SessionView(
@@ -181,13 +181,18 @@ class SessionController:
             self.hooks.wake_touch()
             if self.screen_sleeping:
                 self.screen_sleeping = False
-                self.screen_wake_pending = True
-            self._flush_screen_wake()
+                self.pending_screen_event = 'screen_wake'
+            self._flush_screen_event()
 
-    def _flush_screen_wake(self):
-        if self.screen_wake_pending and self.connection is not None:
-            self.hooks.event('screen_wake')
-            self.screen_wake_pending = False
+    def _flush_screen_event(self):
+        event = self.pending_screen_event
+        if event is not None and self.connection is not None:
+            # A failed write invalidates the route. Keep the latest screen
+            # intent for the next ready route until this send succeeds.
+            self.hooks.event(event)
+            self.pending_screen_event = None
+            if event == 'screen_sleep':
+                self.hooks.log('screen_idle_sleep')
 
     def idle_tick(self):
         self.hooks.reminder_tick()
@@ -203,9 +208,8 @@ class SessionController:
             ):
                 self.set_awake(False)
                 self.screen_sleeping = True
-                self.screen_wake_pending = False
-                self.hooks.event('screen_sleep')
-                self.hooks.log('screen_idle_sleep')
+                self.pending_screen_event = 'screen_sleep'
+                self._flush_screen_event()
 
     def submit_text(self, text):
         if (
@@ -274,10 +278,15 @@ class SessionController:
         return generation
 
     def stop(self):
-        self.capture_start_required = True
-        self.active = False
+        with self.guard:
+            self.capture_start_required = True
+            self.active = False
+            self.screen_sleeping = False
+            # A wake can restore the display after disconnect. Sleep belongs
+            # to the capture that just ended.
+            if self.pending_screen_event == 'screen_sleep':
+                self.pending_screen_event = None
         self.hooks.calibration().stop()
-        self.screen_sleeping = False
         try:
             self.hooks.cancel('session_stop')
         finally:
@@ -349,8 +358,8 @@ class SessionController:
         # A failed send leaves the notice for the next authenticated route.
         self.playback_interrupted_by_transport = False
         with self.guard:
-            # Replay only an unsent wake, without changing capture ownership.
-            self._flush_screen_wake()
+            # Resume the pending screen update without changing capture ownership.
+            self._flush_screen_event()
         self.hooks.log('device_handshake_verified', transport=self.transport_kind)
         self.hooks.event(
             'brain_provider', provider=getattr(self.hooks.brain(), 'selected', 'minimax')
