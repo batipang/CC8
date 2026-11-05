@@ -887,6 +887,7 @@ class SmokeRun:
         self.checks = []
         self.touched = False
         self.cleanup_verified = False
+        self.cleanup_reason = None
         self.initial_instance = None
         self.runtime_change_reason = None
         self.source_sha256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
@@ -933,7 +934,7 @@ class SmokeRun:
             'elapsed_seconds': round(self.clock() - self.started, 3),
             'checks': list(self.checks),
             'cleanup_microphone_off_verified': self.cleanup_verified,
-            'cleanup_reason': self.runtime_change_reason
+            'cleanup_reason': (self.runtime_change_reason or self.cleanup_reason)
             if state == 'cleanup_unconfirmed'
             else None,
             'capture_tests_enabled': self.capture,
@@ -2630,6 +2631,9 @@ class SmokeRun:
     def cleanup(self):
         if not self.touched:
             return
+        # Keep a fixed phase code if a step fails. Exception bodies from the
+        # device/IPC can contain private output and must not reach the report.
+        self.cleanup_reason = 'cleanup_runtime_unconfirmed'
         try:
             self.health()
         except RuntimeChanged:
@@ -2640,14 +2644,19 @@ class SmokeRun:
             pass
         # Home always stops AudioRecord and disarms automatic startup. A fresh
         # maintenance open then restores the original foreground, mic-off state.
+        self.cleanup_reason = 'cleanup_home_failed'
         self.device.home()
+        self.cleanup_reason = 'cleanup_capture_stop_unconfirmed'
         self.wait(
             lambda: self.health().get('microphone_active') is False,
             15,
             'cleanup_capture_not_stopped',
         )
+        self.cleanup_reason = 'cleanup_maintenance_open_failed'
         self.device.open(False)
+        self.cleanup_reason = 'cleanup_connection_unconfirmed'
         self.wait(self.inactive, 25, 'cleanup_connection_not_restored')
+        self.cleanup_reason = 'cleanup_foreground_unconfirmed'
         self.sleep(2)
         d, ui = self.device.status()
         require(
@@ -2658,6 +2667,7 @@ class SmokeRun:
             'cleanup_not_confirmed',
         )
         self.cleanup_verified = True
+        self.cleanup_reason = None
 
     def run(self):
         state = 'failed'
@@ -2727,6 +2737,8 @@ class SmokeRun:
                 self.cleanup()
             except Exception:
                 state = 'cleanup_unconfirmed'
+                if self.cleanup_reason is None:
+                    self.cleanup_reason = 'cleanup_operation_failed'
             finally:
                 if self.preparation_attempted:
                     self.prepared_input_cleaned = False
@@ -2735,6 +2747,8 @@ class SmokeRun:
                         self.prepared_input_cleaned = True
                     except Exception:
                         state = 'cleanup_unconfirmed'
+                        if self.cleanup_reason is None:
+                            self.cleanup_reason = 'cleanup_fixture_not_removed'
             self.checkpoint(self.report(state))
         return self.report(state)
 
