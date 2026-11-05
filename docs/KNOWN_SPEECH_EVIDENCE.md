@@ -1,6 +1,6 @@
 # 已知插话波形的独立核对
 
-后台 0.14.87 源码候选，为 P0-01／P0-04 增加限时、可选的数值观察；尚未部署或完成实机验证。MiniMax ASR／TTS、Dot、本地 AEC／VAD、唤醒与插话规则保持。它要回答的是“本轮已知近端语音的一个片段，是否出现在原始麦克风流中”，不替代完整双源声学分析。
+后台 0.14.87 已部署，为 P0-01／P0-04 增加限时、可选的数值观察。首次实机检查在预备播报完成回执超时后结束，观察尚未启动，现场匹配仍待验证，见 [当前部署](CURRENT_DEPLOYMENT.md)。MiniMax ASR／TTS、Dot、本地 AEC／VAD、唤醒与插话规则保持。它要回答的是“本轮已知近端语音的一个片段，是否出现在原始麦克风流中”，不替代完整双源声学分析。
 
 ```sh
 ./cc8 verify-device --runtime-root /absolute/live/workspace --capture --synthetic-barge --require-render-overlap --known-speech-evidence

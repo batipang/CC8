@@ -51,8 +51,15 @@ public class DrainTest {
   yes(drain.paddingFrames()==2239 && tail.pads==2239 && tail.reports>0);
   Track normal=new Track();normal.resumes=0;normal.stalled=false;
   PlaybackDrain noPadding=new PlaybackDrain();yes(noPadding.drain(normal.speech,normal));yes(noPadding.paddingFrames()==0);
-  Track stuck=new Track();stuck.resumes=0;
+  Track underrun=new Track();underrun.resumes=0;
+  PlaybackDrain recovered=new PlaybackDrain();yes(recovered.drain(underrun.speech,underrun));
+  yes(underrun.time>=100 && underrun.time<3000 && underrun.head>=underrun.speech);
+  yes(recovered.paddingFrames()==2239 && underrun.pads==2239 && underrun.acceptedSpeech==0);
+  Track stuck=new Track(){public int write(short[] a,int o,int n){int k=super.write(a,o,n);stalled=true;return k;}};stuck.resumes=0;
   try{new PlaybackDrain().drain(stuck.speech,stuck);throw new AssertionError("fake complete");}catch(IOException expected){yes(stuck.head<stuck.speech && stuck.time>=3000);}
+  yes(stuck.pads>0 && stuck.pads<=stuck.buffer);
+  Track cancelledTail=new Track();cancelledTail.resumes=0;cancelledTail.cancelOnWrite=true;
+  yes(!new PlaybackDrain().drain(cancelledTail.speech,cancelledTail));yes(cancelledTail.head<cancelledTail.speech && cancelledTail.time>=100);
   Track cancelled=new Track();cancelled.cancelOnWrite=true;
   yes(!new PlaybackDrain().drain(cancelled.speech,cancelled));yes(cancelled.head<cancelled.speech);
   Track paused=new Track(){boolean first=true;public void awaitReady(){if(first){time+=5000;first=false;}}};
