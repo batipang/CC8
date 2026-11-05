@@ -796,6 +796,9 @@ class DeviceAutomationTests(unittest.TestCase):
                 stages = dict.fromkeys(QA_STAGE_METRICS, 100)
                 if index % 2:
                     stages[QA_ENDPOINT_METRIC] = 800
+                    stages['dot_first_delta_ms'] = 100 * index
+                if index == fail_at:
+                    stages['dot_first_delta_ms'] = 99999
                 if index == fail_at and not acoustic and scenario == 'qa':
                     stages.pop(QA_STAGE_METRICS[0])
                 report = {
@@ -846,6 +849,12 @@ class DeviceAutomationTests(unittest.TestCase):
             self.assertEqual(
                 result['latencies_ms'][QA_ENDPOINT_METRIC],
                 {'samples': 2 if fail_at else 15, 'p50': 800, 'p95': 800},
+            )
+            self.assertEqual(
+                result['latencies_ms']['dot_first_delta_ms'],
+                {'samples': 2, 'p50': 200, 'p95': 290}
+                if fail_at
+                else {'samples': 15, 'p50': 1500, 'p95': 2760},
             )
             if fail_at:
                 self.assertEqual(result['state'], 'failed')
@@ -3250,6 +3259,9 @@ class DeviceAutomationTests(unittest.TestCase):
                     utterance_end=0,
                     asr_end=5,
                     brain_start=10,
+                    dot_turn_start=13,
+                    dot_turn_ack=15,
+                    dot_first_delta=24,
                     first_clause=30,
                     tts_start=32,
                     first_pcm=35,
@@ -3276,7 +3288,15 @@ class DeviceAutomationTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     result['acoustic_evidence']['qa_stage_latencies_ms'],
-                    dict(zip(QA_STAGE_METRICS, (5, 20, 3))) if scenario == expected else {},
+                    {
+                        **dict(zip(QA_STAGE_METRICS, (5, 20, 3))),
+                        'dot_preparation_ms': 3,
+                        'dot_turn_ack_ms': 2,
+                        'dot_first_delta_ms': 11,
+                        'dot_delta_to_clause_ms': 6,
+                    }
+                    if scenario == expected
+                    else {},
                 )
                 self.assertEqual(result['acoustic_evidence']['latency_scenario'], scenario)
                 self.assertEqual(

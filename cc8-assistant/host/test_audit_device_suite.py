@@ -159,6 +159,30 @@ class AuditDeviceSuiteTests(unittest.TestCase):
             {'samples': 30, 'p50': 155, 'p95': 285.5},
         )
 
+    def test_qa_audit_recomputes_optional_dot_stages_and_rejects_unknown_metrics(self):
+        data = saved_suite(qa=True)
+        name = 'dot_first_delta_ms'
+        data['latencies_ms'][name] = {'samples': 30, 'p95': 0}
+        self.assertEqual(
+            audit(data)['latencies_ms'][name], {'samples': 0, 'p50': None, 'p95': None}
+        )
+        phases = data['phases']
+        first = phases[0]['report']['acoustic_evidence']['qa_stage_latencies_ms']
+        first[name] = 5
+        verified = audit(data)
+        self.assertTrue(verified['verified'])
+        self.assertEqual(verified['latencies_ms'][name], {'samples': 1, 'p50': 5, 'p95': 5})
+        second = phases[1]['report']['acoustic_evidence']['qa_stage_latencies_ms']
+        for key, value in ((name, True), (name, float('nan')), ('provider_body', 'private text')):
+            with self.subTest(key=key, value=value):
+                second[key] = value
+                reviewed = audit(data)
+                self.assertFalse(reviewed['verified'])
+                self.assertEqual(reviewed['completed_phases'], 1)
+                self.assertEqual(reviewed['reason'], 'suite_qa_stage_timing_incomplete')
+                self.assertEqual(reviewed['latencies_ms'][name]['samples'], 1)
+                second.pop(key)
+
     def test_routed_latency_rejects_a_mixed_corpus_or_receipt(self):
         data = saved_suite(qa=True, scenario='web')
         reviewed = audit(data)
