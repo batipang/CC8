@@ -380,6 +380,21 @@ class FakeChannel:
         self.sent.append(raw)
 
 
+class SleepWriteFails(FakeChannel):
+    def __init__(self, kind):
+        super().__init__(kind)
+        self.closed = False
+
+    def sendall(self, raw):
+        if self.closed:
+            raise EOFError('fixture route closed')
+        event = decode_event(receive(SimpleNamespace(recv=io.BytesIO(raw).read)).data)
+        if event['event'] == 'screen_sleep':
+            self.closed = True
+            raise BrokenPipeError('fixture lost screen sleep')
+        super().sendall(raw)
+
+
 class HandoverTests(unittest.TestCase):
     def bridge(self):
         b = Bridge(None, None)
@@ -396,6 +411,64 @@ class HandoverTests(unittest.TestCase):
 
     def hellos(self, channel):
         return [event for event in self.events(channel) if event['event'] == 'hello']
+
+    def standby_with_failed_send(self):
+        b = self.bridge()
+        b.session.active = True
+        b.session.epoch = 12
+        b.session.last_interaction = time.monotonic() - 901
+        b.session.connection = SleepWriteFails('usb')
+        with self.assertRaises(BrokenPipeError):
+            b.idle_tick()
+        return b
+
+    def test_failed_screen_sleep_reaches_ready_route_once_with_same_capture(self):
+        b = self.standby_with_failed_send()
+        failed_route = SleepWriteFails('wifi')
+        b.change_transport(failed_route)
+        ready = {'event': 'device_ready', 'capture_active': True}
+        with self.assertRaises(BrokenPipeError):
+            b.on_event(ready)
+        restored = FakeChannel('usb')
+        b.change_transport(restored)
+        self.assertFalse(self.events(restored))
+        b.on_event(ready)
+        b.on_event(ready)
+        b.idle_tick()
+        events = [event['event'] for event in self.events(restored)]
+        self.assertEqual(events.count('screen_sleep'), 1)
+        self.assertLess(events.index('hello'), events.index('screen_sleep'))
+        self.assertNotIn('screen_wake', events)
+        self.assertTrue(b.session.active)
+        self.assertTrue(b.session.screen_sleeping)
+        self.assertEqual(b.session.epoch, 12)
+
+    def test_touch_supersedes_failed_screen_sleep_before_replacement(self):
+        b = self.standby_with_failed_send()
+        with self.assertRaises(EOFError):
+            b.touch_activity()
+        replacement = FakeChannel('wifi')
+        b.change_transport(replacement)
+        b.on_event({'event': 'device_ready', 'capture_active': True})
+        events = [event['event'] for event in self.events(replacement)]
+        self.assertNotIn('screen_sleep', events)
+        self.assertEqual(events.count('screen_wake'), 1)
+        self.assertFalse(b.session.screen_sleeping)
+
+    def test_stop_drops_failed_screen_sleep_before_replacement(self):
+        for all_routes_lost in (False, True):
+            with self.subTest(all_routes_lost=all_routes_lost):
+                b = self.standby_with_failed_send()
+                if all_routes_lost:
+                    b.change_transport(None)
+                replacement = FakeChannel('wifi')
+                b.change_transport(replacement)
+                # The device may also report that capture stopped during the handover.
+                b.on_event({'event': 'device_ready', 'capture_active': False})
+                events = [event['event'] for event in self.events(replacement)]
+                self.assertNotIn('screen_sleep', events)
+                self.assertFalse(b.session.active)
+                self.assertFalse(b.session.screen_sleeping)
 
     def test_failed_screen_wake_reaches_replacement_without_restarting_capture(self):
         class WakeWriteFails(FakeChannel):

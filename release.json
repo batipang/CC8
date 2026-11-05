@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-handover-task-receipt-20261106.1",
+  "release_id": "p0-standby-delivery-20261106.1",
   "backend": {
-    "version": "0.14.95"
+    "version": "0.14.96"
   },
   "assistant": {
     "version": "0.9.38",
