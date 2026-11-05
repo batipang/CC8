@@ -328,7 +328,7 @@ class SessionController:
                 '如需继续，可以在语音开启后重新提问；执行结果不明的操作请先核对。'
             )
         elif self.active:
-            message = '我在听'
+            message = '我在听' if self.awake else WAITING
         elif self.hooks.calibration().pending:
             message = '回声自检已准备 · 点击开始语音后保持安静'
         else:
@@ -380,7 +380,7 @@ class SessionController:
                     target=self.hooks.calibrate(), args=(self.generation,), daemon=True
                 ).start()
             else:
-                self.hooks.status('listening', '连接已切换，我在听')
+                self.hooks.status('listening', '连接已切换，我在听' if self.awake else WAITING)
         else:
             self.hooks.route_event({**j, 'event': 'session_start'})
 
