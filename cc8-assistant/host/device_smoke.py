@@ -35,7 +35,14 @@ from diagnostic_run import receipt
 from soak_background import Background, KINDS as BACKGROUND_KINDS, valid_background
 from qa_speech import QUESTIONS as QA_LATENCY_QUESTIONS
 from qa_speech import WAKE as ACOUSTIC_WAKE
-from qa_speech import ALL_QUESTIONS, SCENARIO_DIGESTS, SCENARIO_QUESTIONS, normalize_question
+from qa_speech import (
+    ALL_QUESTIONS,
+    MATH_SCENARIOS,
+    SCENARIO_DIGESTS,
+    SCENARIO_QUESTIONS,
+    math_answer_status,
+    normalize_question,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPONENT = 'com.happyhome.cc8assistant/.MainActivity'
@@ -465,7 +472,7 @@ def objects(text, marker):
     return value
 
 
-def matches_acoustic_question(workspace, generation, question=ACOUSTIC_QUESTION):
+def matching_acoustic_task(workspace, generation, question):
     tasks = workspace.get('tasks')
     if (
         workspace.get('ok') is not True
@@ -473,7 +480,7 @@ def matches_acoustic_question(workspace, generation, question=ACOUSTIC_QUESTION)
         or not 0 <= generation < 2**32
         or not isinstance(tasks, list)
     ):
-        return False
+        return None
     matches = [
         task
         for task in tasks
@@ -482,19 +489,18 @@ def matches_acoustic_question(workspace, generation, question=ACOUSTIC_QUESTION)
         and task['generation'] == generation
     ]
     if len(matches) != 1 or matches[0].get('status') != 'completed':
-        return False
+        return None
     title = matches[0].get('title')
     if not isinstance(title, str) or len(title) > 80:
-        return False
+        return None
     if question == ENGLISH_QUESTION:
-        return (
-            re.fullmatch(
-                r"(?:bumble[ -]*bee[, :]+)?(?:what is|what's) (?:three|3) *(?:plus|\+) *(?:five|5)",
-                ' '.join(title.lower().split()).rstrip('?.!'),
-            )
-            is not None
+        matched = re.fullmatch(
+            r"(?:bumble[ -]*bee[, :]+)?(?:what is|what's) (?:three|3) *(?:plus|\+) *(?:five|5)",
+            ' '.join(title.lower().split()).rstrip('?.!'),
         )
-    return normalize_question(title) == normalize_question(question)
+    else:
+        matched = normalize_question(title) == normalize_question(question)
+    return matches[0] if matched else None
 
 
 def english_wake_counts(health):
@@ -1553,6 +1559,7 @@ class SmokeRun:
 
         admitted_id = None
         recognized_stimulus_matches = None
+        math_answer = None
 
         def received():
             nonlocal admitted_id
@@ -1620,6 +1627,7 @@ class SmokeRun:
                 'cancelled_requests': sum(r.get('outcome') == 'cancelled' for r in rows),
                 'completed_tasks': sum(r.get('task_outcome') == 'completed' for r in rows),
                 'recognized_stimulus_matches': recognized_stimulus_matches,
+                **({'math_answer_status': math_answer} if math_answer is not None else {}),
                 'response_playout_timing': response_playout_timing(completed),
                 **(
                     {
@@ -1691,14 +1699,21 @@ class SmokeRun:
         response_seconds = min(120, response_deadline - self.clock())
         require(response_seconds > 0, 'acoustic_probe_capture_budget_insufficient')
         completed = self.wait(received, response_seconds, 'synthetic_acoustic_chain_not_confirmed')
-        matched = matches_acoustic_question(
+        matched_task = matching_acoustic_task(
             self.request({'operation': 'workspace_status'}),
             completed.get('generation'),
             self.qa_question,
         )
         self.health()
-        recognized_stimulus_matches = matched
+        recognized_stimulus_matches = matched_task is not None
         self.acoustic_evidence['recognized_stimulus_matches'] = recognized_stimulus_matches
+        if (
+            matched_task is not None
+            and self.latency_sample
+            and self.latency_scenario in MATH_SCENARIOS
+        ):
+            math_answer = math_answer_status(self.qa_question, matched_task.get('result'))
+            self.acoustic_evidence['math_answer_status'] = math_answer
         self.checkpoint(self.report('running'))
         require(recognized_stimulus_matches, 'synthetic_stimulus_not_confirmed')
         # An immediate cleanup could hide a post-answer echo turn. Keep one
@@ -2524,6 +2539,10 @@ def run_device_suite(
         if response_acoustic:
             suite['response_acoustic_evidence'] = True
             suite['latencies_ms'][ACOUSTIC_RESPONSE_METRIC] = percentiles([])
+        if latency_scenario in MATH_SCENARIOS:
+            suite['math_answers'] = dict.fromkeys(
+                ('matched', 'mismatch', 'unconfirmed', 'unreported'), 0
+            )
     interruption_samples = {}
     if interruption:
         interruption_samples = {
@@ -2689,6 +2708,8 @@ def run_device_suite(
                 elif qa_latency:
                     stages = evidence.get('qa_stage_latencies_ms')
                     interval = observed_response_interval(evidence.get('response_acoustic_timing'))
+                    math_answers = suite.get('math_answers')
+                    math_answer = evidence.get('math_answer_status', 'unreported')
                     if (
                         not isinstance(stages, dict)
                         or set(stages).difference(QA_OPTIONAL_METRICS) != set(QA_STAGE_METRICS)
@@ -2700,7 +2721,13 @@ def run_device_suite(
                         phase.update(state='failed', reason='suite_qa_stage_timing_incomplete')
                     elif response_acoustic and interval is None:
                         phase.update(state='failed', reason='suite_qa_acoustic_timing_incomplete')
+                    elif math_answers is not None and (
+                        not isinstance(math_answer, str) or math_answer not in math_answers
+                    ):
+                        phase.update(state='failed', reason='suite_math_answer_evidence_invalid')
                     else:
+                        if math_answers is not None:
+                            math_answers[math_answer] += 1
                         sample = {**stages, QA_PLAYOUT_METRIC: timing[QA_PLAYOUT_METRIC]}
                         if response_acoustic:
                             sample[ACOUSTIC_RESPONSE_METRIC] = interval
@@ -3212,6 +3239,8 @@ def main(argv=None):
                             summary['background'] = background_receipt
                     if args.qa_latency_suite or args.interruption_suite:
                         summary['latencies_ms'] = result['latencies_ms']
+                        if 'math_answers' in result:
+                            summary['math_answers'] = result['math_answers']
                         if args.latency_scenario != 'qa':
                             summary['latency_scenario'] = args.latency_scenario
                 else:

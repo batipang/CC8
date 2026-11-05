@@ -226,6 +226,8 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
     result['completed_phases'] = sum(p['state'] == 'passed' for p in reviewed['phases'])
     if (qa_latency or interruption) and result['completed_phases']:
         result['latencies_ms'] = reviewed['latencies_ms']
+        if 'math_answers' in reviewed:
+            result['math_answers'] = reviewed['math_answers']
         if scenario != 'qa':
             result['latency_scenario'] = scenario
     if reviewed['state'] != 'passed':
