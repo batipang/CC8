@@ -283,8 +283,6 @@ class PlaybackController:
                 raise MiniMaxError('No audio available for playback')
             with self.done:
                 self.completed.discard(generation)
-            self.previous_spoken = self.last_spoken
-            self.previous_spoken_until = time.monotonic() + 1
             self.wait_playback(generation)
             if not self.hooks.valid(generation):
                 return False
@@ -297,8 +295,6 @@ class PlaybackController:
                 self.playing = True
                 self.begin_pending = True
                 self.end_frames = None
-                self.last_spoken = text
-                self.spoken.append((time.monotonic(), text))
                 self.current_clause_ack_ms = None
                 self.playback_serial += 1
                 playback_id = self.playback_serial
@@ -325,6 +321,11 @@ class PlaybackController:
             with self.publication_lock:
                 if not self.hooks.valid(generation) or playback_id != self.playback_serial:
                     return False
+                published_at = time.monotonic()
+                self.previous_spoken = self.last_spoken
+                self.previous_spoken_until = published_at + 1
+                self.last_spoken = text
+                self.spoken.append((published_at, text))
                 # Only now can an ordered pause reach the new device player.
                 self.begin_pending = False
             if timing:

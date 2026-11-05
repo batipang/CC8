@@ -56,6 +56,75 @@ class CompletionRacesTests(unittest.TestCase):
         self.assertTrue(b.play(np.ones(400, dtype=np.int16), 'fixed', generation))
         self.assertEqual(observations, [(True, False), (True, False), (False, True), True])
 
+    def test_cancelled_unpublished_clause_keeps_the_existing_wake_reference(self):
+        b = self.session()
+        b.playback.last_spoken = '后一句。'
+        b.playback.previous_spoken = 'Bumblebee。'
+        before = time.monotonic() + 1
+        b.playback.previous_spoken_until = before
+        generation = b.generation
+
+        def supersede(_):
+            b.cancel('new_request')
+            return 0
+
+        with patch.object(b.playback, 'wait_playback', side_effect=supersede):
+            self.assertFalse(b.play(np.ones(400, dtype=np.int16), '未播报的下一句。', generation))
+
+        self.assertEqual(b.playback.previous_spoken, 'Bumblebee。')
+        self.assertEqual(b.playback.previous_spoken_until, before)
+        self.assertEqual(b.playback.last_spoken, '后一句。')
+
+    def test_previous_clause_wake_reference_window_starts_at_publication(self):
+        b = self.session()
+        b.playback.last_spoken = 'Bumblebee。'
+        generation = b.generation
+        now = 100.0
+        paused = False
+        observed = []
+
+        def wait(_):
+            nonlocal now, paused
+            if not paused:
+                now += 2
+                paused = True
+            return 0
+
+        def output(name, **fields):
+            if name == 'play_end':
+                b.on_event({'event': 'play_done', 'generation': generation})
+
+        def send(_):
+            observed.append((b.playback.previous_spoken, b.playback.previous_spoken_until - now))
+
+        b.event = output
+        b.send = send
+        with (
+            patch('playback_controller.time.monotonic', side_effect=lambda: now),
+            patch.object(b.playback, 'wait_playback', side_effect=wait),
+        ):
+            self.assertTrue(b.play(np.ones(400, dtype=np.int16), '下一句。', generation))
+        self.assertEqual(observed[0], ('Bumblebee。', 1.0))
+
+    def test_failed_play_begin_does_not_promote_unsent_words_to_wake_reference(self):
+        b = self.session()
+        b.playback.last_spoken = '最后播出的一句。'
+        b.playback.previous_spoken = '上一句。'
+        before = time.monotonic() + 1
+        b.playback.previous_spoken_until = before
+
+        def output(name, **fields):
+            if name == 'play_begin':
+                raise BrokenPipeError('fixture did not send play_begin')
+
+        b.event = output
+        with self.assertRaises(OperationFailure) as failed:
+            b.play(np.ones(400, dtype=np.int16), 'Bumblebee。', b.generation)
+        self.assertEqual(failed.exception.stage, 'transport')
+        self.assertEqual(b.playback.last_spoken, '最后播出的一句。')
+        self.assertEqual(b.playback.previous_spoken, '上一句。')
+        self.assertEqual(b.playback.previous_spoken_until, before)
+
     def test_previous_clause_done_cannot_clear_the_next_clause_playing_state(self):
         b = self.session()
         generation = b.generation
