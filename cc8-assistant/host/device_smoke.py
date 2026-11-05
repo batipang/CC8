@@ -159,7 +159,16 @@ EXTENDED_VOICE_PHASES = (
     *P0_DEVICE_PHASES[3:],
 )
 QA_STAGE_METRICS = ('utterance_to_asr_ms', 'brain_first_clause_ms', 'tts_first_pcm_ms')
+QA_DOT_METRICS = (
+    'dot_rpc_prepare_ms',
+    'dot_context_ms',
+    'dot_preparation_ms',
+    'dot_turn_ack_ms',
+    'dot_first_delta_ms',
+    'dot_delta_to_clause_ms',
+)
 QA_ENDPOINT_METRIC = 'device_vad_tail_ms'
+QA_OPTIONAL_METRICS = (*QA_DOT_METRICS, QA_ENDPOINT_METRIC)
 QA_PLAYOUT_METRIC = 'utterance_to_confirmed_playout_ack_ms'
 ACOUSTIC_RESPONSE_METRIC = 'last_voiced_to_confirmed_output_block_ms'
 BARGE_DEVICE_METRIC = 'device_pause_from_trigger_ms'
@@ -436,7 +445,7 @@ def qa_stage_latencies(row, scenario='qa'):
     stages = clean['stages']
     result = {
         name: round(stages[end] - stages[start], 1)
-        for name in QA_STAGE_METRICS
+        for name in (*QA_STAGE_METRICS, *QA_DOT_METRICS)
         for start, end in (INTERVALS[name],)
         if start in stages and end in stages and stages[end] >= stages[start]
     }
@@ -2510,7 +2519,7 @@ def run_device_suite(
             suite['latency_scenario'] = latency_scenario
         suite['latencies_ms'] = {
             name: percentiles([])
-            for name in (*QA_STAGE_METRICS, QA_ENDPOINT_METRIC, QA_PLAYOUT_METRIC)
+            for name in (*QA_STAGE_METRICS, *QA_OPTIONAL_METRICS, QA_PLAYOUT_METRIC)
         }
         if response_acoustic:
             suite['response_acoustic_evidence'] = True
@@ -2682,7 +2691,7 @@ def run_device_suite(
                     interval = observed_response_interval(evidence.get('response_acoustic_timing'))
                     if (
                         not isinstance(stages, dict)
-                        or set(stages) - {QA_ENDPOINT_METRIC} != set(QA_STAGE_METRICS)
+                        or set(stages).difference(QA_OPTIONAL_METRICS) != set(QA_STAGE_METRICS)
                         or any(
                             type(value) not in (int, float) or not 0 <= value <= 604800000
                             for value in (*stages.values(), timing.get(QA_PLAYOUT_METRIC))
