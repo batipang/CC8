@@ -1,7 +1,11 @@
 """One local decode of a bounded fixed QA utterance over an anonymous pipe."""
 
 from contextlib import redirect_stdout
+import hashlib
+import json
+import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 import time
@@ -19,6 +23,39 @@ from qa_speech import (
 
 MAX_SAMPLES = 16000 * 13
 TIMEOUT_SECONDS = 20
+MODEL_MANIFEST = Path(__file__).with_name('resources') / 'tool-whisper-model.json'
+
+
+def verified_whisper_snapshot(cache, manifest, *, verify_hashes=True):
+    snapshots = (cache / 'snapshots').resolve(strict=True)
+    snapshot = (snapshots / manifest['revision']).resolve(strict=True)
+    if snapshot.parent != snapshots or snapshot.name != manifest['revision']:
+        raise ValueError('Local Whisper snapshot has an invalid path')
+    blobs = (cache / 'blobs').resolve()
+    shared_blobs = (cache.parent / 'blobs').resolve()
+    identities = {}
+    for filename, expected in manifest['files'].items():
+        path = (snapshot / filename).resolve(strict=True)
+        if path.parent not in (snapshot, blobs) and not path.is_relative_to(shared_blobs):
+            raise ValueError('Local Whisper artifact is outside its cache')
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, 'rb') as artifact:
+            info = os.fstat(artifact.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_size != expected['size']:
+                raise ValueError('Local Whisper artifact has an invalid size')
+            if (
+                verify_hashes
+                and hashlib.file_digest(artifact, 'sha256').hexdigest() != expected['sha256']
+            ):
+                raise ValueError('Local Whisper artifact checksum mismatch')
+            identities[filename] = (
+                info.st_dev,
+                info.st_ino,
+                info.st_size,
+                info.st_mtime_ns,
+                info.st_ctime_ns,
+            )
+    return snapshot, identities
 
 
 def compare_local(case, audio, is_current):
@@ -82,7 +119,18 @@ def main():
     with redirect_stdout(sys.stderr):
         from recognition import MandarinRecognizer
 
-        result = MandarinRecognizer(engine='whisper').recognize(np.frombuffer(pcm, dtype='<f4'))
+        manifest = json.loads(MODEL_MANIFEST.read_text())
+        cache_name = 'models--' + manifest['repo'].replace('/', '--')
+        cache = Path.home() / '.cache/huggingface/hub' / cache_name
+        snapshot, identities = verified_whisper_snapshot(cache, manifest)
+        result = MandarinRecognizer(engine='whisper', whisper_model=snapshot).recognize(
+            np.frombuffer(pcm, dtype='<f4')
+        )
+        if verified_whisper_snapshot(cache, manifest, verify_hashes=False) != (
+            snapshot,
+            identities,
+        ):
+            raise ValueError('Local Whisper snapshot changed during comparison')
     expected = normalize_question(SCENARIO_QUESTIONS['tool'][case - 1])
     print(tool_transcript_rejection(result, expected) or 'matched')
     return 0

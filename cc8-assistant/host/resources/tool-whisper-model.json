@@ -1,0 +1,14 @@
+{
+  "repo": "mlx-community/whisper-large-v3-turbo",
+  "revision": "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb",
+  "files": {
+    "config.json": {
+      "size": 268,
+      "sha256": "b34fc29e4e11e0a25e812775dd67f4dd16fc2c8eb43d28ae25ff7d660ecb6379"
+    },
+    "weights.safetensors": {
+      "size": 1613977612,
+      "sha256": "951ed3fc1203e6a62467abb2144a96ce7eafca8fa77e3704fdb8635ff3e7f8a6"
+    }
+  }
+}

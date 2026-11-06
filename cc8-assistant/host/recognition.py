@@ -55,7 +55,7 @@ def verify_model():
 
 class MandarinRecognizer:
     # 按显式配置选择引擎，失败不偷偷换服务或上传更多录音。
-    def __init__(self, engine=None, recognizer=None, config=None):
+    def __init__(self, engine=None, recognizer=None, config=None, *, whisper_model=None):
         self.engine = engine or (
             'sensevoice'
             if recognizer is not None
@@ -89,14 +89,16 @@ class MandarinRecognizer:
             import mlx_whisper
 
             self.whisper = mlx_whisper
-            cache = (
-                Path.home()
-                / '.cache/huggingface/hub/models--mlx-community--whisper-large-v3-turbo/snapshots'
-            )
-            paths = sorted(p for p in cache.glob('*') if (p / 'weights.safetensors').exists())
-            if not paths:
-                raise RuntimeError('Local MLX speech model is missing')
-            self.model = str(paths[-1])
+            if whisper_model is None:
+                cache = (
+                    Path.home()
+                    / '.cache/huggingface/hub/models--mlx-community--whisper-large-v3-turbo/snapshots'
+                )
+                paths = sorted(p for p in cache.glob('*') if (p / 'weights.safetensors').exists())
+                if not paths:
+                    raise RuntimeError('Local MLX speech model is missing')
+                whisper_model = paths[-1]
+            self.model = str(whisper_model)
         else:
             raise ValueError('Unknown local ASR engine')
 
