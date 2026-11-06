@@ -121,6 +121,20 @@ class WakePipelineTests(unittest.TestCase):
                 )
             )
 
+    def test_capture_reuses_stop_aec_for_alternate_wake_only_outside_playback(self):
+        b, detector, _, _, _, _, _ = self.session()
+        detector.feed = Mock(return_value='')
+        b.capture.endpoint.fast_stop = Mock(feed=Mock(return_value=''))
+        alternate = np.full(FRAME, 0.25)
+        b.capture.echo.stop_aec = Mock(process=Mock(return_value=alternate))
+
+        self.frames(b, first=1, last=1)
+        self.assertIs(detector.feed.call_args.kwargs['alternate_pcm'], alternate)
+
+        b.playback.playing = True
+        self.frames(b, first=2, last=2)
+        self.assertNotIn('alternate_pcm', detector.feed.call_args.kwargs)
+
     def test_buffered_capture_from_before_waiting_cannot_wake_but_new_capture_can(self):
         for transition in ('sleep', 'wake_mode'):
             with self.subTest(transition=transition):

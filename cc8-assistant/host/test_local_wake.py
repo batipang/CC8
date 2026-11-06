@@ -75,6 +75,10 @@ class LocalWakeTests(unittest.TestCase):
         self.assertEqual(english_call.kwargs['keywords_threshold'], 0.25)
         self.assertIs(wake.chinese.detector, stop.detector)
         self.assertIs(wake.english.detector, english)
+        self.assertIs(wake.english_alternate.detector, wake.english.detector)
+        self.assertIs(wake.english_alternate.engine_lock, wake.english.engine_lock)
+        self.assertIsNot(wake.english_alternate.stream, wake.english.stream)
+        self.assertEqual(english.streams[1][1], '▁BU B B LE ▁BE E @BubbleBeeSpaced')
 
     def pair(self):
         backend = Backend()
@@ -112,6 +116,25 @@ class LocalWakeTests(unittest.TestCase):
         wake.reset()
         self.assertEqual(wake.samples, 0)
         self.assertEqual(wake.compute_seconds, 0)
+
+    def test_english_alternate_rejects_competitor_and_discards_its_stream_on_input_gap(self):
+        shared = Backend()
+        primary = EnglishWake(shared)
+        alternate = EnglishWake(shared, lock=primary.engine_lock)
+        wake = WakeDetector(ChineseWake(Backend()), primary, alternate)
+        frame = np.zeros(160)
+        alternate.stream.results = ['BubbleBeeSpaced']
+        self.assertEqual(wake.feed(frame, alternate_pcm=frame), '')
+        old_stream = alternate.stream
+        primary.stream.results = ['Bumblebee']
+        self.assertEqual(wake.feed(frame), 'Bumblebee')
+        self.assertIsNot(alternate.stream, old_stream)
+        self.assertEqual(alternate.samples, 160)
+        alternate.stream.results = ['Bumblebee']
+        self.assertEqual(wake.feed(frame, alternate_pcm=frame), 'Bumblebee')
+        wake.reset()
+        self.assertEqual(alternate.samples, 0)
+        self.assertFalse(wake.alternate_active)
 
     def test_invalid_frames_fail_before_any_native_accept(self):
         _, _, wake = self.pair()

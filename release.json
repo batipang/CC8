@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-playback-log-20261106.1",
+  "release_id": "p0-english-contrastive-wake-20261106.1",
   "backend": {
-    "version": "0.14.97"
+    "version": "0.14.98"
   },
   "assistant": {
     "version": "0.9.38",
