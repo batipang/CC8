@@ -319,7 +319,7 @@ class SupervisorProcessTests(unittest.TestCase):
                 self.assertFalse((private / 'bridge.pid').exists())
 
     def test_manual_open_reuses_supervisor_pid_while_real_worker_is_still_loading(self):
-        with tempfile.TemporaryDirectory(prefix='cc8-load-', dir='/tmp') as folder:
+        with tempfile.TemporaryDirectory(prefix='cc8 load ', dir='/tmp') as folder:
             root = Path(folder)
             private = root / 'p'
             private.mkdir(mode=0o700)
