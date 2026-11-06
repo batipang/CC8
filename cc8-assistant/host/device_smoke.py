@@ -30,6 +30,7 @@ from mac_voice import (
 from capture_evidence import (
     validate as validate_capture,
     ONSET_PREFIX_COUNTS,
+    TOOL_PRIMARY_OMISSION_ONLY,
     TOOL_SAMPLE_REJECTION_REASONS,
     TOOL_TRANSCRIPT_MISMATCHES,
     valid_tool_asr_comparison,
@@ -323,6 +324,14 @@ def acoustic_coverage_reason(value):
         if isinstance(reason, str) and reason in ACOUSTIC_COVERAGE_REASONS:
             return reason
     return None
+
+
+def tool_asr_comparison_fields(row, comparison):
+    fields = {'tool_asr_comparison': dict(comparison)}
+    omission_only = row.get(TOOL_PRIMARY_OMISSION_ONLY)
+    if comparison['primary'] == 'read_only_missing' and type(omission_only) is bool:
+        fields[TOOL_PRIMARY_OMISSION_ONLY] = omission_only
+    return fields
 
 
 def summarize_response_anchor(value):
@@ -2222,7 +2231,9 @@ class SmokeRun:
                         and valid_tool_asr_comparison(comparison, reason)
                         and comparison.get('local_engine', 'whisper') == self.tool_diagnose_engine
                     ):
-                        self.acoustic_evidence[field]['tool_asr_comparison'] = dict(comparison)
+                        self.acoustic_evidence[field].update(
+                            tool_asr_comparison_fields(row, comparison)
+                        )
             if wake_before is not None:
                 local, english = english_wake_counts(health)
                 wake_delta = local - wake_before[0]
@@ -2267,7 +2278,7 @@ class SmokeRun:
                     and valid_asr_input_samples(samples),
                     'tool_comparison_receipt_invalid',
                 )
-                self.acoustic_evidence['tool_asr_comparison'] = dict(comparison)
+                self.acoustic_evidence.update(tool_asr_comparison_fields(row, comparison))
                 self.acoustic_evidence['same_input_samples'] = samples
                 self.checkpoint(self.report('running'))
                 require(

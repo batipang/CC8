@@ -10,6 +10,7 @@ import uuid
 from capture_evidence import (
     validate as validate_capture,
     DECISIONS,
+    TOOL_PRIMARY_OMISSION_ONLY,
     TOOL_SAMPLE_REJECTION_REASONS,
     valid_tool_asr_comparison,
     VAD_TAIL,
@@ -251,16 +252,29 @@ class TraceBook:
             or tool_sample_rejection not in TOOL_SAMPLE_REJECTION_REASONS
         ):
             raise ValueError('Invalid tool sample rejection')
-        if tool_asr_comparison is not None and not valid_tool_asr_comparison(
-            tool_asr_comparison, tool_sample_rejection
-        ):
-            raise ValueError('Invalid tool ASR comparison')
+        omission_only = None
+        if tool_asr_comparison is not None:
+            if not isinstance(tool_asr_comparison, dict):
+                raise ValueError('Invalid tool ASR comparison')
+            tool_asr_comparison = dict(tool_asr_comparison)
+            if TOOL_PRIMARY_OMISSION_ONLY in tool_asr_comparison:
+                omission_only = tool_asr_comparison.pop(TOOL_PRIMARY_OMISSION_ONLY)
+                if (
+                    type(omission_only) is not bool
+                    or tool_asr_comparison.get('primary') != 'read_only_missing'
+                ):
+                    raise ValueError('Invalid tool ASR omission detail')
+            if not valid_tool_asr_comparison(tool_asr_comparison, tool_sample_rejection):
+                raise ValueError('Invalid tool ASR comparison')
         with self.lock:
             self._voice_detail(key, 'gate', value)
             if tool_sample_rejection is not None:
                 self._voice_detail(key, 'tool_sample_rejection', tool_sample_rejection)
             if tool_asr_comparison is not None:
-                self._voice_detail(key, 'tool_asr_comparison', dict(tool_asr_comparison))
+                self._voice_detail(key, 'tool_asr_comparison', tool_asr_comparison)
+            if omission_only is not None:
+                # Older checkers validate the exact comparison object shape.
+                self._voice_detail(key, TOOL_PRIMARY_OMISSION_ONLY, omission_only)
 
     def _voice_detail(self, key, name, value):
         # These observations may finish after cancellation/terminal receipt.

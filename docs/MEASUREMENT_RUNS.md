@@ -299,6 +299,8 @@ cp .toolchains/cc8/paths.json /absolute/qa-checkout/.toolchains/cc8/paths.json
 
 单题执行报告带题号和题库摘要，核对正确答案、工具路由、同段播放回执、阶段计时和停采。单题报告独立保留，完整 30 轮统计仍从原批次产生。
 
+0.15.31 候选在显式同段对照中补充 `primary_read_only_omission_only`。主转录缺少“只读”时，逐字核对按原规则规范化的转录是否等于只删去这一词的固定题句。报告仅保存布尔值，旧版缺字段代表未测。该字段与原对照结果分开，不改变工具准入或实际派发。
+
 后台 0.15.20 起，固定工具单题和工具批次可显式添加 `--tool-diagnose-rejection sensevoice` 或 `--tool-diagnose-rejection whisper`。主识别器因转录不匹配拒绝题句后，同一段内存采样才会交给选定的本地识别器。报告在 `sole_tool_rejection_input` 中记录输入样本数和两侧的固定分类。正常命中仍只走原工具链路，转录拒绝仍停批且零 Dot 派发。换线、取消、尚未开放或收音身份改变时不使用旧结果。诊断最多等待原有本地识别期限，录音和转录正文均不落盘。
 
 ### 离线复核既有报告
