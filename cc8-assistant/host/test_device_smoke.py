@@ -2311,6 +2311,145 @@ class DeviceAutomationTests(unittest.TestCase):
             self.assertEqual(plan['wake_language'], 'en')
             self.assertEqual(plan['minimum_backend_version'], '0.14.67')
 
+    def test_wake_shape_plan_requires_a_fixed_english_phase_and_no_device(self):
+        for flags, count in (
+            (['--english-wake', '--awake-dialogue'], 1),
+            (['--english-wake-pair'], 2),
+        ):
+            output = io.StringIO()
+            with patch('device_smoke.Device') as device, redirect_stdout(output):
+                self.assertEqual(
+                    main(['--runtime-root', '/unused', '--capture', '--wake-input-shape', *flags]),
+                    0,
+                )
+                device.assert_not_called()
+            plan = json.loads(output.getvalue())
+            self.assertTrue(plan['wake_input_shape'])
+            self.assertEqual(len(plan['phases']), count)
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+            main(['--runtime-root', '/unused', '--capture', '--wake-input-shape'])
+        self.assertEqual(error.exception.code, 2)
+
+    def test_awake_wake_shape_execution_uses_single_prepared_phase(self):
+        import device_smoke
+        from release_info import RELEASE
+        from test_wake_input_probe import metadata
+
+        snapshot = dict(
+            bridge_version=RELEASE.backend_version,
+            protocol_version=RELEASE.protocol_version,
+            release_id=RELEASE.release_id,
+            runtime_instance='wake-input-test',
+            wake_input_probe_supported=True,
+            local_wake_count=0,
+            local_wake_english_count=0,
+        )
+        terminal = dict(
+            state='passed', cleanup_microphone_off_verified=True, english_fixture_played=True
+        )
+        with tempfile.TemporaryDirectory() as path:
+            directory = Path(path)
+            output = io.StringIO()
+            fixture = Mock(directory_name='cc8-public-speech-abcdefgh', metadata=metadata())
+            with (
+                patch('device_smoke.rpc', return_value=snapshot),
+                patch('device_smoke.private_directory', return_value=directory),
+                patch('device_smoke.Device'),
+                patch('device_smoke.PreparedSpeech', return_value=fixture) as prepare,
+                patch(
+                    'device_smoke.SmokeRun', return_value=Mock(run=Mock(return_value=terminal))
+                ) as run,
+                redirect_stdout(output),
+            ):
+                self.assertEqual(
+                    main(
+                        [
+                            '--runtime-root',
+                            str(device_smoke.ROOT),
+                            '--capture',
+                            '--awake-dialogue',
+                            '--english-wake',
+                            '--wake-input-shape',
+                            '--execute',
+                        ]
+                    ),
+                    0,
+                )
+            prepare.assert_called_once()
+            self.assertEqual(prepare.call_args.kwargs['directory'], directory)
+            run.assert_called_once()
+            self.assertTrue(run.call_args.kwargs['wake_input_shape'])
+            self.assertIs(run.call_args.kwargs['english_fixture'], fixture)
+            fixture.close.assert_called_once()
+            report = json.loads(next(directory.glob('device-*.json')).read_text())
+            self.assertEqual(report['scope'], 'english_wake_awake')
+            self.assertEqual(
+                json.loads(output.getvalue().splitlines()[1])['phases'],
+                [
+                    {'name': 'awake', 'state': 'passed'},
+                ],
+            )
+
+    def test_wrong_wake_shape_fixture_is_closed_before_any_device_phase(self):
+        from test_wake_input_probe import metadata
+
+        fixture = Mock(
+            directory_name='cc8-public-speech-abcdefgh',
+            metadata={**metadata(), 'pcm_sha256': 'a' * 64},
+        )
+        make_run = Mock()
+        with patch('device_smoke.PreparedSpeech', return_value=fixture):
+            result = run_english_wake_pair(
+                make_run, lambda _: None, fixture_directory=Path('/private'), awake_only=True
+            )
+        self.assertEqual(result['state'], 'failed')
+        self.assertEqual(result['reason'], 'wake_fixture_identity_unconfirmed')
+        self.assertTrue(result['prepared_english_input_cleaned'])
+        make_run.assert_not_called()
+        fixture.close.assert_called_once()
+
+    def test_fixed_fixture_arms_and_reads_wake_shape_without_exporting_unknown_fields(self):
+        from test_wake_input_probe import metadata
+
+        run, device, health, _ = self.acoustic_fixture(
+            lambda _: [self.acoustic_row()],
+            awake=True,
+            english_wake=True,
+            tasks=[{'generation': 8, 'status': 'completed', 'title': ENGLISH_QUESTION}],
+        )
+        health.update(local_wake_count=20, local_wake_english_count=12)
+        run.wake_input_shape = True
+        original_request = run.request
+        operations = []
+
+        def request(payload):
+            operation = payload['operation']
+            if operation == 'wake_input_arm':
+                self.assertEqual(payload['metadata'], metadata())
+                operations.append('arm')
+                return {'status': 'armed', 'token': 'a' * 32}
+            if operation == 'wake_input_result':
+                self.assertEqual(payload, {'operation': operation, 'token': 'a' * 32})
+                operations.append('read')
+                return {'status': 'measured', 'audio': 'never in report'}
+            return original_request(payload)
+
+        def play():
+            operations.append('play')
+            device.speak_probe.side_effect(question=ENGLISH_QUESTION, english=True)
+            health['local_wake_count'] += 1
+            health['local_wake_english_count'] += 1
+
+        run.request = request
+        run.english_fixture = Mock(
+            directory_name='cc8-public-speech-abcdefgh',
+            metadata=metadata(),
+            play=Mock(side_effect=play),
+        )
+        run.acoustic_probe(awake=True)
+        self.assertEqual(operations, ['arm', 'play', 'read'])
+        self.assertEqual(run.acoustic_evidence['english_wake_input_shape'], {'status': 'invalid'})
+
     def test_english_pair_plan_does_not_prepare_audio_or_contact_device(self):
         output = io.StringIO()
         with (

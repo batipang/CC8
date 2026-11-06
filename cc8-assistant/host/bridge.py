@@ -114,6 +114,7 @@ class Bridge:
         self.saved_tasks = components.saved_tasks
         self.probes = AcousticProbes(
             session=self.session,
+            wake=self.wake,
             capture=self.capture,
             playback=self.playback,
             calibration=self.calibration,

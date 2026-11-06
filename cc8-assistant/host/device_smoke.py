@@ -46,6 +46,8 @@ from diagnostics import (
     valid_asr_input_samples,
 )
 from diagnostic_run import receipt
+from wake_input_receipt import valid_request as wake_input_request
+from wake_input_receipt import summarize as summarize_wake_input
 from soak_background import Background, KINDS as BACKGROUND_KINDS, valid_background
 from qa_speech import QUESTIONS as QA_LATENCY_QUESTIONS
 from qa_speech import WAKE as ACOUSTIC_WAKE
@@ -627,6 +629,7 @@ def rpc(path, request, timeout=5):
         or request == ALL_ROUTE_LOSS_REQUEST
         or request == {'operation': 'playback_probe'}
         or known_speech_request(request)
+        or wake_input_request(request)
         or (
             request.get('operation') == 'response_probe_arm'
             and set(request) == {'operation', 'case'}
@@ -851,6 +854,7 @@ class SmokeRun:
         awake_dialogue=False,
         english_wake=False,
         english_fixture=None,
+        wake_input_shape=False,
         latency_sample=False,
         latency_scenario='qa',
         qa_question=ACOUSTIC_QUESTION,
@@ -882,6 +886,7 @@ class SmokeRun:
         self.awake_dialogue = awake_dialogue
         self.english_wake = english_wake
         self.english_fixture = english_fixture
+        self.wake_input_shape = wake_input_shape
         self.english_fixture_played = False
         self.latency_sample = latency_sample
         self.latency_scenario = latency_scenario
@@ -1810,6 +1815,22 @@ class SmokeRun:
         input_before = (
             self.health().get('english_wake_input_samples') if self.english_wake else None
         )
+        input_token = None
+        if self.wake_input_shape:
+            armed = self.request(
+                {
+                    'operation': 'wake_input_arm',
+                    'directory': self.english_fixture.directory_name,
+                    'metadata': self.english_fixture.metadata,
+                }
+            )
+            input_token = armed.get('token')
+            require(
+                armed.get('status') == 'armed'
+                and isinstance(input_token, str)
+                and re.fullmatch('[a-f0-9]{32}', input_token) is not None,
+                'wake_input_probe_not_armed',
+            )
         if self.english_fixture is not None:
             self.english_fixture.play()
             self.english_fixture_played = True
@@ -1822,6 +1843,13 @@ class SmokeRun:
                 input_before, self.health().get('english_wake_input_samples')
             )
             if self.english_wake
+            else None
+        )
+        input_shape = (
+            summarize_wake_input(
+                self.request({'operation': 'wake_input_result', 'token': input_token})
+            )
+            if input_token is not None
             else None
         )
 
@@ -1939,6 +1967,8 @@ class SmokeRun:
                     english_wake_detections=english_delta,
                     english_wake_input_coverage=input_coverage,
                 )
+                if input_shape is not None:
+                    self.acoustic_evidence['english_wake_input_shape'] = input_shape
                 require(
                     0 <= english_delta <= wake_delta <= 1,
                     'english_wake_counter_delta_invalid',
@@ -2889,12 +2919,13 @@ def awake_english_gate_miss(result):
     )
 
 
-def run_english_wake_pair(make_run, checkpoint):
+def run_english_wake_pair(make_run, checkpoint, *, fixture_directory=None, awake_only=False):
     """Own one fixed WAV across the awake control and real standby check."""
-    phases = [dict(name=name, state='not_run') for name, _ in ENGLISH_WAKE_PHASES]
+    cases = ENGLISH_WAKE_PHASES[:1] if awake_only else ENGLISH_WAKE_PHASES
+    phases = [dict(name=name, state='not_run') for name, _ in cases]
     report = {
         'schema': 1,
-        'scope': 'english_wake_pair',
+        'scope': 'english_wake_awake' if awake_only else 'english_wake_pair',
         'state': 'running',
         'phases': phases,
         'prepared_english_input': None,
@@ -2907,10 +2938,22 @@ def run_english_wake_pair(make_run, checkpoint):
     fixture = None
     state = 'failed'
     try:
-        fixture = PreparedSpeech('Daniel', 'Bumblebee, ' + ENGLISH_QUESTION.lower(), rate=155)
+        options = {'directory': fixture_directory} if fixture_directory is not None else {}
+        fixture = PreparedSpeech(
+            'Daniel', 'Bumblebee, ' + ENGLISH_QUESTION.lower(), rate=155, **options
+        )
         report['prepared_english_input'] = validate_prepared_speech(fixture.metadata)
         report['prepared_english_input_cleaned'] = False
-        for phase, (_, options) in zip(phases, ENGLISH_WAKE_PHASES, strict=True):
+        if fixture_directory is not None and not wake_input_request(
+            {
+                'operation': 'wake_input_arm',
+                'directory': fixture.directory_name,
+                'metadata': report['prepared_english_input'],
+            }
+        ):
+            report['reason'] = 'wake_fixture_identity_unconfirmed'
+            return report
+        for phase, (_, options) in zip(phases, cases, strict=True):
 
             def update(value, *, phase=phase):
                 phase.update(state=value['state'], report=value)
@@ -3412,6 +3455,11 @@ def main(argv=None):
         help='Compare awake and real standby using one prepared English WAV',
     )
     parser.add_argument(
+        '--wake-input-shape',
+        action='store_true',
+        help='Corroborate the fixed English fixture at the actual model inputs',
+    )
+    parser.add_argument(
         '--synthetic-barge',
         action='store_true',
         help='Use one fixed Mac speech stimulus to interrupt a verified ongoing CC8 announcement',
@@ -3513,6 +3561,11 @@ def main(argv=None):
         if batch or options != {'capture'} or args.english_wake or args.response_acoustic_evidence:
             parser.error('--english-wake-pair requires --capture and no individual check flags')
         args.english_wake = True
+    if args.wake_input_shape and not (
+        args.english_wake_pair or (args.english_wake and options == {'capture', 'awake_dialogue'})
+    ):
+        parser.error('--wake-input-shape requires the English wake pair or the awake English check')
+    prepared_english = args.english_wake_pair or args.wake_input_shape
     bound_runtime = batch or asr_stop or args.english_wake or args.known_speech_evidence
     background_receipt = None
     if any((args.background_scenario, args.background_wav, args.background_sha256)):
@@ -3587,12 +3640,10 @@ def main(argv=None):
     elif args.response_acoustic_evidence:
         minimum_batch_backend = RESPONSE_ACOUSTIC_MIN_BACKEND
     if not args.execute:
-        if args.english_wake_pair:
+        if prepared_english:
+            cases = ENGLISH_WAKE_PHASES if args.english_wake_pair else ENGLISH_WAKE_PHASES[:1]
             plan = {
-                'phases': [
-                    dict(name=name, checks=planned_checks(flags))
-                    for name, flags in ENGLISH_WAKE_PHASES
-                ],
+                'phases': [dict(name=name, checks=planned_checks(flags)) for name, flags in cases],
                 'execute': False,
                 'capture': True,
                 'wake_language': 'en',
@@ -3600,6 +3651,8 @@ def main(argv=None):
                 'full_p0_acceptance': False,
                 'minimum_backend_version': ENGLISH_WAKE_MIN_BACKEND,
             }
+            if args.wake_input_shape:
+                plan.update(wake_input_shape=True, minimum_backend_version='0.15.1')
         elif batch:
             plan = {
                 'phases': [
@@ -3710,6 +3763,10 @@ def main(argv=None):
                 'runtime_english_wake_evidence_unsupported',
             )
             english_wake_counts(health)
+        if args.wake_input_shape:
+            require(
+                health.get('wake_input_probe_supported') is True, 'wake_input_probe_unsupported'
+            )
         if asr_stop:
             require(
                 tuple(map(int, manifest.backend_version.split('.')))
@@ -3832,6 +3889,7 @@ def main(argv=None):
                         stop_route=args.stop_route,
                         english_wake=args.english_wake,
                         english_fixture=english_fixture,
+                        wake_input_shape=args.wake_input_shape,
                         response_acoustic_evidence=(
                             args.response_acoustic_evidence
                             or 'response_acoustic_evidence' in enabled
@@ -3858,8 +3916,18 @@ def main(argv=None):
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                         )
-                    if args.english_wake_pair:
-                        result = run_english_wake_pair(make_run, save)
+                    if prepared_english:
+                        fixture_directory = (
+                            private_directory(socket_path.parent / 'public-speech-fixtures')
+                            if args.wake_input_shape
+                            else None
+                        )
+                        result = run_english_wake_pair(
+                            make_run,
+                            save,
+                            fixture_directory=fixture_directory,
+                            awake_only=not args.english_wake_pair,
+                        )
                     elif batch:
                         result = run_device_suite(
                             make_run,
@@ -3880,7 +3948,7 @@ def main(argv=None):
                     if keep_awake is not None and keep_awake.poll() is None:
                         keep_awake.terminate()
                         keep_awake.wait(timeout=5)
-                if batch or args.english_wake_pair:
+                if batch or prepared_english:
                     summary = {
                         'state': result['state'],
                         'phases': [
