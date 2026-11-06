@@ -42,6 +42,7 @@ from device_smoke import (
     QA_STAGE_METRICS,
     RuntimeChanged,
     SmokeRun,
+    english_wake_input_coverage,
     main,
     objects,
     planned_checks,
@@ -2475,6 +2476,9 @@ class DeviceAutomationTests(unittest.TestCase):
                     self.assertEqual(evidence['english_wake_detections'], 1)
                     self.assertEqual(evidence['local_wake_detections'], 1)
                     self.assertTrue(evidence['recognized_stimulus_matches'])
+                    self.assertEqual(
+                        evidence['english_wake_input_coverage'], {'status': 'unavailable'}
+                    )
                     self.assertNotIn(title, json.dumps(evidence))
                 device.speak_probe.assert_called_once_with(question=ENGLISH_QUESTION, english=True)
 
@@ -2486,18 +2490,46 @@ class DeviceAutomationTests(unittest.TestCase):
             tasks=[{'generation': 8, 'status': 'completed', 'title': ENGLISH_QUESTION}],
         )
         health.update(local_wake_count=20, local_wake_english_count=12)
+        health['english_wake_input_samples'] = {'primary': 320, 'alternate': 160}
         mark_spoken = device.speak_probe.side_effect
 
         def play():
             mark_spoken(question=ENGLISH_QUESTION, english=True)
             health['local_wake_count'] += 1
             health['local_wake_english_count'] += 1
+            health['english_wake_input_samples'] = {'primary': 960, 'alternate': 480}
 
         run.english_fixture = Mock(play=Mock(side_effect=play))
         run.acoustic_probe(awake=True)
         run.english_fixture.play.assert_called_once_with()
         device.speak_probe.assert_not_called()
         self.assertTrue(run.report('passed')['english_fixture_played'])
+        self.assertEqual(
+            run.acoustic_evidence['english_wake_input_coverage'],
+            {'status': 'observed', 'primary_samples': 640, 'alternate_samples': 320},
+        )
+
+    def test_english_input_coverage_rejects_changed_or_invalid_counters(self):
+        baseline = {'primary': 960, 'alternate': 320}
+        for after in (
+            None,
+            {'primary': 800, 'alternate': 320},
+            {'primary': 1120, 'alternate': 0},
+            {'primary': 1120, 'alternate': 640},
+            {'primary': 1120, 'alternate': None},
+            {'primary': 1120, 'alternate': True},
+            {'primary': 1120, 'alternate': 480, 'payload': 'private'},
+        ):
+            with self.subTest(after=after):
+                self.assertEqual(
+                    english_wake_input_coverage(baseline, after), {'status': 'invalid'}
+                )
+        self.assertEqual(
+            english_wake_input_coverage(
+                {'primary': 320, 'alternate': None}, {'primary': 640, 'alternate': None}
+            ),
+            {'status': 'observed', 'primary_samples': 320, 'alternate_samples': None},
+        )
 
     def test_awake_dialogue_runs_before_home_without_waiting_for_black_screen(self):
         old = self.acoustic_row(request_id='old')

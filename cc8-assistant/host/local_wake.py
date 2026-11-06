@@ -101,6 +101,11 @@ class WakeDetector:
         return min(self.chinese.samples, self.english.samples)
 
     @property
+    def english_input_samples(self):
+        alternate = self.english_alternate
+        return self.english.samples, alternate.samples if alternate is not None else None
+
+    @property
     def compute_seconds(self):
         alternate = self.english_alternate
         return (

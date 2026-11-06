@@ -63,6 +63,19 @@ class WakeController:
     def ready(self):
         return self.detector is not None
 
+    def english_input_samples(self):
+        # A stalled decoder must not block the service health endpoint.
+        if not self.native_lock.acquire(timeout=0.01):
+            return None
+        try:
+            counts = getattr(self.detector, 'english_input_samples', None)
+            if type(counts) is not tuple or len(counts) != 2:
+                return None
+            primary, alternate = counts
+            return {'primary': primary, 'alternate': alternate}
+        finally:
+            self.native_lock.release()
+
     def allowed(self):
         # Continuous mode starts awake, but its 15-minute black-screen standby
         # also requires a local wake. Never fall back to cloud text spotting.

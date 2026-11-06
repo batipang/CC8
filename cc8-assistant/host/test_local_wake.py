@@ -129,11 +129,11 @@ class LocalWakeTests(unittest.TestCase):
         primary.stream.results = ['Bumblebee']
         self.assertEqual(wake.feed(frame), 'Bumblebee')
         self.assertIsNot(alternate.stream, old_stream)
-        self.assertEqual(alternate.samples, 160)
+        self.assertEqual(wake.english_input_samples, (320, 160))
         alternate.stream.results = ['Bumblebee']
         self.assertEqual(wake.feed(frame, alternate_pcm=frame), 'Bumblebee')
         wake.reset()
-        self.assertEqual(alternate.samples, 0)
+        self.assertEqual(wake.english_input_samples, (0, 0))
         self.assertFalse(wake.alternate_active)
 
     def test_invalid_frames_fail_before_any_native_accept(self):
