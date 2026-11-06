@@ -912,6 +912,34 @@ class ProbeIntegrationTests(unittest.TestCase):
                 self.assertEqual(capture.read_response_probe(token), {'status': 'unavailable'})
                 self.assertFalse(observer.response_prefix.size or observer.mic.size)
 
+    def test_response_receipt_keeps_competing_window_scores_without_timing(self):
+        bridge = self.bridge()
+        bridge.session.active = True
+        bridge.session.epoch = 7
+        capture = bridge.capture
+        token = capture.arm_response_probe(1)
+        capture.bind_response_probe('一加一等于几？', 101, START - 600_000_000)
+        observer = capture.evidence
+        probe = observer.current
+        tone = 0.15 * np.sin(np.arange(16000) * 2 * np.pi * 400 / RATE)
+        feed(observer, tone, scene(tone), render_first=True)
+        self.assertEqual(probe.result['status'], 'ambiguous')
+        self.assertEqual(capture.read_response_probe('0' * 32), {'status': 'unavailable'})
+        self.assertEqual(
+            capture.read_response_probe(token),
+            {
+                'status': 'unconfirmed',
+                'generation': 101,
+                'reason': 'ambiguous',
+                'window_diagnostic': {
+                    'correlation': probe.result['correlation'],
+                    'competing_correlation': probe.result['competing_correlation'],
+                },
+            },
+        )
+        self.assertEqual(capture.read_response_probe(token), {'status': 'unavailable'})
+        self.assertFalse(observer.response_prefix.size or observer.mic.size)
+
     def test_passive_probe_reports_signed_anchor_difference_without_accepting_a_gap(self):
         bridge = self.bridge()
         bridge.session.active = True

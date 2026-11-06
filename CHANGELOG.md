@@ -1,5 +1,15 @@
 # Changelog
 
+## Backend 0.15.30 — diagnose competing playback windows
+
+- Keep the two rounded correlation scores when a fixed response probe finds
+  ambiguous playback windows. They remain scoped to the owned response and
+  cannot confirm an onset or contribute to latency statistics.
+- Keep older receipts valid and leave the matcher, capture lifecycle, APK and
+  device protocol unchanged.
+- Recognize the fixed tool answer's exact terminal provenance suffix while
+  still checking the whole remaining answer and independent tool evidence.
+
 ## Backend 0.15.29 — consume the fixed tool reservation on empty ASR
 
 - Close the eligible fixed-tool turn when ASR returns no words, so a later
