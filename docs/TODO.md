@@ -1,6 +1,6 @@
 # 大黄蜂统一待办：功能与工程质量
 
-更新于 2026-11-06。原排期基线为 Android 0.8.6 / 后台 0.11.0。当前部署为后台 0.15.10 / 原签名 APK 0.9.41（code78），源码 `1c0cbab`。部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)。P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)。复选框按完整验收标准关闭。
+更新于 2026-11-06。原排期基线为 Android 0.8.6 / 后台 0.11.0。当前部署为后台 0.15.11 / 原签名 APK 0.9.41（code78），源码 `0372dbb`。部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)。P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)。复选框按完整验收标准关闭。
 
 依据：[竞品复盘](COMPETITOR_REVIEW_2026-11-01.md)、[当前架构](ARCHITECTURE.md)、[实机与回归记录](VALIDATION.md)。本次已合并 [ToFix](ToFix.md) 的 20 个工程条目；这是功能与工程质量的唯一详细清单；[ROADMAP](ROADMAP.md)保留完成情况和阶段概览。
 
@@ -29,7 +29,7 @@
 ## P0：稳定地听、说、运行
 
 - [ ] **P0-01 — 建立语音与运行基线、诊断报告**
-  - 0.15.11 候选增加同段 SenseVoice 诊断。60 条同源合成语料完整匹配 43 条，固定 30 条数字工具题均匹配；当前 MiniMax 默认保持。待用 CC8 实际收音复测限定词。 [同源识别器对照](ASR_EVALUATION.md#minimax-与本地-whisper-同源对照)
+  - 0.15.11 已部署。实机同段正例 SenseVoice 6/6、MiniMax 5/6，两条负例两侧均未识别出“只读”，零 Dot 派发并确认停采。60 条数字语料和真实工具执行批次分别记录。 [实机对照](CURRENT_DEPLOYMENT.md#01511-实机同段-sensevoice-对照)
   - 0.15.10 已部署，空转录分支通过离线回归。第 5 题实机同段对照中 MiniMax 漏掉“只读”，固定本地 Whisper 完整匹配。零 Dot 派发并确认停采，完整工具题批次仍待验收。 [实机对照](CURRENT_DEPLOYMENT.md#01510-实机同段识别对照)
   - 同源合成验收 60 条逐条核对 PCM 摘要，0.15.8 MiniMax 55/60、本地 Whisper 37/60 完整匹配。保留 MiniMax 默认，真人及工具题限定词仍单独验收。 [识别器对照](ASR_EVALUATION.md#minimax-与本地-whisper-同源对照)
   - 0.15.8 已部署。第 1 题慢速和第 5 题原速的实机同段对照中，MiniMax 与本地 Whisper 均匹配，零 Dot 派发并确认停采。0.15.9 候选在子进程内固定及校验本地模型版本。当前样本不足以选择新的默认识别器，旧工具题批次仍保持 4/30。 [实机对照](CURRENT_DEPLOYMENT.md#0158-实机同段识别对照)
