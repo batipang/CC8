@@ -180,11 +180,13 @@ class EndpointPipeline:
             render_text = self.hooks.previous_spoken() + '\n' + render_text
         # A completion receipt still identifies recent playback if the
         # microphone stream has not delivered the matching render reference.
+        # Use that context for both wake and the utterance's admission gate.
+        capture_echo_risk = echo_risk or recent_output
         self.hooks.wake_feed(
             cleaned,
             self.hooks.generation(),
             capture_nanos=stamp,
-            echo_risk=echo_risk or recent_output,
+            echo_risk=capture_echo_risk,
             render_text=render_text,
             alternate_pcm=stop_cleaned if self.fast_stop is not None else None,
             raw_pcm=frame.raw,
@@ -225,7 +227,7 @@ class EndpointPipeline:
             self.hooks.diagnostics().mark(self.voice_trace, 'voice_detected')
             now = time.monotonic()
             self.turn_during_playback = self.hooks.playing()
-            self.turn_echo_risk = echo_risk
+            self.turn_echo_risk = capture_echo_risk
             self.turn_capture_started = now
             self.turn_pause_token = self.hooks.pause_token()
             self.owns_turn_pause = False
@@ -253,7 +255,7 @@ class EndpointPipeline:
             self.turn_pause_token = self.hooks.pause_voice(stamp)
             self.owns_turn_pause = self.turn_pause_token is not None
         if self.vad.talking or utterance is not None:
-            self.turn_echo_risk |= echo_risk
+            self.turn_echo_risk |= capture_echo_risk
         if (
             began or self.vad.talking or utterance is not None
         ) and self.capture_evidence is not None:
