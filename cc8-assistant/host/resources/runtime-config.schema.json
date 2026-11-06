@@ -150,6 +150,20 @@
       "minimum": 15,
       "maximum": 300
     },
+    "chinese_wake_verifier": {
+      "default": "off",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "not": {
+        "type": "string",
+        "pattern": "sk-(?:cp-|proj-|ant-)|^Bearer |[\\u0000-\\u001f]|^\\s|\\s$"
+      },
+      "enum": [
+        "off",
+        "sensevoice"
+      ]
+    },
     "credential_file": {
       "default": ".toolchains/cc8/voice-secrets.env",
       "type": "string",

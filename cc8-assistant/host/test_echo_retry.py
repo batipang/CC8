@@ -13,7 +13,7 @@ import bridge
 
 
 class EchoRetryTests(unittest.TestCase):
-    def registered_handler(self, session):
+    def registered_handler(self, session, *, verifier='off'):
         handlers = {}
         hub = Mock()
         # End the fake event loop immediately, after actual handler registration.
@@ -24,10 +24,15 @@ class EchoRetryTests(unittest.TestCase):
             patch.object(sys, 'argv', ['bridge.py', '--no-fast-stop']),
             patch(
                 'bridge.load_config',
-                return_value=SimpleNamespace(brain='dot', tls_port=18766, wake_window_seconds=60),
+                return_value=SimpleNamespace(
+                    brain='dot',
+                    tls_port=18766,
+                    wake_window_seconds=60,
+                    chinese_wake_verifier=verifier,
+                ),
             ),
             patch('bridge.DirectSpeech') as speech_factory,
-            patch('bridge.WakeDetector'),
+            patch('bridge.WakeDetector') as wake_factory,
             patch('bridge.MiniMaxBrain'),
             patch('bridge.BrainRouter'),
             patch('bridge.Workspace'),
@@ -45,7 +50,18 @@ class EchoRetryTests(unittest.TestCase):
         ):
             bridge.run_backend()
         speech_factory.return_value.recognize.assert_not_called()
+        if verifier == 'sensevoice':
+            wake_factory.load.assert_called_once_with(None, verify_chinese=True)
+        else:
+            wake_factory.load.assert_called_once_with(None)
         return handlers[signal.SIGUSR1]
+
+    def test_backend_passes_opt_in_before_registering_the_capture_free_handler(self):
+        with patch('threading.Thread.start'):
+            session = bridge.Bridge(None, None)
+        session.save_status = Mock()
+        self.registered_handler(session, verifier='sensevoice')
+        self.assertFalse(session.session.active)
 
     def test_signal_retry_checks_real_playback_owner_and_never_starts_capture(self):
         with patch('threading.Thread.start'):

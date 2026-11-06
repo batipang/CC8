@@ -97,32 +97,50 @@ def replay_chinese_inputs(streams, cancelled):
 class WakeDetector:
     KEYWORDS = ChineseWake.KEYWORDS | EnglishWake.KEYWORDS
 
-    def __init__(self, chinese, english, english_alternate=None):
+    def __init__(self, chinese, english, english_alternate=None, *, chinese_verifier=None):
         self.chinese = chinese
         self.english = english
         self.english_alternate = english_alternate
+        self.chinese_verifier = chinese_verifier
         self.alternate_active = False
 
     @classmethod
-    def load(cls, stop=None, *, english_model=ENGLISH_MODEL):
+    def load(cls, stop=None, *, english_model=ENGLISH_MODEL, verify_chinese=False):
         chinese = (
             ChineseWake(stop.detector, lock=stop.engine_lock)
             if stop is not None
             else ChineseWake(keyword_spotter(MODEL))
         )
         english = EnglishWake.load(english_model)
-        return cls(chinese, english, english.alternate())
+        verifier = None
+        if verify_chinese and stop is not None:
+            try:
+                from chinese_wake_verifier import ChineseWakeVerifier
+                from recognition import MandarinRecognizer
+
+                recognizer = MandarinRecognizer(engine='sensevoice')
+                verifier = ChineseWakeVerifier(
+                    ChineseWake(stop.detector, lock=stop.engine_lock), recognizer.recognize
+                )
+            except (ImportError, OSError, RuntimeError, ValueError):
+                # An optional model or stream must never disable standard wake.
+                pass
+        return cls(chinese, english, english.alternate(), chinese_verifier=verifier)
 
     def reset(self, *, clear_metrics=True):
         self.chinese.reset(clear_metrics=clear_metrics)
         self.english.reset(clear_metrics=clear_metrics)
         if self.english_alternate is not None:
             self.english_alternate.reset(clear_metrics=clear_metrics)
+        if self.chinese_verifier is not None:
+            self.chinese_verifier.reset(clear_metrics=clear_metrics)
         self.alternate_active = False
 
     def feed(self, pcm, *, alternate_pcm=None):
         # Each native lock is released before entering the next; no callbacks.
         chinese = self.chinese.feed(pcm)
+        if self.chinese_verifier is not None:
+            chinese = self.chinese_verifier.feed(chinese, pcm, alternate_pcm)
         english = self.english.feed(pcm)
         alternate = ''
         if self.english_alternate is not None:
@@ -133,7 +151,10 @@ class WakeDetector:
                 # Do not stitch speech across a playback or source gap.
                 self.english_alternate.reset(clear_metrics=False)
                 self.alternate_active = False
-        return chinese or english or alternate
+        keyword = chinese or english or alternate
+        if keyword and self.chinese_verifier is not None:
+            self.chinese_verifier.reset()
+        return keyword
 
     @property
     def samples(self):
@@ -147,8 +168,14 @@ class WakeDetector:
     @property
     def compute_seconds(self):
         alternate = self.english_alternate
+        verifier = self.chinese_verifier
         return (
             self.chinese.compute_seconds
             + self.english.compute_seconds
             + (alternate.compute_seconds if alternate is not None else 0.0)
+            + (
+                verifier.alternate.compute_seconds + verifier.decode_seconds
+                if verifier is not None
+                else 0.0
+            )
         )
