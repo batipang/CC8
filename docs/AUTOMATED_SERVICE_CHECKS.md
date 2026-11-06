@@ -30,7 +30,7 @@ P0-02 的真实进程验证使用 `verify-service`，与隔离模拟 worker 的 
 
 ## 含空格的工作区与后台 PID
 
-0.15.34 候选由操作系统读取各参数的边界，核对当前用户和完整脚本路径。Mac 通过 Darwin 的进程参数接口读取，Linux 使用 procfs。隔离真实进程验证，后台仍在加载时手动启动能复用原 PID。同样的显示命令若来自另一个脚本加一个额外参数，会被拒绝。服务检查器遇到无法读取的候选进程会保留为未确认。 [Darwin 进程参数实现](https://github.com/apple-oss-distributions/adv_cmds/blob/main/ps/print.c)
+已部署的 0.15.34 由操作系统读取各参数的边界，核对当前用户和完整脚本路径。Mac 通过 Darwin 的进程参数接口读取，Linux 使用 procfs。隔离真实进程验证，后台仍在加载时手动启动能复用原 PID。同样的显示命令若来自另一个脚本加一个额外参数，会被拒绝。服务检查器遇到无法读取的候选进程会保留为未确认。 [Darwin 进程参数实现](https://github.com/apple-oss-distributions/adv_cmds/blob/main/ps/print.c)
 
 ## Mac 睡眠与恢复观察
 
