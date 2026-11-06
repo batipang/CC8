@@ -1,5 +1,10 @@
 # Changelog
 
+## Backend 0.15.36 — expose overlong-utterance guidance on the retained APK
+
+- Show the retry message through the existing visible error detail label. A
+  rejected long utterance leaves capture ready for the next separate request.
+
 ## Backend 0.15.35 — withhold overlong continuous utterances
 
 - Keep microphone and playback reference buffers bounded while waiting for a

@@ -435,7 +435,9 @@ class CaptureDiagnosticsTests(unittest.TestCase):
         (row,) = bridge.diagnostics.report()['requests']
         self.assertEqual((row['gate'], row['outcome']), ('utterance_too_long', 'rejected'))
         self.assertNotIn('asr_start', row['stages'])
-        self.assertEqual(events.count(('listening', '这句话太长了，请分成几句说')), 1)
+        self.assertEqual(events.count(('error', '这句话太长了，请分成几句说')), 1)
+        self.assertTrue(bridge.session.active)
+        self.assertTrue(bridge.session.awake)
         feed(80, False)
         feed(30, True)
         feed(80, False)
