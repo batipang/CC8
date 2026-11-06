@@ -14,7 +14,15 @@ import threading
 import time
 
 from diagnose import query
-from launch import ROOT, PRIVATE, BRIDGE, PYTHON, own_process
+from launch import (
+    ROOT,
+    PRIVATE,
+    BRIDGE,
+    PYTHON,
+    WorkerPidWriteError,
+    own_process,
+    publish_worker_pid,
+)
 from process_lock import ProcessLease, atomic_private_bytes, atomic_private_json
 from runtime_env import command_path
 from configuration import load_config
@@ -221,7 +229,12 @@ class Supervisor:
         self.pid = self.child.pid
         # Model loading happens in the child. Publish its PID before releasing
         # the shared launcher lease so a concurrent manual open can reuse it.
-        atomic_private_bytes(PRIVATE / 'bridge.pid', f'{self.pid}\n'.encode())
+        try:
+            publish_worker_pid(PRIVATE / 'bridge.pid', self.child)
+        except WorkerPidWriteError:
+            self.pid = None
+            self.child = None
+            raise
         threading.Thread(target=self._drain, args=(self.child.stdout,), daemon=True).start()
 
     def terminate(self):
@@ -271,9 +284,13 @@ class Supervisor:
                     if self.stop.wait(30):
                         break
                     continue
+                except WorkerPidWriteError as error:
+                    self.log.warning(
+                        'worker_pid_write_failed error_type=%s', type(error.__cause__).__name__
+                    )
                 started = time.monotonic()
                 bad_health = 0
-                while enabled() and not self.stop.wait(2):
+                while self.pid is not None and enabled() and not self.stop.wait(2):
                     if self.child and self.child.poll() is not None:
                         break
                     if not own_process(self.pid):
