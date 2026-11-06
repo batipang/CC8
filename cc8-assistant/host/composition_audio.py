@@ -6,8 +6,9 @@ from capture_pipeline import CapturePipeline, CaptureHooks
 from echo_pipeline import EchoPipeline, EchoHooks, EchoFactory
 from endpoint_pipeline import EndpointPipeline, EndpointHooks
 from fast_stop import FastStopDetector
-from recognition_worker import RecognitionWorker, RecognitionHooks
+from recognition_worker import RecognitionWorker
 from response_worker import ResponseWorker, ResponseHooks
+from session_ports import RecognitionHooks
 
 if TYPE_CHECKING:
     from bridge import Bridge
