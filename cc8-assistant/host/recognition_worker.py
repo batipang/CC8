@@ -14,11 +14,10 @@ import numpy as np
 from diagnostics import ASR_STOP_STAGE
 from dsp import RATE, STOP_COMMANDS, resembles_playback
 from minimax_client import Cancelled
-from qa_speech import SCENARIO_QUESTIONS, normalize_question, tool_asr_result
 from reply_types import Reply
 from recognition_commands import SLEEP_COMMAND, stop_command, stop_matches_reference, wake_payload
 from session_ports import RecognitionHooks
-from tool_asr_compare import compare_local
+from tool_asr_compare import comparison_evidence
 from vision import visual_request
 from wake_controller import WAITING
 
@@ -372,9 +371,6 @@ class RecognitionWorker:
             finally:
                 reason = tool_sample_rejection if decision == 'tool_sample_guard' else None
                 if reason is not None and compare_target is not None:
-                    case, engine = compare_target
-                    expected = normalize_question(SCENARIO_QUESTIONS['tool'][case - 1])
-                    primary = tool_asr_result(text, expected)
 
                     def comparison_current():
                         return (
@@ -382,24 +378,11 @@ class RecognitionWorker:
                             and self.hooks.tool_sample_comparison(reason) is compare_target
                         )
 
-                    try:
-                        local = (
-                            compare_local(case, audio, comparison_current, engine=engine)
-                            if comparison_current()
-                            else None
-                        )
-                    except Exception:
-                        # An optional local diagnostic cannot stop the recognition worker.
-                        local = 'error'
+                    paired = comparison_evidence(compare_target, text, audio, comparison_current)
                     with self.hooks.lock:
-                        comparison = (
-                            {'primary': primary, 'local': local}
-                            if local is not None and comparison_current()
-                            else None
-                        )
-                        if comparison is not None and engine != 'whisper':
-                            comparison['local_engine'] = engine
-                        self.hooks.diagnostics().gate(trace_id, decision, reason, comparison)
+                        if paired is not None and not comparison_current():
+                            paired = None
+                        self.hooks.diagnostics().gate(trace_id, decision, reason, paired)
                 else:
                     self.hooks.diagnostics().gate(trace_id, decision, reason)
                 self.busy = False

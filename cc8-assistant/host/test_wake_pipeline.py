@@ -518,7 +518,7 @@ class WakePipelineTests(unittest.TestCase):
                         self.assertFalse(current())
                     return 'matched'
 
-                with patch('recognition_worker.compare_local', side_effect=compare) as decode:
+                with patch('tool_asr_compare.compare_local', side_effect=compare) as decode:
                     self.frames(b)
                     if mode == 'accepted':
                         self.assertTrue(answered.wait(1))
@@ -599,7 +599,7 @@ class WakePipelineTests(unittest.TestCase):
                         self.assertFalse(is_current())
                     return 'matched'
 
-                with patch('recognition_worker.compare_local', side_effect=compare) as decode:
+                with patch('tool_asr_compare.compare_local', side_effect=compare) as decode:
                     self.frames(b)
                     deadline = time.monotonic() + 1
                     while time.monotonic() < deadline:
@@ -643,7 +643,7 @@ class WakePipelineTests(unittest.TestCase):
                         return ''
 
                     b.speech.recognize = recognize
-                with patch('recognition_worker.compare_local') as decode:
+                with patch('tool_asr_compare.compare_local') as decode:
                     self.frames(b)
                     deadline = time.monotonic() + 1
                     while time.monotonic() < deadline:
