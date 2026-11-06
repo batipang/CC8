@@ -25,6 +25,8 @@ runtime-root 指**实际运行目录**。现场目录为 `/Volumes/AI/Codex/CC8-
 
 待机检查在开麦前记录唤醒和语音识别计数，校准结束后再记录播放帧基线。等待黑屏期间若任一计数变化，立即结束该轮，保留数字差值并走原停采流程。黑屏确认后还会再核对一次计数。验收新待机批次时，用 `./cc8 audit-device-suite /absolute/private/report.json --require-standby-quiet` 要求每轮的三个 `quiet_counter_deltas` 差值均为零。时长未确认和静默计数未确认各有固定原因。省略该参数时，旧报告仍可按原时长证据复核。
 
+单独复验三轮待机可用 `./cc8 verify-device --runtime-root /absolute/runtime --capture --standby-suite` 查看计划。追加 `--execute` 后，在同一运行实例和验收锁下执行三轮真实等待、合成唤醒和完整问答，每轮都确认停采，失败后停止且不自动重试。报告可用 `./cc8 audit-device-suite /absolute/private/report.json` 复核，该批次类型始终要求静默计数。它仅覆盖待机和唤醒，物理拔插、真人识别与 72 小时运行分别验收。
+
 ## 收音启动失败与 Home 停采
 
 启动或校准检查失败时，报告在 Home 和维护重开前读取 Mac 与 CC8 各自的收音状态，以及设备阶段的固定枚举。无法读取的一侧记为空，原失败原因保留。该快照只能证明采样时的两端状态，无法单凭错误阶段证明某条拒绝消息已送达。

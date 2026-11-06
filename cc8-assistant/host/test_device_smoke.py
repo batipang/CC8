@@ -295,6 +295,35 @@ class DeviceAutomationTests(unittest.TestCase):
                 ],
             )
 
+    def test_standby_batch_plan_only_runs_three_standby_rounds(self):
+        output = io.StringIO()
+        args = ['--runtime-root', '/unused', '--standby-suite']
+        with (
+            patch('device_smoke.Device') as device,
+            patch('device_smoke.rpc') as query,
+            redirect_stdout(output),
+        ):
+            self.assertEqual(main([*args, '--capture']), 0)
+            for conflict in ([], ['--capture', '--p0-device-suite'], ['--capture', '--standby']):
+                with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    main([*args, *conflict])
+            device.assert_not_called()
+            query.assert_not_called()
+        plan = json.loads(output.getvalue())
+        self.assertFalse(plan['execute'])
+        self.assertFalse(plan['full_p0_acceptance'])
+        self.assertEqual(plan['standby_seconds_per_phase'], 900)
+        self.assertEqual(
+            plan['phases'],
+            [
+                dict(
+                    name=f'standby_{index}',
+                    checks=planned_checks({'capture', 'standby', 'acoustic'}),
+                )
+                for index in range(1, 4)
+            ],
+        )
+
     def test_extended_voice_plan_adds_stop_and_room_evidence_without_device_access(self):
         output = io.StringIO()
         with (
@@ -955,6 +984,11 @@ class DeviceAutomationTests(unittest.TestCase):
         output.assert_not_called()
 
     def test_suite_keeps_one_runtime_lock_and_rejects_instance_change(self):
+        for mode in ('--p0-device-suite', '--standby-suite'):
+            with self.subTest(mode=mode):
+                self.assert_suite_runtime_binding(mode)
+
+    def assert_suite_runtime_binding(self, mode):
         import device_smoke
         from release_info import RELEASE
 
@@ -990,13 +1024,42 @@ class DeviceAutomationTests(unittest.TestCase):
                         request({'operation': 'health'})
                     except RuntimeChanged as error:
                         return dict(state='failed', checks=[{'reason': str(error)}])
-                    return dict(
+                    report = dict(
                         state='passed',
                         cleanup_microphone_off_verified=True,
                         checks=[
                             dict(name=name, state='passed') for name in planned_checks(set(options))
                         ],
                     )
+                    if mode == '--standby-suite':
+                        report.update(
+                            elapsed_seconds=925,
+                            standby_evidence={
+                                'last_awake_seconds': 895,
+                                'black_screen_poll_started_seconds': 900,
+                                'first_black_screen_seconds': 900,
+                                'quiet_counter_deltas': {
+                                    'local_wake_count': 0,
+                                    'voice_asr_attempts': 0,
+                                    'render_frames': 0,
+                                },
+                            },
+                            acoustic_evidence={
+                                'post_playback_quiet_seconds': 20,
+                                'response_playout_timing': {
+                                    'status': 'observed',
+                                    'utterance_end_ms': 10,
+                                    'confirmed_playout_ack_ms': 30,
+                                    'confirmed_playback_done_ms': 100,
+                                    QA_PLAYOUT_METRIC: 20,
+                                },
+                                'admitted_voice_requests': 1,
+                                'pending_voice_candidates': 0,
+                                'unresumed_rejected_pauses': 0,
+                                'recognized_stimulus_matches': True,
+                            },
+                        )
+                    return report
 
                 run.run.side_effect = run_phase
                 return run
@@ -1015,7 +1078,7 @@ class DeviceAutomationTests(unittest.TestCase):
                             '--runtime-root',
                             str(device_smoke.ROOT),
                             '--capture',
-                            '--p0-device-suite',
+                            mode,
                             '--execute',
                         ]
                     ),

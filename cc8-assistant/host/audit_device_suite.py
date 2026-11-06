@@ -15,8 +15,7 @@ from device_smoke import (
     POST_DIALOGUE_SECONDS,
     ROUTED_LATENCY_MIN_BACKEND,
     RENDER_OVERLAP_MIN_BACKEND,
-    STANDBY_SECONDS,
-    STANDBY_QUIET_COUNTERS,
+    STANDBY_SUITE_SCOPE,
     TOOL_SAMPLE_MIN_BACKEND,
     device_suite_phases,
     matched_playout,
@@ -25,6 +24,7 @@ from device_smoke import (
     EXTENDED_VOICE_MIN_BACKEND,
     planned_checks,
     run_device_suite,
+    standby_failure,
 )
 from private_output import read_private_json
 from qa_speech import SCENARIO_DIGESTS
@@ -38,29 +38,6 @@ def bounded_number(value, low, high):
     return type(value) in (int, float) and low <= value <= high
 
 
-def standby_failure(evidence, elapsed, *, require_quiet):
-    if not isinstance(evidence, dict) or not bounded_number(elapsed, STANDBY_SECONDS, 86400):
-        return 'standby_duration_unconfirmed'
-    awake = evidence.get('last_awake_seconds')
-    poll = evidence.get('black_screen_poll_started_seconds')
-    black = evidence.get('first_black_screen_seconds')
-    if not (
-        all(bounded_number(value, 0, elapsed) for value in (awake, poll, black))
-        and awake <= poll <= black
-        and poll >= STANDBY_SECONDS
-    ):
-        return 'standby_duration_unconfirmed'
-    if require_quiet or 'quiet_counter_deltas' in evidence:
-        deltas = evidence.get('quiet_counter_deltas')
-        if (
-            not isinstance(deltas, dict)
-            or set(deltas) != set(STANDBY_QUIET_COUNTERS)
-            or any(type(value) is not int or value != 0 for value in deltas.values())
-        ):
-            return 'standby_quiet_counters_unconfirmed'
-    return None
-
-
 def audit(data, *, expect_backend=None, expect_apk_code=None, require_standby_quiet=False):
     if not isinstance(data, dict) or type(data.get('schema')) is not int or data['schema'] != 1:
         raise ValueError('Unknown report schema')
@@ -70,6 +47,7 @@ def audit(data, *, expect_backend=None, expect_apk_code=None, require_standby_qu
         scope
         not in (
             'fixed_device_suite',
+            STANDBY_SUITE_SCOPE,
             'synthetic_qa_latency',
             'synthetic_interruption_latency',
             ECHO_SOAK_SCOPE,
@@ -91,6 +69,8 @@ def audit(data, *, expect_backend=None, expect_apk_code=None, require_standby_qu
     qa_latency = scope == 'synthetic_qa_latency'
     interruption = scope == 'synthetic_interruption_latency'
     echo_soak = scope == ECHO_SOAK_SCOPE
+    standby_only = scope == STANDBY_SUITE_SCOPE
+    require_standby_quiet = require_standby_quiet or standby_only
     has_soak_duration = 'self_playback_seconds_per_phase' in data
     soak_duration = data.get('self_playback_seconds_per_phase')
     legacy_echo_soak = echo_soak and not has_soak_duration
@@ -114,7 +94,7 @@ def audit(data, *, expect_backend=None, expect_apk_code=None, require_standby_qu
             )
         )
         or (room_coverage and not room_latency)
-        or ((qa_latency or interruption or echo_soak) and extended)
+        or ((qa_latency or interruption or echo_soak or standby_only) and extended)
         or (
             interruption
             and tuple(map(int, backend.split('.')))
@@ -160,6 +140,7 @@ def audit(data, *, expect_backend=None, expect_apk_code=None, require_standby_qu
         interruption=interruption,
         echo_soak=echo_soak,
         legacy_echo_soak=legacy_echo_soak,
+        standby_only=standby_only,
     )
     if require_standby_quiet and not any('standby' in options for _, options in plan):
         raise ValueError('Standby quiet evidence requires a standby suite')
@@ -319,6 +300,7 @@ def audit(data, *, expect_backend=None, expect_apk_code=None, require_standby_qu
         echo_soak=echo_soak,
         background=background,
         legacy_echo_soak=legacy_echo_soak,
+        standby_only=standby_only,
     )
     result['completed_phases'] = sum(p['state'] == 'passed' for p in reviewed['phases'])
     if room_coverage:
