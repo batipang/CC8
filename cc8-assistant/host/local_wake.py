@@ -116,16 +116,23 @@ class WakeDetector:
         if verify_chinese and stop is not None:
             try:
                 from chinese_wake_verifier import ChineseWakeVerifier
-                from recognition import MandarinRecognizer
+                from wake_verifier_process import WakeVerifierProcess
 
-                recognizer = MandarinRecognizer(engine='sensevoice')
                 verifier = ChineseWakeVerifier(
-                    ChineseWake(stop.detector, lock=stop.engine_lock), recognizer.recognize
+                    ChineseWake(stop.detector, lock=stop.engine_lock), WakeVerifierProcess()
                 )
             except (ImportError, OSError, RuntimeError, ValueError):
                 # An optional model or stream must never disable standard wake.
                 pass
         return cls(chinese, english, english.alternate(), chinese_verifier=verifier)
+
+    def start_capture(self):
+        if self.chinese_verifier is not None:
+            self.chinese_verifier.worker.start()
+
+    def stop_capture(self):
+        if self.chinese_verifier is not None:
+            self.chinese_verifier.worker.close()
 
     def reset(self, *, clear_metrics=True):
         self.chinese.reset(clear_metrics=clear_metrics)

@@ -6,17 +6,17 @@ import time
 import numpy as np
 
 from dsp import FRAME
+from wake_verifier_process import MAX_SAMPLES
 
 
-WINDOW_FRAMES = 180
+WINDOW_FRAMES = MAX_SAMPLES // FRAME
 TARGET = '大黄蜂'
-CONFUSABLES = ('打黄蜂', '大黄风筝')
 
 
 class ChineseWakeVerifier:
-    def __init__(self, alternate, recognize):
+    def __init__(self, alternate, worker):
         self.alternate = alternate
-        self.recognize = recognize
+        self.worker = worker
         self.primary_audio = deque()
         self.alternate_audio = deque()
         self.decode_seconds = 0.0
@@ -40,16 +40,18 @@ class ChineseWakeVerifier:
         pcm = np.concatenate(audio)
         started = time.perf_counter()
         try:
-            text = self.recognize(pcm).replace('黃', '黄')
-        except (OSError, RuntimeError, ValueError):
-            return False, False
+            return self.worker.classify(pcm)
         finally:
             self.decode_seconds += time.perf_counter() - started
             pcm.fill(0)
-        return TARGET in text, any(word in text for word in CONFUSABLES)
 
     def feed(self, primary_hit, primary, alternate):
-        if alternate is None or primary.shape != (FRAME,) or alternate.shape != (FRAME,):
+        if (
+            alternate is None
+            or primary.shape != (FRAME,)
+            or alternate.shape != (FRAME,)
+            or not self.worker.ready
+        ):
             self.reset()
             return primary_hit
 

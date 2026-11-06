@@ -106,7 +106,7 @@ def run_backend(dependencies: BackendDependencies):
     if config.chinese_wake_verifier == 'sensevoice':
         wake_detector = dependencies.wake_detector(fast_stop, verify_chinese=True)
         print(
-            'Chinese wake verifier ready.'
+            'Chinese wake verifier configured; loads when capture starts.'
             if wake_detector.chinese_verifier is not None
             else 'Chinese wake verifier unavailable; using standard local wake.',
             flush=True,
