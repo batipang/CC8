@@ -923,6 +923,20 @@ class FastStopTests(unittest.TestCase):
         self.assertTrue(b.playback.playing)
         self.assertEqual(b.session.connection.packets, [])
 
+    def test_stop_reference_joins_active_clauses_in_playback_order(self):
+        for previous, current, remaining, stopped in (
+            ('你可以说停', '一下来结束。', 5, False),
+            ('一下只是个例子。', '这里请先停', 5, True),
+            ('你可以说停', '一下来结束。', -1, True),
+        ):
+            with self.subTest(previous=previous, current=current, remaining=remaining):
+                b = self.bridge(current)
+                b.playback.previous_spoken = previous
+                b.playback.previous_spoken_until = time.monotonic() + remaining
+                b.process_microphone(Packet(MIC, 0, 0, 0, 10_000_000_000, b'\x00\x00' * 320))
+                self.assertEqual(b.playback.playing, not stopped)
+                self.assertEqual(b.session.generation, 100 + int(stopped))
+
     def test_calibration_never_activates_fast_stop(self):
         b = self.bridge(calibrating=True)
         b.process_microphone(Packet(MIC, 0, 0, 0, 10_000_000_000, b'\x00\x00' * 320))
