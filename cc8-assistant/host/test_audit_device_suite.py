@@ -204,6 +204,40 @@ def saved_suite(
 
 
 class AuditDeviceSuiteTests(unittest.TestCase):
+    def test_standby_audit_rejects_nonquiet_or_malformed_optional_counts(self):
+        zero = {'local_wake_count': 0, 'voice_asr_attempts': 0, 'render_frames': 0}
+        for value, verified in (
+            (zero, True),
+            ({**zero, 'voice_asr_attempts': 1}, False),
+            ({**zero, 'local_wake_count': False}, False),
+            ({'render_frames': 0}, False),
+            ({**zero, 'extra': 0}, False),
+            (None, False),
+        ):
+            with self.subTest(value=value):
+                data = saved_suite()
+                data['phases'][-1]['report']['standby_evidence']['quiet_counter_deltas'] = value
+                result = audit(data)
+                self.assertIs(result['verified'], verified)
+                if not verified:
+                    self.assertEqual(result['reason'], 'standby_quiet_counters_unconfirmed')
+
+    def test_strict_standby_audit_requires_counts_in_each_round(self):
+        data = saved_suite()
+        self.assertTrue(audit(data)['verified'])
+        zero = {'local_wake_count': 0, 'voice_asr_attempts': 0, 'render_frames': 0}
+        for phase in data['phases'][-3:]:
+            reviewed = audit(data, require_standby_quiet=True)
+            self.assertFalse(reviewed['verified'])
+            self.assertEqual(reviewed['phase'], phase['name'])
+            self.assertEqual(reviewed['reason'], 'standby_quiet_counters_unconfirmed')
+            phase['report']['standby_evidence']['quiet_counter_deltas'] = zero
+        self.assertTrue(audit(data, require_standby_quiet=True)['verified'])
+
+    def test_strict_standby_audit_rejects_other_suite_scopes(self):
+        with self.assertRaisesRegex(ValueError, 'Standby quiet evidence requires a standby suite'):
+            audit(saved_suite(qa=True), require_standby_quiet=True)
+
     def test_acoustic_coverage_keeps_only_observed_samples_and_remains_unverified(self):
         data = saved_suite(qa=True, acoustic_coverage=True, missing_acoustic=(2, 15))
         self.assertEqual(data['state'], 'acoustic_incomplete')
@@ -622,6 +656,19 @@ class AuditDeviceSuiteTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertNotIn('PRIVATE_NOT_IN_OUTPUT', result.stdout)
             self.assertTrue(json.loads(result.stdout)['verified'])
+            self.assertEqual(report.read_text(), encoded)
+            strict = subprocess.run(
+                [*cmd, '--require-standby-quiet'],
+                env={'PATH': '/usr/bin:/bin'},
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(strict.returncode, 2)
+            self.assertEqual(
+                json.loads(strict.stdout)['reason'], 'standby_quiet_counters_unconfirmed'
+            )
+            self.assertNotIn('PRIVATE_NOT_IN_OUTPUT', strict.stdout)
             self.assertEqual(report.read_text(), encoded)
             data['state'] = 'running'
             data['phases'][1]['state'] = 'running'

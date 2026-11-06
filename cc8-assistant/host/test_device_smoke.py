@@ -182,6 +182,8 @@ class DeviceAutomationTests(unittest.TestCase):
             'transport': 'usb',
             'mic_frames': 100,
         }
+        if options.get('standby'):
+            health.update(render_frames=0, local_wake_count=0, voice_asr_attempts=0)
 
         def request(p):
             if p == {'operation': 'health'}:
@@ -2165,8 +2167,62 @@ class DeviceAutomationTests(unittest.TestCase):
                 'last_awake_seconds': 895,
                 'black_screen_poll_started_seconds': 900,
                 'first_black_screen_seconds': 900,
+                'quiet_counter_deltas': {
+                    'local_wake_count': 0,
+                    'voice_asr_attempts': 0,
+                    'render_frames': 0,
+                },
             },
         )
+
+    def test_standby_stops_on_activity_without_waiting_for_a_black_screen(self):
+        for counter, during_start in (
+            ('local_wake_count', True),
+            ('local_wake_count', False),
+            ('voice_asr_attempts', False),
+            ('render_frames', False),
+        ):
+            with self.subTest(counter=counter, during_start=during_start):
+                run, device, health, now = self.fixture(capture=True, standby=True)
+                self.arm_fixture_capture(run, device, health)
+                d, ui = device.status.return_value
+                device.status.side_effect = lambda: (d, {**ui, 'screen_sleeping': now[0] >= 900})
+
+                def open_capture():
+                    health['render_frames'] += 160  # Startup calibration reference.
+                    if during_start:
+                        health[counter] += 1
+
+                def wait(seconds):
+                    now[0] += seconds
+                    if not during_start:
+                        health[counter] += 1
+
+                run.start_capture, run.sleep = open_capture, wait
+                with self.assertRaisesRegex(CheckFailure, 'idle_unexpected_audio_activity'):
+                    run.idle()
+                self.assertLess(now[0], 900)
+                self.assertEqual(run.standby_evidence['quiet_counter_deltas'][counter], 1)
+                device.speak_probe.assert_not_called()
+
+    def test_standby_rechecks_audio_activity_after_observing_a_black_screen(self):
+        run, device, health, now = self.fixture(capture=True, standby=True)
+        self.arm_fixture_capture(run, device, health)
+        run.start_capture = Mock()
+        d, ui = device.status.return_value
+
+        def status():
+            sleeping = now[0] >= 900
+            if sleeping:
+                health['voice_asr_attempts'] += 1
+            return d, {**ui, 'screen_sleeping': sleeping}
+
+        device.status.side_effect = status
+        with self.assertRaisesRegex(CheckFailure, 'idle_unexpected_audio_activity'):
+            run.idle()
+        self.assertEqual(run.standby_evidence['first_black_screen_seconds'], 900)
+        self.assertEqual(run.standby_evidence['quiet_counter_deltas']['voice_asr_attempts'], 1)
+        device.speak_probe.assert_not_called()
 
     def test_standby_rejects_black_screen_seen_at_895_seconds(self):
         run, device, health, now = self.fixture(capture=True, standby=True)

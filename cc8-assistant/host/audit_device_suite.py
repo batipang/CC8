@@ -16,6 +16,7 @@ from device_smoke import (
     ROUTED_LATENCY_MIN_BACKEND,
     RENDER_OVERLAP_MIN_BACKEND,
     STANDBY_SECONDS,
+    STANDBY_QUIET_COUNTERS,
     TOOL_SAMPLE_MIN_BACKEND,
     device_suite_phases,
     matched_playout,
@@ -37,20 +38,30 @@ def bounded_number(value, low, high):
     return type(value) in (int, float) and low <= value <= high
 
 
-def real_standby(evidence, elapsed):
+def standby_failure(evidence, elapsed, *, require_quiet):
     if not isinstance(evidence, dict) or not bounded_number(elapsed, STANDBY_SECONDS, 86400):
-        return False
+        return 'standby_duration_unconfirmed'
     awake = evidence.get('last_awake_seconds')
     poll = evidence.get('black_screen_poll_started_seconds')
     black = evidence.get('first_black_screen_seconds')
-    return (
+    if not (
         all(bounded_number(value, 0, elapsed) for value in (awake, poll, black))
         and awake <= poll <= black
         and poll >= STANDBY_SECONDS
-    )
+    ):
+        return 'standby_duration_unconfirmed'
+    if require_quiet or 'quiet_counter_deltas' in evidence:
+        deltas = evidence.get('quiet_counter_deltas')
+        if (
+            not isinstance(deltas, dict)
+            or set(deltas) != set(STANDBY_QUIET_COUNTERS)
+            or any(type(value) is not int or value != 0 for value in deltas.values())
+        ):
+            return 'standby_quiet_counters_unconfirmed'
+    return None
 
 
-def audit(data, *, expect_backend=None, expect_apk_code=None):
+def audit(data, *, expect_backend=None, expect_apk_code=None, require_standby_quiet=False):
     if not isinstance(data, dict) or type(data.get('schema')) is not int or data['schema'] != 1:
         raise ValueError('Unknown report schema')
     scope = data.get('scope')
@@ -150,6 +161,8 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
         echo_soak=echo_soak,
         legacy_echo_soak=legacy_echo_soak,
     )
+    if require_standby_quiet and not any('standby' in options for _, options in plan):
+        raise ValueError('Standby quiet evidence requires a standby suite')
     phases = data.get('phases')
     if not isinstance(phases, list) or len(phases) != len(plan):
         raise ValueError('Invalid suite length')
@@ -167,6 +180,8 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
         result['tool_sample_guard_required'] = tool_guard_required
     if render_overlap:
         result['require_render_overlap'] = True
+    if require_standby_quiet:
+        result['require_standby_quiet'] = True
     if echo_soak:
         result['self_playback_seconds_per_phase'] = (
             LEGACY_ECHO_SOAK_SECONDS if legacy_echo_soak else ECHO_SOAK_SECONDS
@@ -223,11 +238,15 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
         ):
             failure = {'phase': name, 'reason': 'phase_provenance_incomplete'}
             break
-        if 'standby' in options and not real_standby(
-            report.get('standby_evidence'), report.get('elapsed_seconds')
-        ):
-            failure = {'phase': name, 'reason': 'standby_duration_unconfirmed'}
-            break
+        if 'standby' in options:
+            reason = standby_failure(
+                report.get('standby_evidence'),
+                report.get('elapsed_seconds'),
+                require_quiet=require_standby_quiet,
+            )
+            if reason:
+                failure = {'phase': name, 'reason': reason}
+                break
         prepared = report.get('prepared_interruption_input')
         # Known-speech corroboration is currently an explicit individual run;
         # no fixed batch may silently claim its additional evidence scope.
@@ -340,12 +359,18 @@ def main(argv=None):
     parser.add_argument('report', type=Path)
     parser.add_argument('--expect-backend')
     parser.add_argument('--expect-apk-code', type=int)
+    parser.add_argument(
+        '--require-standby-quiet',
+        action='store_true',
+        help='Require zero wake, ASR and render counter deltas in every standby phase',
+    )
     args = parser.parse_args(argv)
     try:
         result = audit(
             read_private_json(args.report, 4 * 1024**2),
             expect_backend=args.expect_backend,
             expect_apk_code=args.expect_apk_code,
+            require_standby_quiet=args.require_standby_quiet,
         )
     except (OSError, ValueError, TypeError, KeyError, RecursionError):
         parser.exit(2, '无法复核所选私有设备批次报告。\n')
