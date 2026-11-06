@@ -5,6 +5,7 @@ real backend, device UI or capture is used; fixture PIDs are path-verified.
 """
 
 import json
+import errno
 import os
 from pathlib import Path
 import shlex
@@ -205,6 +206,118 @@ def exercise(root):
 
 
 class SupervisorProcessTests(unittest.TestCase):
+    def test_pid_publication_failure_reaps_worker_before_supervisor_retries(self):
+        with tempfile.TemporaryDirectory(prefix='cc8-pid-write-', dir='/tmp') as folder:
+            root = Path(folder)
+            private = root / 'p'
+            private.mkdir(mode=0o700)
+            script = root / 'bridge.py'
+            script.write_text('import time\ntime.sleep(30)\n')
+            pids, delays = [], []
+            stop = threading.Event()
+            deadline = time.monotonic() + 5
+
+            def publish(path, value, **kwargs):
+                self.assertEqual(path, private / 'bridge.pid')
+                with self.assertRaises(BlockingIOError), ProcessLease(private / 'launcher.lock'):
+                    self.fail('PID write must hold the launcher lease')
+                pids.append(int(value))
+                if len(pids) == 1:
+                    raise OSError(errno.ENOSPC, 'PRIVATE_PATH')
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(pids[0], 0)
+                return atomic_private_bytes(path, value, **kwargs)
+
+            class Gate:
+                def is_set(self):
+                    return stop.is_set()
+
+                def wait(self, seconds):
+                    if time.monotonic() > deadline:
+                        raise TimeoutError('PID write recovery test deadline')
+                    if seconds == 1:
+                        delays.append(seconds)
+                    return stop.wait(min(seconds, 0.02))
+
+            def ready(*, operation):
+                self.assertEqual(operation, 'health')
+                self.assertEqual(len(pids), 2)
+                self.assertEqual(int((private / 'bridge.pid').read_text()), pids[-1])
+                stop.set()
+                return dict(model_ready=True, recognition_worker=True, response_worker=True)
+
+            with (
+                patch.object(service, 'ROOT', root),
+                patch.object(service, 'PRIVATE', private),
+                patch.object(service, 'BRIDGE', script),
+                patch.object(service, 'PYTHON', Path(sys.executable)),
+                patch.object(launch, 'BRIDGE', script),
+                patch.object(service, 'enabled', return_value=True),
+                patch.object(service, 'ensure_available'),
+                patch.object(service, 'atomic_private_bytes', side_effect=publish),
+                patch.object(launch, 'atomic_private_bytes', side_effect=publish),
+                patch.object(service, 'query', side_effect=ready),
+            ):
+                supervisor = service.Supervisor()
+                supervisor.stop = Gate()
+                error = None
+                try:
+                    supervisor.run()
+                except OSError as failure:
+                    error = type(failure).__name__
+                self.assertIsNone(error, 'PID write failure escaped the supervisor')
+            self.assertEqual(delays, [1])
+            self.assertEqual(len(pids), 2)
+            self.assertNotIn('PRIVATE_PATH', (private / 'service.log').read_text())
+            for pid in pids:
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(pid, 0)
+
+    def test_manual_pid_publication_failure_reaps_worker_before_releasing_lease(self):
+        with tempfile.TemporaryDirectory(prefix='cc8-manual-pid-', dir='/tmp') as folder:
+            root = Path(folder)
+            private = root / 'p'
+            private.mkdir(mode=0o700)
+            script = root / 'bridge.py'
+            script.write_text('import time\ntime.sleep(30)\n')
+            child = None
+            original_spawn = subprocess.Popen
+
+            def spawn(*args, **kwargs):
+                nonlocal child
+                child = original_spawn(*args, **kwargs)
+                return child
+
+            try:
+                with (
+                    patch.object(launch, 'ROOT', root),
+                    patch.object(launch, 'PRIVATE', private),
+                    patch.object(launch, 'BRIDGE', script),
+                    patch.object(launch, 'PYTHON', Path(sys.executable)),
+                    patch.object(launch, 'ensure_available'),
+                    patch.object(launch, 'load_config'),
+                    patch.object(launch.subprocess, 'Popen', side_effect=spawn),
+                    patch.object(
+                        launch, 'atomic_private_bytes', side_effect=PermissionError('PRIVATE_PATH')
+                    ),
+                    patch.object(sys, 'argv', ['launch.py', '--no-open']),
+                ):
+                    error = None
+                    try:
+                        launch.main()
+                    except (SystemExit, OSError) as failure:
+                        error = failure
+                    self.assertIsNotNone(child)
+                    self.assertIsNotNone(child.poll(), 'unpublished worker survived the launcher')
+                    self.assertIsInstance(error, SystemExit)
+                    self.assertNotIn('PRIVATE_PATH', str(error))
+            finally:
+                if child is not None and child.poll() is None:
+                    child.kill()
+                    child.wait(timeout=3)
+            with ProcessLease(private / 'launcher.lock'):
+                self.assertFalse((private / 'bridge.pid').exists())
+
     def test_manual_open_reuses_supervisor_pid_while_real_worker_is_still_loading(self):
         with tempfile.TemporaryDirectory(prefix='cc8-load-', dir='/tmp') as folder:
             root = Path(folder)

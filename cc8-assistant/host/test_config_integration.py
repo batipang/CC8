@@ -137,6 +137,22 @@ class ConfigurationIntegrationTests(unittest.TestCase):
         local.assert_not_called()
         self.assertIn('asr', output.getvalue())
 
+    def test_worker_pid_failure_aborts_before_opening_models_or_transports(self):
+        with (
+            patch.object(sys, 'argv', ['bridge.py']),
+            patch('bridge.load_config'),
+            patch('app_runtime.atomic_private_bytes', side_effect=PermissionError('PRIVATE_PATH')),
+            patch('bridge.DirectSpeech', side_effect=AssertionError('provider started')) as direct,
+            patch('bridge.TransportHub') as hub,
+            patch('sys.stderr', new_callable=io.StringIO) as output,
+        ):
+            with self.assertRaises(SystemExit) as stopped:
+                bridge.run_backend()
+        self.assertEqual(stopped.exception.code, 2)
+        direct.assert_not_called()
+        hub.assert_not_called()
+        self.assertNotIn('PRIVATE_PATH', output.getvalue())
+
     def test_real_minimal_environment_cli_does_not_disclose_invalid_values(self):
         with tempfile.TemporaryDirectory() as folder:
             config = self.fixture(folder)

@@ -19,6 +19,29 @@ BRIDGE = ROOT / 'cc8-assistant/host/bridge.py'
 PYTHON = ROOT / '.toolchains/cc8/voice-venv/bin/python'
 
 
+class WorkerPidWriteError(OSError):
+    """The launcher could not publish the PID and reaped its new worker."""
+
+
+def publish_worker_pid(path, child):
+    try:
+        atomic_private_bytes(path, f'{child.pid}\n'.encode())
+    except OSError as error:
+        # The caller still holds the launcher lease. Own the new subprocess
+        # through its handle rather than relying on the failed PID receipt.
+        try:
+            child.terminate()
+            try:
+                child.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait(timeout=3)
+        finally:
+            if child.stdout is not None:
+                child.stdout.close()
+        raise WorkerPidWriteError from error
+
+
 def own_process(pid):
     # PID 会复用，必须核对当前用户及脚本绝对路径，避免停止别的工作区服务。
     if type(pid) is not int or pid <= 0:
@@ -110,7 +133,10 @@ def main():
                     stderr=subprocess.STDOUT,
                     start_new_session=True,
                 )
-            atomic_private_bytes(pid_file, f'{child.pid}\n'.encode())
+            try:
+                publish_worker_pid(pid_file, child)
+            except WorkerPidWriteError:
+                raise SystemExit('语音后台未能登记进程。请检查运行目录的权限和磁盘空间。') from None
             print('本机语音服务已启动，正在准备识别模型。')
         else:
             print('本机语音服务已运行。')

@@ -1,5 +1,12 @@
 # Changelog
 
+## Backend 0.15.32 — recover safely from worker PID write failures
+
+- Reap the new child under the shared launcher lease if PID publication fails.
+  The login supervisor backs off and can recover when storage is writable.
+- Publish the backend's own PID before constructing providers or transports.
+  Preserve the smoke-only entry and keep diagnostics free of raw error paths.
+
 ## Backend 0.15.31 — classify the fixed tool qualifier omission
 
 - On an explicitly enabled same-input comparison, report whether the normalized

@@ -79,6 +79,13 @@ def run_backend(dependencies: BackendDependencies):
         parser.error(str(error))
     except OSError:
         parser.error('CC8 configuration file unavailable; check path and owner access')
+    if not args.speech_smoke:
+        # A direct backend start also needs an owned PID before any provider
+        # or transport starts. The global runtime lease is already held.
+        try:
+            atomic_private_bytes(dependencies.private / 'bridge.pid', f'{os.getpid()}\n'.encode())
+        except OSError:
+            parser.error('语音后台未能登记进程。请检查运行目录的权限和磁盘空间。')
     speech = (
         dependencies.direct_speech(config=config)
         if args.brain == 'minimax'
@@ -136,9 +143,6 @@ def run_backend(dependencies: BackendDependencies):
     bridge.save_status()
     announcements = dependencies.announcement_server(bridge)
     announcements.start()
-    dependencies.private.mkdir(parents=True, exist_ok=True, mode=0o700)
-    os.chmod(dependencies.private, 0o700)
-    atomic_private_bytes(dependencies.private / 'bridge.pid', f'{os.getpid()}\n'.encode())
     stop = threading.Event()
 
     def shutdown(*unused):
