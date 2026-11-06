@@ -592,6 +592,27 @@ def english_wake_counts(health):
     return counts
 
 
+def english_wake_input_coverage(before, after):
+    """Summarize decoder input between playback boundary snapshots."""
+    if before is None and after is None:
+        return {'status': 'unavailable'}
+    for value in (before, after):
+        if not isinstance(value, dict) or value.keys() != {'primary', 'alternate'}:
+            return {'status': 'invalid'}
+        primary, alternate = value['primary'], value['alternate']
+        if type(primary) is not int or primary < 0:
+            return {'status': 'invalid'}
+        if alternate is not None and (type(alternate) is not int or not 0 <= alternate <= primary):
+            return {'status': 'invalid'}
+    primary = after['primary'] - before['primary']
+    if (before['alternate'] is None) != (after['alternate'] is None):
+        return {'status': 'invalid'}
+    alternate = after['alternate'] - before['alternate'] if after['alternate'] is not None else None
+    if primary < 0 or alternate is not None and not 0 <= alternate <= primary:
+        return {'status': 'invalid'}
+    return {'status': 'observed', 'primary_samples': primary, 'alternate_samples': alternate}
+
+
 def rpc(path, request, timeout=5):
     # Workspace status is read-only. The test client cannot create tasks via IPC.
     allowed = (
@@ -1786,6 +1807,9 @@ class SmokeRun:
             )
         mic_before = h.get('mic_frames')
         wake_before = english_wake_counts(h) if self.english_wake else None
+        input_before = (
+            self.health().get('english_wake_input_samples') if self.english_wake else None
+        )
         if self.english_fixture is not None:
             self.english_fixture.play()
             self.english_fixture_played = True
@@ -1793,6 +1817,13 @@ class SmokeRun:
             self.device.speak_probe(question=self.qa_question, english=True)
         else:
             self.device.speak_probe(question=self.qa_question)
+        input_coverage = (
+            english_wake_input_coverage(
+                input_before, self.health().get('english_wake_input_samples')
+            )
+            if self.english_wake
+            else None
+        )
 
         admitted_id = None
         recognized_stimulus_matches = None
@@ -1906,6 +1937,7 @@ class SmokeRun:
                     wake_language='en',
                     local_wake_detections=wake_delta,
                     english_wake_detections=english_delta,
+                    english_wake_input_coverage=input_coverage,
                 )
                 require(
                     0 <= english_delta <= wake_delta <= 1,

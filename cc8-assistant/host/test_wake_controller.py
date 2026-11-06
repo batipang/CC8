@@ -73,6 +73,39 @@ class WakeControllerTests(unittest.TestCase):
     def feed(self, **fields):
         return self.controller.feed(np.zeros(320), self.state.generation, capture_nanos=0, **fields)
 
+    def test_english_input_snapshot_supports_legacy_detector_and_is_independent(self):
+        self.assertIsNone(self.controller.english_input_samples())
+        self.detector.english_input_samples = (640, 160)
+        counts = self.controller.english_input_samples()
+        self.detector.english_input_samples = (800, 320)
+        self.assertEqual(counts, {'primary': 640, 'alternate': 160})
+        self.assertEqual(
+            self.controller.english_input_samples(), {'primary': 800, 'alternate': 320}
+        )
+
+    def test_english_input_snapshot_does_not_wait_for_stalled_decoder(self):
+        held = threading.Event()
+        release = threading.Event()
+
+        def hold_decoder():
+            with self.controller.native_lock:
+                held.set()
+                release.wait(2)
+
+        worker = threading.Thread(target=hold_decoder)
+        worker.start()
+        try:
+            self.assertTrue(held.wait(1))
+            self.detector.english_input_samples = (640, 160)
+            self.assertIsNone(self.controller.english_input_samples())
+            self.assertTrue(worker.is_alive())
+        finally:
+            release.set()
+            worker.join(1)
+        self.assertEqual(
+            self.controller.english_input_samples(), {'primary': 640, 'alternate': 160}
+        )
+
     def test_local_name_authorizes_once_and_continuous_standby_also_requires_wake(self):
         self.assertFalse(self.controller.allowed())
         self.assertTrue(self.feed())
