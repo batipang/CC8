@@ -48,6 +48,10 @@ class MiniMaxError(ClassifiedFailure):
         self.http_status = http_status
 
 
+class MiniMaxSearchError(MiniMaxError):
+    pass
+
+
 def check_api_result(data, *, require_status=False):
     """Validate status before releasing transcripts, model text or PCM events."""
     if not isinstance(data, dict):
@@ -533,6 +537,8 @@ class MiniMaxBrain:
                 if clarification:
                     self.pending_web = text if not self.pending_web else self.pending_web
                     self.web_context = True
+                    if on_web:
+                        on_web('clarification', {})
                     yield clarification
                     return
                 data = self.transport.post_json(SEARCH_ROUTE, {'q': query}, is_current)
@@ -545,6 +551,8 @@ class MiniMaxBrain:
                 self.pending_web = None
                 self.web_context = True
                 if not items:
+                    if on_web:
+                        on_web('no_results', {})
                     yield '这次没有查到可用的网页结果，暂时无法核实。你可以补充关键词让我再查。'
                     return
                 if on_web:
@@ -568,7 +576,9 @@ class MiniMaxBrain:
                     on_web('failed', {'kind': kind})
                 # A failed retrieval is an execution failure, not an ordinary
                 # answer clause that would close the task as successful.
-                raise
+                raise MiniMaxSearchError(
+                    'Web search failed', code=error.code, http_status=error.http_status, kind=kind
+                ) from None
         else:
             self.pending_web = None
             self.web_context = False

@@ -15,7 +15,8 @@ from unittest.mock import Mock, patch
 
 import requests
 
-from minimax_client import Transport, MiniMaxError, Cancelled, RequestSlot
+from minimax_client import Transport, MiniMaxBrain, MiniMaxError, Cancelled, RequestSlot
+from operation_failure import OperationFailure
 from http_budget import IOBudget, BudgetAdapter, BudgetSocket
 
 
@@ -323,7 +324,10 @@ class HTTPBudgetTLS(unittest.TestCase):
                 payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
                 seen.append((self.path, payload))
                 status, headers, data = replies[min(len(seen), len(replies)) - 1]
-                wire = json.dumps(data).encode()
+                if status is None:
+                    self.close_connection = True
+                    return
+                wire = data if isinstance(data, bytes) else json.dumps(data).encode()
                 self.send_response(status)
                 self.send_header('Content-Length', str(len(wire)))
                 for name, value in headers.items():
@@ -342,6 +346,80 @@ class HTTPBudgetTLS(unittest.TestCase):
         client = self.client(server)
         client.timeout = (0.5, 0.5)
         return client, seen
+
+    def test_web_search_failure_and_explicit_recovery_use_the_real_tls_routes(self):
+        from brain_router import BrainRouter
+
+        chat = '/v1/chat/completions'
+        search = '/v1/coding_plan/search'
+        plan = (
+            200,
+            {},
+            {
+                'choices': [
+                    {
+                        'finish_reason': 'stop',
+                        'message': {'content': '{"query":"public-fixture","clarification":""}'},
+                    }
+                ],
+            },
+        )
+        sources = (
+            200,
+            {},
+            {
+                'base_resp': {'status_code': 0},
+                'organic': [
+                    {'title': 'Fixture', 'link': 'https://example.com/news', 'snippet': 'Public'}
+                ],
+            },
+        )
+        answer = (
+            200,
+            {'Content-Type': 'text/event-stream'},
+            (
+                b'data: {"choices":[{"delta":{"content":"Fixture answer."},"finish_reason":"stop"}]}\n\n'
+                b'data: [DONE]\n\n'
+            ),
+        )
+        secret = 'PRIVATE-provider-error'
+        for failure, kind in (
+            ((200, {}, {'base_resp': {'status_code': 1001, 'status_msg': secret}}), 'timeout'),
+            ((429, {}, {'error': secret}), 'rate_limit'),
+            ((402, {}, {'error': secret}), 'quota'),
+            ((401, {}, {'error': secret}), 'credential_or_permission'),
+            ((None, {}, {}), 'transport_or_io'),
+        ):
+            for repeat in range(3):
+                with self.subTest(kind=kind, repeat=repeat):
+                    client, seen = self.scripted_json_server([plan, failure, plan, sources, answer])
+                    brain = BrainRouter(MiniMaxBrain(client), dot=Mock(), selected='minimax')
+                    updates = []
+                    with self.assertRaises(OperationFailure) as raised:
+                        list(
+                            brain.clauses(
+                                '联网查询新闻', [], on_web=lambda k, v: updates.append((k, v))
+                            )
+                        )
+                    self.assertEqual(
+                        (raised.exception.stage, raised.exception.kind), ('search', kind)
+                    )
+                    self.assertEqual([route for route, _ in seen], [chat, search])
+                    self.assertEqual(updates[-1], ('failed', {'kind': kind}))
+                    self.assertNotIn(secret, json.dumps(updates) + str(raised.exception))
+                    self.assertFalse(client.slots)
+                    updates.clear()
+                    recovered = ''.join(
+                        brain.clauses(
+                            '请再联网查一次新闻', [], on_web=lambda k, v: updates.append((k, v))
+                        )
+                    )
+                    self.assertEqual(recovered, 'Fixture answer.')
+                    self.assertEqual(
+                        [route for route, _ in seen], [chat, search, chat, search, chat]
+                    )
+                    self.assertIn(('route_completed', {'scenario': 'web'}), updates)
+                    self.assertFalse(client.slots)
 
     def test_search_retries_one_explicit_gateway_failure_over_verified_tls(self):
         route = '/v1/coding_plan/search'

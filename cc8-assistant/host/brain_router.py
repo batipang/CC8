@@ -4,7 +4,7 @@ import re
 from dot_client import DotBrain, DotError, DotApprovalRequired
 from diagnostics import error_kind
 from operation_failure import OperationFailure
-from minimax_client import Cancelled
+from minimax_client import Cancelled, MiniMaxSearchError
 
 DELEGATE = re.compile(
     r'^\s*(?:请\s*)?(?:让|叫|交给|用)\s*(?:dot|codex|多特)(?![A-Za-z])\s*(?:来|帮我|帮忙)?[，,：:\s]*',
@@ -126,6 +126,9 @@ class BrainRouter:
             if not is_current():
                 raise Cancelled('Turn cancelled') from None
             self.last_metrics = {'provider': provider, 'completed': False}
+            search_failure = isinstance(error, MiniMaxSearchError)
             raise OperationFailure(
-                'Brain request failed', stage='brain', kind=error_kind(error)
+                'Web search failed' if search_failure else 'Brain request failed',
+                stage='search' if search_failure else 'brain',
+                kind=error_kind(error),
             ) from None

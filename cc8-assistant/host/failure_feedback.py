@@ -11,6 +11,7 @@ from operation_failure import STAGES, KINDS
 LABELS = {
     'asr': '语音识别',
     'brain': '助理执行',
+    'search': '联网检索',
     'tts': '语音合成',
     'playback': '设备播放',
     'transport': '设备连接',
@@ -29,6 +30,7 @@ REASONS = {
 RECOVERY = {
     'asr': '这句话未交给助理；检查服务后请再说一次。',
     'brain': '执行结果可能不完整；请在电脑端核对已执行步骤，再决定是否重新发起。',
+    'search': '本次没有取得可用的检索结果。检查网络或服务后，可以明确发起一次新的查询。',
     'tts': '请查看任务页的执行结果；不要重复交办已完成的任务。',
     'playback': '请检查 CC8 连接；任务执行结果以任务页为准。',
     'transport': '请检查 USB 或已配对 Wi-Fi；重连后需手动开始语音。',
