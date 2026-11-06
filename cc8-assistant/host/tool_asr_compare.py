@@ -1,4 +1,4 @@
-"""One local decode of a bounded fixed QA utterance over an anonymous pipe."""
+"""Content-free paired results and local decoding for a bounded fixed QA utterance."""
 
 from contextlib import redirect_stdout
 import hashlib
@@ -103,6 +103,23 @@ def compare_local(case, audio, is_current, *, engine='whisper'):
         process.wait()
         process.stdin.close()
         process.stdout.close()
+
+
+def comparison_evidence(target, text, audio, is_current):
+    case, engine = target
+    expected = normalize_question(SCENARIO_QUESTIONS['tool'][case - 1])
+    primary = tool_asr_result(text, expected)
+    try:
+        local = compare_local(case, audio, is_current, engine=engine) if is_current() else None
+    except Exception:
+        # An optional local diagnostic cannot stop the recognition worker.
+        local = 'error'
+    if local is None:
+        return None
+    evidence = {'primary': primary, 'local': local}
+    if engine != 'whisper':
+        evidence['local_engine'] = engine
+    return evidence
 
 
 def sensevoice_identity(folder, manifest):
