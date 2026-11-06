@@ -87,6 +87,25 @@ def _valid_replay(value, matched, hit_fields):
     )
 
 
+def _valid_live_decoder(value, primary_frames, alternate_frames):
+    if not isinstance(value, dict) or set(value) != {
+        'primary_samples_before',
+        'alternate_samples_before',
+        'render_rejections',
+    }:
+        return False
+    # Each render rejection removes one 160-sample frame from the alternate.
+    return (
+        primary_frames >= 160
+        and all(
+            type(value[key]) is int and 0 <= value[key] < 2**53
+            for key in ('primary_samples_before', 'alternate_samples_before')
+        )
+        and type(value['render_rejections']) is int
+        and 0 <= value['render_rejections'] <= (primary_frames - alternate_frames) // 160
+    )
+
+
 def summarize(value):
     if value == {'status': 'unavailable'}:
         return value
@@ -101,7 +120,7 @@ def summarize(value):
     if chinese:
         fields.add('language')
     if (
-        set(value) - {'fresh_replay'} != fields
+        set(value) - {'fresh_replay', 'live_decoder'} != fields
         or chinese
         and 'fresh_replay' not in value
         or value['status'] != 'measured'
@@ -110,6 +129,15 @@ def summarize(value):
         or not 0 <= value['primary_frames'] <= limit
         or any(not 0 <= value[key] <= value['primary_frames'] for key in frame_counts)
         or not all(_valid_stream(value[key]) for key in streams)
+        or (
+            'live_decoder' in value
+            and (
+                chinese
+                or not _valid_live_decoder(
+                    value['live_decoder'], value['primary_frames'], value['alternate_frames']
+                )
+            )
+        )
         or (
             'fresh_replay' in value
             and not _valid_replay(

@@ -173,6 +173,13 @@ class WakeDetector:
         return self.english.samples, alternate.samples if alternate is not None else None
 
     @property
+    def english_stream_samples(self):
+        alternate = self.english_alternate
+        if alternate is None:
+            return None
+        return self.english.stream_samples, alternate.stream_samples
+
+    @property
     def compute_seconds(self):
         alternate = self.english_alternate
         verifier = self.chinese_verifier

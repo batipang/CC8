@@ -125,13 +125,18 @@ class LocalWakeTests(unittest.TestCase):
         frame = np.zeros(160)
         alternate.stream.results = ['BubbleBeeSpaced']
         self.assertEqual(wake.feed(frame, alternate_pcm=frame), '')
+        self.assertEqual(wake.english_stream_samples, (160, 160))
         old_stream = alternate.stream
         primary.stream.results = ['Bumblebee']
         self.assertEqual(wake.feed(frame), 'Bumblebee')
         self.assertIsNot(alternate.stream, old_stream)
         self.assertEqual(wake.english_input_samples, (320, 160))
+        self.assertEqual(wake.english_stream_samples, (320, 0))
         alternate.stream.results = ['Bumblebee']
         self.assertEqual(wake.feed(frame, alternate_pcm=frame), 'Bumblebee')
+        wake.reset(clear_metrics=False)
+        self.assertEqual(wake.english_input_samples, (480, 320))
+        self.assertEqual(wake.english_stream_samples, (0, 0))
         wake.reset()
         self.assertEqual(wake.english_input_samples, (0, 0))
         self.assertFalse(wake.alternate_active)

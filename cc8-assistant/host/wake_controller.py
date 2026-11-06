@@ -224,6 +224,10 @@ class WakeController:
             # frame into a fresh stream, even though its result would be rejected.
             if serial != self.serial:
                 return False
+            # Snapshot under the same lock as the first observed decoder input.
+            stream_samples = None
+            if probe is not None and not probe.chinese and not probe.frames:
+                stream_samples = getattr(self.detector, 'english_stream_samples', None)
             if echo_risk:
                 alternate_pcm = None
             if alternate_pcm is not None:
@@ -241,14 +245,21 @@ class WakeController:
                 or generation != self.hooks.generation()
             ):
                 return False
+            render_rejected = recognized and echo_risk and bool(WAKE_PATTERN.search(render_text))
             if probe is not None and probe is self.input_probe:
                 if probe.chinese and echo_risk:
                     self._cancel_input_probe()
                 else:
-                    probe.observe(pcm, alternate_pcm, raw_pcm if probe.chinese else None)
+                    probe.observe(
+                        pcm,
+                        alternate_pcm,
+                        raw_pcm if probe.chinese else None,
+                        stream_samples=stream_samples,
+                        english_render_rejected=render_rejected and keyword == 'Bumblebee',
+                    )
             if not recognized:
                 return False
-            if echo_risk and WAKE_PATTERN.search(render_text):
+            if render_rejected:
                 self.hooks.metric('wake_render_rejections', increment=True)
                 self.hooks.log('local_wake_render_rejected')
                 return False

@@ -120,6 +120,8 @@ class WakeInputProbe:
         self.raw = np.empty(self.limit) if chinese else np.empty(0)
         self.frames = self.alternate_frames = 0
         self.raw_frames = 0
+        self.stream_samples = None
+        self.english_render_rejections = 0
         self.closed = False
         self.cancelled = threading.Event()
         self.timer = timer(10 if chinese else TTL_SECONDS, self.cancel)
@@ -143,7 +145,9 @@ class WakeInputProbe:
             for audio in self._close():
                 audio.fill(0)
 
-    def observe(self, primary, alternate, raw=None):
+    def observe(
+        self, primary, alternate, raw=None, *, stream_samples=None, english_render_rejected=False
+    ):
         with self.lock:
             if self.closed or self.frames + FRAME > self.limit:
                 return
@@ -154,6 +158,10 @@ class WakeInputProbe:
                     audio.fill(0)
                 return
             start = self.frames
+            if not self.chinese:
+                if start == 0 and type(stream_samples) is tuple and len(stream_samples) == 2:
+                    self.stream_samples = stream_samples
+                self.english_render_rejections += english_render_rejected
             self.primary[start : start + FRAME] = primary
             if alternate is not None:
                 self.alternate[start : start + FRAME] = alternate
@@ -187,6 +195,12 @@ class WakeInputProbe:
                 'alternate': alternate_shape,
             }
             streams = {'primary': primary, 'alternate': alternate_view}
+            if self.stream_samples is not None:
+                result['live_decoder'] = {
+                    'primary_samples_before': self.stream_samples[0],
+                    'alternate_samples_before': self.stream_samples[1],
+                    'render_rejections': self.english_render_rejections,
+                }
             if self.chinese:
                 raw_view = raw[: self.frames]
                 result.update(
