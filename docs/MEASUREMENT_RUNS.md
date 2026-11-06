@@ -266,6 +266,8 @@ cp .toolchains/cc8/paths.json /absolute/qa-checkout/.toolchains/cc8/paths.json
 
 工具题批次用 `audit-device-suite` 逐轮复核。从后台 0.15.4 起，每个合格样本须有门控启用记录、恰好一次语音准入，且门控拒绝次数为零。旧批次仍可按当时的回执复核，结果注明当时未要求门控证据。
 
+新版固定问答、联网及工具时延批次会在每轮报告写入所选题库场景和题号。采集与离线复核均检查该编号是否对应计划中的轮次，第一条不符时保留此前有效轮次并停止。报告只保存场景枚举与题号，不保存题句或转录。旧批次仍可复核，摘要的 `qa_fixture_binding_required` 为 `false`。需要题号绑定证据时执行 `./cc8 audit-device-suite /absolute/private/suite.json --require-qa-fixture-binding`。
+
 若工具题批次停在清醒问答检查，离线复核会核对此前步骤、APK 版本与构建号、收尾停采及报告的无正文声明，再将白名单中的停止原因列为 `recorded_failure`。如指定构建号或已有通过轮次，失败轮必须与其匹配。该字段复述检查器的记录，失败轮不计入时延样本。
 
 ```sh

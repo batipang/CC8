@@ -24,6 +24,7 @@ from device_smoke import (
     STOP_VISUAL_MIN_APK_CODE,
     EXTENDED_VOICE_MIN_BACKEND,
     planned_checks,
+    qa_fixture_matches,
     run_device_suite,
     standby_failure,
 )
@@ -99,7 +100,14 @@ def recorded_tool_failure(report, expected, previous):
     return reason if reason in TOOL_DIALOGUE_FAILURES else None
 
 
-def audit(data, *, expect_backend=None, expect_apk_code=None, require_standby_quiet=False):
+def audit(
+    data,
+    *,
+    expect_backend=None,
+    expect_apk_code=None,
+    require_standby_quiet=False,
+    require_qa_fixture_binding=False,
+):
     if not isinstance(data, dict) or type(data.get('schema')) is not int or data['schema'] != 1:
         raise ValueError('Unknown report schema')
     scope = data.get('scope')
@@ -128,6 +136,11 @@ def audit(data, *, expect_backend=None, expect_apk_code=None, require_standby_qu
     ):
         raise ValueError('Invalid report scope')
     qa_latency = scope == 'synthetic_qa_latency'
+    qa_fixture_bound = 'qa_fixture_bound' in data
+    if qa_fixture_bound and (not qa_latency or data['qa_fixture_bound'] is not True):
+        raise ValueError('Invalid QA fixture binding')
+    if require_qa_fixture_binding and not qa_latency:
+        raise ValueError('QA fixture binding requires a QA latency suite')
     interruption = scope == 'synthetic_interruption_latency'
     echo_soak = scope == ECHO_SOAK_SCOPE
     standby_only = scope == STANDBY_SUITE_SCOPE
@@ -220,6 +233,8 @@ def audit(data, *, expect_backend=None, expect_apk_code=None, require_standby_qu
     )
     if scenario == 'tool':
         result['tool_sample_guard_required'] = tool_guard_required
+    if qa_latency:
+        result['qa_fixture_binding_required'] = qa_fixture_bound
     if render_overlap:
         result['require_render_overlap'] = True
     if require_standby_quiet:
@@ -230,11 +245,13 @@ def audit(data, *, expect_backend=None, expect_apk_code=None, require_standby_qu
         )
     if expect_backend is not None and backend != expect_backend:
         return {**result, 'reason': 'backend_version_mismatch'}
+    if require_qa_fixture_binding and not qa_fixture_bound:
+        return {**result, 'reason': 'suite_qa_fixture_binding_missing'}
 
     reports = []
     artifact = None
     failure = None
-    for phase, (name, options) in zip(phases, plan):
+    for case, (phase, (name, options)) in enumerate(zip(phases, plan), start=1):
         if (
             not isinstance(phase, dict)
             or phase.get('name') != name
@@ -243,6 +260,12 @@ def audit(data, *, expect_backend=None, expect_apk_code=None, require_standby_qu
             failure = {'phase': name, 'reason': 'phase_plan_mismatch'}
             break
         report = phase.get('report')
+        if isinstance(report, dict) and (
+            (qa_fixture_bound and not qa_fixture_matches(report, scenario, case))
+            or (not qa_fixture_bound and 'qa_fixture' in report)
+        ):
+            failure = {'phase': name, 'reason': 'suite_qa_fixture_mismatch'}
+            break
         identity = phase_apk_identity(report, expect_apk_code, artifact)
         if phase.get('state') != 'passed' or not isinstance(report, dict):
             failure = {'phase': name, 'reason': 'phase_not_completed'}
@@ -395,6 +418,11 @@ def main(argv=None):
     parser.add_argument('--expect-backend')
     parser.add_argument('--expect-apk-code', type=int)
     parser.add_argument(
+        '--require-qa-fixture-binding',
+        action='store_true',
+        help='Require each fixed QA latency phase to name its corpus scenario and case number',
+    )
+    parser.add_argument(
         '--require-standby-quiet',
         action='store_true',
         help='Require zero wake, ASR and render counter deltas in every standby phase',
@@ -406,6 +434,7 @@ def main(argv=None):
             expect_backend=args.expect_backend,
             expect_apk_code=args.expect_apk_code,
             require_standby_quiet=args.require_standby_quiet,
+            require_qa_fixture_binding=args.require_qa_fixture_binding,
         )
     except (OSError, ValueError, TypeError, KeyError, RecursionError):
         parser.exit(2, '无法复核所选私有设备批次报告。\n')
