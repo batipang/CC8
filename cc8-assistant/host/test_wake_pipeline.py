@@ -348,6 +348,60 @@ class WakePipelineTests(unittest.TestCase):
         self.assertTrue(b.wake.allowed())
         self.assertIsNone(b.wake.deadline)
 
+    def test_only_a_standalone_rest_request_returns_to_local_waiting(self):
+        for cue, transcript in (
+            ('', '休息。'),
+            ('大黄蜂', '大黄蜂，请休息一下。'),
+            ('', 'Bumblebee，先休息吧！'),
+            ('', '大黄蜂，你先休息一会儿吧。'),
+        ):
+            with self.subTest(transcript=transcript):
+                b, _, _, requests, events, asr, _ = self.session(cue, transcript)
+                if not cue:
+                    b.session.set_awake(True)
+                generation = b.session.generation
+                self.frames(b)
+                self.assertTrue(asr.wait(1))
+                deadline = time.monotonic() + 1
+                while time.monotonic() < deadline:
+                    rows = b.diagnostics_report()['requests']
+                    if rows and rows[0].get('gate') is not None:
+                        break
+                    time.sleep(0.005)
+                self.assertEqual(rows[0].get('gate'), 'wake_sleep')
+                self.assertFalse(b.session.awake)
+                self.assertTrue(b.session.active)
+                self.assertGreater(b.session.generation, generation)
+                self.assertEqual(requests, [])
+                self.assertFalse(any(name == 'transcript' for name, _ in events))
+
+    def test_negation_quotes_and_questions_about_rest_continue_to_dot(self):
+        for cue, transcript, expected in (
+            ('', '别休息', '别休息'),
+            ('', '休息？', '休息？'),
+            ('', '“休息”呢？', '“休息”呢？'),
+            ('', '什么时候休息？', '什么时候休息？'),
+            ('', '大黄蜂，提醒我十点休息', '大黄蜂，提醒我十点休息'),
+            ('Bumblebee', 'Bumblebee，别休息，继续讲。', '别休息，继续讲。'),
+        ):
+            with self.subTest(transcript=transcript):
+                b, _, _, requests, _, _, answered = self.session(cue, transcript)
+                if not cue:
+                    b.session.set_awake(True)
+                self.frames(b)
+                self.assertTrue(answered.wait(1))
+                self.assertEqual(requests, [expected])
+                self.assertTrue(b.session.awake)
+
+    def test_rest_is_an_ordinary_request_in_continuous_mode(self):
+        b, _, _, requests, _, _, answered = self.session('', '休息一下。')
+        b.session.wake = False
+        b.session.set_awake(True)
+        self.frames(b)
+        self.assertTrue(answered.wait(1))
+        self.assertEqual(requests, ['休息一下。'])
+        self.assertTrue(b.session.awake)
+
     def test_punctuated_wake_only_stays_listening_without_dispatching_a_task(self):
         for keyword, transcript in (
             ('Bumblebee', 'Bumblebee.'),

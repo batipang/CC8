@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-english-contrastive-wake-20261106.1",
+  "release_id": "p0-explicit-voice-standby-20261106.1",
   "backend": {
-    "version": "0.14.98"
+    "version": "0.14.99"
   },
   "assistant": {
     "version": "0.9.38",

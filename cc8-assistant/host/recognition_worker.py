@@ -71,6 +71,7 @@ class RecognitionHooks:
 MIN_ECHO_RISK_CREDIBLE_FRAMES = 5
 WAKE_PREFIX_SEPARATORS = ' \t\r\n，。,！!：:'
 WAKE_QUOTES = {'“': '”', '「': '」', '『': '』', '"': '"'}
+SLEEP_COMMAND = re.compile(r'(?:请)?(?:你)?(?:先)?(?:去)?休息(?:一下|一会儿?)?吧?')
 
 
 def wake_payload(text, wake_pattern):
@@ -321,23 +322,25 @@ class RecognitionWorker:
                         if not self.hooks.playing():
                             self.hooks.status('listening', '我在听')
                         continue
-                    if evidence and evidence.get('local_wake') is True:
-                        payload = wake_payload(text, self.hooks.wake_pattern)
-                        if payload is not None:
-                            text = payload
-                            # ASR can add punctuation to the name alone. Detect
-                            # that without stripping signs or decimal points from a query.
-                            if all(ch.isspace() or category(ch).startswith('P') for ch in text):
-                                decision = 'wake_only'
-                                rejected = True
-                                self.hooks.cancel_session('wake_only')
-                                self.hooks.status('listening', '我在听，请说出你的问题')
-                                continue
-                    if (
-                        self.hooks.wake()
-                        and '休息' in text
-                        and (self.hooks.wake_pattern.search(text) or len(text) < 8)
-                    ):
+                    wake_mode = self.hooks.wake()
+                    local_wake = evidence is not None and evidence.get('local_wake') is True
+                    payload = (
+                        wake_payload(text, self.hooks.wake_pattern)
+                        if local_wake or wake_mode
+                        else None
+                    )
+                    if local_wake and payload is not None:
+                        text = payload
+                        # ASR can add punctuation to the name alone. Detect
+                        # that without stripping signs or decimal points from a query.
+                        if all(ch.isspace() or category(ch).startswith('P') for ch in text):
+                            decision = 'wake_only'
+                            rejected = True
+                            self.hooks.cancel_session('wake_only')
+                            self.hooks.status('listening', '我在听，请说出你的问题')
+                            continue
+                    sleep_text = payload if payload is not None else text
+                    if wake_mode and SLEEP_COMMAND.fullmatch(sleep_text.strip().rstrip('。.!！')):
                         decision = 'wake_sleep'
                         self.hooks.set_awake(False)
                         self.hooks.cancel_session('wake_sleep')
@@ -364,7 +367,7 @@ class RecognitionWorker:
                     if visual_request(text):
                         self.hooks.begin_visual(text, 'voice')
                     else:
-                        if evidence and evidence.get('local_wake') is True:
+                        if local_wake:
                             self.hooks.bind_response_probe(
                                 text, generation, evidence.get('input_end_ns')
                             )
