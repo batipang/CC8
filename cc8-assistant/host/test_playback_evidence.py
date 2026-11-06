@@ -436,6 +436,49 @@ class AcousticEvidenceTests(unittest.TestCase):
                     self.assertIn(metric, evidence)
                 self.assertFalse(observer.response_prefix.size or observer.mic.size)
 
+    def test_response_probe_waits_for_late_leading_blocks_with_a_stable_clock(self):
+        for has_leading in (True, False):
+            with self.subTest(has_leading=has_leading):
+                reference = public_signal()
+                # The prelude matches as a 200 ms shape, but no individual
+                # 20 ms block is energetic enough to timestamp the output.
+                levels = [24, -19, 18, 23, -24, 27, -29, -22, 21, -18]
+                if not has_leading:
+                    levels.extend([20, -25, 22])
+                prelude = len(levels) * 320
+                reference[:prelude] = np.repeat(levels, 320) / 1000 + reference[:prelude] * 0.02
+                mic = scene(reference, noise=0.0002)
+                observer = PlaybackEvidence()
+                probe = observer.arm(101, 7, input_end_ns=START - 600_000_000)
+                self.addCleanup(observer.cancel)
+
+                def render(start, end):
+                    for frame in range(start, end, 320):
+                        stamp = START + round(frame * 1e9 / RATE)
+                        observer.render(101, frame, stamp, reference[frame : frame + 320])
+
+                render(0, 3200)
+                for frame in range(0, len(mic), 320):
+                    stamp = START - 200_000_000 + round(frame * 1e9 / RATE)
+                    observer.microphone(7, stamp, mic[frame : frame + 320])
+                self.assertFalse(probe.done.is_set())
+                render(3200, 3520)
+                self.assertFalse(probe.done.is_set())
+                render(3520, 3840)
+                if not has_leading:
+                    self.assertFalse(probe.done.is_set())
+                    render(3840, 4160)
+                self.assertTrue(probe.done.is_set())
+                self.assertEqual(probe.result['status'], 'observed')
+                self.assertEqual(probe.result['render_clock_resets'], 0)
+                leading = probe.result['leading_acoustic_evidence']
+                if has_leading:
+                    self.assertEqual(leading['status'], 'observed')
+                    self.assertEqual(leading['reference_block_start_ms'], 200)
+                    self.assertAlmostEqual(leading['last_voiced_to_confirmed_output_block_ms'], 920)
+                else:
+                    self.assertEqual(leading, {'status': 'reference_not_found'})
+
     def test_response_probe_waits_for_late_render_reference_after_clock_jump(self):
         for outcome in ('complete', 'expired', 'render_gap', 'no_leading_block'):
             with self.subTest(outcome=outcome):
