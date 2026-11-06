@@ -59,10 +59,27 @@ def content_free_phase(report):
     )
 
 
+def phase_apk_identity(report, expect_apk_code, previous):
+    if not isinstance(report, dict):
+        return None
+    version, code = report.get('expected_apk_version'), report.get('expected_apk_code')
+    if (
+        not isinstance(version, str)
+        or not re.fullmatch(VERSION, version)
+        or type(code) is not int
+        or not 0 < code < 2**31
+        or (expect_apk_code is not None and code != expect_apk_code)
+        or (previous is not None and previous != (version, code))
+    ):
+        return None
+    return version, code
+
+
 def recorded_tool_failure(report, expected, previous):
     if not (
         isinstance(report, dict)
         and report.get('state') == 'failed'
+        and report.get('cleanup_microphone_off_verified') is True
         and content_free_phase(report)
         and AWAKE_DIALOGUE_CHECK in expected
         and (previous is None or all(report[key] == previous[key] for key in SOURCE_FIELDS))
@@ -226,6 +243,7 @@ def audit(data, *, expect_backend=None, expect_apk_code=None, require_standby_qu
             failure = {'phase': name, 'reason': 'phase_plan_mismatch'}
             break
         report = phase.get('report')
+        identity = phase_apk_identity(report, expect_apk_code, artifact)
         if phase.get('state') != 'passed' or not isinstance(report, dict):
             failure = {'phase': name, 'reason': 'phase_not_completed'}
             if (
@@ -236,26 +254,21 @@ def audit(data, *, expect_backend=None, expect_apk_code=None, require_standby_qu
             ):
                 # The batch rejected this phase before collecting evidence.
                 failure['recorded_failure'] = 'suite_source_changed'
-            elif tool_guard_required and data.get('state') == phase.get('state') == 'failed':
+            elif (
+                tool_guard_required
+                and identity is not None
+                and data.get('state') == phase.get('state') == 'failed'
+            ):
                 recorded = recorded_tool_failure(
                     report, phase['expected_checks'], reports[-1] if reports else None
                 )
                 if recorded is not None:
                     failure['recorded_failure'] = recorded
             break
-        version, code = report.get('expected_apk_version'), report.get('expected_apk_code')
-        if (
-            not isinstance(version, str)
-            or not re.fullmatch(VERSION, version)
-            or type(code) is not int
-            or not 0 < code < 2**31
-            or (interruption and code < STOP_VISUAL_MIN_APK_CODE)
-            or (expect_apk_code is not None and code != expect_apk_code)
-            or (artifact is not None and artifact != (version, code))
-        ):
+        if identity is None or (interruption and identity[1] < STOP_VISUAL_MIN_APK_CODE):
             failure = {'phase': name, 'reason': 'apk_identity_mismatch'}
             break
-        artifact = (version, code)
+        artifact = identity
         if not content_free_phase(report):
             failure = {'phase': name, 'reason': 'phase_provenance_incomplete'}
             break
