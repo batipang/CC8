@@ -4,13 +4,19 @@ from dataclasses import replace
 import json
 import threading
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import numpy as np
 
 from bridge import Bridge
 from diagnostics import ASR_STOP_STAGE
+from minimax_client import Transport
+from recognition import MandarinRecognizer, prepare_audio
+from speech_providers import DirectSpeech
 from test_barge_in import Sink
+from test_cloud_asr import JsonResponse
+from test_minimax import Session
 
 
 def captured(*, credible=2, risky=True, local_wake=False):
@@ -47,6 +53,8 @@ class WeakNearTests(unittest.TestCase):
         playing=None,
         references=None,
         render_audio=None,
+        speech=None,
+        audio=None,
     ):
         entered, release = threading.Event(), threading.Event()
         calls = []
@@ -59,7 +67,7 @@ class WeakNearTests(unittest.TestCase):
                     release.wait(2)
                 return text
 
-        b = Bridge(Speech(), None)
+        b = Bridge(Speech() if speech is None else speech, None)
         b.session.connection = Sink()
         b.session.active = True
         b.session.awake = True
@@ -77,7 +85,7 @@ class WeakNearTests(unittest.TestCase):
         b.recognition.queue.put(
             (
                 generation,
-                np.zeros(16000),
+                np.zeros(16000) if audio is None else audio,
                 risky,
                 ['一加一等于二。'] if references is None else references,
                 {
@@ -201,6 +209,56 @@ class WeakNearTests(unittest.TestCase):
         self.assertIsNone(current['outcome'])
         events = [json.loads(p.data) for p in b.session.connection.packets]
         self.assertFalse(any(e['event'] == 'playback_resume' for e in events))
+
+    def test_asr_upload_checks_ownership_after_pcm_preparation(self):
+        pcm = np.sin(np.arange(16000) * 0.1) * 0.02
+        for before_upload in (1, 2):
+            for lost in ('replace', 'stop', 'wake'):
+                with self.subTest(before_upload=before_upload, lost=lost):
+                    preparing, release = threading.Event(), threading.Event()
+                    prep_calls = 0
+
+                    def delayed(samples):
+                        nonlocal prep_calls
+                        prep_calls += 1
+                        if prep_calls == before_upload:
+                            preparing.set()
+                            if not release.wait(2):
+                                raise TimeoutError('test did not release audio preparation')
+                        return prepare_audio(samples)
+
+                    response = JsonResponse({'text': '请换个新问题'})
+                    http = Session(response)
+                    transport = Transport(
+                        key='sk-cp-test-not-a-secret', session_factory=lambda: http
+                    )
+                    speech = DirectSpeech.__new__(DirectSpeech)
+                    speech.recognizer = MandarinRecognizer(engine='minimax', recognizer=transport)
+                    speech.voice = SimpleNamespace(cancel=lambda: None)
+                    with patch('recognition.prepare_audio', side_effect=delayed):
+                        b, key, _, replies, _, _, _ = self.start(
+                            capture=captured(credible=30),
+                            risky=before_upload == 2,
+                            render_audio=pcm if before_upload == 2 else None,
+                            audio=pcm,
+                            speech=speech,
+                        )
+                        try:
+                            self.assertTrue(preparing.wait(1))
+                            if lost == 'replace':
+                                b.cancel('replacement')
+                            elif lost == 'stop':
+                                b.stop()
+                            else:
+                                b.session.set_awake(False)
+                        finally:
+                            release.set()
+                        row = self.wait(b, key)
+                    self.assertEqual(len(http.calls), before_upload - 1)
+                    self.assertEqual(row['gate'], 'stale')
+                    self.assertEqual(row['outcome'], 'cancelled')
+                    self.assertNotIn('error_stage', row)
+                    self.assertEqual(replies, [])
 
     def test_replaced_or_stopped_queued_voice_does_not_start_asr_or_publish_status(self):
         original = Bridge.valid

@@ -106,7 +106,7 @@ class MandarinRecognizer:
         if self.engine == 'minimax':
             self.recognizer.cancel()
 
-    def recognize(self, samples):
+    def recognize(self, samples, *, is_current=None):
         # 云端仅接收当前单句的内存 WAV；持续音频、AEC 和即时插话仍在 Mac 本地处理。
         start = time.monotonic()
         pcm, gain = prepare_audio(samples)
@@ -119,7 +119,12 @@ class MandarinRecognizer:
                 output.setsampwidth(2)
                 output.setframerate(16000)
                 output.writeframes(np.rint(pcm * 32768).astype('<i2').tobytes())
-            text = self.recognizer.transcribe(buffer.getvalue())
+            wav = buffer.getvalue()
+            text = (
+                self.recognizer.transcribe(wav)
+                if is_current is None
+                else self.recognizer.transcribe(wav, is_current)
+            )
         elif self.engine == 'sensevoice':
             stream = self.recognizer.create_stream()
             stream.accept_waveform(16000, pcm)

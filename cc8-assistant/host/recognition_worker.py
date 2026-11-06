@@ -13,6 +13,7 @@ from unicodedata import category
 import numpy as np
 from diagnostics import ASR_STOP_STAGE
 from dsp import RATE, STOP_COMMANDS, resembles_playback
+from minimax_client import Cancelled
 from qa_speech import SCENARIO_QUESTIONS, normalize_question, tool_asr_result
 from reply_types import Reply
 from recognition_commands import SLEEP_COMMAND, stop_command, stop_matches_reference, wake_payload
@@ -62,6 +63,15 @@ class RecognitionWorker:
             except queue.Empty:
                 break
 
+    def _recognize_current(self, audio, is_current):
+        if not is_current():
+            raise Cancelled('Turn cancelled')
+        speech = self.hooks.speech()
+        recognize = getattr(speech, 'recognize_current', None)
+        if callable(recognize):
+            return recognize(audio, is_current)
+        return speech.recognize(audio)
+
     def work(self):
         while True:
             job = self.queue.get()
@@ -82,6 +92,10 @@ class RecognitionWorker:
             decision = 'stale'
             tool_sample_rejection = None
             compare_target = None
+
+            def is_current():
+                return self.hooks.valid(generation) and self.hooks.wake_allowed()
+
             try:
                 # The dequeued job can lose ownership before announcing ASR.
                 with self.hooks.lock:
@@ -96,7 +110,7 @@ class RecognitionWorker:
                         self.hooks.status('thinking', '正在识别语音…')
                     self.hooks.diagnostics().asr_start(trace_id, len(audio))
                     self.hooks.metric('voice_asr_attempts', increment=True)
-                text = self.hooks.speech().recognize(audio)
+                text = self._recognize_current(audio, is_current)
                 self.hooks.diagnostics().mark(trace_id, 'asr_end')
                 asr = getattr(self.hooks.speech(), 'recognizer', None)
                 if asr:
@@ -181,7 +195,7 @@ class RecognitionWorker:
                     # using the selected ASR provider; never decode the full answer.
                     self.hooks.metric('render_asr_checks', increment=True)
                     self.hooks.metric('voice_asr_attempts', increment=True)
-                    render_text = self.hooks.speech().recognize(render_audio)
+                    render_text = self._recognize_current(render_audio, is_current)
                     if not self.hooks.valid(generation):
                         continue
                     echo = bool(render_text) and resembles_playback(text, [render_text])
@@ -336,6 +350,8 @@ class RecognitionWorker:
                                 text, generation, evidence.get('input_end_ns')
                             )
                         self.hooks.enqueue_response(Reply(generation, text))
+            except Cancelled:
+                decision = 'stale'
             except Exception as e:
                 decision = 'error'
                 self.hooks.diagnostics().failure(trace_id, 'asr', e)
