@@ -15,6 +15,9 @@ from dsp import FRAME
 from local_wake import replay_english_inputs
 from wake_input_probe import NAME_END, WakeInputProbe, compare_stream
 from wake_input_receipt import (
+    CHINESE_FIXTURE_FRAMES,
+    CHINESE_PCM_SHA256,
+    CHINESE_WAV_SHA256,
     FIXTURE_FRAMES,
     FIXTURE_PCM_SHA256,
     FIXTURE_WAV_SHA256,
@@ -66,6 +69,53 @@ class WakeInputTests(unittest.TestCase):
         self.assertFalse(
             valid_request({'operation': 'wake_input_result', 'token': 'a' * 32, 'audio': True})
         )
+        chinese = {
+            **metadata(),
+            'frames': CHINESE_FIXTURE_FRAMES,
+            'pcm_sha256': CHINESE_PCM_SHA256,
+            'wav_sha256': CHINESE_WAV_SHA256,
+        }
+        self.assertTrue(valid_request({**arm, 'metadata': chinese}))
+        self.assertFalse(
+            valid_request({**arm, 'metadata': {**chinese, 'wav_sha256': FIXTURE_WAV_SHA256}})
+        )
+
+    def test_chinese_probe_replays_three_matched_streams_and_erases_them(self):
+        source = np.random.default_rng(882).integers(
+            -4000, 4000, CHINESE_FIXTURE_FRAMES, dtype='<i2'
+        )
+        pcm = source.tobytes()
+        received = np.zeros(112000)
+        received[3200 : 3200 + len(source)] = source.astype(float) / 32768
+        with patch('wake_input_probe.CHINESE_PCM_SHA256', hashlib.sha256(pcm).hexdigest()):
+            probe = WakeInputProbe(pcm, chinese=True, timer=Mock())
+        retained = probe.reference, probe.primary, probe.alternate, probe.raw
+        for frame in received.reshape(-1, FRAME):
+            probe.observe(frame, frame / 2, -frame)
+
+        def replay(streams, cancelled):
+            self.assertFalse(cancelled())
+            np.testing.assert_array_equal(streams['primary'], received)
+            np.testing.assert_array_equal(streams['alternate'], received / 2)
+            np.testing.assert_array_equal(streams['raw'], -received)
+            return {
+                'status': 'measured',
+                'primary_hit': False,
+                'alternate_hit': True,
+                'raw_hit': True,
+            }
+
+        with patch('local_wake.replay_chinese_inputs', side_effect=replay) as decode:
+            report = probe.read()
+        decode.assert_called_once()
+        self.assertEqual(summarize(report), report)
+        self.assertEqual(report['language'], 'zh')
+        self.assertEqual(report['raw_frames'], len(received))
+        self.assertTrue(all(not np.any(array) for array in retained))
+        self.assertEqual(
+            summarize({**report, 'raw_frames': len(received) - FRAME}), {'status': 'invalid'}
+        )
+        self.assertEqual(summarize({**report, 'raw_pcm': 'private'}), {'status': 'invalid'})
 
     def test_owner_socket_uses_private_fixture_root_and_returns_only_probe_receipt(self):
         bridge = Mock()
@@ -257,6 +307,38 @@ class WakeInputTests(unittest.TestCase):
         bridge.wake.feed(np.zeros(FRAME), bridge.generation, capture_nanos=0)
         self.assertEqual(probe.frames, 0)
         probe.cancel()
+
+    def test_raw_probe_tracks_only_current_capture_and_clears_on_wake(self):
+        pcm = b'\x01\x00' * CHINESE_FIXTURE_FRAMES
+        bridge, detector = self.bridge()
+        with patch('wake_input_probe.CHINESE_PCM_SHA256', hashlib.sha256(pcm).hexdigest()):
+            probe = WakeInputProbe(pcm, chinese=True, timer=Mock())
+        bridge.wake.input_probe = probe
+        raw_buffer = probe.raw
+        frame = np.full(FRAME, 0.25)
+        bridge.wake.feed(frame, bridge.generation + 1, capture_nanos=0, raw_pcm=frame)
+        self.assertEqual(probe.raw_frames, 0)
+        bridge.wake.feed(frame, bridge.generation, capture_nanos=0, raw_pcm=frame * 2)
+        np.testing.assert_array_equal(raw_buffer[:FRAME], frame * 2)
+        detector.feed.return_value = '大黄蜂'
+        self.assertTrue(bridge.wake.feed(frame, bridge.generation, capture_nanos=1, raw_pcm=frame))
+        self.assertTrue(probe.closed)
+        self.assertFalse(np.any(raw_buffer))
+        self.assertEqual(bridge.wake.read_input_probe(probe.token), {'status': 'unavailable'})
+
+    def test_raw_probe_clears_before_sampling_playback_risk(self):
+        pcm = b'\x01\x00' * CHINESE_FIXTURE_FRAMES
+        bridge, _ = self.bridge()
+        with patch('wake_input_probe.CHINESE_PCM_SHA256', hashlib.sha256(pcm).hexdigest()):
+            probe = WakeInputProbe(pcm, chinese=True, timer=Mock())
+        bridge.wake.input_probe = probe
+        raw_buffer = probe.raw
+        frame = np.ones(FRAME)
+        bridge.wake.feed(frame, bridge.generation, capture_nanos=0, raw_pcm=frame)
+        bridge.wake.feed(frame, bridge.generation, capture_nanos=1, raw_pcm=frame, echo_risk=True)
+        self.assertTrue(probe.closed)
+        self.assertEqual(probe.raw_frames, FRAME)
+        self.assertFalse(np.any(raw_buffer))
 
     def test_no_arm_when_idle_and_source_reset_during_fixture_load_is_rejected(self):
         bridge, _ = self.bridge()

@@ -87,18 +87,18 @@ class WakeController:
             and (not self.hooks.wake_mode() or self.ready)
         )
 
-    def arm_input_probe(self, pcm):
+    def arm_input_probe(self, pcm, *, chinese=False):
         from wake_input_probe import WakeInputProbe
 
         with self.hooks.lock:
             counts = self.english_input_samples()
             if counts is None or counts['alternate'] is None:
-                raise RuntimeError('English wake input accounting unavailable')
+                raise RuntimeError('Wake input accounting unavailable')
             if self.reading_input_probe is not None or (
                 self.input_probe is not None and not self.input_probe.closed
             ):
                 raise RuntimeError('Wake input probe already armed')
-            self.input_probe = WakeInputProbe(pcm)
+            self.input_probe = WakeInputProbe(pcm, chinese=True) if chinese else WakeInputProbe(pcm)
             return {'status': 'armed', 'token': self.input_probe.token}
 
     def read_input_probe(self, token):
@@ -170,7 +170,15 @@ class WakeController:
                 self.deadline = self.clock() + self.window_seconds
 
     def feed(
-        self, pcm, generation, *, capture_nanos, echo_risk=False, render_text='', alternate_pcm=None
+        self,
+        pcm,
+        generation,
+        *,
+        capture_nanos,
+        echo_risk=False,
+        render_text='',
+        alternate_pcm=None,
+        raw_pcm=None,
     ):
         with self.hooks.lock:
             if (
@@ -207,7 +215,10 @@ class WakeController:
             ):
                 return False
             if probe is not None and probe is self.input_probe:
-                probe.observe(pcm, alternate_pcm)
+                if probe.chinese and echo_risk:
+                    self._cancel_input_probe()
+                else:
+                    probe.observe(pcm, alternate_pcm, raw_pcm if probe.chinese else None)
             if not recognized:
                 return False
             if echo_risk and WAKE_PATTERN.search(render_text):

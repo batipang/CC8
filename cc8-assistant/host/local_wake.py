@@ -76,6 +76,24 @@ def replay_english_inputs(primary, alternate, cancelled):
     return {'status': 'measured', 'primary_hit': primary_hit, 'alternate_hit': alternate_hit}
 
 
+def replay_chinese_inputs(streams, cancelled):
+    if cancelled():
+        return {'status': 'unavailable'}
+    detector = keyword_spotter(MODEL)
+    result = {'status': 'measured'}
+    for name, frames in streams.items():
+        wake = ChineseWake(detector)
+        hit = False
+        for offset in range(0, len(frames), FRAME):
+            if cancelled():
+                return {'status': 'unavailable'}
+            if wake.feed(frames[offset : offset + FRAME]) == '大黄蜂':
+                hit = True
+                break
+        result[name + '_hit'] = hit
+    return {'status': 'unavailable'} if cancelled() else result
+
+
 class WakeDetector:
     KEYWORDS = ChineseWake.KEYWORDS | EnglishWake.KEYWORDS
 

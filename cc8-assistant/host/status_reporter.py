@@ -105,6 +105,7 @@ class StatusReporter:
             'render_clock_evidence_supported': playback.device_can_report_clock,
             'local_wake_ready': self.hooks.wake().ready,
             'wake_input_probe_supported': True,
+            'chinese_wake_input_probe_supported': True,
             'tool_sample_guard_supported': True,
             'waiting_for_wake': state.active
             and not self.hooks.calibration().active

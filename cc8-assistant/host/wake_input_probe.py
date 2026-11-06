@@ -1,4 +1,4 @@
-"""One short, opt-in in-memory observation of actual English KWS inputs."""
+"""One short, opt-in in-memory observation of actual wake inputs."""
 
 import hashlib
 import threading
@@ -7,7 +7,15 @@ import uuid
 import numpy as np
 
 from dsp import FRAME
-from wake_input_receipt import FIXTURE_FRAMES, FIXTURE_PCM_SHA256, MAX_FRAMES, MIN_MATCH_FRAMES
+from wake_input_receipt import (
+    CHINESE_FIXTURE_FRAMES,
+    CHINESE_MAX_FRAMES,
+    CHINESE_PCM_SHA256,
+    FIXTURE_FRAMES,
+    FIXTURE_PCM_SHA256,
+    MAX_FRAMES,
+    MIN_MATCH_FRAMES,
+)
 
 TTL_SECONDS = 7
 DECIMATION = 8
@@ -15,6 +23,8 @@ DECIMATION = 8
 # look for the name near the implied start. These are source sample boundaries.
 NAME_END = 10400
 QUESTION_FIRST, QUESTION_LAST = 13600, 35600
+# Fixed case 27 mixture has a 200 ms noise lead before the spoken name.
+CHINESE_WINDOWS = (3200, 16000, 20800, 51200)
 NAME_SEARCH = 30
 RIVAL_RADIUS = 80
 
@@ -38,12 +48,13 @@ def _scores(audio, reference):
     return np.clip(np.abs(covariance) / norm, 0, 1)
 
 
-def compare_stream(samples, reference):
-    if len(samples) < MIN_MATCH_FRAMES:
+def compare_stream(samples, reference, *, chinese=False):
+    minimum = CHINESE_FIXTURE_FRAMES + 1280 if chinese else MIN_MATCH_FRAMES
+    if len(samples) < minimum:
         return {'status': 'capture_incomplete'}
     audio, source = _downsample(samples), _downsample(reference)
-    name_end = NAME_END // DECIMATION
-    question_first, question_last = QUESTION_FIRST // DECIMATION, QUESTION_LAST // DECIMATION
+    windows = CHINESE_WINDOWS if chinese else (0, NAME_END, QUESTION_FIRST, QUESTION_LAST)
+    name_first, name_end, question_first, question_last = (n // DECIMATION for n in windows)
     question = source[question_first:question_last]
     scores = _scores(audio, question)
     peak = int(np.argmax(scores))
@@ -61,12 +72,14 @@ def compare_stream(samples, reference):
     if start < NAME_SEARCH or start + len(source) > len(audio):
         return {**result, 'status': 'fixture_boundary_unconfirmed'}
     name_scores = _scores(
-        audio[start - NAME_SEARCH : start + name_end + NAME_SEARCH], source[:name_end]
+        audio[start + name_first - NAME_SEARCH : start + name_end + NAME_SEARCH],
+        source[name_first:name_end],
     )
     name_peak = int(np.argmax(name_scores))
     name_score = float(name_scores[name_peak])
-    name_start = (start + name_peak - NAME_SEARCH) * DECIMATION
-    name_rms = float(np.sqrt(np.mean(samples[name_start : name_start + NAME_END] ** 2)))
+    name_start = (start + name_first + name_peak - NAME_SEARCH) * DECIMATION
+    name_size = (name_end - name_first) * DECIMATION
+    name_rms = float(np.sqrt(np.mean(samples[name_start : name_start + name_size] ** 2)))
     question_rms = float(
         np.sqrt(np.mean(samples[peak * DECIMATION : (peak + len(question)) * DECIMATION] ** 2))
     )
@@ -90,17 +103,26 @@ def compare_stream(samples, reference):
 
 
 class WakeInputProbe:
-    def __init__(self, pcm, *, timer=threading.Timer):
-        if len(pcm) != 2 * FIXTURE_FRAMES or hashlib.sha256(pcm).hexdigest() != FIXTURE_PCM_SHA256:
+    def __init__(self, pcm, *, chinese=False, timer=threading.Timer):
+        fixture = (
+            (CHINESE_FIXTURE_FRAMES, CHINESE_PCM_SHA256)
+            if chinese
+            else (FIXTURE_FRAMES, FIXTURE_PCM_SHA256)
+        )
+        if len(pcm) != 2 * fixture[0] or hashlib.sha256(pcm).hexdigest() != fixture[1]:
             raise ValueError('Unexpected wake probe fixture')
+        self.chinese = chinese
+        self.limit = CHINESE_MAX_FRAMES if chinese else MAX_FRAMES
         self.token = uuid.uuid4().hex
         self.lock = threading.Lock()
         self.reference = np.frombuffer(pcm, dtype='<i2').astype(float) / 32768
-        self.primary, self.alternate = np.empty(MAX_FRAMES), np.empty(MAX_FRAMES)
+        self.primary, self.alternate = np.empty(self.limit), np.empty(self.limit)
+        self.raw = np.empty(self.limit) if chinese else np.empty(0)
         self.frames = self.alternate_frames = 0
+        self.raw_frames = 0
         self.closed = False
         self.cancelled = threading.Event()
-        self.timer = timer(TTL_SECONDS, self.cancel)
+        self.timer = timer(10 if chinese else TTL_SECONDS, self.cancel)
         self.timer.daemon = True
         try:
             self.timer.start()
@@ -111,8 +133,8 @@ class WakeInputProbe:
     def _close(self):
         self.closed = True
         self.timer.cancel()
-        arrays = self.reference, self.primary, self.alternate
-        self.reference = self.primary = self.alternate = np.empty(0)
+        arrays = self.reference, self.primary, self.alternate, self.raw
+        self.reference = self.primary = self.alternate = self.raw = np.empty(0)
         return arrays
 
     def cancel(self):
@@ -121,11 +143,13 @@ class WakeInputProbe:
             for audio in self._close():
                 audio.fill(0)
 
-    def observe(self, primary, alternate):
+    def observe(self, primary, alternate, raw=None):
         with self.lock:
-            if self.closed or self.frames + FRAME > MAX_FRAMES:
+            if self.closed or self.frames + FRAME > self.limit:
                 return
-            if primary.shape != (FRAME,) or (alternate is not None and alternate.shape != (FRAME,)):
+            if primary.shape != (FRAME,) or any(
+                stream is not None and stream.shape != (FRAME,) for stream in (alternate, raw)
+            ):
                 for audio in self._close():
                     audio.fill(0)
                 return
@@ -134,6 +158,9 @@ class WakeInputProbe:
             if alternate is not None:
                 self.alternate[start : start + FRAME] = alternate
                 self.alternate_frames += FRAME
+            if self.chinese and raw is not None:
+                self.raw[start : start + FRAME] = raw
+                self.raw_frames += FRAME
             self.frames += FRAME
 
     def read(self):
@@ -141,33 +168,48 @@ class WakeInputProbe:
             if self.closed:
                 return {'status': 'unavailable'}
             arrays = self._close()
-            reference, primary, alternate = arrays
+            reference, primary, alternate, raw = arrays
         try:
             primary = primary[: self.frames]
             alternate_view = alternate[: self.frames]
-            primary_shape = compare_stream(primary, reference)
+            primary_shape = compare_stream(primary, reference, chinese=self.chinese)
             alternate_shape = (
-                compare_stream(alternate_view, reference)
+                compare_stream(alternate_view, reference, chinese=self.chinese)
                 if self.alternate_frames == self.frames
                 else {'status': 'input_gap'}
             )
-            replay = {'status': 'not_run'}
-            if primary_shape['status'] == alternate_shape['status'] == 'matched':
-                from local_wake import replay_english_inputs
-
-                try:
-                    replay = replay_english_inputs(primary, alternate_view, self.cancelled.is_set)
-                except (ImportError, OSError, RuntimeError, ValueError):
-                    replay = {'status': 'unavailable'}
-            return {
+            result = {
                 'status': 'measured',
                 'raw_audio_saved': False,
                 'primary_frames': self.frames,
                 'alternate_frames': self.alternate_frames,
                 'primary': primary_shape,
                 'alternate': alternate_shape,
-                'fresh_replay': replay,
             }
+            streams = {'primary': primary, 'alternate': alternate_view}
+            if self.chinese:
+                raw_view = raw[: self.frames]
+                result.update(
+                    language='zh',
+                    raw_frames=self.raw_frames,
+                    raw=compare_stream(raw_view, reference, chinese=True)
+                    if self.raw_frames == self.frames
+                    else {'status': 'input_gap'},
+                )
+                streams['raw'] = raw_view
+            result['fresh_replay'] = {'status': 'not_run'}
+            if all(result[key]['status'] == 'matched' for key in streams):
+                from local_wake import replay_chinese_inputs, replay_english_inputs
+
+                try:
+                    result['fresh_replay'] = (
+                        replay_chinese_inputs(streams, self.cancelled.is_set)
+                        if self.chinese
+                        else replay_english_inputs(primary, alternate_view, self.cancelled.is_set)
+                    )
+                except (ImportError, OSError, RuntimeError, ValueError):
+                    result['fresh_replay'] = {'status': 'unavailable'}
+            return result
         finally:
             for audio in arrays:
                 audio.fill(0)
