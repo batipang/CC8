@@ -1,8 +1,12 @@
 """Exercise the transport's write deadline against real local child pipes."""
 
+from dataclasses import replace
 import hashlib
+import json
+from pathlib import Path
 import socket
 import sys
+import tempfile
 import threading
 import unittest
 from types import SimpleNamespace
@@ -142,6 +146,41 @@ class USBPipeTests(unittest.TestCase):
         self.assertEqual(bridge.session.epoch, 7)
         self.assertFalse(bridge.playback.playing)
         self.assertEqual(bridge.workspace.tasks[-1]['status'], 'cancelled')
+
+    def test_status_cache_write_failure_does_not_tear_down_the_selected_route(self):
+        hub = self.hub()
+        wifi = self.wifi(hub)
+        with patch('threading.Thread.start'):
+            bridge = Bridge(None, None)
+        with tempfile.TemporaryDirectory() as folder:
+            private = Path(folder)
+            bridge.reporting.hooks = replace(
+                bridge.reporting.hooks, private_directory=lambda: private
+            )
+            cache = private / 'status.json'
+            blocked = private / 'status.tmp'
+            self.assertTrue(reconcile_transport(bridge, hub))
+            previous = cache.read_bytes()
+            self.assertEqual(json.loads(previous)['transport'], 'wifi')
+            blocked.mkdir()
+            usb = hub.register(self.peer(), 'usb')
+            self.assertEqual(hub.events.get(timeout=2), ('up', usb, None))
+            # The dispatcher closes the event channel when an OSError escapes.
+            with patch.object(bridge, 'log') as log:
+                self.assertTrue(reconcile_transport(bridge, hub))
+                log.assert_any_call('status_cache_write_failed', error_type='IsADirectoryError')
+            self.assertIs(hub.active, usb)
+            self.assertIs(bridge.session.connection, usb)
+            self.assertFalse(usb.closed or wifi.closed)
+            self.assertFalse(bridge.session.active)
+            self.assertEqual(bridge.health()['transport'], 'usb')
+            self.assertEqual(cache.read_bytes(), previous)
+            self.assertFalse(reconcile_transport(bridge, hub))
+
+            blocked.rmdir()
+            bridge.save_status()
+            self.assertEqual(json.loads(cache.read_bytes())['transport'], 'usb')
+            self.assertFalse(usb.closed or wifi.closed)
 
     def test_pipe_timeout_invalidates_direct_callers_and_does_not_append_bytes(self):
         pipe = self.peer()
