@@ -3066,6 +3066,29 @@ class DeviceAutomationTests(unittest.TestCase):
             {'status': 'unconfirmed', 'reason': 'expired'},
         )
 
+    def test_response_reference_prefix_diagnosis_is_allowlisted_and_owned(self):
+        expected = {'status': 'unconfirmed', 'reason': 'reference_not_found'}
+        receipt = {**expected, 'generation': 8}
+        for prefix in ('nonzero_below_floor', 'digital_silence'):
+            value = {**receipt, 'reference_prefix': prefix}
+            self.assertEqual(
+                summarize_response_acoustic(value, 8), {**expected, 'reference_prefix': prefix}
+            )
+            self.assertEqual(
+                summarize_response_acoustic(value, 9),
+                {'status': 'unconfirmed', 'reason': 'generation_mismatch'},
+            )
+        for invalid in ('private-provider-message', {'pcm': [1]}):
+            self.assertEqual(
+                summarize_response_acoustic({**receipt, 'reference_prefix': invalid}, 8), expected
+            )
+        observed = {
+            'status': 'observed',
+            ACOUSTIC_RESPONSE_METRIC: 1040,
+            'alignment': 'matched_after_digital_silence',
+        }
+        self.assertEqual(summarize_response_acoustic({**observed, 'generation': 8}, 8), observed)
+
     def test_synthetic_barge_dry_plan_has_no_side_effects(self):
         output = io.StringIO()
         with (

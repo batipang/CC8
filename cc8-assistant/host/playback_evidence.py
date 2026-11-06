@@ -21,9 +21,11 @@ REFERENCE_LIMIT = 24000
 MIN_DELAY = -1280  # Render-clock estimates can be slightly ahead of capture.
 MAX_DELAY = 12800
 LEADING_BLOCK = 320  # 20 ms at 16 kHz.
-LEADING_LIMIT = 4000  # Search only the first 250 ms of the original reference.
+LEADING_LIMIT = 4000  # Standard leading search starts within the first 250 ms.
 LEADING_SEARCH_FRAMES = ((LEADING_LIMIT - 1) // LEADING_BLOCK + 1) * LEADING_BLOCK
 RESPONSE_PREFIX_LIMIT = LEADING_LIMIT + WINDOW
+# The existing prefix buffer must also hold two full confirmation blocks.
+ZERO_PAD_SEARCH_LIMIT = RESPONSE_PREFIX_LIMIT - 2 * LEADING_BLOCK
 PREFIX_AGREEMENT = 32  # 2 ms on the device capture clock.
 PREFIX_SEARCH_RADIUS = 1280  # Inspect competing matches within 80 ms of the projected block.
 MIN_REFERENCE_RMS = 0.01
@@ -333,6 +335,37 @@ class PlaybackEvidence:
                 evidence['last_voiced_to_confirmed_output_block_ms'] = round(elapsed / 1e6, 3)
         return evidence
 
+    def _stable_response_leading(self, origin, offset):
+        required = LEADING_SEARCH_FRAMES if offset is None else offset + 2 * LEADING_BLOCK
+        if len(self.reference) < required:
+            return None
+        if offset is not None:
+            return self._leading_evidence(origin, self.reference, offset)
+
+        # Only skip exact digital silence. A quiet but nonzero prefix may be
+        # audible, so a later block cannot stand in for its onset.
+        prefix = self.response_prefix
+        if np.any(prefix[:LEADING_SEARCH_FRAMES]):
+            return {'status': 'reference_not_found', 'reference_prefix': 'nonzero_below_floor'}
+        nonzero = prefix[:ZERO_PAD_SEARCH_LIMIT] != 0
+        if not np.any(nonzero):
+            if len(prefix) < ZERO_PAD_SEARCH_LIMIT:
+                return None
+            return {'status': 'reference_not_found', 'reference_prefix': 'digital_silence'}
+
+        # Check the block containing the very first nonzero sample, rather
+        # than searching later for an easier match. Keep the long anchor and
+        # both existing short-block checks at the same capture alignment.
+        first = int(np.argmax(nonzero)) // LEADING_BLOCK * LEADING_BLOCK
+        if len(prefix) < first + 2 * LEADING_BLOCK:
+            return None
+        if np.std(prefix[first : first + LEADING_BLOCK]) < MIN_REFERENCE_RMS:
+            return {'status': 'reference_not_sustained'}
+        result = self._leading_evidence(origin, prefix, first)
+        if result['status'] == 'observed':
+            result['alignment'] = 'matched_after_digital_silence'
+        return result
+
     def _response_leading_after_clock_jump(self, matched_capture_frame):
         if self.current.input_end_ns is None:
             return {'status': 'render_clock_discontinuous'}
@@ -513,18 +546,13 @@ class PlaybackEvidence:
                     return
             else:
                 offset = first_leading_block(self.reference)
+                origin = left + peak - self.template_offset
                 if self.current.input_end_ns is not None:
-                    # The capture window can be ready before the RENDER prefix.
-                    required_frames = (
-                        LEADING_SEARCH_FRAMES if offset is None else offset + 2 * LEADING_BLOCK
-                    )
-                    if len(self.reference) < required_frames:
+                    leading = self._stable_response_leading(origin, offset)
+                    if leading is None:
                         return
-                leading = self._leading_evidence(
-                    left + peak - self.template_offset,
-                    self.reference,
-                    offset,
-                )
+                else:
+                    leading = self._leading_evidence(origin, self.reference, offset)
         evidence = dict(
             leading_acoustic_evidence=leading,
             correlation=round(confidence, 4),

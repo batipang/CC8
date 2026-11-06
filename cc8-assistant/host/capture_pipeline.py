@@ -169,6 +169,8 @@ class CapturePipeline:
                 receipt['anchor_diagnostic'] = leading['anchor_diagnostic']
             if reason == 'response_prefix_discontinuous' and 'room_fit_status' in leading:
                 receipt['room_fit_status'] = leading['room_fit_status']
+            if reason == 'reference_not_found' and 'reference_prefix' in leading:
+                receipt['reference_prefix'] = leading['reference_prefix']
             return receipt
         receipt = {
             'status': 'observed',

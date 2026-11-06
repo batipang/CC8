@@ -547,7 +547,13 @@ class AcousticEvidenceTests(unittest.TestCase):
                     self.assertEqual(leading['reference_block_start_ms'], 200)
                     self.assertAlmostEqual(leading['last_voiced_to_confirmed_output_block_ms'], 920)
                 else:
-                    self.assertEqual(leading, {'status': 'reference_not_found'})
+                    self.assertEqual(
+                        leading,
+                        {
+                            'status': 'reference_not_found',
+                            'reference_prefix': 'nonzero_below_floor',
+                        },
+                    )
 
     def test_response_probe_waits_for_late_render_reference_after_clock_jump(self):
         for outcome in ('complete', 'expired', 'render_gap', 'no_leading_block'):
@@ -777,6 +783,72 @@ class ProbeIntegrationTests(unittest.TestCase):
                 )
                 self.assertFalse(capture.evidence.mic.size)
                 self.assertEqual(capture.read_response_probe(token), {'status': 'unavailable'})
+
+    def test_response_can_confirm_first_output_after_exact_digital_silence(self):
+        metric = 'last_voiced_to_confirmed_output_block_ms'
+        for condition, expected in (
+            (
+                'exact_silence',
+                {'status': 'observed', metric: 1040, 'alignment': 'matched_after_digital_silence'},
+            ),
+            (
+                'weak_prelude',
+                {
+                    'status': 'unconfirmed',
+                    'reason': 'reference_not_found',
+                    'reference_prefix': 'nonzero_below_floor',
+                },
+            ),
+            (
+                'past_limit',
+                {
+                    'status': 'unconfirmed',
+                    'reason': 'reference_not_found',
+                    'reference_prefix': 'digital_silence',
+                },
+            ),
+            ('weak_first_block', {'status': 'unconfirmed', 'reason': 'reference_not_sustained'}),
+            (
+                'weak_full_rate_block',
+                {'status': 'unconfirmed', 'reason': 'reference_not_sustained'},
+            ),
+            (
+                'weak_first_capture_block',
+                {'status': 'unconfirmed', 'reason': 'leading_match_unconfirmed'},
+            ),
+        ):
+            for render_first in (False, True):
+                with self.subTest(condition=condition, render_first=render_first):
+                    bridge = self.bridge()
+                    bridge.session.active = True
+                    bridge.session.epoch = 7
+                    capture = bridge.capture
+                    token = capture.arm_response_probe(1)
+                    capture.bind_response_probe('一加一等于几？', 101, START - 600_000_000)
+                    reference = public_signal()
+                    start = 7360 if condition == 'past_limit' else 5120
+                    reference[:start] = 0
+                    if condition == 'weak_prelude':
+                        reference[640] = 1 / 32768
+                    if condition == 'weak_first_block':
+                        reference[start - 320] = 1 / 32768
+                    if condition == 'weak_full_rate_block':
+                        block = reference[start : start + 320]
+                        block[1::2] = 0
+                        block[::2] -= block[::2].mean()
+                        block[::2] *= 0.012 / np.std(block[::2])
+                    microphone = scene(reference, noise=0.0002)
+                    if condition == 'weak_first_capture_block':
+                        block = microphone[5120 + start : 5120 + start + 320]
+                        block[:] = 0.04 + (block - 0.04) * 0.035
+                    feed(capture.evidence, reference, microphone, render_first=render_first)
+                    self.assertEqual(
+                        capture.read_response_probe(token), {'generation': 101, **expected}
+                    )
+                    self.assertEqual(capture.read_response_probe(token), {'status': 'unavailable'})
+                    self.assertFalse(
+                        capture.evidence.response_prefix.size or capture.evidence.mic.size
+                    )
 
     def test_response_receipt_keeps_room_fit_failure_separate_from_prefix_match(self):
         reference = public_signal()

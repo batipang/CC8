@@ -389,6 +389,11 @@ def summarize_response_acoustic(value, generation):
                 'prefix_shape_mismatch',
             ):
                 timing['room_fit_status'] = room_status
+        if reason == 'reference_not_found' and value.get('reference_prefix') in (
+            'nonzero_below_floor',
+            'digital_silence',
+        ):
+            timing['reference_prefix'] = value['reference_prefix']
         return timing
     elapsed = observed_response_interval(value)
     if elapsed is None:
@@ -399,6 +404,7 @@ def summarize_response_acoustic(value, generation):
             'matched_render_frames',
             'matched_render_frames_room_fit',
             'matched_render_frames_room_alignment',
+            'matched_after_digital_silence',
         ):
             return {'status': 'unconfirmed', 'reason': 'invalid_receipt'}
         timing['alignment'] = value['alignment']
