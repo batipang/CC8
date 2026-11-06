@@ -17,10 +17,12 @@ from device_smoke import (
     FAST_STOP_DEVICE_METRIC,
     QA_PLAYOUT_METRIC,
     QA_STAGE_METRICS,
+    SmokeRun,
     STOP_VISUAL_METRIC,
     planned_checks,
     run_device_suite,
 )
+from qa_speech import SCENARIO_QUESTIONS
 
 
 class PreparedInputAuditTests(unittest.TestCase):
@@ -86,10 +88,12 @@ def saved_suite(
     missing_acoustic=(),
     standby_only=False,
     missing_standby_quiet=None,
+    fixture_bound=False,
+    misplaced_fixture=None,
 ):
     index = 0
 
-    def make_run(options, _checkpoint, **_kwargs):
+    def make_run(options, _checkpoint, **kwargs):
         nonlocal index
         index += 1
         response = 10 * index
@@ -107,6 +111,12 @@ def saved_suite(
             'elapsed_seconds': 960 if 'standby' in options else 60,
             'checks': [{'name': n, 'state': 'passed'} for n in planned_checks(options)],
         }
+        if fixture_bound:
+            case = SCENARIO_QUESTIONS[scenario].index(kwargs['qa_question']) + 1
+            report['qa_fixture'] = {
+                'scenario': scenario,
+                'case': case - 1 if case == misplaced_fixture else case,
+            }
         if 'standby' in options:
             report['standby_evidence'] = {
                 'last_awake_seconds': 896,
@@ -197,6 +207,7 @@ def saved_suite(
         make_run,
         lambda _: None,
         qa_latency=qa,
+        qa_fixture_bound=fixture_bound,
         response_acoustic=qa,
         response_acoustic_coverage=acoustic_coverage,
         extended_voice=extended,
@@ -214,6 +225,56 @@ def saved_suite(
 
 
 class AuditDeviceSuiteTests(unittest.TestCase):
+    def test_bound_qa_report_rejects_a_reused_or_misplaced_fixture(self):
+        original = saved_suite(qa=True, fixture_bound=True)
+        self.assertTrue(audit(original, require_qa_fixture_binding=True)['verified'])
+
+        for variant in ('reused', 'wrong_scenario', 'missing', 'boolean'):
+            with self.subTest(variant=variant):
+                data = deepcopy(original)
+                first, second = data['phases'][:2]
+                if variant == 'reused':
+                    second['report'] = deepcopy(first['report'])
+                elif variant == 'wrong_scenario':
+                    second['report']['qa_fixture']['scenario'] = 'web'
+                elif variant == 'missing':
+                    del second['report']['qa_fixture']
+                else:
+                    second['report']['qa_fixture']['case'] = True
+                result = audit(data)
+                self.assertFalse(result['verified'])
+                self.assertEqual(result['completed_phases'], 1)
+                self.assertEqual(result['phase'], 'qa_02')
+                self.assertEqual(result['reason'], 'suite_qa_fixture_mismatch')
+
+    def test_qa_fixture_binding_distinguishes_legacy_reports_and_stops_the_producer(self):
+        old = saved_suite(qa=True)
+        result = audit(old)
+        self.assertTrue(result['verified'])
+        self.assertFalse(result['qa_fixture_binding_required'])
+        result = audit(old, require_qa_fixture_binding=True)
+        self.assertFalse(result['verified'])
+        self.assertEqual(result['reason'], 'suite_qa_fixture_binding_missing')
+
+        data = saved_suite(qa=True, fixture_bound=True, misplaced_fixture=2)
+        self.assertEqual(data['state'], 'failed')
+        self.assertEqual(data['phases'][1]['reason'], 'suite_qa_fixture_mismatch')
+        self.assertEqual(data['phases'][2]['state'], 'not_run')
+        self.assertEqual(audit(data)['completed_phases'], 1)
+
+        data = saved_suite(qa=True, fixture_bound=True)
+        del data['qa_fixture_bound']
+        self.assertEqual(audit(data)['reason'], 'suite_qa_fixture_mismatch')
+
+    def test_real_report_uses_the_selected_qa_fixture_without_text(self):
+        question = SCENARIO_QUESTIONS['tool'][6]
+        smoke = SmokeRun(
+            None, None, latency_sample=True, latency_scenario='tool', qa_question=question
+        )
+        report = smoke.report('failed')
+        self.assertEqual(report['qa_fixture'], {'scenario': 'tool', 'case': 7})
+        self.assertNotIn(question, json.dumps(report, ensure_ascii=False))
+
     def test_standby_batch_always_requires_quiet_and_stops_at_the_first_miss(self):
         complete = saved_suite(standby_only=True)
         self.assertEqual(complete['scope'], 'fixed_standby_suite')

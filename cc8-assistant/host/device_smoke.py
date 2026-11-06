@@ -971,6 +971,14 @@ class SmokeRun:
         self.tool_diagnose_engine = tool_diagnose_engine
         self.tool_sample_token = None
         self.qa_question = ENGLISH_QUESTION if english_wake else qa_question
+        questions = SCENARIO_QUESTIONS.get(latency_scenario, ())
+        self.qa_fixture = (
+            {'scenario': latency_scenario, 'case': questions.index(self.qa_question) + 1}
+            if latency_sample
+            and not (tool_local_compare or fixed_tool_case)
+            and self.qa_question in questions
+            else None
+        )
         self.response_acoustic_evidence = response_acoustic_evidence
         self.response_acoustic_coverage = response_acoustic_coverage
         self.require_render_overlap = require_render_overlap
@@ -1062,6 +1070,7 @@ class SmokeRun:
                 self.acoustic or self.awake_dialogue or self.interruption_enabled
             ),
             'awake_dialogue_enabled': self.awake_dialogue,
+            **({'qa_fixture': self.qa_fixture} if self.qa_fixture is not None else {}),
             **(
                 {
                     'scope': TOOL_COMPARISON_CHECK
@@ -3357,11 +3366,21 @@ def device_suite_phases(
     return EXTENDED_VOICE_PHASES if extended_voice else P0_DEVICE_PHASES
 
 
+def qa_fixture_matches(report, scenario, case):
+    fixture = report.get('qa_fixture')
+    return (
+        isinstance(fixture, dict)
+        and type(fixture.get('case')) is int
+        and fixture == {'scenario': scenario, 'case': case}
+    )
+
+
 def run_device_suite(
     make_run,
     save,
     *,
     qa_latency=False,
+    qa_fixture_bound=False,
     response_acoustic=False,
     response_acoustic_coverage=False,
     require_render_overlap=False,
@@ -3373,6 +3392,8 @@ def run_device_suite(
     legacy_echo_soak=False,
     standby_only=False,
 ):
+    if qa_fixture_bound and not qa_latency:
+        raise ValueError('Fixture binding requires a QA latency suite')
     if standby_only and (qa_latency or extended_voice or interruption or echo_soak):
         raise ValueError('Standby suite must run separately')
     if require_render_overlap and not interruption:
@@ -3414,6 +3435,8 @@ def run_device_suite(
     if qa_latency:
         suite['audible_onset_measured'] = False
         suite['qa_corpus_sha256'] = SCENARIO_DIGESTS[latency_scenario]
+        if qa_fixture_bound:
+            suite['qa_fixture_bound'] = True
         if latency_scenario != 'qa':
             suite['latency_scenario'] = latency_scenario
         suite['latencies_ms'] = {
@@ -3484,6 +3507,8 @@ def run_device_suite(
             result = run.run()
             phase['report'] = result
             phase['state'] = result['state']
+            if qa_fixture_bound and not qa_fixture_matches(result, latency_scenario, index + 1):
+                phase.update(state='failed', reason='suite_qa_fixture_mismatch')
             if phase['state'] == 'passed' and (
                 result['cleanup_microphone_off_verified'] is not True
                 or [(row['name'], row['state']) for row in result['checks']]
@@ -4404,6 +4429,7 @@ def main(argv=None):
                             make_run,
                             save,
                             qa_latency=args.qa_latency_suite,
+                            qa_fixture_bound=args.qa_latency_suite,
                             response_acoustic=args.response_acoustic_evidence,
                             response_acoustic_coverage=args.collect_acoustic_coverage,
                             require_render_overlap=args.require_render_overlap,
