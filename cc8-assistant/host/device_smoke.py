@@ -1050,6 +1050,19 @@ class SmokeRun:
             require(self.clock() < deadline, reason)
             self.sleep(min(0.5, max(0, deadline - self.clock())))
 
+    def quiet_observation_times(self, seconds):
+        started = self.clock()
+        deadline = started + seconds
+        while True:
+            remaining = deadline - self.clock()
+            if remaining > 0:
+                self.sleep(min(0.5, remaining))
+            observed = self.clock()
+            yield round(observed - started, 3)
+            # Time spent reading or saving a sample cannot finish the window.
+            if observed >= deadline:
+                return
+
     def report(self, state):
         return {
             'schema': 1,
@@ -2282,13 +2295,9 @@ class SmokeRun:
         # bounded observation window. An extra admitted dialogue fails, while
         # a transient candidate must resolve and a rejected pause must resume.
         # Counts remain visible; success never implies pause-free playback.
-        quiet_started = self.clock()
-        while self.clock() - quiet_started < quiet_seconds:
-            self.sleep(min(0.5, quiet_seconds - (self.clock() - quiet_started)))
+        for observed in self.quiet_observation_times(quiet_seconds):
             require(received(), 'synthetic_acoustic_chain_not_confirmed')
-            self.acoustic_evidence['post_playback_quiet_seconds'] = round(
-                self.clock() - quiet_started, 3
-            )
+            self.acoustic_evidence['post_playback_quiet_seconds'] = observed
             self.checkpoint(self.report('running'))
         require(
             self.acoustic_evidence['pending_voice_candidates'] == 0,
@@ -2398,10 +2407,8 @@ class SmokeRun:
                 evidence['mic_frames'] > 0 and evidence['render_frames'] > 0,
                 'wake_self_playback_audio_not_observed',
             )
-            quiet_started = self.clock()
-            while self.clock() - quiet_started < POST_DIALOGUE_SECONDS:
-                self.sleep(min(0.5, POST_DIALOGUE_SECONDS - (self.clock() - quiet_started)))
-                evidence['quiet_seconds'] = round(self.clock() - quiet_started, 3)
+            for observed in self.quiet_observation_times(POST_DIALOGUE_SECONDS):
+                evidence['quiet_seconds'] = observed
                 verify_counters(before, evidence)
 
             new = [row for row in self.diagnostic_requests() if row['request_id'] not in ids]
@@ -2921,16 +2928,14 @@ class SmokeRun:
             stop_only or evidence['device_pause_from_trigger_ms'] is not None,
             'interruption_pause_timing_missing',
         )
-        quiet_started = self.clock()
         stop_asr_attempts = evidence.get('stop_cloud_asr_attempts')
-        while self.clock() - quiet_started < POST_DIALOGUE_SECONDS:
-            self.sleep(min(0.5, POST_DIALOGUE_SECONDS - (self.clock() - quiet_started)))
+        for observed in self.quiet_observation_times(POST_DIALOGUE_SECONDS):
             require(completed(), failure)
             require(
                 not self.asr_stop or evidence.get('stop_cloud_asr_attempts') == stop_asr_attempts,
                 'asr_stop_unexpected_asr_count',
             )
-            evidence['post_playback_quiet_seconds'] = round(self.clock() - quiet_started, 3)
+            evidence['post_playback_quiet_seconds'] = observed
         require(not evidence['pending_voice_candidates'], 'interruption_unresolved_voice')
         d, ui = self.device.status()
         self.capture_status((d, ui))
