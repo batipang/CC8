@@ -4057,6 +4057,15 @@ class DeviceAutomationTests(unittest.TestCase):
                 '本机只读终端命令计算结果：一加一等于二，或者等于三。',
                 'unconfirmed',
             ),
+            (SCENARIO_QUESTIONS['tool'][0], 'tool', '本机终端计算结果：一加一等于 2。', 'matched'),
+            (SCENARIO_QUESTIONS['tool'][0], 'tool', '本机终端计算结果：一加一等于 3。', 'mismatch'),
+            (
+                SCENARIO_QUESTIONS['tool'][0],
+                'tool',
+                '本机终端计算结果：一加一等于二，或者等于三。',
+                'unconfirmed',
+            ),
+            (ACOUSTIC_QUESTION, 'qa', '本机终端计算结果：一加一等于 2。', 'unconfirmed'),
             (ACOUSTIC_QUESTION, 'qa', '本机只读终端命令计算结果：一加一等于二。', 'unconfirmed'),
             (SCENARIO_QUESTIONS['web'][0], 'web', '答案是二', None),
         ):
