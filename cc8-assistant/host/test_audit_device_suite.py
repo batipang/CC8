@@ -521,8 +521,11 @@ class AuditDeviceSuiteTests(unittest.TestCase):
             ('tool_sample_guard_not_confirmed', 'wrong_check', None),
             ('tool_sample_guard_not_confirmed', 'wrong_prefix', None),
             ('tool_sample_guard_not_confirmed', 'mixed_source', None),
+            ('tool_sample_guard_not_confirmed', 'mixed_apk_code', None),
+            ('tool_sample_guard_not_confirmed', 'mixed_apk_version', None),
             ('tool_sample_guard_not_confirmed', 'untrusted_report', None),
             ('tool_sample_guard_not_confirmed', 'cleanup_unconfirmed', None),
+            ('tool_sample_guard_not_confirmed', 'cleanup_flag_false', None),
         ):
             with self.subTest(reason=reason, variant=variant):
                 data = saved_suite(qa=True, scenario='tool')
@@ -544,10 +547,16 @@ class AuditDeviceSuiteTests(unittest.TestCase):
                     checks[0]['state'] = 'running'
                 elif variant == 'mixed_source':
                     report['automation_source_sha256'] = 'c' * 64
+                elif variant == 'mixed_apk_code':
+                    report['expected_apk_code'] += 1
+                elif variant == 'mixed_apk_version':
+                    report['expected_apk_version'] = '0.9.42'
                 elif variant == 'untrusted_report':
                     report['raw_audio_saved'] = True
                 elif variant == 'cleanup_unconfirmed':
                     report['state'] = 'cleanup_unconfirmed'
+                elif variant == 'cleanup_flag_false':
+                    report['cleanup_microphone_off_verified'] = False
                 reviewed = audit(data)
                 self.assertFalse(reviewed['verified'])
                 self.assertEqual(reviewed['completed_phases'], 1)
@@ -555,6 +564,35 @@ class AuditDeviceSuiteTests(unittest.TestCase):
                 self.assertEqual(reviewed['reason'], 'phase_not_completed')
                 self.assertEqual(reviewed.get('recorded_failure'), expected)
                 self.assertNotIn('PRIVATE_ERROR', json.dumps(reviewed))
+
+    def test_first_tool_failure_requires_valid_apk_identity_and_requested_code(self):
+        data = saved_suite(qa=True, scenario='tool')
+        data.update(state='failed', backend_version='0.15.15')
+        phase = data['phases'][0]
+        phase['state'] = 'failed'
+        report = phase['report']
+        report['state'] = 'failed'
+        checks = report['checks']
+        del checks[phase['expected_checks'].index(AWAKE_DIALOGUE_CHECK) + 1 :]
+        checks[-1].update(state='failed', reason='tool_sample_transcript_not_confirmed')
+
+        self.assertEqual(
+            audit(data, expect_apk_code=71).get('recorded_failure'),
+            'tool_sample_transcript_not_confirmed',
+        )
+        for version, code, expected in (
+            ('0.9.34', 71, 79),
+            ('0.9.34', True, None),
+            ('0.9.34', None, None),
+            ('invalid', 71, None),
+        ):
+            with self.subTest(version=version, code=code, expected=expected):
+                report.update(expected_apk_version=version, expected_apk_code=code)
+                result = audit(data, expect_apk_code=expected)
+                self.assertFalse(result['verified'])
+                self.assertEqual(result['completed_phases'], 0)
+                self.assertEqual(result['phase'], 'qa_01')
+                self.assertNotIn('recorded_failure', result)
 
     def test_self_playback_soak_recomputes_coverage_and_uses_one_pause_budget(self):
         data = saved_suite(echo_soak=True)
