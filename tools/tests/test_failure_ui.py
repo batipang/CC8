@@ -323,6 +323,7 @@ class DriverGateTests(unittest.TestCase):
         for argv in (
             [str(root / 'cc8'), 'verify-failure-ui', '--runtime-root', '/not/used'],
             [str(root / 'cc8'), 'verify-failure-ui', '--host-only'],
+            [str(root / 'cc8'), 'verify-failure-ui', '--host-only', '--case-set', 'search'],
             [str(root / 'tools/qa_variant.py'), '--output', '/not/created'],
         ):
             code = (

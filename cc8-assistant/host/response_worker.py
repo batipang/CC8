@@ -225,6 +225,10 @@ class ResponseWorker:
                 self.hooks.workspace().task_stage(task_id, 'search', '联网检索', 'failed')
                 self.hooks.publish_workspace()
                 self.hooks.log('web_search_failed', kind=category)
+            elif kind in ('no_results', 'clarification'):
+                title = '未找到可核实的网页结果' if kind == 'no_results' else '需要补充查询条件'
+                self.hooks.workspace().task_stage(task_id, 'search', title, 'completed')
+                self.hooks.publish_workspace()
             elif kind in ('clear', 'sources'):
                 self.hooks.event(
                     'web_sources',

@@ -22,12 +22,30 @@ BUSINESS_CODES = {
 }
 RECOVERY_TEXT = '自动测试识别恢复。'
 RECOVERY_PCM = b'\x01\x00' * 320
+CHAT_ROUTE = '/v1/chat/completions'
+SEARCH_ROUTE = '/v1/coding_plan/search'
+SEARCH_QUERY = 'public cc8 qa fixture'
+SEARCH_SOURCE = 'https://example.com/cc8-qa'
 
 
 class LoopbackHTTP:
-    def __init__(self, current_case, before_request, *, business=False, recovering=lambda: False):
+    def __init__(
+        self,
+        current_case,
+        before_request,
+        *,
+        business=False,
+        recovering=lambda: False,
+        search=False,
+    ):
         self.current_case, self.before_request = current_case, before_request
         self.business, self.recovering = business, recovering
+        self.routes = (
+            {'search': (CHAT_ROUTE, SEARCH_ROUTE)}
+            if search
+            else {'asr': ('/v1/speech_to_text',), 'tts': ('/v1/t2a_v2',)}
+        )
+        self.request_limit = 75 if search else 64
         self.stopped = threading.Event()
         self.guard = threading.Lock()
         self.counts = Counter()
@@ -91,7 +109,7 @@ class LoopbackHTTP:
                 peer.close()
                 return
             with self.guard:
-                if len(self.handlers) >= 64:
+                if len(self.handlers) >= self.request_limit:
                     peer.close()
                     self.errors.append('fixture_request_limit')
                     self.stopped.set()
@@ -114,8 +132,6 @@ class LoopbackHTTP:
                     raise ValueError('fixture_headers_too_large')
             head, _, body = data.partition(b'\r\n\r\n')
             lines = head.split(b'\r\n')
-            if lines[0] not in (b'POST /v1/speech_to_text HTTP/1.1', b'POST /v1/t2a_v2 HTTP/1.1'):
-                raise ValueError('fixture_route_not_allowed')
             headers = {}
             for line in lines[1:]:
                 name, separator, value = line.partition(b':')
@@ -128,7 +144,7 @@ class LoopbackHTTP:
             parts = ident.split('-')
             if (
                 len(parts) != 3
-                or parts[0] not in ('asr', 'tts')
+                or parts[0] not in self.routes
                 or parts[1]
                 not in (
                     'timeout',
@@ -140,8 +156,15 @@ class LoopbackHTTP:
                 or parts[2] not in ('1', '2', '3')
             ):
                 raise ValueError('fixture_unknown_case')
-            route = b'/v1/speech_to_text' if parts[0] == 'asr' else b'/v1/t2a_v2'
-            if lines[0] != b'POST ' + route + b' HTTP/1.1':
+            route = next(
+                (
+                    value
+                    for value in self.routes[parts[0]]
+                    if lines[0] == f'POST {value} HTTP/1.1'.encode()
+                ),
+                None,
+            )
+            if route is None:
                 raise ValueError('fixture_stage_route_mismatch')
             phase = headers.get(b'x-cc8-qa-phase')
             if phase not in (b'fault', b'recovery'):
@@ -157,6 +180,8 @@ class LoopbackHTTP:
             with self.guard:
                 self.counts[(ident, phase)] += 1
             kind = parts[1]
+            if parts[0] == 'search' and self.search_reply(peer, route, phase, body):
+                return
             if phase == b'recovery':
                 data = (
                     {'text': RECOVERY_TEXT}
@@ -194,6 +219,44 @@ class LoopbackHTTP:
         finally:
             peer.close()
 
+    def search_reply(self, peer, route, phase, body):
+        payload = json.loads(body)
+        if not isinstance(payload, dict):
+            raise ValueError('fixture_invalid_search_body')
+        if route == CHAT_ROUTE:
+            if payload.get('stream', False) is False:
+                content = json.dumps({'query': SEARCH_QUERY, 'clarification': ''})
+                choice = {'message': {'content': content}}
+                stream = False
+            elif payload['stream'] is True and phase == b'recovery':
+                choice = {'delta': {'content': '自动联网查询恢复。'}}
+                stream = True
+            else:
+                raise ValueError('fixture_unexpected_search_answer')
+            self.send_payload(
+                peer, 200, {'choices': [{**choice, 'finish_reason': 'stop'}]}, stream=stream
+            )
+            return True
+        if payload != {'q': SEARCH_QUERY}:
+            raise ValueError('fixture_unexpected_search_query')
+        if phase != b'recovery':
+            return False
+        self.send_payload(
+            peer,
+            200,
+            {
+                'base_resp': {'status_code': 0},
+                'organic': [
+                    {
+                        'title': '自动测试来源',
+                        'link': SEARCH_SOURCE,
+                        'snippet': '固定公开测试摘要。',
+                    }
+                ],
+            },
+        )
+        return True
+
     @staticmethod
     def send_payload(peer, status, value, *, stream=False):
         body = json.dumps(value).encode()
@@ -219,12 +282,14 @@ class LoopbackHTTP:
                 self.verify = str(fixture.cert)
 
             def post(self, url, **kwargs):
-                if url not in (fixture.base + '/v1/speech_to_text', fixture.base + '/v1/t2a_v2'):
+                case = fixture.current_case()
+                if url not in tuple(
+                    fixture.base + route for route in fixture.routes.get(case.stage, ())
+                ):
                     raise AssertionError('QA cannot reach a non-fixture endpoint')
                 if kwargs.get('allow_redirects', False) is not False:
                     raise AssertionError('QA does not follow redirects')
                 kwargs['allow_redirects'] = False
-                case = fixture.current_case()
                 headers = dict(kwargs.get('headers', {}))
                 headers['X-CC8-QA-Case'] = case.ident
                 headers['X-CC8-QA-Phase'] = 'recovery' if fixture.recovering() else 'fault'
