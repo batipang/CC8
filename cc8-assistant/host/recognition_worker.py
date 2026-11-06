@@ -12,10 +12,12 @@ import time
 from unicodedata import category
 import numpy as np
 from diagnostics import ASR_STOP_STAGE
-from dsp import RATE, STOP_COMMANDS, resembles_playback
+from dsp import RATE
 from minimax_client import Cancelled
 from reply_types import Reply
+from recognition_commands import STOP_COMMANDS
 from recognition_commands import SLEEP_COMMAND, stop_command, stop_matches_reference, wake_payload
+from recognition_echo import resembles_playback
 from session_ports import RecognitionHooks
 from tool_asr_compare import comparison_evidence
 from vision import visual_request

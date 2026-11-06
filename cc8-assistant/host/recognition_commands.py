@@ -2,7 +2,9 @@
 
 import re
 
-from dsp import STOP_COMMANDS
+STOP_COMMANDS = frozenset(
+    ('停', '停下', '停一下', '停止', '暂停', '打住', '等等', '别说了', '听我说', '听一下')
+)
 
 WAKE_PREFIX_SEPARATORS = ' \t\r\n，。,！!：:'
 WAKE_QUOTES = {'“': '”', '「': '」', '『': '』', '"': '"'}

@@ -83,7 +83,8 @@ python3 cc8-assistant/host/announce.py --text '你好，我是大黄蜂。'
 | 文件 | 职责 |
 | --- | --- |
 | `host/bridge.py` | 流式音频、轮次状态、插话、待机和设备事件 |
-| `host/dsp.py` / `fast_stop.py` | AEC3、VAD、回声证据、停止关键词 |
+| `host/dsp.py` / `fast_stop.py` | AEC3、VAD、播放参考、流式停止词检测 |
+| `host/recognition_echo.py` / `recognition_commands.py` | 播报转录比对、唤醒及停止指令解析 |
 | `host/recognition.py` | MiniMax / SenseVoice / Whisper 识别适配 |
 | `host/dot_client.py` / `brain_router.py` | Dot app-server、工具与对话路由 |
 | `host/minimax_client.py` / `web_search.py` | ASR、流式 TTS、可选 MiniMax 对话与搜索 |
