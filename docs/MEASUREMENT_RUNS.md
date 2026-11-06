@@ -233,6 +233,8 @@ cp .toolchains/cc8/paths.json /absolute/qa-checkout/.toolchains/cc8/paths.json
 
 工具题批次用 `audit-device-suite` 逐轮复核。从后台 0.15.4 起，每个合格样本须有门控启用记录、恰好一次语音准入，且门控拒绝次数为零。旧批次仍可按当时的回执复核，结果注明当时未要求门控证据。
 
+若工具题批次停在清醒问答检查，离线复核会核对此前步骤和报告的无正文声明，再将白名单中的停止原因列为 `recorded_failure`。该字段复述检查器的记录，失败轮不计入时延样本。
+
 ```sh
 ./cc8 audit-measure /absolute/private/run.json
 ```
