@@ -89,6 +89,18 @@ TLS 模式在安装 QA 前生成协议包，再由实体 QA 界面重放。报�
 
 设备播放错误、播完回执超时、输出连接断管各三次。主机先取得固定任务完成回执，再经真实播放控制器注入故障。检查原任务仍为已完成、录音关闭、没有重试或遗留播报，并在下一条独立请求时核对恢复。两端只用隔离替身，发送至 QA 包的回放只有协议控制事件。实体模式核对错误详情及新请求状态，音频设备性能另行验收。
 
+## 插话识别超时专项
+
+```sh
+.toolchains/cc8/dev-venv/bin/python cc8 verify-failure-ui --host-only --case-set interruption --execute
+.toolchains/cc8/dev-venv/bin/python cc8 verify-failure-ui --case-set interruption --runtime-root /absolute/live/workspace \
+  --qa-receipt /absolute/private/new-qa-build/qa-build.json --execute
+```
+
+一个固定用例。在主机隔离控制器中，于首个输出帧请求暂缓播报，将该暂停的起始时间设为已过期。实际等待分支取消原播报并发送超时原因，保留已完成任务，再处理一条独立请求。界面模式只重放控制事件，检查超时摘要、详情和新请求对旧错误的隔离。麦克风始终关闭，未测实体收音、真实 20 秒等待或播报效果。
+
+2026-11-07 用 `2457f51` 的 Android 源码和原签名构建 code79 隔离 QA 包。实体重放一项通过，用时 48.194 秒。确认超时详情、新请求完成以及旧代次错误被忽略。独立复核 QA 包已移除，生产助手 0.15.36 仍在前台，原 APK 摘要一致，USB 优先、Wi-Fi 就绪，麦克风和摄像头关闭。协议摘要绑定当轮包含工作区时间戳的实际报文。
+
 ## MiniMax 业务错误与下一次请求恢复
 
 ### 联网检索专项
