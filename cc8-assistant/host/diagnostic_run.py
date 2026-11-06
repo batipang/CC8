@@ -19,7 +19,7 @@ from diagnostics import (
     summarize_dot_contexts,
     valid_asr_input_samples,
 )
-from capture_evidence import validate as validate_capture, DECISIONS
+from capture_evidence import validate as validate_capture, DECISIONS, TOOL_SAMPLE_REJECTION_REASONS
 from operation_failure import STAGES as ERROR_STAGES
 
 ERRORS = frozenset(
@@ -50,6 +50,7 @@ ROW_FIELDS = frozenset(
         'capture',
         ASR_INPUT_SAMPLES,
         'gate',
+        'tool_sample_rejection',
         'confirmed_playback_clauses',
         'device_pause_from_trigger_ms',
         VAD_ONSET_PAUSE,
@@ -182,6 +183,13 @@ def receipt(value):
         if value['origin'] != 'voice' or not enum(value['gate'], DECISIONS):
             raise ValueError('Invalid gate receipt')
         result['gate'] = value['gate']
+    if 'tool_sample_rejection' in value:
+        reason = value['tool_sample_rejection']
+        if result.get('gate') != 'tool_sample_guard' or not enum(
+            reason, TOOL_SAMPLE_REJECTION_REASONS
+        ):
+            raise ValueError('Invalid tool sample rejection receipt')
+        result['tool_sample_rejection'] = reason
     for stage, field in DOT_CONTEXT_FIELDS.items():
         if stage in clean_stages or field in value:
             if stage not in clean_stages or type(value.get(field)) is not bool:

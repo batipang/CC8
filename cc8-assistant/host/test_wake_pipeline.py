@@ -468,6 +468,7 @@ class WakePipelineTests(unittest.TestCase):
                 break
             time.sleep(0.005)
         self.assertEqual(rows[0]['gate'], 'tool_sample_guard')
+        self.assertEqual(rows[0].get('tool_sample_rejection'), 'transcript_mismatch')
         self.assertEqual(rows[0]['outcome'], 'rejected')
         self.assertNotIn('brain_start', rows[0]['stages'])
         self.assertEqual(requests, [])
@@ -475,7 +476,7 @@ class WakePipelineTests(unittest.TestCase):
         self.assertEqual(s.begin_tool_sample(token), {'status': 'unavailable'})
         s.stop()
         self.assertEqual(s.release_tool_sample(token), {'status': 'released'})
-        self.assertTrue(s.tool_sample_allows('正常对话', False, None))
+        self.assertIsNone(s.tool_sample_rejection('正常对话', False, None))
 
     def test_tool_sample_accepts_exact_phrase_once(self):
         question = SCENARIO_QUESTIONS['tool'][0]
@@ -486,7 +487,7 @@ class WakePipelineTests(unittest.TestCase):
         self.frames(b)
         self.assertTrue(answered.wait(1))
         self.assertEqual(requests, [question])
-        self.assertFalse(s.tool_sample_allows(question, True, time.monotonic()))
+        self.assertEqual(s.tool_sample_rejection(question, True, time.monotonic()), 'not_open')
         s.stop()
 
     def test_tool_sample_cannot_begin_inside_usb_replacement_cancellation(self):
@@ -515,10 +516,12 @@ class WakePipelineTests(unittest.TestCase):
                 token = self.arm_tool_capture(b, invalid)
                 s = b.session
                 self.assertEqual(s.begin_tool_sample(token), {'status': 'unavailable'})
-                self.assertFalse(s.tool_sample_allows(question, True, time.monotonic()))
+                self.assertEqual(
+                    s.tool_sample_rejection(question, True, time.monotonic()), 'capture_changed'
+                )
                 s.stop()
                 self.assertEqual(s.release_tool_sample(token), {'status': 'released'})
-                self.assertTrue(s.tool_sample_allows(question, True, time.monotonic()))
+                self.assertIsNone(s.tool_sample_rejection(question, True, time.monotonic()))
 
     def test_tool_sample_requires_same_capture_to_finish_startup_on_usb(self):
         question = SCENARIO_QUESTIONS['tool'][0]
@@ -533,7 +536,7 @@ class WakePipelineTests(unittest.TestCase):
 
         token = self.arm_tool_capture(b, startup_on_wifi)
         self.assertEqual(s.begin_tool_sample(token), {'status': 'unavailable'})
-        self.assertFalse(s.tool_sample_allows(question, True, time.monotonic()))
+        self.assertEqual(s.tool_sample_rejection(question, True, time.monotonic()), 'not_open')
         s.change_transport(Channel('usb'))
         s.ready({**capabilities, 'capture_active': True})
         self.assertEqual(s.begin_tool_sample(token), {'status': 'unavailable'})
@@ -547,12 +550,16 @@ class WakePipelineTests(unittest.TestCase):
         s.ready({**capabilities, 'capture_active': True})
         s.rebind({**claim, 'capture_id': 'f' * 32})
         self.assertEqual(s.begin_tool_sample(token), {'status': 'unavailable'})
-        self.assertFalse(s.tool_sample_allows(question, True, time.monotonic()))
+        self.assertEqual(s.tool_sample_rejection(question, True, time.monotonic()), 'route_changed')
         s.stop()
 
     def test_tool_sample_scope_rejects_old_audio_route_changes_and_invalid_ipc(self):
         question = SCENARIO_QUESTIONS['tool'][0]
-        for case in ('audio_before_playback', 'new_generation', 'missing_local_wake'):
+        for case, reason in (
+            ('audio_before_playback', 'capture_window'),
+            ('new_generation', 'generation_changed'),
+            ('missing_local_wake', 'local_wake_missing'),
+        ):
             with self.subTest(case=case):
                 b, *_ = self.session('大黄蜂', question)
                 s = b.session
@@ -562,14 +569,17 @@ class WakePipelineTests(unittest.TestCase):
                 started = s.tool_sample.opened_at
                 if case == 'new_generation':
                     s.generation += 1
-                self.assertFalse(
-                    s.tool_sample_allows(
+                self.assertEqual(
+                    s.tool_sample_rejection(
                         question,
                         case != 'missing_local_wake',
                         started - 0.01 if case == 'audio_before_playback' else started,
-                    )
+                    ),
+                    reason,
                 )
-                self.assertFalse(s.tool_sample_allows(question, True, time.monotonic()))
+                self.assertEqual(
+                    s.tool_sample_rejection(question, True, time.monotonic()), 'not_open'
+                )
                 s.stop()
         self.assertFalse(tool_sample_request({'operation': 'tool_sample_arm', 'case': True}))
         self.assertFalse(tool_sample_request({'operation': 'tool_sample_arm', 'case': 31}))

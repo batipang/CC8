@@ -27,7 +27,11 @@ from mac_voice import (
     validate_prepared_speech,
     __file__ as voice_source,
 )
-from capture_evidence import validate as validate_capture, ONSET_PREFIX_COUNTS
+from capture_evidence import (
+    validate as validate_capture,
+    ONSET_PREFIX_COUNTS,
+    TOOL_SAMPLE_REJECTION_REASONS,
+)
 from known_speech_receipt import (
     MIN_COMMON_FRAMES,
     validate as validate_known_speech,
@@ -1902,6 +1906,13 @@ class SmokeRun:
             ]
             groups = classify_voice_records(rows)
             admitted, rejected = groups['admitted'], groups['rejected']
+            tool_rejections = {}
+            for row in rejected:
+                if row['gate'] == 'tool_sample_guard':
+                    reason = row.get('tool_sample_rejection')
+                    if reason not in TOOL_SAMPLE_REJECTION_REASONS:
+                        reason = 'unreported'
+                    tool_rejections[reason] = tool_rejections.get(reason, 0) + 1
             mic_now = health.get('mic_frames')
             wake_rejection = (
                 rejected[0]
@@ -1937,6 +1948,7 @@ class SmokeRun:
                     gate: sum(row['gate'] == gate for row in rejected)
                     for gate in REJECTED_VOICE_GATES
                 },
+                **({'tool_sample_rejections': tool_rejections} if tool_rejections else {}),
                 'sole_wake_rejection_capture': (
                     summarize_wake_rejection_capture(wake_rejection)
                     if wake_rejection is not None

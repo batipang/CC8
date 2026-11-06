@@ -66,7 +66,7 @@ class RecognitionHooks:
     failure: FailureSink
     resume_rejected: Callable[[int | None, int], None]
     bind_response_probe: Callable[[str, int, int | None], None] = lambda *_: None
-    tool_sample_allows: Callable[[str, bool, float | None], bool] = lambda *_: True
+    tool_sample_rejection: Callable[[str, bool, float | None], str | None] = lambda *_: None
 
 
 MIN_ECHO_RISK_CREDIBLE_FRAMES = 5
@@ -161,6 +161,7 @@ class RecognitionWorker:
             self.busy = True
             rejected = False
             decision = 'stale'
+            tool_sample_rejection = None
             try:
                 # The dequeued job can lose ownership before announcing ASR.
                 with self.hooks.lock:
@@ -340,9 +341,10 @@ class RecognitionWorker:
                             self.hooks.cancel_session('wake_only')
                             self.hooks.status('listening', '我在听，请说出你的问题')
                             continue
-                    if not self.hooks.tool_sample_allows(
+                    tool_sample_rejection = self.hooks.tool_sample_rejection(
                         text, local_wake, evidence.get('captured_at') if evidence else None
-                    ):
+                    )
+                    if tool_sample_rejection is not None:
                         decision = 'tool_sample_guard'
                         rejected = True
                         if not self.hooks.playing():
@@ -399,7 +401,11 @@ class RecognitionWorker:
                             pass
                         self.hooks.failure('这次识别没有完成，请再说一次', e, trace_key=trace_id)
             finally:
-                self.hooks.diagnostics().gate(trace_id, decision)
+                self.hooks.diagnostics().gate(
+                    trace_id,
+                    decision,
+                    tool_sample_rejection if decision == 'tool_sample_guard' else None,
+                )
                 self.busy = False
                 if not accepted:
                     self.hooks.diagnostics().finish(

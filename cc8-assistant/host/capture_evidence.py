@@ -53,6 +53,15 @@ DECISIONS = frozenset(
         'error',
     )
 )
+TOOL_SAMPLE_REJECTION_REASONS = (
+    'not_open',
+    'capture_changed',
+    'generation_changed',
+    'route_changed',
+    'local_wake_missing',
+    'capture_window',
+    'transcript_mismatch',
+)
 
 
 def validate(value):

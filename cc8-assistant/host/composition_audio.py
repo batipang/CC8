@@ -115,7 +115,7 @@ def build_audio_pipeline(
             resume_rejected=lambda token, generation: host.resume_after_rejection(
                 token, generation
             ),
-            tool_sample_allows=host.session.tool_sample_allows,
+            tool_sample_rejection=host.session.tool_sample_rejection,
             bind_response_probe=lambda text, generation, input_end_ns: (
                 host.capture.bind_response_probe(text, generation, input_end_ns)
             ),
