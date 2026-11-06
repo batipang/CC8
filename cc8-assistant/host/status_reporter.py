@@ -104,6 +104,7 @@ class StatusReporter:
             'response_acoustic_evidence_supported': True,
             'render_clock_evidence_supported': playback.device_can_report_clock,
             'local_wake_ready': self.hooks.wake().ready,
+            'chinese_wake_verifier_configured': self.hooks.wake().chinese_verifier_configured,
             'chinese_wake_verifier_ready': self.hooks.wake().chinese_verifier_ready,
             'wake_input_probe_supported': True,
             'chinese_wake_input_probe_supported': True,

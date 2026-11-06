@@ -66,8 +66,20 @@ class WakeController:
         return self.detector is not None
 
     @property
-    def chinese_verifier_ready(self):
+    def chinese_verifier_configured(self):
         return getattr(self.detector, 'chinese_verifier', None) is not None
+
+    @property
+    def chinese_verifier_ready(self):
+        if not self.chinese_verifier_configured:
+            return False
+        worker = self.detector.chinese_verifier.worker
+        if not self.native_lock.acquire(blocking=False):
+            return worker.last_ready is True
+        try:
+            return worker.ready is True
+        finally:
+            self.native_lock.release()
 
     def english_input_samples(self):
         # A stalled decoder must not block the service health endpoint.
@@ -129,15 +141,26 @@ class WakeController:
             self.reading_input_probe.cancel()
 
     def reset(self, reason):
-        if reason not in ('start', 'stop', 'mode', 'cancel', 'transport', 'capture_gap'):
+        if reason not in ('start', 'stop', 'mode', 'cancel', 'transport', 'capture_gap', 'rebind'):
             raise ValueError('Invalid local wake reset reason')
         with self.hooks.lock:
+            if reason == 'rebind':
+                if self.hooks.active() and (start := getattr(self.detector, 'start_capture', None)):
+                    with self.native_lock:
+                        start()
+                return
             self.serial += 1
             self.pending_prefix = False
             self._cancel_input_probe()
             if self.detector is not None:
                 with self.native_lock:
+                    if reason in ('stop', 'transport') or not self.hooks.active():
+                        if stop := getattr(self.detector, 'stop_capture', None):
+                            stop()
                     self.detector.reset(clear_metrics=reason == 'start')
+                    if reason == 'start' and self.hooks.active():
+                        if start := getattr(self.detector, 'start_capture', None):
+                            start()
             if not self.hooks.active():
                 self.deadline = None
             elif reason not in ('cancel', 'transport', 'capture_gap'):

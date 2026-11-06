@@ -8,6 +8,7 @@ from bridge import Bridge
 from chinese_wake_verifier import ChineseWakeVerifier, TARGET, WINDOW_FRAMES
 from dsp import FRAME
 from local_wake import WakeDetector
+from wake_verifier_process import classify_text
 
 
 class ChineseWakeVerifierTests(unittest.TestCase):
@@ -16,7 +17,9 @@ class ChineseWakeVerifierTests(unittest.TestCase):
         self.alternate = np.full(FRAME, 0.2)
         self.spotter = Mock(**{'feed.return_value': '', 'compute_seconds': 0.0})
         self.recognize = Mock(return_value='')
-        self.verifier = ChineseWakeVerifier(self.spotter, self.recognize)
+        self.worker = Mock(ready=True, last_ready=True)
+        self.worker.classify.side_effect = lambda pcm: classify_text(self.recognize(pcm))
+        self.verifier = ChineseWakeVerifier(self.spotter, self.worker)
 
     def feed(self, hit=''):
         return self.verifier.feed(hit, self.primary, self.alternate)
@@ -56,9 +59,19 @@ class ChineseWakeVerifierTests(unittest.TestCase):
 
     def test_verifier_error_keeps_primary_and_rejects_alternate(self):
         self.spotter.feed.return_value = TARGET
-        self.recognize.side_effect = RuntimeError('native decode failed')
+        self.worker.classify.side_effect = None
+        self.worker.classify.return_value = (False, False)
         self.assertEqual(self.feed(TARGET), TARGET)
         self.assertEqual(self.feed(), '')
+
+    def test_unready_worker_keeps_primary_without_saving_or_decoding_input(self):
+        self.feed()
+        saved = self.verifier.primary_audio[0]
+        self.worker.ready = False
+        self.assertEqual(self.feed(TARGET), TARGET)
+        self.assertFalse(np.any(saved))
+        self.assertFalse(self.verifier.primary_audio)
+        self.worker.classify.assert_not_called()
 
     def test_window_is_bounded_and_wipes_copies_on_eviction_reset_and_decode(self):
         self.feed()
@@ -108,21 +121,19 @@ class ChineseWakeVerifierTests(unittest.TestCase):
         self.assertEqual(wake.feed(self.primary, alternate_pcm=self.alternate), TARGET)
         self.assertEqual(len(self.verifier.alternate_audio), 0)
 
-    def test_optional_model_initializes_only_when_enabled_and_missing_model_falls_back(self):
+    def test_optional_model_process_is_only_constructed_when_enabled_and_not_started_at_load(self):
         stop = SimpleNamespace(detector=object(), engine_lock=object())
         with (
             patch('local_wake.ChineseWake') as chinese,
             patch('local_wake.EnglishWake.load'),
-            patch('recognition.MandarinRecognizer') as recognizer,
+            patch('wake_verifier_process.WakeVerifierProcess') as worker,
         ):
             self.assertIsNone(WakeDetector.load(stop).chinese_verifier)
-            recognizer.assert_not_called()
-            recognizer.side_effect = RuntimeError('model missing')
-            self.assertIsNone(WakeDetector.load(stop, verify_chinese=True).chinese_verifier)
-            recognizer.side_effect = None
+            worker.assert_not_called()
             wake = WakeDetector.load(stop, verify_chinese=True)
             self.assertIsNotNone(wake.chinese_verifier)
-            recognizer.assert_called_with(engine='sensevoice')
+            worker.assert_called_once_with()
+            worker.return_value.start.assert_not_called()
             chinese.side_effect = [Mock(), RuntimeError('alternate stream unavailable')]
             self.assertIsNone(WakeDetector.load(stop, verify_chinese=True).chinese_verifier)
 
@@ -156,3 +167,27 @@ class ChineseWakeVerifierTests(unittest.TestCase):
         )
         self.assertTrue(bridge.session.awake)
         self.assertFalse(self.verifier.alternate_audio)
+
+    def test_transport_rebind_starts_worker_only_for_the_existing_capture(self):
+        wake = WakeDetector(Mock(), Mock(), chinese_verifier=self.verifier)
+        bridge = Bridge(None, None, wake_detector=wake)
+        bridge.session.active = True
+        bridge.wake.reset('start')
+        self.worker.start.assert_called_once_with()
+        bridge.wake.reset('cancel')
+        self.worker.close.assert_not_called()
+        bridge.wake.reset('transport')
+        self.worker.close.assert_called_once_with()
+        bridge.session.capture_start_ack = True
+        bridge.session.rebind({'epoch': bridge.session.epoch, 'capture_id': 'obsolete'})
+        self.worker.start.assert_called_once_with()
+        bridge.session.capture_start_ack = False
+        bridge.session.rebind({'epoch': bridge.session.epoch})
+        self.assertEqual(self.worker.start.call_count, 2)
+        bridge.session.rebind({'epoch': bridge.session.epoch})
+        self.assertEqual(self.worker.start.call_count, 2)
+        bridge.session.deactivate()
+        bridge.wake.reset('cancel')
+        self.assertEqual(self.worker.close.call_count, 2)
+        bridge.wake.reset('rebind')
+        self.assertEqual(self.worker.start.call_count, 2)

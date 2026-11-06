@@ -87,6 +87,7 @@ def rebind_capture(session: SessionController, j):
         return
     session.rebind_seen = True
     if session.active and int(j.get('epoch', -1)) == session.epoch:
+        hooks.wake_reset('rebind')
         if hooks.calibration().active:
             hooks.capture().echo.clear_calibration_frames()
             threading.Thread(
