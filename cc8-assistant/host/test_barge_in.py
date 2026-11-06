@@ -171,6 +171,17 @@ class BargeInTests(unittest.TestCase):
         b.wait_playback(old)
         self.assertGreater(b.session.generation, old)
         self.assertIsNone(b.playback.pause_state)
+        self.assertTrue(b.session.active)
+        pause, cancel, feedback = [p for p in b.session.connection.packets if p.kind == EVENT]
+        self.assertEqual(
+            [json.loads(p.data)['event'] for p in (pause, cancel)], ['playback_pause', 'cancel']
+        )
+        self.assertEqual(cancel.generation, b.session.generation)
+        self.assertEqual(feedback.generation, cancel.generation)
+        self.assertEqual(
+            json.loads(feedback.data),
+            {'event': 'status', 'phase': 'error', 'message': '插话识别超时，已停止旧播报'},
+        )
 
     def test_expired_snapshot_cannot_cancel_resolved_or_replaced_pause(self):
         for replace in (False, True):
