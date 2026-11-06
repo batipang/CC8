@@ -183,18 +183,20 @@ class Supervisor:
         os.chmod(PRIVATE / 'service.log', 0o600)
 
     def state(self, phase, failures):
-        atomic_private_json(
-            PRIVATE / 'supervisor.json',
-            {
-                'schema': 1,
-                'phase': phase,
-                'failures': failures,
-                'retry_seconds': retry_delay(failures) if phase == 'backoff' else 0,
-                'pid': self.pid,
-                'updated_at': time.time(),
-                'opens_device': False,
-            },
-        )
+        receipt = {
+            'schema': 1,
+            'phase': phase,
+            'failures': failures,
+            'retry_seconds': retry_delay(failures) if phase == 'backoff' else 0,
+            'pid': self.pid,
+            'updated_at': time.time(),
+            'opens_device': False,
+        }
+        try:
+            atomic_private_json(PRIVATE / 'supervisor.json', receipt)
+        except OSError as error:
+            # A diagnostic receipt is not a reason to terminate the backend.
+            self.log.warning('supervisor_state_write_failed error_type=%s', type(error).__name__)
 
     def _drain(self, stream):
         # 即使子进程不换行也限定每次读取大小，日志总量以 2 MiB × 4 份封顶。
