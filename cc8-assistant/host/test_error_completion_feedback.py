@@ -140,6 +140,46 @@ class TextFailureTests(unittest.TestCase):
         )
         self.assertEqual(b.session.text_generation, b.generation)
 
+    def test_replaced_answer_does_not_create_a_task_or_publish_thinking(self):
+        brain = Brain()
+        b = self.bridge(brain)
+        generation = b.submit_text('旧的固定公开测试指令')['generation']
+        job = b.response.queue.get_nowait()
+        admitted, release = threading.Event(), threading.Event()
+        errors = []
+        original = b.valid
+
+        def valid(candidate):
+            result = original(candidate)
+            if result and candidate == generation and not admitted.is_set():
+                admitted.set()
+                if not release.wait(2):
+                    raise RuntimeError('response admission barrier')
+            return result
+
+        b.valid = valid
+
+        def worker():
+            try:
+                self.work(b, [job])
+            except BaseException as error:
+                errors.append(type(error).__name__)
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+        try:
+            self.assertTrue(admitted.wait(1))
+            successor = b.submit_text('新的固定公开测试指令')['generation']
+        finally:
+            release.set()
+            thread.join(2)
+        self.assertEqual(errors, [])
+        self.assertFalse(thread.is_alive())
+        self.assertFalse(b.workspace.tasks)
+        self.assertFalse(any(name == 'status' for name, _ in b.events))
+        self.assertEqual(brain.calls, 0)
+        self.assertEqual(b.session.text_generation, successor)
+
     def test_answer_status_cannot_overtake_a_new_owner(self):
         b = self.bridge(Brain())
         b.speak = lambda *args: True
@@ -156,6 +196,7 @@ class TextFailureTests(unittest.TestCase):
                 and candidate == generation
                 and b.response.busy
                 and not admitted.is_set()
+                and b.workspace.tasks
                 and b.workspace.tasks[-1]['status'] == 'completed'
             ):
                 admitted.set()
