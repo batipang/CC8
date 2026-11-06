@@ -12,6 +12,7 @@ from copy import deepcopy
 from diagnostics import VAD_ONSET_PAUSE
 from device_smoke import (
     ACOUSTIC_RESPONSE_METRIC,
+    AWAKE_DIALOGUE_CHECK,
     BARGE_DEVICE_METRIC,
     FAST_STOP_DEVICE_METRIC,
     QA_PLAYOUT_METRIC,
@@ -510,6 +511,50 @@ class AuditDeviceSuiteTests(unittest.TestCase):
         self.assertNotIn('recorded_failure', audit(data))
         phase.update(state='running', reason='suite_source_changed')
         self.assertNotIn('recorded_failure', audit(data))
+
+    def test_partial_tool_audit_exposes_only_allowlisted_dialogue_failures(self):
+        for reason, variant, expected in (
+            ('tool_sample_extra_voice_candidate', None, 'tool_sample_extra_voice_candidate'),
+            ('tool_sample_transcript_not_confirmed', None, 'tool_sample_transcript_not_confirmed'),
+            ('tool_sample_guard_not_confirmed', None, 'tool_sample_guard_not_confirmed'),
+            ('PRIVATE_ERROR', None, None),
+            ('tool_sample_guard_not_confirmed', 'wrong_check', None),
+            ('tool_sample_guard_not_confirmed', 'wrong_prefix', None),
+            ('tool_sample_guard_not_confirmed', 'mixed_source', None),
+            ('tool_sample_guard_not_confirmed', 'untrusted_report', None),
+            ('tool_sample_guard_not_confirmed', 'cleanup_unconfirmed', None),
+        ):
+            with self.subTest(reason=reason, variant=variant):
+                data = saved_suite(qa=True, scenario='tool')
+                data.update(state='failed', backend_version='0.15.15')
+                data['phases'][0]['report']['acoustic_evidence'].update(
+                    tool_sample_guarded=True, rejected_voice_gates={'tool_sample_guard': 0}
+                )
+                phase = data['phases'][1]
+                phase['state'] = 'failed'
+                report = phase['report']
+                report['state'] = 'failed'
+                checks = report['checks']
+                index = phase['expected_checks'].index(AWAKE_DIALOGUE_CHECK)
+                del checks[index + 1 :]
+                checks[-1].update(state='failed', reason=reason)
+                if variant == 'wrong_check':
+                    checks[-1]['name'] = 'preflight'
+                elif variant == 'wrong_prefix':
+                    checks[0]['state'] = 'running'
+                elif variant == 'mixed_source':
+                    report['automation_source_sha256'] = 'c' * 64
+                elif variant == 'untrusted_report':
+                    report['raw_audio_saved'] = True
+                elif variant == 'cleanup_unconfirmed':
+                    report['state'] = 'cleanup_unconfirmed'
+                reviewed = audit(data)
+                self.assertFalse(reviewed['verified'])
+                self.assertEqual(reviewed['completed_phases'], 1)
+                self.assertEqual(reviewed['phase'], 'qa_02')
+                self.assertEqual(reviewed['reason'], 'phase_not_completed')
+                self.assertEqual(reviewed.get('recorded_failure'), expected)
+                self.assertNotIn('PRIVATE_ERROR', json.dumps(reviewed))
 
     def test_self_playback_soak_recomputes_coverage_and_uses_one_pause_budget(self):
         data = saved_suite(echo_soak=True)

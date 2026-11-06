@@ -7,6 +7,7 @@ import re
 from types import SimpleNamespace
 
 from device_smoke import (
+    AWAKE_DIALOGUE_CHECK,
     ECHO_SOAK_MIN_BACKEND,
     CheckFailure,
     ECHO_SOAK_SCOPE,
@@ -32,10 +33,53 @@ from soak_background import valid_background
 
 VERSION = r'[0-9]{1,8}(?:\.[0-9]{1,8}){2}'
 SOURCE_DIGEST = r'[a-f0-9]{64}'
+SOURCE_FIELDS = ('automation_source_sha256', 'speech_probe_source_sha256')
+TOOL_DIALOGUE_FAILURES = (
+    'tool_sample_extra_voice_candidate',
+    'tool_sample_guard_not_confirmed',
+    'tool_sample_transcript_not_confirmed',
+)
 
 
 def bounded_number(value, low, high):
     return type(value) in (int, float) and low <= value <= high
+
+
+def content_free_phase(report):
+    return (
+        type(report.get('schema')) is int
+        and report['schema'] == 1
+        and report.get('capture_tests_enabled') is True
+        and report.get('raw_audio_saved') is False
+        and report.get('contains_conversation_content') is False
+        and all(
+            isinstance(report.get(key), str) and re.fullmatch(SOURCE_DIGEST, report[key])
+            for key in SOURCE_FIELDS
+        )
+    )
+
+
+def recorded_tool_failure(report, expected, previous):
+    if not (
+        isinstance(report, dict)
+        and report.get('state') == 'failed'
+        and content_free_phase(report)
+        and AWAKE_DIALOGUE_CHECK in expected
+        and (previous is None or all(report[key] == previous[key] for key in SOURCE_FIELDS))
+    ):
+        return None
+    index = expected.index(AWAKE_DIALOGUE_CHECK)
+    checks = report.get('checks')
+    if (
+        not isinstance(checks, list)
+        or len(checks) != index + 1
+        or not all(isinstance(check, dict) for check in checks)
+        or [(check.get('name'), check.get('state')) for check in checks]
+        != [(name, 'passed') for name in expected[:index]] + [(AWAKE_DIALOGUE_CHECK, 'failed')]
+    ):
+        return None
+    reason = checks[-1].get('reason')
+    return reason if reason in TOOL_DIALOGUE_FAILURES else None
 
 
 def audit(data, *, expect_backend=None, expect_apk_code=None, require_standby_quiet=False):
@@ -192,6 +236,12 @@ def audit(data, *, expect_backend=None, expect_apk_code=None, require_standby_qu
             ):
                 # The batch rejected this phase before collecting evidence.
                 failure['recorded_failure'] = 'suite_source_changed'
+            elif tool_guard_required and data.get('state') == phase.get('state') == 'failed':
+                recorded = recorded_tool_failure(
+                    report, phase['expected_checks'], reports[-1] if reports else None
+                )
+                if recorded is not None:
+                    failure['recorded_failure'] = recorded
             break
         version, code = report.get('expected_apk_version'), report.get('expected_apk_code')
         if (
@@ -206,17 +256,7 @@ def audit(data, *, expect_backend=None, expect_apk_code=None, require_standby_qu
             failure = {'phase': name, 'reason': 'apk_identity_mismatch'}
             break
         artifact = (version, code)
-        if (
-            type(report.get('schema')) is not int
-            or report['schema'] != 1
-            or report.get('capture_tests_enabled') is not True
-            or report.get('raw_audio_saved') is not False
-            or report.get('contains_conversation_content') is not False
-            or not all(
-                isinstance(report.get(key), str) and re.fullmatch(SOURCE_DIGEST, report[key])
-                for key in ('automation_source_sha256', 'speech_probe_source_sha256')
-            )
-        ):
+        if not content_free_phase(report):
             failure = {'phase': name, 'reason': 'phase_provenance_incomplete'}
             break
         if 'standby' in options:
