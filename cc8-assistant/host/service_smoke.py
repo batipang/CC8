@@ -303,13 +303,16 @@ class LiveService:
             return None
         self.device = device
         try:
-            return self.supervisor_sample(include_activity=True)
+            snapshot = self.supervisor_sample(include_activity=True)
         except CheckFailure as error:
             if str(error) != 'usb_target_changed':
                 raise
             return None
         except (OSError, RuntimeError, subprocess.SubprocessError):
             return None
+
+        # Readiness is only usable if it belongs to a single USB enumeration.
+        return snapshot if snapshot is not None and read_usb(3)[0] == before else None
 
 
 class RecoveryRun:
@@ -499,6 +502,7 @@ class SleepRecoveryRun:
             'scope': 'observed_mac_system_sleep',
             'state': 'running',
             'wait_seconds': self.seconds,
+            'wait_clock': 'awake',
             'minimum_sleep_seconds': None,
             'post_resume_ready_observed_seconds': None,
             'unready_samples_after_resume': 0,
@@ -522,16 +526,24 @@ class SleepRecoveryRun:
             require(
                 low <= old_high + 0.01 and high >= old_low - 0.01, 'resume_sleep_crossed_baseline'
             )
-            deadline = now + self.seconds
+            # Subtract the lower offset bound to recover the later awake
+            # timestamp in the bracket. Time asleep must not use this budget.
+            awake_deadline = now - low + self.seconds
+            previous_high = high
             print('正在只读等待 Mac 睡眠和唤醒。', flush=True)
             while True:
                 now, low, high = self.clock()
-                require(now < deadline, 'resume_sleep_not_observed')
-                if low - old_high >= 5:
-                    report['minimum_sleep_seconds'] = round(low - old_high, 3)
+                remaining = awake_deadline - (now - low)
+                require(remaining > 0, 'resume_sleep_not_observed')
+                sleep_lower_bound = low - previous_high
+                if sleep_lower_bound >= 5:
+                    report['minimum_sleep_seconds'] = round(sleep_lower_bound, 3)
                     self.checkpoint(report)
                     break
-                self.sleep(min(1, deadline - now))
+                # Adjacent observations avoid accumulating small gaps that
+                # happened in different sampling intervals.
+                previous_high = high
+                self.sleep(min(1, remaining))
 
             resumed, sleep_high = now, high
             ready_deadline = resumed + 90
@@ -545,6 +557,7 @@ class SleepRecoveryRun:
                     break
                 report['unready_samples_after_resume'] += 1
                 self.checkpoint(report)
+                require(now < ready_deadline, 'resume_service_not_ready')
                 self.sleep(min(1, ready_deadline - now))
             report['post_resume_ready_observed_seconds'] = round(now - resumed, 3)
             self.sleep(3)
@@ -592,6 +605,7 @@ def main(argv=None):
                         {
                             'scope': 'observed_mac_system_sleep',
                             'wait_seconds': sleep_wait,
+                            'wait_clock': 'awake',
                             'forces_sleep': False,
                         }
                         if args.observe_sleep
