@@ -4146,6 +4146,43 @@ class DeviceAutomationTests(unittest.TestCase):
         self.assertEqual(evidence['admitted_voice_requests'], 0)
         self.assertNotIn('PRIVATE', json.dumps(evidence))
 
+    def test_tool_latency_keeps_only_bounded_input_from_the_sole_transcript_rejection(self):
+        row = self.rejected_candidate(
+            gate='tool_sample_guard',
+            tool_sample_rejection='read_only_missing',
+            stages={'wake_detected': 1, 'asr_start': 2, 'asr_end': 3},
+            asr_input_samples=98720,
+        )
+        for changes, extra, expected in (
+            ({}, [], {'asr_input_samples': 98720, 'capture': {'status': 'missing'}}),
+            (
+                {'asr_input_samples': True, 'capture': {'raw_audio': 'PRIVATE_AUDIO'}},
+                [],
+                {'asr_input_samples': None, 'capture': {'status': 'malformed'}},
+            ),
+            ({'tool_sample_rejection': 'route_changed'}, [], None),
+            ({'turn_id': 'PRIVATE_TURN'}, [], None),
+            (None, [], None),
+            ({'stages': {'asr_start': 3, 'asr_end': 2}}, [], None),
+            ({'stages': {'asr_start': 2, 'asr_end': 'PRIVATE_TIME'}}, [], None),
+            ({'stages': {'asr_start': 2, 'asr_end': 3, 'dot_turn_start': 4}}, [], None),
+            ({}, [self.rejected_candidate(request_id='PRIVATE_EXTRA')], None),
+        ):
+            with self.subTest(changes=changes, extra=len(extra)):
+                candidate = {**row, **(changes or {})}
+                if changes is None:
+                    del candidate['stages']
+                run, _, _, _ = self.acoustic_fixture(lambda _: [candidate, *extra], awake=True)
+                run.latency_sample = True
+                run.latency_scenario = 'tool'
+                run.qa_question = SCENARIO_QUESTIONS['tool'][1]
+                run.tool_sample_token = 'a' * 32
+                with self.assertRaisesRegex(CheckFailure, 'tool_sample_transcript_not_confirmed'):
+                    run.acoustic_probe(awake=True)
+                evidence = run.report('failed')['acoustic_evidence']
+                self.assertEqual(evidence.get('sole_tool_rejection_input'), expected)
+                self.assertNotIn('PRIVATE', json.dumps(evidence))
+
     def test_tool_suite_requires_backend_guard_before_constructing_device(self):
         from release_info import RELEASE
 

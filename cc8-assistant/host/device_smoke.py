@@ -31,6 +31,7 @@ from capture_evidence import (
     validate as validate_capture,
     ONSET_PREFIX_COUNTS,
     TOOL_SAMPLE_REJECTION_REASONS,
+    TOOL_TRANSCRIPT_MISMATCHES,
     valid_tool_asr_comparison,
 )
 from known_speech_receipt import (
@@ -42,6 +43,7 @@ from known_speech_receipt import (
 from diagnostics import (
     ASR_INPUT_SAMPLES,
     ASR_STOP_STAGE,
+    DOT_STAGES,
     INTERVALS,
     MAX_CONFIRMED_PLAYBACK_CLAUSES,
     MAX_DEVICE_PAUSE_MS,
@@ -506,7 +508,7 @@ def classify_voice_records(rows):
     return groups
 
 
-def summarize_wake_rejection_capture(row):
+def summarize_rejection_capture(row):
     if 'capture' not in row:
         return {'status': 'missing'}
     try:
@@ -1962,6 +1964,7 @@ class SmokeRun:
                 None,
             )
             route = completed.get('scenario') if completed is not None else None
+            tool_latency = self.latency_sample and self.latency_scenario == 'tool'
             # Keep only fixed counts, categories and timing. A completed task
             # is not a played answer.
             self.acoustic_evidence = {
@@ -1981,7 +1984,7 @@ class SmokeRun:
                 },
                 **({'tool_sample_rejections': tool_rejections} if tool_rejections else {}),
                 'sole_wake_rejection_capture': (
-                    summarize_wake_rejection_capture(wake_rejection)
+                    summarize_rejection_capture(wake_rejection)
                     if wake_rejection is not None
                     else None
                 ),
@@ -1996,11 +1999,7 @@ class SmokeRun:
                 'cancelled_requests': sum(r.get('outcome') == 'cancelled' for r in rows),
                 'completed_tasks': sum(r.get('task_outcome') == 'completed' for r in rows),
                 'recognized_stimulus_matches': recognized_stimulus_matches,
-                **(
-                    {'tool_sample_guarded': True}
-                    if self.latency_sample and self.latency_scenario == 'tool'
-                    else {}
-                ),
+                **({'tool_sample_guarded': True} if tool_latency else {}),
                 **({'math_answer_status': math_answer} if math_answer is not None else {}),
                 'response_playout_timing': response_playout_timing(completed),
                 **(
@@ -2035,6 +2034,26 @@ class SmokeRun:
                     'post_playback_quiet_seconds', 0
                 ),
             }
+            if tool_latency and not self.tool_local_compare and len(rows) == 1 and rejected:
+                row = rejected[0]
+                stages = row.get('stages', {})
+                started, ended = stages.get('asr_start'), stages.get('asr_end')
+                if (
+                    row['gate'] == 'tool_sample_guard'
+                    and row.get('tool_sample_rejection') in TOOL_TRANSCRIPT_MISMATCHES
+                    and type(started) in (int, float)
+                    and type(ended) in (int, float)
+                    and 0 <= started <= ended <= 604800000
+                    and DOT_STAGES.isdisjoint(stages)
+                    and 'task_result' not in stages
+                    and row.get('turn_id') is None
+                    and row.get('task_outcome') is None
+                ):
+                    samples = row.get(ASR_INPUT_SAMPLES)
+                    self.acoustic_evidence['sole_tool_rejection_input'] = {
+                        ASR_INPUT_SAMPLES: samples if valid_asr_input_samples(samples) else None,
+                        'capture': summarize_rejection_capture(row),
+                    }
             if wake_before is not None:
                 local, english = english_wake_counts(health)
                 wake_delta = local - wake_before[0]
@@ -2086,7 +2105,7 @@ class SmokeRun:
                     comparison['local'] not in ('error', 'timeout'), 'tool_comparison_decode_failed'
                 )
                 return comparison
-            if self.latency_sample and self.latency_scenario == 'tool':
+            if tool_latency:
                 require(
                     not any(row['gate'] == 'tool_sample_guard' for row in rejected),
                     'tool_sample_transcript_not_confirmed',
