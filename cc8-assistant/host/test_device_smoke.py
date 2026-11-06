@@ -4296,11 +4296,60 @@ class DeviceAutomationTests(unittest.TestCase):
                 run.latency_scenario = 'tool'
                 run.qa_question = SCENARIO_QUESTIONS['tool'][1]
                 run.tool_sample_token = 'a' * 32
-                with self.assertRaisesRegex(CheckFailure, 'tool_sample_transcript_not_confirmed'):
+                reason = (
+                    'tool_sample_guard_not_confirmed'
+                    if (changes or {}).get('tool_sample_rejection') == 'route_changed'
+                    else 'tool_sample_transcript_not_confirmed'
+                )
+                with self.assertRaisesRegex(CheckFailure, reason):
                     run.acoustic_probe(awake=True)
                 evidence = run.report('failed')['acoustic_evidence']
                 self.assertEqual(evidence.get('sole_tool_rejection_input'), expected)
                 self.assertNotIn('PRIVATE', json.dumps(evidence))
+
+    def test_tool_latency_distinguishes_an_extra_candidate_after_a_matched_answer(self):
+        from test_capture_evidence import evidence as capture_evidence
+
+        question = SCENARIO_QUESTIONS['tool'][0]
+        answer = self.acoustic_row(scenario='tool')
+        extra = self.rejected_candidate(
+            gate='tool_sample_guard',
+            tool_sample_rejection='not_open',
+            stages={'voice_detected': 0, 'asr_start': 2, 'asr_end': 3},
+            asr_input_samples=22880,
+        )
+        valid = capture_evidence()
+        for arrives_after_answer, capture, summary in (
+            (True, valid, {'status': 'observed', **valid}),
+            (True, {'raw_audio': 'PRIVATE_AUDIO'}, {'status': 'malformed'}),
+            (False, valid, None),
+        ):
+            with self.subTest(arrives_after_answer=arrives_after_answer, summary=summary):
+                run, device, _, _ = self.acoustic_fixture(
+                    lambda elapsed: (
+                        [answer, {**extra, 'capture': capture}]
+                        if not arrives_after_answer or elapsed >= 19.5
+                        else [answer]
+                    ),
+                    awake=True,
+                    tasks=[dict(generation=8, status='completed', title=question, result='二')],
+                )
+                run.latency_sample = True
+                run.latency_scenario = 'tool'
+                run.qa_question = question
+                run.tool_sample_token = 'a' * 32
+                with self.assertRaisesRegex(CheckFailure, 'tool_sample_extra_voice_candidate'):
+                    run.acoustic_probe(awake=True)
+                evidence = run.report('failed')['acoustic_evidence']
+                self.assertEqual(evidence['completed_tasks'], 1)
+                self.assertEqual(evidence['tool_sample_rejections'], {'not_open': 1})
+                self.assertNotIn('sole_tool_rejection_input', evidence)
+                self.assertEqual(
+                    evidence.get('post_answer_tool_rejection_input'),
+                    {'asr_input_samples': 22880, 'capture': summary} if summary else None,
+                )
+                self.assertNotIn('PRIVATE', json.dumps(evidence))
+                device.speak_probe.assert_called_once_with(question=question)
 
     def test_tool_suite_requires_backend_guard_before_constructing_device(self):
         from release_info import RELEASE
