@@ -16,8 +16,8 @@ from capture_evidence import TOOL_ASR_MATCH_RESULTS
 from qa_speech import (
     SCENARIO_QUESTIONS,
     normalize_question,
+    tool_asr_result,
     tool_sample_request,
-    tool_transcript_rejection,
 )
 
 
@@ -132,7 +132,7 @@ def main():
         ):
             raise ValueError('Local Whisper snapshot changed during comparison')
     expected = normalize_question(SCENARIO_QUESTIONS['tool'][case - 1])
-    print(tool_transcript_rejection(result, expected) or 'matched')
+    print(tool_asr_result(result, expected))
     return 0
 
 

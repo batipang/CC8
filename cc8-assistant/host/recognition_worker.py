@@ -15,7 +15,7 @@ from typing import Callable, ContextManager, Mapping, Pattern, Protocol
 import numpy as np
 from diagnostics import ASR_STOP_STAGE, TraceBook
 from dsp import RATE, STOP_COMMANDS, resembles_playback
-from qa_speech import SCENARIO_QUESTIONS, normalize_question, tool_transcript_rejection
+from qa_speech import SCENARIO_QUESTIONS, normalize_question, tool_asr_result
 from reply_types import Reply
 from session_ports import EventSink, MetricSink
 from tool_asr_compare import compare_local
@@ -195,6 +195,32 @@ class RecognitionWorker:
                     with self.hooks.lock:
                         if not self.hooks.valid(generation) or not self.hooks.wake_allowed():
                             continue
+                        # A matched local cue can still produce an empty cloud
+                        # transcript. Pair it only inside the explicit QA guard.
+                        if (
+                            not clean
+                            and evidence is not None
+                            and evidence.get('local_wake') is True
+                            and evidence.get('echo_risk') is False
+                            and not self.hooks.playing()
+                            and not (self.hooks.echo_running() or self.hooks.echo_failed())
+                            and (case := self.hooks.tool_sample_compare_case()) is not None
+                        ):
+                            tool_sample_rejection = self.hooks.tool_sample_rejection(
+                                text, True, evidence.get('captured_at')
+                            )
+                            if tool_sample_rejection is not None:
+                                decision = 'tool_sample_guard'
+                                rejected = True
+                                if tool_sample_rejection == 'comparison_only':
+                                    compare_case = case
+                                self.hooks.status(
+                                    'listening',
+                                    '识别对照采样完成'
+                                    if compare_case is not None
+                                    else '工具测试语音未通过核对',
+                                )
+                                continue
                         decision = 'empty'
                         rejected = True
                         if not self.hooks.playing():
@@ -415,7 +441,7 @@ class RecognitionWorker:
                 reason = tool_sample_rejection if decision == 'tool_sample_guard' else None
                 if reason == 'comparison_only' and compare_case is not None:
                     expected = normalize_question(SCENARIO_QUESTIONS['tool'][compare_case - 1])
-                    primary = tool_transcript_rejection(text, expected) or 'matched'
+                    primary = tool_asr_result(text, expected)
                     try:
                         local = compare_local(
                             compare_case, audio, lambda: self.hooks.valid(generation)

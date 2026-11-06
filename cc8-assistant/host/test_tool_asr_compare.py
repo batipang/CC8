@@ -73,7 +73,11 @@ class ToolAsrCompareTests(unittest.TestCase):
 
     def test_pipe_sends_expected_pcm_and_exports_only_a_known_category(self):
         audio = np.array([0.5, -0.25], dtype='<f4')
-        for answer, expected in (('matched', 'matched'), ('private transcript', 'error')):
+        for answer, expected in (
+            ('matched', 'matched'),
+            ('empty', 'empty'),
+            ('private transcript', 'error'),
+        ):
             with self.subTest(answer=answer):
                 code = (
                     'import sys; '
