@@ -5,108 +5,24 @@ Session/wake, output and diagnostic mutations cross explicit callback ports.
 """
 
 from __future__ import annotations
-from dataclasses import dataclass
 import queue
 import re
 import threading
 import time
 from unicodedata import category
-from typing import Callable, ContextManager, Mapping, Pattern, Protocol
 import numpy as np
-from diagnostics import ASR_STOP_STAGE, TraceBook
+from diagnostics import ASR_STOP_STAGE
 from dsp import RATE, STOP_COMMANDS, resembles_playback
 from qa_speech import SCENARIO_QUESTIONS, normalize_question, tool_asr_result
 from reply_types import Reply
-from session_ports import EventSink, MetricSink
+from recognition_commands import SLEEP_COMMAND, stop_command, stop_matches_reference, wake_payload
+from session_ports import RecognitionHooks
 from tool_asr_compare import compare_local
 from vision import visual_request
 from wake_controller import WAITING
 
 
-class FailureSink(Protocol):
-    def __call__(
-        self, message: str, error: BaseException, *, trace_key: str | int | None = None
-    ) -> None: ...
-
-
-class MetricFieldSink(Protocol):
-    def __call__(self, name: str, field: str, value: object) -> None: ...
-
-
-class PairSink(Protocol):
-    def __call__(self, text: str, render_text: str, echo: bool) -> None: ...
-
-
-@dataclass(frozen=True)
-class RecognitionHooks:
-    lock: ContextManager[object]
-    valid: Callable[[int], bool]
-    diagnostics: Callable[[], TraceBook]
-    playing: Callable[[], bool]
-    last_audio_end: Callable[[], float]
-    recent_spoken: Callable[[], list[str]]
-    pause_state: Callable[[], Mapping[str, object] | None]
-    speech: Callable[[], object]
-    metric: MetricSink
-    set_metric_field: MetricFieldSink
-    add_metric_field: MetricFieldSink
-    record_echo_pair: PairSink
-    echo_running: Callable[[], bool]
-    echo_failed: Callable[[], bool]
-    awake: Callable[[], bool]
-    wake_allowed: Callable[[], bool]
-    wake: Callable[[], bool]
-    set_awake: Callable[[bool], None]
-    wake_pattern: Pattern[str]
-    touch: Callable[[], None]
-    event: EventSink
-    status: Callable[[str, str], None]
-    log: EventSink
-    cancel_session: Callable[[str], int]
-    begin_visual: Callable[[str, str], None]
-    enqueue_response: Callable[[Reply], None]
-    failure: FailureSink
-    resume_rejected: Callable[[int | None, int], None]
-    bind_response_probe: Callable[[str, int, int | None], None] = lambda *_: None
-    tool_sample_rejection: Callable[[str, bool, float | None], str | None] = lambda *_: None
-    tool_sample_comparison: Callable[[str], tuple[int, str] | None] = lambda _: None
-
-
 MIN_ECHO_RISK_CREDIBLE_FRAMES = 5
-WAKE_PREFIX_SEPARATORS = ' \t\r\n，。,！!：:'
-WAKE_QUOTES = {'“': '”', '「': '」', '『': '』', '"': '"'}
-SLEEP_COMMAND = re.compile(r'(?:请)?(?:你)?(?:先)?(?:去)?休息(?:一下|一会儿?)?吧?')
-
-
-def wake_payload(text, wake_pattern):
-    candidate = text.lstrip(WAKE_PREFIX_SEPARATORS)
-    closing_quote = WAKE_QUOTES.get(candidate[:1])
-    if closing_quote:
-        candidate = candidate[1:].lstrip(WAKE_PREFIX_SEPARATORS)
-    prefix = wake_pattern.match(candidate)
-    if prefix is None:
-        return None
-    tail = candidate[prefix.end() :]
-    if closing_quote:
-        tail = tail.removeprefix(closing_quote)
-    return tail.lstrip(WAKE_PREFIX_SEPARATORS)
-
-
-def stop_command(text, wake_pattern):
-    command = re.sub(r'\W', '', text)
-    if command in STOP_COMMANDS:
-        return command
-    payload = wake_payload(text, wake_pattern)
-    command = re.sub(r'\W', '', payload) if payload is not None else ''
-    return command if command in STOP_COMMANDS else ''
-
-
-def stop_matches_reference(command, references):
-    for reference in references:
-        clean = re.sub(r'\W', '', reference)
-        if clean == command or (len(command) > 1 and command in clean):
-            return True
-    return False
 
 
 class RecognitionWorker:
