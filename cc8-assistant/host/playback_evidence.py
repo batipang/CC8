@@ -498,10 +498,18 @@ class PlaybackEvidence:
                 if leading is None:
                     return
             else:
+                offset = first_leading_block(self.reference)
+                if self.current.input_end_ns is not None:
+                    # The capture window can be ready before the RENDER prefix.
+                    required_frames = (
+                        LEADING_SEARCH_FRAMES if offset is None else offset + 2 * LEADING_BLOCK
+                    )
+                    if len(self.reference) < required_frames:
+                        return
                 leading = self._leading_evidence(
                     left + peak - self.template_offset,
                     self.reference,
-                    first_leading_block(self.reference),
+                    offset,
                 )
         self._finish(
             status,
