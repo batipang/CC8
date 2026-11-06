@@ -61,6 +61,11 @@ TOOL_SAMPLE_REJECTION_REASONS = (
     'local_wake_missing',
     'capture_window',
     'transcript_mismatch',
+    'formatting_mismatch',
+    'read_only_missing',
+    'tool_instruction_mismatch',
+    'arithmetic_mismatch',
+    'arithmetic_form_mismatch',
 )
 
 

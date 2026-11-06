@@ -85,6 +85,9 @@ ANSWER_VALUE = re.compile(rf'(?:(?:答案|结果)(?:是|:)|是|等于)?\s*{ANSWE
 ANSWER_EQUATION = re.compile(
     rf'{ANSWER_TOKEN}\s*(?:加|\+)\s*{ANSWER_TOKEN}\s*(?:等于|=)\s*{ANSWER_TOKEN}'
 )
+TOOL_QUESTION = re.compile(rf'({ANSWER_NUMBER})加({ANSWER_NUMBER})等于(?:几|多少|什么)')
+FIXED_ADDITION = re.compile(r'([1-6])加([1-5])等于几')
+TOOL_FORMATTING = str.maketrans('', '', ':"“”「」『』')
 
 
 def normalize_question(text):
@@ -94,11 +97,34 @@ def normalize_question(text):
     return text.replace(',', '').translate(DIGITS).replace('+', '加').replace('=', '等于')
 
 
+def tool_transcript_rejection(text, expected):
+    """Classify a fixed-tool mismatch without broadening admission or exposing text."""
+    actual = normalize_question(text)
+    if actual == expected:
+        return None
+    if actual.translate(TOOL_FORMATTING) == expected:
+        return 'formatting_mismatch'
+    if '只读' not in actual:
+        return 'read_only_missing'
+    if not actual.startswith(TOOL_PREFIX):
+        return 'tool_instruction_mismatch'
+    parsed = TOOL_QUESTION.fullmatch(actual.removeprefix(TOOL_PREFIX))
+    target = FIXED_ADDITION.fullmatch(expected.removeprefix(TOOL_PREFIX))
+    if parsed is None or target is None:
+        return 'transcript_mismatch'
+    operands = tuple(
+        int(value) if value.isascii() else ANSWER_WORDS[value] for value in parsed.groups()
+    )
+    return (
+        'arithmetic_form_mismatch'
+        if operands == tuple(map(int, target.groups()))
+        else 'arithmetic_mismatch'
+    )
+
+
 def math_answer_status(question, result):
     """Classify only unambiguous short answers to the fixed public additions."""
-    operands = re.fullmatch(
-        r'([1-6])加([1-5])等于几', normalize_question(question.removeprefix(TOOL_PREFIX))
-    )
+    operands = FIXED_ADDITION.fullmatch(normalize_question(question.removeprefix(TOOL_PREFIX)))
     if operands is None or not isinstance(result, str) or not 0 < len(result) <= 1600:
         return 'unconfirmed'
 

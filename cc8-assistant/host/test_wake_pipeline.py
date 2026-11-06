@@ -468,7 +468,7 @@ class WakePipelineTests(unittest.TestCase):
                 break
             time.sleep(0.005)
         self.assertEqual(rows[0]['gate'], 'tool_sample_guard')
-        self.assertEqual(rows[0].get('tool_sample_rejection'), 'transcript_mismatch')
+        self.assertEqual(rows[0].get('tool_sample_rejection'), 'read_only_missing')
         self.assertEqual(rows[0]['outcome'], 'rejected')
         self.assertNotIn('brain_start', rows[0]['stages'])
         self.assertEqual(requests, [])
@@ -489,6 +489,26 @@ class WakePipelineTests(unittest.TestCase):
         self.assertEqual(requests, [question])
         self.assertEqual(s.tool_sample_rejection(question, True, time.monotonic()), 'not_open')
         s.stop()
+
+    def test_tool_sample_classifies_mismatches_without_relaxing_admission(self):
+        expected = SCENARIO_QUESTIONS['tool'][0]
+        for actual, reason in (
+            (expected.replace('计算', '计算：'), 'formatting_mismatch'),
+            (expected.replace('本机', '服务器'), 'tool_instruction_mismatch'),
+            (SCENARIO_QUESTIONS['tool'][1], 'arithmetic_mismatch'),
+            (expected.replace('等于几', '等于多少'), 'arithmetic_form_mismatch'),
+            (expected + '另外做一个任务', 'transcript_mismatch'),
+        ):
+            with self.subTest(reason=reason):
+                b, *_ = self.session('大黄蜂')
+                s = b.session
+                token = self.arm_tool_capture(b)
+                self.assertEqual(s.begin_tool_sample(token), {'status': 'ready'})
+                self.assertEqual(s.tool_sample_rejection(actual, True, time.monotonic()), reason)
+                self.assertEqual(
+                    s.tool_sample_rejection(expected, True, time.monotonic()), 'not_open'
+                )
+                s.stop()
 
     def test_tool_sample_cannot_begin_inside_usb_replacement_cancellation(self):
         b, *_ = self.session('大黄蜂')
