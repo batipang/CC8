@@ -2,6 +2,7 @@ import json
 import threading
 import time
 import unittest
+from unittest.mock import Mock
 import numpy as np
 
 from minimax_client import (
@@ -11,6 +12,7 @@ from minimax_client import (
     MiniMaxError,
     Cancelled,
     RequestSlot,
+    SEARCH_ROUTE,
     VisibleText,
     sse_events,
 )
@@ -95,6 +97,75 @@ class StreamTests(unittest.TestCase):
         self.assertTrue(slot.stopped.is_set())
         self.assertTrue(entered.wait(1))
         release.set()
+
+    def test_cancel_closes_session_even_when_response_close_fails(self):
+        closed = threading.Event()
+        response = Mock()
+        response.close.side_effect = OSError('private cleanup detail')
+        session = Mock()
+        session.close.side_effect = closed.set
+        slot = RequestSlot(response=response, session=session)
+        slot.cancel()
+        self.assertTrue(closed.wait(1))
+        response.close.assert_called_once()
+        session.close.assert_called_once()
+
+
+class TransportCleanupTests(unittest.TestCase):
+    def test_terminal_cleanup_preserves_success_failure_and_cancellation(self):
+        for entry in ('asr', 'json', 'sse'):
+            for outcome in ('success', 'quota', 'cancelled'):
+                with self.subTest(entry=entry, outcome=outcome):
+                    value = {'text': '固定测试'}
+                    if outcome == 'quota':
+                        value = {'base_resp': {'status_code': 1008}}
+                    t, session, response = transport([value])
+                    if entry != 'sse':
+                        response.iter_content = Mock(
+                            return_value=iter([json.dumps(value).encode()])
+                        )
+                    response.close = Mock(side_effect=OSError('private cleanup detail'))
+                    close_session = Mock(side_effect=OSError('private session cleanup detail'))
+                    session.close = close_session
+
+                    def current():
+                        return outcome != 'cancelled' or not session.calls
+
+                    if entry == 'asr':
+                        call = lambda: t.transcribe(b'RIFFtest', current)
+                        expected = '固定测试'
+                    elif entry == 'json':
+                        call = lambda: t.post_json('/v1/chat/completions', {}, current)
+                        expected = value
+                    else:
+                        call = lambda: list(t.events('/v1/chat/completions', {}, current))
+                        expected = [value]
+
+                    if outcome == 'success':
+                        self.assertEqual(call(), expected)
+                    elif outcome == 'quota':
+                        with self.assertRaises(MiniMaxError) as error:
+                            call()
+                        self.assertEqual(error.exception.kind, 'quota')
+                    else:
+                        with self.assertRaises(Cancelled):
+                            call()
+                    self.assertEqual(len(session.calls), 1)
+                    self.assertEqual(t.slots, set())
+                    response.close.assert_called_once()
+                    close_session.assert_called_once()
+
+    def test_read_only_retry_stops_if_the_first_response_cannot_close(self):
+        t, session, response = transport([])
+        response.status_code = 503
+        response.close = Mock(side_effect=OSError('private cleanup detail'))
+        with self.assertRaises(MiniMaxError) as error:
+            t.post_json(SEARCH_ROUTE, {'q': '固定公开搜索'})
+        self.assertEqual(error.exception.kind, 'transport_or_io')
+        self.assertNotIn('private cleanup detail', str(error.exception))
+        self.assertEqual(len(session.calls), 1)
+        self.assertEqual(t.slots, set())
+        self.assertTrue(session.closed)
 
 
 class TextTests(unittest.TestCase):
