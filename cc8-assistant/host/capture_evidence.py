@@ -74,7 +74,7 @@ TOOL_ASR_MATCH_RESULTS = ('matched', 'empty') + TOOL_TRANSCRIPT_MISMATCHES
 TOOL_ASR_LOCAL_RESULTS = TOOL_ASR_MATCH_RESULTS + ('error', 'timeout')
 
 
-def valid_tool_asr_comparison(value):
+def valid_tool_asr_comparison(value, reason='comparison_only'):
     return (
         isinstance(value, dict)
         and (
@@ -86,6 +86,11 @@ def valid_tool_asr_comparison(value):
         )
         and isinstance(value['primary'], str)
         and value['primary'] in TOOL_ASR_MATCH_RESULTS
+        and (
+            reason == 'comparison_only'
+            or reason in TOOL_TRANSCRIPT_MISMATCHES
+            and reason == value['primary']
+        )
         and isinstance(value['local'], str)
         and value['local'] in TOOL_ASR_LOCAL_RESULTS
     )

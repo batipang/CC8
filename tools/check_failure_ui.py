@@ -20,13 +20,13 @@ sys.path.insert(0, str(ROOT / 'cc8-assistant/host'))
 
 if __package__:
     from .qa_variant import PACKAGE, COMPONENT, PORT, apk_metadata, safe_source, snapshot_files
-    from .qa_faults import CASES, DOT_FIXTURES, HTTP_FIXTURES, generate
+    from .qa_faults import CASE_SETS, DOT_FIXTURES, HTTP_FIXTURES, generate
     from .qa_ui import stdout_hierarchy, status_target, dialog_close
     from .private_output import private_directory, PrivateOutput
 else:
     # Root entry imports this as tools.check_failure_ui to keep one module identity.
     from tools.qa_variant import PACKAGE, COMPONENT, PORT, apk_metadata, safe_source, snapshot_files
-    from tools.qa_faults import CASES, DOT_FIXTURES, HTTP_FIXTURES, generate
+    from tools.qa_faults import CASE_SETS, DOT_FIXTURES, HTTP_FIXTURES, generate
     from tools.qa_ui import stdout_hierarchy, status_target, dialog_close
     from tools.private_output import private_directory, PrivateOutput
 
@@ -333,9 +333,19 @@ def run(
     shared_staging=False,
     http_fixture='fake',
     dot_fixture='fake',
+    case_set='standard',
 ):
     require(http_fixture in HTTP_FIXTURES, 'unknown_qa_http_fixture')
     require(dot_fixture in DOT_FIXTURES, 'unknown_qa_dot_fixture')
+    require(
+        case_set in CASE_SETS and type(limit) is int and 1 <= limit <= len(CASE_SETS[case_set]),
+        'invalid_qa_selection',
+    )
+    require(
+        case_set != 'search' or http_fixture != 'fake' and dot_fixture == 'fake',
+        'search_qa_requires_loopback_without_dot',
+    )
+    cases = CASE_SETS[case_set]
     from service_smoke import LiveService
     from protocol import decode_event
 
@@ -371,7 +381,7 @@ def run(
     service = LiveService(runtime, device.original)
     baseline = service.sample()
     require(baseline is not None, 'production_not_idle_ready')
-    fixtures = generate(http_fixture=http_fixture, dot_fixture=dot_fixture, cases=CASES[:limit])
+    fixtures = generate(http_fixture=http_fixture, dot_fixture=dot_fixture, cases=cases[:limit])
     summary = fixture_summary(fixtures, http_fixture, dot_fixture)
     rows = []
     link = None
@@ -406,7 +416,8 @@ def run(
                 if shared_staging
                 else 'protected_shell_directory',
                 'selected_cases': limit,
-                'total_fixed_cases': len(CASES),
+                'total_fixed_cases': len(cases),
+                'case_set': case_set,
                 'microphone_used': False,
                 'camera_used': False,
                 'capture_permissions_absent': True,
@@ -553,11 +564,13 @@ def run(
 
 
 def host_check(args):
+    cases = CASE_SETS[args.case_set]
     result = {
         'execute': args.execute,
         'scope': 'host_fault_recovery',
         'selected_cases': args.limit,
-        'total_fixed_cases': len(CASES),
+        'total_fixed_cases': len(cases),
+        'case_set': args.case_set,
         'physical_ui_tested': False,
         'real_provider_requested': False,
         'provider_http_fixture': args.http_fixture,
@@ -568,7 +581,7 @@ def host_check(args):
             fixtures = generate(
                 http_fixture=args.http_fixture,
                 dot_fixture=args.dot_fixture,
-                cases=CASES[: args.limit],
+                cases=cases[: args.limit],
             )
             result.update(fixture_summary(fixtures, args.http_fixture, args.dot_fixture))
             result['state'] = 'passed'
@@ -587,7 +600,8 @@ def main(argv=None):
         '--host-only', action='store_true', help='Check fault/recovery fixtures without a device'
     )
     parser.add_argument('--qa-receipt', type=Path)
-    parser.add_argument('--limit', type=int, default=len(CASES))
+    parser.add_argument('--case-set', choices=tuple(CASE_SETS), default='standard')
+    parser.add_argument('--limit', type=int)
     parser.add_argument('--execute', action='store_true')
     parser.add_argument(
         '--http-fixture',
@@ -605,8 +619,16 @@ def main(argv=None):
         help='Explicit existing shared-directory installer compatibility route; see docs/APK_INSTALL.md',
     )
     args = parser.parse_args(argv)
-    if not 1 <= args.limit <= len(CASES):
-        parser.error(f'--limit must be between 1 and {len(CASES)}')
+    total = len(CASE_SETS[args.case_set])
+    if args.limit is None:
+        args.limit = total
+    if not 1 <= args.limit <= total:
+        parser.error(f'--limit must be between 1 and {total}')
+    if args.case_set == 'search':
+        args.http_fixture = args.http_fixture or 'loopback_business'
+        args.dot_fixture = args.dot_fixture or 'fake'
+        if args.http_fixture == 'fake' or args.dot_fixture != 'fake':
+            parser.error('Search QA requires loopback TLS and no Dot subprocess')
     if args.host_only:
         if args.runtime_root is not None or args.qa_receipt is not None or args.shared_staging:
             parser.error('--host-only cannot be combined with device or installer options')
@@ -622,7 +644,8 @@ def main(argv=None):
             json.dumps(
                 {
                     'execute': False,
-                    'fixed_cases': len(CASES),
+                    'fixed_cases': total,
+                    'case_set': args.case_set,
                     'qa_package': PACKAGE,
                     'microphone_used': False,
                     'camera_used': False,
@@ -672,6 +695,7 @@ def main(argv=None):
                         shared_staging=args.shared_staging,
                         http_fixture=args.http_fixture,
                         dot_fixture=args.dot_fixture,
+                        case_set=args.case_set,
                     )
                 except BaseException:
                     if private_json(output.path).get('state') == 'preparing':

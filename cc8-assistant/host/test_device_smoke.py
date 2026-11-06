@@ -4307,6 +4307,106 @@ class DeviceAutomationTests(unittest.TestCase):
                 self.assertEqual(evidence.get('sole_tool_rejection_input'), expected)
                 self.assertNotIn('PRIVATE', json.dumps(evidence))
 
+    def test_tool_rejection_diagnosis_is_retained_only_for_the_requested_engine(self):
+        comparison = {
+            'primary': 'read_only_missing',
+            'local': 'matched',
+            'local_engine': 'sensevoice',
+        }
+        for engine, value, retained in (
+            ('sensevoice', comparison, True),
+            (None, comparison, False),
+            ('whisper', comparison, False),
+            ('sensevoice', {**comparison, 'primary': 'arithmetic_mismatch'}, False),
+            ('sensevoice', {**comparison, 'local': 'PRIVATE_TEXT'}, False),
+        ):
+            with self.subTest(engine=engine, value=value):
+                row = self.rejected_candidate(
+                    gate='tool_sample_guard',
+                    tool_sample_rejection='read_only_missing',
+                    stages={'wake_detected': 1, 'asr_start': 2, 'asr_end': 3},
+                    asr_input_samples=98720,
+                    tool_asr_comparison=value,
+                )
+                run, device, _, _ = self.acoustic_fixture(lambda _: [row], awake=True)
+                run.latency_sample = True
+                run.latency_scenario = 'tool'
+                run.qa_question = SCENARIO_QUESTIONS['tool'][1]
+                run.tool_sample_token = 'a' * 32
+                run.tool_diagnose_engine = engine
+                with self.assertRaisesRegex(CheckFailure, 'tool_sample_transcript_not_confirmed'):
+                    run.acoustic_probe(awake=True)
+                evidence = run.report('failed')['acoustic_evidence']
+                self.assertEqual(evidence['admitted_voice_requests'], 0)
+                self.assertEqual(
+                    evidence['sole_tool_rejection_input'].get('tool_asr_comparison'),
+                    comparison if retained else None,
+                )
+                self.assertNotIn('PRIVATE', json.dumps(evidence))
+                device.speak_probe.assert_called_once_with(question=run.qa_question)
+
+    def test_tool_rejection_diagnosis_plan_requires_tool_execution(self):
+        base = ['--runtime-root', '/unused', '--capture', '--tool-diagnose-rejection', 'sensevoice']
+        for mode in (['--awake-dialogue', '--tool-case', '2'], ['--qa-latency-suite']):
+            with (
+                patch('device_smoke.Device') as device,
+                patch('device_smoke.rpc') as rpc,
+                redirect_stdout(io.StringIO()) as output,
+            ):
+                self.assertEqual(main(base + mode + ['--latency-scenario', 'tool']), 0)
+            plan = json.loads(output.getvalue())
+            self.assertEqual(plan['minimum_backend_version'], '0.15.20')
+            self.assertEqual(plan['tool_rejection_diagnose_engine'], 'sensevoice')
+            device.assert_not_called()
+            rpc.assert_not_called()
+        for mode in (
+            ['--awake-dialogue'],
+            ['--awake-dialogue', '--tool-case', '2', '--tool-asr-comparison', 'whisper'],
+            ['--qa-latency-suite', '--latency-scenario', 'web'],
+        ):
+            with self.subTest(mode=mode), redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as error:
+                    main(base + mode + ['--execute'])
+                self.assertEqual(error.exception.code, 2)
+
+    def test_tool_rejection_diagnosis_requires_supported_distinct_engine_before_device_access(self):
+        from release_info import RELEASE
+
+        args = [
+            '--runtime-root',
+            '/unused',
+            '--capture',
+            '--awake-dialogue',
+            '--latency-scenario',
+            'tool',
+            '--tool-case',
+            '2',
+            '--tool-diagnose-rejection',
+            'sensevoice',
+            '--execute',
+        ]
+        for supported, primary in ((False, 'minimax'), (True, 'sensevoice')):
+            health = dict(
+                bridge_version=RELEASE.backend_version,
+                protocol_version=RELEASE.protocol_version,
+                release_id=RELEASE.release_id,
+                runtime_instance='private',
+                tool_sample_guard_supported=True,
+                tool_rejection_diagnosis_supported=supported,
+                asr_engine=primary,
+            )
+            with (
+                self.subTest(supported=supported, primary=primary),
+                patch('device_smoke.rpc', return_value=health),
+                patch('device_smoke.load_release', return_value=RELEASE),
+                patch('device_smoke.Device') as device,
+                redirect_stderr(io.StringIO()),
+            ):
+                with self.assertRaises(SystemExit) as error:
+                    main(args)
+                self.assertEqual(error.exception.code, 2)
+                device.assert_not_called()
+
     def test_tool_latency_distinguishes_an_extra_candidate_after_a_matched_answer(self):
         from test_capture_evidence import evidence as capture_evidence
 
@@ -4360,26 +4460,19 @@ class DeviceAutomationTests(unittest.TestCase):
             release_id=RELEASE.release_id,
             runtime_instance='private-unready',
         )
-        with (
-            patch('device_smoke.rpc', return_value=health),
-            patch('device_smoke.load_release', return_value=RELEASE),
-            patch('device_smoke.Device') as device,
-            redirect_stderr(io.StringIO()),
-            self.assertRaises(SystemExit) as error,
-        ):
-            main(
-                [
-                    '--runtime-root',
-                    '/unused',
-                    '--capture',
-                    '--qa-latency-suite',
-                    '--latency-scenario',
-                    'tool',
-                    '--execute',
-                ]
-            )
-        self.assertEqual(error.exception.code, 2)
-        device.assert_not_called()
+        base = ['--runtime-root', '/unused', '--capture', '--latency-scenario', 'tool', '--execute']
+        for flags in (['--qa-latency-suite'], ['--awake-dialogue', '--tool-case', '4']):
+            with (
+                self.subTest(flags=flags),
+                patch('device_smoke.rpc', return_value=health),
+                patch('device_smoke.load_release', return_value=RELEASE),
+                patch('device_smoke.Device') as device,
+                redirect_stderr(io.StringIO()),
+            ):
+                with self.assertRaises(SystemExit) as error:
+                    main(base + flags)
+                self.assertEqual(error.exception.code, 2)
+                device.assert_not_called()
 
     def test_fixed_tool_comparison_plan_validates_case_and_individual_capture(self):
         base = ['--runtime-root', '/unused']
@@ -4404,6 +4497,160 @@ class DeviceAutomationTests(unittest.TestCase):
                 self.assertRaises(SystemExit),
             ):
                 main(base + invalid)
+
+    def test_fixed_tool_execution_plan_binds_one_public_case_without_accessing_hardware(self):
+        base = ['--runtime-root', '/unused']
+        flags = ['--capture', '--awake-dialogue', '--latency-scenario', 'tool']
+        with (
+            patch('device_smoke.Device') as device,
+            patch('device_smoke.rpc') as rpc,
+            redirect_stdout(io.StringIO()) as output,
+        ):
+            self.assertEqual(
+                main(base + flags + ['--tool-case', '4', '--response-acoustic-evidence']), 0
+            )
+        device.assert_not_called()
+        rpc.assert_not_called()
+        plan = json.loads(output.getvalue())
+        self.assertFalse(plan['execute'])
+        self.assertEqual((plan['scope'], plan['tool_case']), ('fixed_tool_case', 4))
+        self.assertTrue(plan['dot_dispatch_expected'])
+        self.assertTrue(plan['response_acoustic_evidence'])
+        self.assertEqual(plan['checks'], planned_checks(set(QA_LATENCY_PHASES[0][1])))
+        for invalid in (
+            flags,
+            flags + ['--tool-case', '31'],
+            flags + ['--tool-case', '0'],
+            flags + ['--tool-case', '4', '--qa-latency-suite'],
+            flags + ['--tool-case', '4', '--english-wake'],
+            flags + ['--tool-case', '4', '--tool-asr-comparison', 'sensevoice'],
+            flags + ['--tool-case', '4', '--collect-acoustic-coverage'],
+            ['--capture', '--latency-scenario', 'tool', '--tool-case', '4'],
+        ):
+            with self.subTest(invalid=invalid), redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as error:
+                    main(base + invalid + ['--execute'])
+                self.assertEqual(error.exception.code, 2)
+
+    def test_fixed_tool_execution_requires_route_playout_timing_and_correct_answer(self):
+        question = SCENARIO_QUESTIONS['tool'][0]
+        for missing, answer, error in (
+            (None, '二', None),
+            ('tool_route_completed', '二', 'route_not_confirmed'),
+            ('confirmed_playback_done', '二', 'playout_not_confirmed'),
+            ('tts_start', '二', 'stage_timing_incomplete'),
+            (None, '三', 'answer_not_confirmed'),
+        ):
+            with self.subTest(missing=missing, answer=answer):
+                row = self.acoustic_row(
+                    request_id='a' * 32,
+                    scenario='tool',
+                    error=None,
+                    gate='accepted',
+                    confirmed_playback_clauses=1,
+                )
+                del row['text']
+                row['stages'].update(
+                    utterance_end=0,
+                    asr_end=5,
+                    brain_start=10,
+                    tool_route_completed=27,
+                    first_clause=30,
+                    tts_start=32,
+                    first_pcm=35,
+                    playout_ack=50,
+                    playback_done=60,
+                    confirmed_playout_ack=50,
+                    confirmed_playback_done=60,
+                )
+                if missing is not None:
+                    row['stages'].pop(missing)
+                run, device, _, now = self.acoustic_fixture(
+                    lambda _: [row],
+                    awake=True,
+                    tasks=[
+                        {
+                            'generation': 8,
+                            'status': 'completed',
+                            'title': question,
+                            'result': answer,
+                        }
+                    ],
+                )
+                run.latency_sample = run.fixed_tool_case = True
+                run.latency_scenario = 'tool'
+                run.qa_question = question
+                run.tool_sample_token = 'a' * 32
+                if error is None:
+                    run.acoustic_probe(awake=True)
+                else:
+                    with self.assertRaisesRegex(CheckFailure, f'fixed_tool_{error}'):
+                        run.acoustic_probe(awake=True)
+                report = run.report('failed' if error else 'passed')
+                self.assertEqual((report['scope'], report['tool_case']), ('fixed_tool_case', 1))
+                self.assertEqual(now[0], POST_DIALOGUE_SECONDS)
+                self.assertNotIn(question, json.dumps(report, ensure_ascii=False))
+                device.speak_probe.assert_called_once_with(question=question)
+
+    def test_fixed_tool_execution_binds_case_runtime_and_lock(self):
+        from release_info import RELEASE
+
+        health = dict(
+            bridge_version=RELEASE.backend_version,
+            protocol_version=RELEASE.protocol_version,
+            release_id=RELEASE.release_id,
+            runtime_instance='owner-private-instance',
+            tool_sample_guard_supported=True,
+            response_acoustic_evidence_supported=True,
+        )
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder).resolve()
+
+            def run(device, request, *, checkpoint, **options):
+                self.assertTrue(options['fixed_tool_case'])
+                self.assertTrue(options['latency_sample'])
+                self.assertTrue(options['response_acoustic_evidence'])
+                self.assertFalse(options['tool_local_compare'])
+                self.assertEqual(options['qa_question'], SCENARIO_QUESTIONS['tool'][3])
+                with (directory / 'automation-test.lock').open('rb') as other:
+                    with self.assertRaises(BlockingIOError):
+                        fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self.assertEqual(request({'operation': 'health'}), health)
+                result = dict(state='passed', checks=[], cleanup_microphone_off_verified=True)
+                checkpoint(result)
+                return Mock(run=Mock(return_value=result))
+
+            with (
+                patch('device_smoke.rpc', return_value=health) as rpc,
+                patch('device_smoke.load_release', return_value=RELEASE),
+                patch('device_smoke.private_directory', return_value=directory),
+                patch('device_smoke.Device') as device,
+                patch('device_smoke.SmokeRun', side_effect=run) as smoke,
+                redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(
+                    main(
+                        [
+                            '--runtime-root',
+                            str(directory),
+                            '--capture',
+                            '--awake-dialogue',
+                            '--latency-scenario',
+                            'tool',
+                            '--tool-case',
+                            '4',
+                            '--response-acoustic-evidence',
+                            '--execute',
+                        ]
+                    ),
+                    0,
+                )
+            device.assert_called_once()
+            smoke.assert_called_once()
+            self.assertEqual(rpc.call_count, 3)
+            report = next(directory.glob('device-*.json')).read_text()
+            self.assertNotIn(health['runtime_instance'], report)
+            self.assertEqual(json.loads(report)['release_id'], RELEASE.release_id)
 
     def test_tool_comparison_measures_rejected_pair_without_any_task_dispatch(self):
         result = {'primary': 'read_only_missing', 'local': 'matched', 'local_engine': 'sensevoice'}
@@ -4511,6 +4758,15 @@ class DeviceAutomationTests(unittest.TestCase):
         run.start_capture()
         run.request.assert_called_once_with(
             {'operation': 'tool_sample_compare_arm', 'case': 1, 'engine': 'sensevoice'}
+        )
+
+        run.tool_local_compare = False
+        run.tool_compare_engine = 'whisper'
+        run.tool_diagnose_engine = 'sensevoice'
+        run.request.reset_mock()
+        run.start_capture()
+        run.request.assert_called_once_with(
+            {'operation': 'tool_sample_diagnose_arm', 'case': 1, 'engine': 'sensevoice'}
         )
 
     def test_acoustic_cancelled_narration_is_not_a_completed_answer(self):

@@ -39,6 +39,8 @@ CASES = tuple(
     for kind in KINDS + (('approval_declined',) if stage == 'brain' else ())
     for repeat in range(1, 4)
 )
+SEARCH_CASES = tuple(Case('search', kind, repeat) for kind in KINDS for repeat in range(1, 4))
+CASE_SETS = {'standard': CASES, 'search': SEARCH_CASES}
 
 
 def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
@@ -46,16 +48,20 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
         raise ValueError('Unknown QA HTTP fixture')
     if dot_fixture not in DOT_FIXTURES:
         raise ValueError('Unknown QA Dot fixture')
+    search = isinstance(cases, tuple) and bool(cases) and cases[0] in SEARCH_CASES
+    allowed = SEARCH_CASES if search else CASES
     if (
         not isinstance(cases, tuple)
-        or not 1 <= len(cases) <= len(CASES)
+        or not 1 <= len(cases) <= len(allowed)
         or any(
-            not isinstance(case, Case) or type(case.repeat) is not int or case not in CASES
+            not isinstance(case, Case) or type(case.repeat) is not int or case not in allowed
             for case in cases
         )
         or len(set(cases)) != len(cases)
     ):
         raise ValueError('Unknown QA case selection')
+    if search and (http_fixture == 'fake' or dot_fixture != 'fake'):
+        raise ValueError('Search QA requires loopback TLS and no Dot subprocess')
     import numpy as np
     import requests
 
@@ -65,7 +71,7 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
     from configuration import load_config
     from dot_client import DotError, DotApprovalRequired
     from failure_feedback import feedback
-    from minimax_client import Transport, MiniMaxVoice
+    from minimax_client import Transport, MiniMaxBrain, MiniMaxVoice
     from protocol import receive, EVENT, decode_event
     from recognition import MandarinRecognizer
 
@@ -138,7 +144,7 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
         tls = None
         factory = FaultSession
         if http_fixture != 'fake':
-            from tools.qa_http import LoopbackHTTP, RECOVERY_TEXT, RECOVERY_PCM
+            from tools.qa_http import LoopbackHTTP, RECOVERY_TEXT, RECOVERY_PCM, SEARCH_SOURCE
 
             def requested():
                 state.http_calls += 1
@@ -149,6 +155,7 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
                     requested,
                     business=http_fixture == 'loopback_business',
                     recovering=lambda: state.recovery,
+                    search=search,
                 )
             )
             factory = tls.session_factory
@@ -200,7 +207,12 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
             stack.callback(local_dot.close)
         with patch.object(bridge, 'PRIVATE', folder), patch('threading.Thread.start'):
             b = bridge.Bridge(
-                Speech(), BrainRouter(fake_dot, local_dot.brain if local_dot else fake_dot)
+                Speech(),
+                BrainRouter(
+                    MiniMaxBrain(transport, config=config) if search else fake_dot,
+                    local_dot.brain if local_dot else fake_dot,
+                    selected='minimax' if search else 'dot',
+                ),
             )
         b.session.connection = Recorder()
         b.log = lambda *args, **kwargs: None
@@ -226,7 +238,8 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
             )
             if local_dot:
                 local_dot.withhold_start_ack = dot_start_timeout
-            b.submit_text('自动故障测试 ' + case.ident)
+            prefix = '联网查询' if search else ''
+            b.submit_text(prefix + '自动故障测试 ' + case.ident)
             job = b.response.queue.get_nowait()
             if case.stage == 'asr':
                 # The UI owner is text-only, but this virtual recognizer job
@@ -262,8 +275,8 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
                 'kind': case.kind,
             }:
                 raise AssertionError('Fixture diagnostic mismatch')
-            expected_http = 0 if case.stage == 'brain' else 1
-            expected_brain = 0 if case.stage == 'asr' else 1
+            expected_http = 2 if search else 0 if case.stage == 'brain' else 1
+            expected_brain = int(case.stage in ('brain', 'tts'))
             fault_turns = (
                 local_dot.counts()[case.ident + ':fault'] if local_dot else state.brain_calls
             )
@@ -273,7 +286,11 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
             if tls is not None and wire_requests != expected_http:
                 raise AssertionError('QA TLS request did not reach its fixed local endpoint')
             expected_task = (
-                'completed' if case.stage == 'tts' else 'failed' if case.stage == 'brain' else None
+                'completed'
+                if case.stage == 'tts'
+                else 'failed'
+                if case.stage in ('brain', 'search')
+                else None
             )
             if expected_task and b.workspace.tasks[-1]['status'] != expected_task:
                 raise AssertionError('Failure changed task completion incorrectly')
@@ -302,9 +319,27 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
                 recovery_wire_requests = tls.count(case.ident, recovery=True)
                 if not recovered or recovery_wire_requests != 1 or transport.slots:
                     raise AssertionError('Fixture transport did not recover on a new request')
-            b.submit_text('自动恢复检查 ' + case.ident)
+            b.submit_text(prefix + '自动恢复检查 ' + case.ident)
             run_one(b.response, b.response.queue.get_nowait())
             recovery = list(packets)
+            if search:
+                recovery_wire_requests = tls.count(case.ident, recovery=True)
+                report = b.diagnostics.report()['requests'][-1]
+                sources = [
+                    e['items']
+                    for packet in recovery
+                    if (e := decode_event(packet.data)).get('event') == 'web_sources'
+                    and e.get('items')
+                ]
+                if (
+                    recovery_wire_requests != 3
+                    or state.brain_calls
+                    or 'web_route_completed' not in report['stages']
+                    or len(sources) != 1
+                    or [row['url'] for row in sources[0]] != [SEARCH_SOURCE]
+                    or transport.slots
+                ):
+                    raise AssertionError('Fixture search did not recover on a new request')
             if (
                 b.workspace.tasks[-1]['status'] != 'completed'
                 or b.session.text_generation is not None

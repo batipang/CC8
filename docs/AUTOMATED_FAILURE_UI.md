@@ -81,6 +81,21 @@ TLS 模式在安装 QA 前生成协议包，再由实体 QA 界面重放。报�
 
 ## MiniMax 业务错误与下一次请求恢复
 
+### 联网检索专项
+
+```sh
+./cc8 verify-failure-ui --host-only --case-set search
+.toolchains/cc8/dev-venv/bin/python cc8 verify-failure-ui --host-only --case-set search --execute
+.toolchains/cc8/dev-venv/bin/python cc8 verify-failure-ui --case-set search \
+  --runtime-root /absolute/live/workspace --qa-receipt /absolute/private/new-qa-build/qa-build.json --execute
+```
+
+专项单列五类检索故障各三次。失败请求只执行查询规划和检索；下一条明确查询执行规划、检索及有来源的流式回答。默认使用证书校验的本地 TLS 业务故障，可显式选 `loopback_tls`。本专项拒绝假 HTTP 和 Dot 子进程，固定端点之外不发请求。报告记录 `case_set: search`、30 次失败路径和 45 次恢复路径的实际请求。实体模式用同样的协议包核对失败详情、原任务失败、新请求恢复及旧错误隔离。默认 48 项矩阵继续独立统计。
+
+2026-11-06，实体 CC8 的 USB 隔离 QA 包通过 **15/15** 项，用时 224.536 秒。测试包使用 `76ac7c6` 的 Android 源码和原签名，禁止录音、拍照及 Wi-Fi 客户端。逐轮核对失败详情、原任务失败、新请求完成和旧错误隔离。独立复核报告与 APK 摘要，并确认 QA 包已移除，生产助手 0.15.19 仍在前台，原签名 code79、USB 优先、Wi-Fi 就绪及双端关麦。检索请求只访问本地 TLS；实体环节重放故障协议包。
+
+### ASR 与 TTS 业务错误
+
 `--http-fixture loopback_business` 在原有固定用例中，用 HTTP 200 加非零业务状态模拟请求超时、限流、额度不足和凭证权限错误。ASR 使用 JSON，TTS 使用 SSE，断线仍在完整接收本地请求后关闭连接。每条 ASR/TTS 故障结束后，同一个识别器或合成器主动发起一次独立的恢复探针，校验固定识别文本或完整数字 PCM，并确认请求槽清空。恢复探针只在本地回环中运行，PCM 不保存或播放。随后继续用原有界面恢复包验证新请求和旧错误隔离。
 
 ```sh

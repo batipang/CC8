@@ -13,11 +13,56 @@ from unittest.mock import patch
 import requests
 
 from tools.check_failure_ui import corpus_identity
-from tools.qa_faults import CASES, Case, generate
-from tools.qa_http import LoopbackHTTP
+from tools.qa_faults import CASES, SEARCH_CASES, Case, generate
+from tools.qa_http import LoopbackHTTP, SEARCH_SOURCE
 
 
 class HTTPFixtureTests(unittest.TestCase):
+    def test_search_matrix_keeps_failures_separate_from_explicit_recovery(self):
+        rows = generate(http_fixture='loopback_business', cases=SEARCH_CASES)
+        from protocol import decode_event
+
+        self.assertEqual(tuple(row['case'] for row in rows), SEARCH_CASES)
+        for row in rows:
+            with self.subTest(case=row['case'].ident):
+                self.assertEqual(row['wire_requests'], 2)
+                self.assertEqual(row['recovery_wire_requests'], 3)
+                self.assertEqual(row['dot_wire_counts'], {})
+                self.assertEqual(row['expected_task'], 'failed')
+                fault = [decode_event(p.data) for p in row['error']]
+                recovery = [decode_event(p.data) for p in row['recovery']]
+                self.assertFalse(any(item.get('items') for item in fault))
+                self.assertEqual(
+                    [
+                        item['url']
+                        for event in recovery
+                        if event.get('event') == 'web_sources'
+                        for item in event['items']
+                    ],
+                    [SEARCH_SOURCE],
+                )
+                self.assertNotIn('qa-injected-sensitive-body', json.dumps(fault))
+
+    def test_search_scope_rejects_mixed_or_nonisolated_options_before_network(self):
+        for options in (
+            {'http_fixture': 'loopback_business', 'cases': (SEARCH_CASES[0], CASES[0])},
+            {'http_fixture': 'fake', 'cases': SEARCH_CASES},
+            {
+                'http_fixture': 'loopback_business',
+                'dot_fixture': 'local_stdio',
+                'cases': SEARCH_CASES,
+            },
+        ):
+            with (
+                self.subTest(options=options),
+                patch.object(socket.socket, 'connect') as connect,
+                patch.object(subprocess, 'Popen') as process,
+                self.assertRaises(ValueError),
+            ):
+                generate(**options)
+            connect.assert_not_called()
+            process.assert_not_called()
+
     def test_tls_and_dot_stdio_run_together_without_extra_provider_requests(self):
         rows = generate(http_fixture='loopback_tls', dot_fixture='local_stdio')
         self.assertEqual(len(rows), 48)

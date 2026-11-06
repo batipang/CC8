@@ -143,7 +143,9 @@ ASR_STOP_MIN_BACKEND = '0.14.66'
 ROUTED_LATENCY_MIN_BACKEND = '0.14.62'
 TOOL_SAMPLE_MIN_BACKEND = '0.15.4'
 TOOL_COMPARE_MIN_BACKEND = '0.15.11'
+TOOL_REJECTION_MIN_BACKEND = '0.15.20'
 TOOL_COMPARISON_CHECK = 'fixed_tool_asr_comparison'
+FIXED_TOOL_CASE_SCOPE = 'fixed_tool_case'
 RENDER_OVERLAP_MIN_BACKEND = '0.14.83'
 STOP_RECEIPT_MIN_APK_CODE = 69
 STOP_VISUAL_MIN_APK_CODE = 71
@@ -880,7 +882,9 @@ class SmokeRun:
         wake_input_shape=False,
         latency_sample=False,
         tool_local_compare=False,
+        fixed_tool_case=False,
         tool_compare_engine='whisper',
+        tool_diagnose_engine=None,
         latency_scenario='qa',
         qa_question=ACOUSTIC_QUESTION,
         response_acoustic_evidence=False,
@@ -915,18 +919,31 @@ class SmokeRun:
         self.english_fixture_played = False
         self.latency_sample = latency_sample
         self.latency_scenario = latency_scenario
-        if tool_local_compare and not (capture and latency_sample and latency_scenario == 'tool'):
-            raise ValueError('Local comparison requires a bounded tool sample')
-        if tool_local_compare and (
-            not awake_dialogue or qa_question not in SCENARIO_QUESTIONS['tool']
+        if (tool_local_compare or fixed_tool_case) and not (
+            capture
+            and latency_sample
+            and latency_scenario == 'tool'
+            and awake_dialogue
+            and not english_wake
+            and qa_question in SCENARIO_QUESTIONS['tool']
         ):
-            raise ValueError('Local comparison requires a fixed awake tool question')
+            raise ValueError('Tool check requires a bounded fixed awake question')
+        if tool_local_compare and fixed_tool_case:
+            raise ValueError('Tool execution and recognition comparison are separate checks')
+        if tool_diagnose_engine is not None and (
+            tool_local_compare
+            or tool_diagnose_engine not in TOOL_COMPARE_ENGINES
+            or not (capture and latency_sample and latency_scenario == 'tool' and awake_dialogue)
+        ):
+            raise ValueError('Rejection diagnosis requires a bounded tool execution')
         if tool_compare_engine not in TOOL_COMPARE_ENGINES or (
             tool_compare_engine != 'whisper' and not tool_local_compare
         ):
             raise ValueError('Local comparison engine requires an explicit comparison')
         self.tool_local_compare = tool_local_compare
+        self.fixed_tool_case = fixed_tool_case
         self.tool_compare_engine = tool_compare_engine
+        self.tool_diagnose_engine = tool_diagnose_engine
         self.tool_sample_token = None
         self.qa_question = ENGLISH_QUESTION if english_wake else qa_question
         self.response_acoustic_evidence = response_acoustic_evidence
@@ -1021,13 +1038,18 @@ class SmokeRun:
             'awake_dialogue_enabled': self.awake_dialogue,
             **(
                 {
-                    'scope': TOOL_COMPARISON_CHECK,
+                    'scope': TOOL_COMPARISON_CHECK
+                    if self.tool_local_compare
+                    else FIXED_TOOL_CASE_SCOPE,
                     'tool_case': SCENARIO_QUESTIONS['tool'].index(self.qa_question) + 1,
-                    'tool_compare_engine': self.tool_compare_engine,
                 }
-                if self.tool_local_compare
+                if self.tool_local_compare or self.fixed_tool_case
                 else {}
             ),
+            **(
+                {'tool_compare_engine': self.tool_compare_engine} if self.tool_local_compare else {}
+            ),
+            **({'qa_corpus_sha256': SCENARIO_DIGESTS['tool']} if self.fixed_tool_case else {}),
             **(
                 {'english_fixture_played': self.english_fixture_played}
                 if self.english_fixture is not None
@@ -1632,10 +1654,15 @@ class SmokeRun:
         limit = self.capture_limit_ms
         if self.latency_sample and self.latency_scenario == 'tool':
             case = SCENARIO_QUESTIONS['tool'].index(self.qa_question) + 1
-            operation = 'tool_sample_compare_arm' if self.tool_local_compare else 'tool_sample_arm'
-            request = {'operation': operation, 'case': case}
-            if self.tool_compare_engine != 'whisper':
-                request['engine'] = self.tool_compare_engine
+            request = {'operation': 'tool_sample_arm', 'case': case}
+            if self.tool_diagnose_engine is not None:
+                request.update(
+                    operation='tool_sample_diagnose_arm', engine=self.tool_diagnose_engine
+                )
+            elif self.tool_local_compare:
+                request['operation'] = 'tool_sample_compare_arm'
+                if self.tool_compare_engine != 'whisper':
+                    request['engine'] = self.tool_compare_engine
             armed = self.request(request)
             token = armed.get('token')
             require(
@@ -2090,6 +2117,15 @@ class SmokeRun:
                         ASR_INPUT_SAMPLES: samples if valid_asr_input_samples(samples) else None,
                         'capture': summarize_rejection_capture(row),
                     }
+                    comparison = row.get('tool_asr_comparison')
+                    if (
+                        field == 'sole_tool_rejection_input'
+                        and self.tool_diagnose_engine is not None
+                        and valid_asr_input_samples(samples)
+                        and valid_tool_asr_comparison(comparison, reason)
+                        and comparison.get('local_engine', 'whisper') == self.tool_diagnose_engine
+                    ):
+                        self.acoustic_evidence[field]['tool_asr_comparison'] = dict(comparison)
             if wake_before is not None:
                 local, english = english_wake_counts(health)
                 wake_delta = local - wake_before[0]
@@ -2221,6 +2257,19 @@ class SmokeRun:
                 and acoustic_coverage_reason(timing) is not None,
                 'response_acoustic_timing_unconfirmed',
             )
+        if self.fixed_tool_case:
+            evidence = self.acoustic_evidence
+            require(
+                evidence.get('latency_scenario') == 'tool'
+                and evidence.get('latency_route_completed') is True,
+                'fixed_tool_route_not_confirmed',
+            )
+            require(matched_playout(evidence), 'fixed_tool_playout_not_confirmed')
+            require(
+                valid_qa_stage_latencies(evidence.get('qa_stage_latencies_ms')),
+                'fixed_tool_stage_timing_incomplete',
+            )
+            require(math_answer == 'matched', 'fixed_tool_answer_not_confirmed')
         d, ui = self.device.status()
         require(
             ui.get('screen_sleeping') is False and d.get('foreground') is True,
@@ -3207,6 +3256,16 @@ def matched_playout(evidence):
     )
 
 
+def valid_qa_stage_latencies(stages):
+    return (
+        isinstance(stages, dict)
+        and set(stages).difference(QA_OPTIONAL_METRICS) == set(QA_STAGE_METRICS)
+        and all(
+            type(value) in (int, float) and 0 <= value <= 604800000 for value in stages.values()
+        )
+    )
+
+
 def standby_failure(evidence, elapsed, *, require_quiet):
     if not (
         isinstance(evidence, dict)
@@ -3543,12 +3602,9 @@ def run_device_suite(
                     math_answers = suite.get('math_answers')
                     math_answer = evidence.get('math_answer_status', 'unreported')
                     if (
-                        not isinstance(stages, dict)
-                        or set(stages).difference(QA_OPTIONAL_METRICS) != set(QA_STAGE_METRICS)
-                        or any(
-                            type(value) not in (int, float) or not 0 <= value <= 604800000
-                            for value in (*stages.values(), timing.get(QA_PLAYOUT_METRIC))
-                        )
+                        not valid_qa_stage_latencies(stages)
+                        or type(timing.get(QA_PLAYOUT_METRIC)) not in (int, float)
+                        or not 0 <= timing[QA_PLAYOUT_METRIC] <= 604800000
                     ):
                         phase.update(state='failed', reason='suite_qa_stage_timing_incomplete')
                     elif response_acoustic and interval is None and missing_reason is None:
@@ -3661,7 +3717,14 @@ def main(argv=None):
     parser.add_argument('--background-wav', type=Path)
     parser.add_argument('--background-sha256')
     parser.add_argument('--tool-asr-comparison', choices=TOOL_COMPARE_ENGINES)
-    parser.add_argument('--tool-case', type=int, metavar='1..30')
+    parser.add_argument(
+        '--tool-diagnose-rejection',
+        choices=TOOL_COMPARE_ENGINES,
+        help='Compare the same audio locally if the fixed tool transcript is rejected',
+    )
+    parser.add_argument(
+        '--tool-case', type=int, metavar='1..30', help='Select one fixed read-only tool question'
+    )
     parser.add_argument(
         '--known-speech-evidence',
         action='store_true',
@@ -3794,20 +3857,31 @@ def main(argv=None):
         or args.self_playback_soak
     )
     tool_comparison = args.tool_asr_comparison is not None
-    if tool_comparison:
+    fixed_tool_case = (
+        args.tool_case is not None and not tool_comparison and args.latency_scenario == 'tool'
+    )
+    if tool_comparison or fixed_tool_case:
         if (
             not tool_sample_request({'operation': 'tool_sample_arm', 'case': args.tool_case})
             or options != {'capture', 'awake_dialogue'}
             or batch
             or args.english_wake
             or args.english_wake_pair
-            or args.response_acoustic_evidence
+            or tool_comparison
+            and args.response_acoustic_evidence
         ):
             parser.error(
-                '--tool-asr-comparison requires --tool-case and --capture --awake-dialogue'
+                'Single tool checks require --tool-case and only --capture --awake-dialogue'
             )
     elif args.tool_case is not None:
-        parser.error('--tool-case requires --tool-asr-comparison')
+        parser.error('--tool-case requires --tool-asr-comparison or --latency-scenario tool')
+    diagnose_tool = args.tool_diagnose_rejection
+    if diagnose_tool is not None and (
+        tool_comparison
+        or args.latency_scenario != 'tool'
+        or not (fixed_tool_case or args.qa_latency_suite)
+    ):
+        parser.error('--tool-diagnose-rejection requires a fixed tool case or tool latency suite')
     asr_stop = args.stop_route == 'asr'
     if args.known_speech_room_model and not args.known_speech_evidence:
         parser.error('--known-speech-room-model requires --known-speech-evidence')
@@ -3837,7 +3911,12 @@ def main(argv=None):
         parser.error('--wake-input-shape requires the English wake pair or the awake English check')
     prepared_english = args.english_wake_pair or args.wake_input_shape
     bound_runtime = (
-        batch or asr_stop or args.english_wake or args.known_speech_evidence or tool_comparison
+        batch
+        or asr_stop
+        or args.english_wake
+        or args.known_speech_evidence
+        or tool_comparison
+        or fixed_tool_case
     )
     background_receipt = None
     if any((args.background_scenario, args.background_wav, args.background_sha256)):
@@ -3852,8 +3931,8 @@ def main(argv=None):
             )
     if args.extended_voice_evidence and not args.p0_device_suite:
         parser.error('--extended-voice-evidence requires --p0-device-suite')
-    if args.latency_scenario != 'qa' and not args.qa_latency_suite:
-        parser.error('--latency-scenario requires --qa-latency-suite')
+    if args.latency_scenario != 'qa' and not (args.qa_latency_suite or fixed_tool_case):
+        parser.error('--latency-scenario requires --qa-latency-suite or a single fixed tool case')
     if args.response_acoustic_evidence and not (
         args.qa_latency_suite or (not batch and args.awake_dialogue)
     ):
@@ -3906,7 +3985,9 @@ def main(argv=None):
     elif args.self_playback_soak:
         minimum_batch_backend = ECHO_SOAK_MIN_BACKEND
     elif args.latency_scenario == 'tool':
-        minimum_batch_backend = TOOL_SAMPLE_MIN_BACKEND
+        minimum_batch_backend = (
+            TOOL_REJECTION_MIN_BACKEND if diagnose_tool else TOOL_SAMPLE_MIN_BACKEND
+        )
     elif args.latency_scenario == 'web':
         minimum_batch_backend = ROUTED_LATENCY_MIN_BACKEND
     elif args.extended_voice_evidence or args.interruption_suite:
@@ -3966,7 +4047,9 @@ def main(argv=None):
         else:
             plan = {
                 'checks': planned_checks(
-                    options, stop_route=args.stop_route, tool_comparison=tool_comparison
+                    options | ({'latency_sample'} if fixed_tool_case else set()),
+                    stop_route=args.stop_route,
+                    tool_comparison=tool_comparison,
                 ),
                 'execute': False,
                 **{
@@ -4002,6 +4085,17 @@ def main(argv=None):
                 minimum_backend_version=TOOL_COMPARE_MIN_BACKEND,
                 dot_dispatch_expected=False,
             )
+        elif fixed_tool_case:
+            plan.update(
+                scope=FIXED_TOOL_CASE_SCOPE,
+                tool_case=args.tool_case,
+                latency_scenario='tool',
+                qa_corpus_sha256=SCENARIO_DIGESTS['tool'],
+                minimum_backend_version=minimum_batch_backend,
+                dot_dispatch_expected=True,
+            )
+        if diagnose_tool:
+            plan['tool_rejection_diagnose_engine'] = diagnose_tool
         print(json.dumps(plan, ensure_ascii=False, indent=2))
         return 0
     try:
@@ -4050,10 +4144,17 @@ def main(argv=None):
                 'runtime_english_wake_evidence_unsupported',
             )
             english_wake_counts(health)
-        if tool_comparison or args.qa_latency_suite and args.latency_scenario == 'tool':
+        if tool_comparison or args.latency_scenario == 'tool':
             require(
                 health.get('tool_sample_guard_supported') is True,
                 'backend_tool_sample_guard_unsupported',
+            )
+        if diagnose_tool:
+            require(
+                health.get('tool_rejection_diagnosis_supported') is True
+                and health.get('asr_engine') in ('minimax', *TOOL_COMPARE_ENGINES)
+                and health['asr_engine'] != diagnose_tool,
+                'runtime_tool_rejection_diagnosis_unsupported',
             )
         if tool_comparison:
             require(
@@ -4075,7 +4176,7 @@ def main(argv=None):
                 and health.get('asr_engine') == 'minimax',
                 'runtime_asr_stop_evidence_unsupported',
             )
-        if batch:
+        if batch or fixed_tool_case:
             if tuple(map(int, manifest.backend_version.split('.'))) < tuple(
                 map(int, minimum_batch_backend.split('.'))
             ):
@@ -4118,7 +4219,10 @@ def main(argv=None):
                     and result.get('bridge_version') == manifest.backend_version
                     and type(result.get('protocol_version')) is int
                     and result['protocol_version'] == manifest.protocol_version
-                    and (not tool_comparison or result.get('asr_engine') == health['asr_engine'])
+                    and (
+                        not (tool_comparison or diagnose_tool)
+                        or result.get('asr_engine') == health['asr_engine']
+                    )
                 ):
                     raise RuntimeChanged('suite_runtime_changed')
             return result
@@ -4158,7 +4262,12 @@ def main(argv=None):
                             'protocol_version': health.get('protocol_version'),
                             **(
                                 {'tool_primary_engine': health['asr_engine']}
-                                if tool_comparison
+                                if tool_comparison or diagnose_tool
+                                else {}
+                            ),
+                            **(
+                                {'tool_rejection_diagnose_engine': diagnose_tool}
+                                if diagnose_tool
                                 else {}
                             ),
                             **({'release_id': manifest.release_id} if bound_runtime else {}),
@@ -4192,7 +4301,9 @@ def main(argv=None):
                         qa_question=qa_question,
                         latency_scenario='tool' if tool_comparison else args.latency_scenario,
                         tool_local_compare=tool_comparison,
+                        fixed_tool_case=fixed_tool_case,
                         tool_compare_engine=args.tool_asr_comparison or 'whisper',
+                        tool_diagnose_engine=diagnose_tool,
                         background=background,
                         stop_route=args.stop_route,
                         english_wake=args.english_wake,
@@ -4251,7 +4362,7 @@ def main(argv=None):
                             background=background_receipt,
                             standby_only=args.standby_suite,
                         )
-                    elif tool_comparison:
+                    elif tool_comparison or fixed_tool_case:
                         result = make_run(
                             options | {'latency_sample'},
                             save,
