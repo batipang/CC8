@@ -211,6 +211,29 @@ class FailureFeedbackTests(unittest.TestCase):
         self.assertIn('设备播放', self.guidance(b)[-1])
         self.assertTrue(b.response.queue.empty())
 
+    def test_device_playback_error_log_accepts_only_known_exception_names(self):
+        for error_type, expected in (
+            ('IOException', 'IOException'),
+            (SECRET, 'Unknown'),
+            ({'message': SECRET}, 'Unknown'),
+            (True, 'Unknown'),
+            (None, 'Unknown'),
+        ):
+            with self.subTest(expected=expected, kind=type(error_type).__name__):
+                b = self.session()
+                b.diagnostics.begin('text', b.generation)
+                b.on_event(
+                    {
+                        'event': 'playback_error',
+                        'generation': b.generation,
+                        'error_type': error_type,
+                    }
+                )
+                events = [fields for name, fields in b.logs if name == 'device_playback_error']
+                self.assertEqual(events, [{'error_type': expected}])
+                self.assertNotIn(SECRET, json.dumps([b.logs, b.events, b.diagnostics.report()]))
+                self.assertIn('设备播放', self.guidance(b)[-1])
+
     def test_missing_play_done_is_a_failure_with_bounded_wait_not_silent_success(self):
         b = self.session()
         generation = b.generation
