@@ -1,4 +1,4 @@
-"""Owner IPC contract for the fixed public English wake fixture."""
+"""Owner IPC contract for fixed public wake fixtures."""
 
 from math import isfinite
 import re
@@ -10,6 +10,10 @@ FIXTURE_PCM_SHA256 = '56089a76c91d384a60fe8a011f70df7eebd6464603930671a6525f97f0
 FIXTURE_WAV_SHA256 = '9510d2d219f1bb277578db5add07052691d92cf9a0ab8798e7490fa28e5bcb4c'
 MIN_MATCH_FRAMES = FIXTURE_FRAMES + 1280
 MAX_FRAMES = 64000
+CHINESE_FIXTURE_FRAMES = 90432
+CHINESE_PCM_SHA256 = '8e7318bb9667ef38e81d49168e2bd8cc0b0878ba3369d24735636c010696d80e'
+CHINESE_WAV_SHA256 = '0ea74fc0f9241dbf78a4d0d554c251ca5d3b55d9a49638ab8f737dddba870454'
+CHINESE_MAX_FRAMES = 128000
 
 
 def valid_request(value):
@@ -33,10 +37,9 @@ def valid_request(value):
         meta = validate_prepared_speech(value['metadata'])
     except ValueError:
         return False
-    return (
-        meta['frames'] == FIXTURE_FRAMES
-        and meta['pcm_sha256'] == FIXTURE_PCM_SHA256
-        and meta['wav_sha256'] == FIXTURE_WAV_SHA256
+    return (meta['frames'], meta['pcm_sha256'], meta['wav_sha256']) in (
+        (FIXTURE_FRAMES, FIXTURE_PCM_SHA256, FIXTURE_WAV_SHA256),
+        (CHINESE_FIXTURE_FRAMES, CHINESE_PCM_SHA256, CHINESE_WAV_SHA256),
     )
 
 
@@ -73,43 +76,48 @@ def _valid_stream(value):
     )
 
 
-def _valid_replay(value, matched):
+def _valid_replay(value, matched, hit_fields):
     if not matched:
         return value == {'status': 'not_run'}
     return value == {'status': 'unavailable'} or (
         isinstance(value, dict)
-        and set(value) == {'status', 'primary_hit', 'alternate_hit'}
+        and set(value) == {'status'} | hit_fields
         and value['status'] == 'measured'
-        and type(value['primary_hit']) is bool
-        and type(value['alternate_hit']) is bool
+        and all(type(value[key]) is bool for key in hit_fields)
     )
 
 
 def summarize(value):
     if value == {'status': 'unavailable'}:
         return value
+    if not isinstance(value, dict):
+        return {'status': 'invalid'}
+    chinese = value.get('language') == 'zh'
+    streams = ('primary', 'alternate', 'raw') if chinese else ('primary', 'alternate')
+    frame_counts = tuple(stream + '_frames' for stream in streams)
+    limit = CHINESE_MAX_FRAMES if chinese else MAX_FRAMES
+    minimum = CHINESE_FIXTURE_FRAMES + 1280 if chinese else MIN_MATCH_FRAMES
+    fields = {'status', 'raw_audio_saved', *streams, *frame_counts}
+    if chinese:
+        fields.add('language')
     if (
-        not isinstance(value, dict)
-        or set(value) - {'fresh_replay'}
-        != {
-            'status',
-            'raw_audio_saved',
-            'primary_frames',
-            'alternate_frames',
-            'primary',
-            'alternate',
-        }
+        set(value) - {'fresh_replay'} != fields
+        or chinese
+        and 'fresh_replay' not in value
         or value['status'] != 'measured'
         or value['raw_audio_saved'] is not False
-        or any(type(value[key]) is not int for key in ('primary_frames', 'alternate_frames'))
-        or not 0 <= value['alternate_frames'] <= value['primary_frames'] <= MAX_FRAMES
-        or not all(_valid_stream(value[key]) for key in ('primary', 'alternate'))
+        or any(type(value[key]) is not int for key in frame_counts)
+        or not 0 <= value['primary_frames'] <= limit
+        or any(not 0 <= value[key] <= value['primary_frames'] for key in frame_counts)
+        or not all(_valid_stream(value[key]) for key in streams)
         or (
             'fresh_replay' in value
             and not _valid_replay(
                 value['fresh_replay'],
-                value['primary']['status'] == value['alternate']['status'] == 'matched'
-                and MIN_MATCH_FRAMES <= value['primary_frames'] == value['alternate_frames'],
+                all(value[key]['status'] == 'matched' for key in streams)
+                and minimum <= value['primary_frames']
+                and all(value[key] == value['primary_frames'] for key in frame_counts),
+                {stream + '_hit' for stream in streams},
             )
         )
     ):
