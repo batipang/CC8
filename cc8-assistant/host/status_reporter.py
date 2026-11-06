@@ -143,9 +143,6 @@ class StatusReporter:
 
     def save_status(self):
         state = self.hooks.session()
-        private = self.hooks.private_directory()
-        private.mkdir(parents=True, exist_ok=True, mode=0o700)
-        os.chmod(private, 0o700)
         data = {
             'connected': state.connected,
             'active': state.active,
@@ -199,10 +196,18 @@ class StatusReporter:
             'speech_emotion': getattr(getattr(self.hooks.speech(), 'voice', None), 'emotion', None),
             **self.hooks.metrics(),
         }
-        with self.status_lock:
-            temporary = private / 'status.tmp'
-            temporary.write_text(json.dumps(data, indent=2) + '\n')
-            temporary.replace(private / 'status.json')
+        content = json.dumps(data, indent=2) + '\n'
+        private = self.hooks.private_directory()
+        # A failed cache update must not be treated as a transport failure.
+        try:
+            with self.status_lock:
+                private.mkdir(parents=True, exist_ok=True, mode=0o700)
+                os.chmod(private, 0o700)
+                temporary = private / 'status.tmp'
+                temporary.write_text(content)
+                temporary.replace(private / 'status.json')
+        except OSError as error:
+            self.hooks.log('status_cache_write_failed', error_type=type(error).__name__)
 
     def failure(self, message, error, trace_key=None):
         state = self.hooks.session()
