@@ -66,6 +66,7 @@ class RecognitionHooks:
     failure: FailureSink
     resume_rejected: Callable[[int | None, int], None]
     bind_response_probe: Callable[[str, int, int | None], None] = lambda *_: None
+    tool_sample_allows: Callable[[str, bool, float | None], bool] = lambda *_: True
 
 
 MIN_ECHO_RISK_CREDIBLE_FRAMES = 5
@@ -339,6 +340,14 @@ class RecognitionWorker:
                             self.hooks.cancel_session('wake_only')
                             self.hooks.status('listening', '我在听，请说出你的问题')
                             continue
+                    if not self.hooks.tool_sample_allows(
+                        text, local_wake, evidence.get('captured_at') if evidence else None
+                    ):
+                        decision = 'tool_sample_guard'
+                        rejected = True
+                        if not self.hooks.playing():
+                            self.hooks.status('listening', '工具测试语音未通过核对')
+                        continue
                     sleep_text = payload if payload is not None else text
                     if wake_mode and SLEEP_COMMAND.fullmatch(sleep_text.strip().rstrip('。.!！')):
                         decision = 'wake_sleep'

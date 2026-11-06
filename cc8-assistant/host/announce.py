@@ -15,6 +15,7 @@ import stat
 import sys
 import threading
 from vision import jpeg_dimensions
+from qa_speech import tool_sample_request
 from known_speech_receipt import valid_request as known_speech_request
 from wake_input_receipt import valid_request as wake_input_request
 
@@ -109,6 +110,20 @@ class AnnouncementServer:
                         result = self.snapshot(connection, request)
                     elif request.get('operation') == 'playback_probe':
                         result = self.playback_probe(connection, request)
+                    elif request.get('operation') in (
+                        'tool_sample_arm',
+                        'tool_sample_begin',
+                        'tool_sample_release',
+                    ):
+                        if not tool_sample_request(request):
+                            raise ValueError('Tool sample accepts only a fixed case or its token')
+                        operation = request['operation']
+                        if operation == 'tool_sample_arm':
+                            result = self.bridge.session.arm_tool_sample(request['case'])
+                        elif operation == 'tool_sample_begin':
+                            result = self.bridge.session.begin_tool_sample(request['token'])
+                        else:
+                            result = self.bridge.session.release_tool_sample(request['token'])
                     elif request.get('operation') == 'response_probe_arm':
                         if set(request) != {'operation', 'case'}:
                             raise ValueError('Response probe accepts only a public case')

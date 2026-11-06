@@ -780,7 +780,9 @@ class DeviceAutomationTests(unittest.TestCase):
                 plan = json.loads(output.getvalue())
                 self.assertTrue(plan['response_acoustic_evidence'])
                 self.assertEqual(plan['latency_scenario'], scenario)
-                self.assertEqual(plan['minimum_backend_version'], '0.14.62')
+                self.assertEqual(
+                    plan['minimum_backend_version'], '0.15.4' if scenario == 'tool' else '0.14.62'
+                )
                 self.assertEqual(plan['qa_corpus_sha256'], SCENARIO_DIGESTS[scenario])
                 self.assertEqual(len(plan['phases']), 30)
 
@@ -2281,6 +2283,8 @@ class DeviceAutomationTests(unittest.TestCase):
         def request(p):
             if p == {'operation': 'health'}:
                 return dict(health)
+            if p == {'operation': 'tool_sample_begin', 'token': 'a' * 32}:
+                return {'status': 'ready'}
             if p == {'operation': 'workspace_status'}:
                 return {
                     'ok': True,
@@ -3994,6 +3998,8 @@ class DeviceAutomationTests(unittest.TestCase):
                 run, device, _, _ = self.acoustic_fixture(lambda _: [row], awake=True)
                 run.latency_sample = True
                 run.latency_scenario = expected
+                if expected == 'tool':
+                    run.tool_sample_token = 'a' * 32
                 for name in ('preflight', 'maintenance_open', 'start_capture', 'home', 'cleanup'):
                     setattr(run, name, Mock())
                 run.playback, run.handover = Mock(), Mock()
@@ -4072,6 +4078,8 @@ class DeviceAutomationTests(unittest.TestCase):
                 run.latency_sample = True
                 run.qa_question = question
                 run.latency_scenario = scenario
+                if scenario == 'tool':
+                    run.tool_sample_token = 'a' * 32
                 run.acoustic_probe(awake=True)
                 self.assertEqual(now[0], POST_DIALOGUE_SECONDS)
                 evidence = run.report('passed')['acoustic_evidence']
@@ -4080,6 +4088,83 @@ class DeviceAutomationTests(unittest.TestCase):
                     self.assertNotIn('math_answer_status', evidence)
                 if answer:
                     self.assertNotIn(answer, json.dumps(evidence, ensure_ascii=False))
+
+    def test_tool_latency_refuses_unarmed_stimulus_and_stops_on_pre_dispatch_rejection(self):
+        row = {
+            'request_id': 'PRIVATE_REJECTED',
+            'origin': 'voice',
+            'generation': None,
+            'outcome': 'rejected',
+            'gate': 'tool_sample_guard',
+            'stages': {'asr_end': 1},
+        }
+        run, device, _, now = self.acoustic_fixture(lambda _: [row], awake=True)
+        run.latency_sample = True
+        run.latency_scenario = 'tool'
+        run.qa_question = SCENARIO_QUESTIONS['tool'][0]
+        with self.assertRaisesRegex(CheckFailure, 'tool_sample_guard_not_ready'):
+            run.acoustic_probe(awake=True)
+        device.speak_probe.assert_not_called()
+        run.tool_sample_token = 'a' * 32
+        with self.assertRaisesRegex(CheckFailure, 'tool_sample_transcript_not_confirmed'):
+            run.acoustic_probe(awake=True)
+        device.speak_probe.assert_called_once_with(question=run.qa_question)
+        self.assertLess(now[0], 1)
+        evidence = run.report('failed')['acoustic_evidence']
+        self.assertEqual(evidence['rejected_voice_gates']['tool_sample_guard'], 1)
+        self.assertTrue(evidence['tool_sample_guarded'])
+        self.assertEqual(evidence['admitted_voice_requests'], 0)
+        self.assertNotIn('PRIVATE', json.dumps(evidence))
+
+    def test_tool_suite_requires_backend_guard_before_constructing_device(self):
+        from release_info import RELEASE
+
+        health = dict(
+            bridge_version=RELEASE.backend_version,
+            protocol_version=RELEASE.protocol_version,
+            release_id=RELEASE.release_id,
+            runtime_instance='private-unready',
+        )
+        with (
+            patch('device_smoke.rpc', return_value=health),
+            patch('device_smoke.load_release', return_value=RELEASE),
+            patch('device_smoke.Device') as device,
+            redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit) as error,
+        ):
+            main(
+                [
+                    '--runtime-root',
+                    '/unused',
+                    '--capture',
+                    '--qa-latency-suite',
+                    '--latency-scenario',
+                    'tool',
+                    '--execute',
+                ]
+            )
+        self.assertEqual(error.exception.code, 2)
+        device.assert_not_called()
+
+    def test_tool_guard_arms_before_a_capture_is_allowed_to_start(self):
+        run, device, _, _ = self.acoustic_fixture(lambda _: [], awake=True)
+        run.latency_sample = True
+        run.latency_scenario = 'tool'
+        run.qa_question = SCENARIO_QUESTIONS['tool'][0]
+        run.request = Mock(return_value={'status': 'unavailable'})
+        with self.assertRaisesRegex(CheckFailure, 'tool_sample_guard_not_armed'):
+            run.start_capture()
+        device.open.assert_not_called()
+        run.request.assert_called_once_with({'operation': 'tool_sample_arm', 'case': 1})
+        original = run.request
+        run.request = Mock(return_value={'status': 'armed', 'token': 'a' * 32})
+        run.health = Mock(
+            return_value={'microphone_active': True, 'calibrating': False, 'local_wake_ready': True}
+        )
+        device.open.side_effect = lambda *a, **k: self.assertEqual(run.tool_sample_token, 'a' * 32)
+        run.start_capture()
+        run.request.assert_called_once_with(original.call_args.args[0])
+        device.open.assert_called_once_with(True, capture_limit_ms=run.capture_limit_ms)
 
     def test_acoustic_cancelled_narration_is_not_a_completed_answer(self):
         row = self.acoustic_row(outcome='cancelled')

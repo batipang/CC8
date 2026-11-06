@@ -47,6 +47,7 @@ DECISIONS = frozenset(
         'wake_closed',
         'wake_only',
         'wake_sleep',
+        'tool_sample_guard',
         'calibration',
         'stale',
         'error',

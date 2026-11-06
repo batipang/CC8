@@ -3,11 +3,12 @@
 import threading
 import time
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 import numpy as np
 from bridge import Bridge
 from dsp import FRAME, RATE
 from protocol import MIC, Packet
+from qa_speech import SCENARIO_QUESTIONS, tool_sample_request
 
 
 class Channel:
@@ -99,7 +100,7 @@ class WakePipelineTests(unittest.TestCase):
             b.process_microphone(
                 Packet(
                     MIC,
-                    0,
+                    b.session.epoch,
                     index,
                     0,
                     10_000_000_000 + index * FRAME * 1_000_000_000 // RATE,
@@ -425,6 +426,113 @@ class WakePipelineTests(unittest.TestCase):
                 self.assertFalse(any(name == 'transcript' for name, _ in events))
                 self.assertTrue(b.session.awake)
                 self.assertEqual(len(audio), 1)
+
+    def arm_tool_capture(self, b, before_start=lambda _: None):
+        s = b.session
+        s.active = False
+        s.transport_kind = 'usb'
+        s.capture_start_ack = True
+        token = s.arm_tool_sample(1)['token']
+        self.assertIsNone(s.capture_id)
+        self.assertEqual(s.begin_tool_sample(token), {'status': 'unavailable'})
+        before_start(s)
+        with patch.object(b.capture.echo, 'open'), patch('threading.Thread.start'):
+            s.start_capture(
+                {'epoch': 1, 'capture_id': 'f' * 32, 'capture_start_token': s.capture_start_token}
+            )
+        b.calibration.stop()
+        b.capture.echo.aec = Echo()
+        b.capture.endpoint.vad = UtteranceVAD()
+        return token
+
+    def test_tool_sample_rejects_dropped_qualifier_before_brain_dispatch(self):
+        question = SCENARIO_QUESTIONS['tool'][0]
+        transcript = '大黄蜂，' + question.replace('只读', '')
+        ordinary, _, _, ordinary_requests, _, _, ordinary_answered = self.session(
+            '大黄蜂', transcript
+        )
+        self.frames(ordinary)
+        self.assertTrue(ordinary_answered.wait(1))
+        self.assertEqual(ordinary_requests, [question.replace('只读', '')])
+        b, _, _, requests, events, asr, _ = self.session('大黄蜂', transcript)
+        s = b.session
+        token = self.arm_tool_capture(b)
+        self.assertEqual(s.release_tool_sample(token), {'status': 'unavailable'})
+        self.assertEqual(s.begin_tool_sample(token), {'status': 'ready'})
+        self.frames(b)
+        self.assertTrue(asr.wait(1))
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline:
+            rows = b.diagnostics_report()['requests']
+            if rows and rows[0]['outcome'] is not None:
+                break
+            time.sleep(0.005)
+        self.assertEqual(rows[0]['gate'], 'tool_sample_guard')
+        self.assertEqual(rows[0]['outcome'], 'rejected')
+        self.assertNotIn('brain_start', rows[0]['stages'])
+        self.assertEqual(requests, [])
+        self.assertFalse(any(name == 'transcript' for name, _ in events))
+        self.assertEqual(s.begin_tool_sample(token), {'status': 'unavailable'})
+        s.stop()
+        self.assertEqual(s.release_tool_sample(token), {'status': 'released'})
+        self.assertTrue(s.tool_sample_allows('正常对话', False, None))
+
+    def test_tool_sample_accepts_exact_phrase_once(self):
+        question = SCENARIO_QUESTIONS['tool'][0]
+        b, _, _, requests, _, _, answered = self.session('大黄蜂', '大黄蜂，' + question)
+        token = self.arm_tool_capture(b)
+        s = b.session
+        self.assertEqual(s.begin_tool_sample(token), {'status': 'ready'})
+        self.frames(b)
+        self.assertTrue(answered.wait(1))
+        self.assertEqual(requests, [question])
+        self.assertFalse(s.tool_sample_allows(question, True, time.monotonic()))
+        s.stop()
+
+    def test_pending_tool_sample_stays_closed_if_capture_binding_is_invalid(self):
+        question = SCENARIO_QUESTIONS['tool'][0]
+        for invalid in (
+            lambda s: setattr(s.tool_sample, 'arm_until', 0),
+            lambda s: s.cancel('transport_switch'),
+            lambda s: s.stop(),
+        ):
+            with self.subTest(invalid=invalid):
+                b, *_ = self.session('大黄蜂', question)
+                token = self.arm_tool_capture(b, invalid)
+                s = b.session
+                self.assertEqual(s.begin_tool_sample(token), {'status': 'unavailable'})
+                self.assertFalse(s.tool_sample_allows(question, True, time.monotonic()))
+                s.stop()
+                self.assertEqual(s.release_tool_sample(token), {'status': 'released'})
+                self.assertTrue(s.tool_sample_allows(question, True, time.monotonic()))
+
+    def test_tool_sample_scope_rejects_old_audio_route_changes_and_invalid_ipc(self):
+        question = SCENARIO_QUESTIONS['tool'][0]
+        for case in ('audio_before_playback', 'new_generation', 'missing_local_wake'):
+            with self.subTest(case=case):
+                b, *_ = self.session('大黄蜂', question)
+                s = b.session
+                token = self.arm_tool_capture(b)
+                self.assertEqual(s.begin_tool_sample('0' * 32), {'status': 'unavailable'})
+                self.assertEqual(s.begin_tool_sample(token), {'status': 'ready'})
+                started = s.tool_sample.opened_at
+                if case == 'new_generation':
+                    s.generation += 1
+                self.assertFalse(
+                    s.tool_sample_allows(
+                        question,
+                        case != 'missing_local_wake',
+                        started - 0.01 if case == 'audio_before_playback' else started,
+                    )
+                )
+                self.assertFalse(s.tool_sample_allows(question, True, time.monotonic()))
+                s.stop()
+        self.assertFalse(tool_sample_request({'operation': 'tool_sample_arm', 'case': True}))
+        self.assertFalse(tool_sample_request({'operation': 'tool_sample_arm', 'case': 31}))
+        self.assertFalse(tool_sample_request({'operation': 'tool_sample_begin', 'token': 'x' * 32}))
+        self.assertFalse(
+            tool_sample_request({'operation': 'tool_sample_arm', 'case': 1, 'text': 'private'})
+        )
 
     def test_wake_prefix_preserves_numbers_and_quotes_in_a_real_question(self):
         for value in ('-3', '+3', '.5', '“参数”'):

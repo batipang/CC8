@@ -7,6 +7,7 @@ existing session-lock then component-lock order, never the reverse.
 
 from __future__ import annotations
 from collections import deque
+from dataclasses import dataclass
 import threading
 import time
 import uuid
@@ -14,6 +15,19 @@ from protocol import Packet, SPEAKER
 from reply_types import TextReply
 from session_ports import SessionHooks, SessionView
 from device_session import apply_settings, complete_handshake, rebind_capture
+
+from qa_speech import SCENARIO_QUESTIONS, normalize_question, tool_sample_request
+
+
+@dataclass
+class ToolSample:
+    token: str
+    expected: str
+    generation: int
+    arm_until: float
+    capture_id: str | None = None
+    state: str = 'pending'
+    opened_at: float = 0.0
 
 
 class SessionController:
@@ -29,6 +43,7 @@ class SessionController:
         self.capture_start_ack = False
         self.capture_start_token = uuid.uuid4().hex
         self.capture_id = None
+        self.tool_sample: ToolSample | None = None
         # One device can only retry its current explicitly requested capture.
         # Remember recent consumed IDs across route loss and failed native starts.
         self.consumed_capture_ids = deque(maxlen=64)
@@ -198,6 +213,13 @@ class SessionController:
             )
             self.generation += 1
             generation = self.generation
+            sample = self.tool_sample
+            if sample is not None and sample.state != 'pending':
+                if reason == 'voice' and sample.state == 'open':
+                    # The endpoint may advance a live turn when VAD begins.
+                    sample.generation = generation
+                else:
+                    sample.state = 'closed'
             was_playing = self.hooks.playback().stop_output()
             if reason == 'transport_switch' and was_playing and not self.hooks.calibration().active:
                 self.playback_interrupted_by_transport = True
@@ -236,6 +258,10 @@ class SessionController:
             self.capture_start_required = True
             self.active = False
             self.capture_id = None
+            # An idle stop may race the already requested QA capture start.
+            # Keep that reservation so the late start cannot bypass its gate.
+            if self.tool_sample is not None and self.tool_sample.state != 'pending':
+                self.tool_sample = None
             self.screen_sleeping = False
             # A wake can restore the display after disconnect. Sleep belongs
             # to the capture that just ended.
@@ -312,6 +338,79 @@ class SessionController:
     def settings(self, j):
         apply_settings(self, j)
 
+    def arm_tool_sample(self, case):
+        if not tool_sample_request({'operation': 'tool_sample_arm', 'case': case}):
+            raise ValueError('Invalid tool sample case')
+        with self.guard:
+            existing = self.tool_sample
+            now = time.monotonic()
+            if (
+                self.active
+                or self.connection is None
+                or self.transport_kind != 'usb'
+                or not self.capture_start_ack
+                or not self.wake
+                or self.hooks.voice_busy()
+                or (existing is not None and now < existing.arm_until)
+            ):
+                raise RuntimeError('Tool sample requires an idle USB session')
+            token = uuid.uuid4().hex
+            self.tool_sample = ToolSample(
+                token,
+                normalize_question(SCENARIO_QUESTIONS['tool'][case - 1]),
+                self.generation + 1,
+                now + 30,
+            )
+            return {'status': 'armed', 'token': token}
+
+    def begin_tool_sample(self, token):
+        with self.guard:
+            sample = self.tool_sample
+            if (
+                sample is None
+                or sample.token != token
+                or sample.state != 'bound'
+                or not self.active
+                or sample.capture_id != self.capture_id
+                or sample.generation != self.generation
+                or self.transport_kind != 'usb'
+                or not self.wake
+                or self.awake
+                or self.hooks.calibration().active
+                or self.hooks.voice_busy()
+            ):
+                return {'status': 'unavailable'}
+            sample.opened_at = time.monotonic()
+            sample.state = 'open'
+            return {'status': 'ready'}
+
+    def release_tool_sample(self, token):
+        with self.guard:
+            sample = self.tool_sample
+            # Only capture teardown can remove a guard already bound to it.
+            if sample is not None and sample.token == token and sample.state == 'pending':
+                self.tool_sample = None
+            return {'status': 'released' if self.tool_sample is None else 'unavailable'}
+
+    def tool_sample_allows(self, text, local_wake, captured_at):
+        # Called at the final ASR admission boundary under the session guard.
+        sample = self.tool_sample
+        if sample is None:
+            return True
+        if sample.state != 'open':
+            return False
+        sample.state = 'closed'
+        return (
+            self.active
+            and sample.capture_id == self.capture_id
+            and sample.generation == self.generation
+            and self.transport_kind == 'usb'
+            and local_wake
+            and type(captured_at) in (int, float)
+            and sample.opened_at <= captured_at <= sample.opened_at + 20
+            and normalize_question(text) == sample.expected
+        )
+
     def start_capture(self, j):
         capture_id = j.get('capture_id')
         negotiated = (
@@ -366,6 +465,17 @@ class SessionController:
         self.capture_start_required = False
         self.active = True
         self.capture_id = capture_id if negotiated else None
+        sample = self.tool_sample
+        if sample is not None:
+            bindable = (
+                sample.state == 'pending'
+                and time.monotonic() < sample.arm_until
+                and sample.generation == self.generation
+                and self.capture_id is not None
+                and self.transport_kind == 'usb'
+            )
+            sample.capture_id = self.capture_id
+            sample.state = 'bound' if bindable else 'closed'
         self.hooks.calibration().begin()
         self.awake = not self.wake
         self.screen_sleeping = False
