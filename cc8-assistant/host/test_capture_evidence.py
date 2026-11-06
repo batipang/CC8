@@ -410,6 +410,55 @@ class CaptureDiagnosticsTests(unittest.TestCase):
         self.assertNotIn('input_end_ns', json.dumps(row))
         self.assertIn('utterance_end', row['stages'])
 
+    def test_endpoint_routes_recent_unreferenced_playback_tail_through_echo_gate(self):
+        spoken = '这次联网查询没有成功，请稍后再查。'
+        for age, transcript, expected in (
+            (1, spoken, 'echo_text'),
+            (1, '请问常州属于哪个省', 'accepted'),
+            (4, spoken, 'accepted'),
+        ):
+            with self.subTest(age=age, expected=expected):
+                bridge, frame, _ = self.endpoint()
+                endpoint = bridge.capture.endpoint
+                bridge.playback.playing = False
+                bridge.playback.last_audio_end = time.monotonic() - age
+                bridge.playback.last_spoken = spoken
+                bridge.playback.spoken.append((bridge.playback.last_audio_end - 2, spoken))
+                bridge.speech = SimpleNamespace(recognize=lambda _audio: transcript)
+                replies = []
+                bridge.recognition.hooks = replace(
+                    bridge.recognition.hooks, enqueue_response=replies.append
+                )
+                recorded = threading.Event()
+                original_gate = bridge.diagnostics.gate
+
+                def gate(key, decision, tool_sample_rejection=None):
+                    original_gate(key, decision, tool_sample_rejection)
+                    recorded.set()
+
+                bridge.diagnostics.gate = gate
+                endpoint.vad = VoiceDetector()
+                voiced_frames = VoiceDetector.ONSET_FRAMES + 10
+                voice = iter([(True, True)] * voiced_frames + [(False, False)] * 80)
+                endpoint.near_speech.feed = lambda *_: next(voice)
+                frame = replace(frame, reference=np.zeros_like(frame.reference))
+                generation = bridge.session.generation
+                for index in range(voiced_frames + 80):
+                    endpoint.consume(replace(frame, nanos=frame.nanos + index * 10_000_000))
+                self.assertIsNone(endpoint.last_capture_render_ns)
+                self.assertEqual(bridge.session.generation, generation + int(age == 4))
+                bridge.recognition.start()
+                self.assertTrue(recorded.wait(1))
+                row = bridge.diagnostics.report()['requests'][-1]
+                self.assertEqual(row['gate'], expected)
+                self.assertEqual(row['capture']['render_frames'], 0)
+                self.assertIs(row['capture']['echo_risk'], age == 1)
+                self.assertFalse(row['capture']['during_playback'])
+                self.assertEqual(len(replies), int(expected == 'accepted'))
+                self.assertEqual(
+                    bridge.session.generation, generation + int(expected == 'accepted')
+                )
+
     def test_transport_session_and_activity_resets_drop_partial_capture_counts(self):
         for name in ('reset_transport', 'reset_session', 'reset_voice_activity'):
             with self.subTest(reset=name):
