@@ -187,10 +187,10 @@ final class VoiceSession {
 
   void pause() {
     // 先使生命周期票据失效，再停音频和关闭连接；旧异步任务不能在后台重建资源。
-    cancelVision();
-    textSession = false;
     ServerSocket listener;
     synchronized (routeLock) {
+      cancelVision();
+      textSession = false;
       foreground = false;
       lifecycle++;
       routeEpoch++;
@@ -447,12 +447,24 @@ final class VoiceSession {
     }
 
     void event(JSONObject value) throws IOException {
+      offer(eventPacket(value));
+    }
+
+    void cameraEvent(JSONObject value, int gen, String ident, long route) throws IOException {
+      Wire.Packet packet = eventPacket(value);
+      packet.cameraGeneration = gen;
+      packet.cameraRequestId = ident;
+      packet.cameraRoute = route;
+      offer(packet);
+    }
+
+    private Wire.Packet eventPacket(JSONObject value) {
       Wire.Packet packet = new Wire.Packet();
       packet.type = Wire.EVENT;
       packet.generation = epoch;
       packet.nanos = System.nanoTime();
       packet.data = Wire.jsonBytes(value);
-      offer(packet);
+      return packet;
     }
 
     void offer(Wire.Packet packet) throws IOException {
@@ -473,7 +485,7 @@ final class VoiceSession {
                   try {
                     while (!closed && foreground && lifecycle == ticket) {
                       Wire.Packet packet = queue.poll(1, TimeUnit.SECONDS);
-                      if (packet != null)
+                      if (packet != null && queuedCameraCurrent(packet, this))
                         Wire.write(
                             out,
                             packet.type,
@@ -638,14 +650,18 @@ final class VoiceSession {
           listener.screen(false);
           listener.vision(true, "请调整画面 · 预览 5 秒后拍摄", false);
           final int waitingGeneration = visualGeneration;
+          final long waitingRoute = routeEpoch;
           new android.os.Handler(android.os.Looper.getMainLooper())
               .postDelayed(
                   () -> {
-                    if (visual
-                        && visualGeneration == waitingGeneration
-                        && visionRequestId.isEmpty()) {
-                      cancelVision();
-                      listener.state(recording ? "listening" : "idle", "拍摄请求超时，请重试");
+                    synchronized (routeLock) {
+                      if (currentRoute(waitingRoute)
+                          && visual
+                          && visualGeneration == waitingGeneration
+                          && visionRequestId.isEmpty()) {
+                        cancelVision();
+                        listener.state(recording ? "listening" : "idle", "拍摄请求超时，请重试");
+                      }
                     }
                   },
                   15000);
@@ -659,6 +675,7 @@ final class VoiceSession {
           if (!visionRequestId.isEmpty() || !ident.matches("[a-f0-9]{32}")) return;
           visionRequestId = ident;
           Wire.put(j, "vision_generation", p.generation);
+          Wire.put(j, "vision_route", route);
           boolean allowed =
               "desktop".equals(j.optString("origin"))
                   ? !nonce.isEmpty() && nonce.equals(desktopVisionNonce) && ident.equals(nonce)
@@ -671,7 +688,6 @@ final class VoiceSession {
             cameraFailed(j, "request_not_authorized");
             return;
           }
-          Wire.put(j, "vision_generation", p.generation);
           listener.cameraCapture(j);
         } else if ("vision_done".equals(event)) {
           if (visual && p.generation == visualGeneration) {
@@ -960,10 +976,22 @@ final class VoiceSession {
   }
 
   boolean isVisionRequestCurrent(JSONObject request) {
+    synchronized (routeLock) {
+      return ownsVisionRequest(
+          request.optInt("vision_generation", -1),
+          request.optString("request_id"),
+          request.optLong("vision_route", -1));
+    }
+  }
+
+  private boolean ownsVisionRequest(int gen, String ident, long route) {
     return foreground
         && visual
-        && visualGeneration == request.optInt("vision_generation", -1)
-        && visionRequestId.equals(request.optString("request_id"));
+        && currentRoute(route)
+        && gen == visualGeneration
+        && gen >= minimumGeneration
+        && !ident.isEmpty()
+        && visionRequestId.equals(ident);
   }
 
   void requestVision() {
@@ -986,36 +1014,45 @@ final class VoiceSession {
   }
 
   void cancelVision() {
-    boolean had = visual || !pendingVisionNonce.isEmpty();
-    int stoppedGeneration = visual ? visualGeneration : -1;
-    String stoppedNonce = pendingVisionNonce;
-    if (visual) minimumGeneration = Math.max(minimumGeneration, visualGeneration + 1);
-    visual = false;
-    pendingVisionNonce = "";
-    visionRequestId = "";
-    desktopVisionNonce = "";
-    if (had) {
-      cancelPlayback();
-      speakerOwner.endTask(stoppedGeneration);
-      JSONObject stopped = Wire.event("vision_cancel");
-      Wire.put(stopped, "vision_generation", stoppedGeneration);
-      Wire.put(stopped, "nonce", stoppedNonce);
-      send(stopped);
-      listener.vision(false, "已取消看图 · 摄像头关闭", false);
+    synchronized (routeLock) {
+      boolean had = visual || !pendingVisionNonce.isEmpty();
+      int stoppedGeneration = visual ? visualGeneration : -1;
+      String stoppedNonce = pendingVisionNonce;
+      if (visual) minimumGeneration = Math.max(minimumGeneration, visualGeneration + 1);
+      visual = false;
+      pendingVisionNonce = "";
+      visionRequestId = "";
+      desktopVisionNonce = "";
+      if (had) {
+        cancelPlayback();
+        speakerOwner.endTask(stoppedGeneration);
+        JSONObject stopped = Wire.event("vision_cancel");
+        Wire.put(stopped, "vision_generation", stoppedGeneration);
+        Wire.put(stopped, "nonce", stoppedNonce);
+        send(stopped);
+        listener.vision(false, "已取消看图 · 摄像头关闭", false);
+      }
     }
   }
 
   void cameraFailed(JSONObject request, String reason) {
     JSONObject e = Wire.event("camera_error");
-    Wire.put(e, "request_id", request.optString("request_id"));
-    Wire.put(e, "vision_generation", request.optInt("vision_generation", visualGeneration));
     Wire.put(e, "error", reason);
-    send(e);
+    try {
+      sendCameraEvent(
+          e,
+          request.optInt("vision_generation", -1),
+          request.optString("request_id"),
+          request.optLong("vision_route", -1));
+    } catch (IOException ignored) {
+      // The originating request no longer owns a usable route.
+    }
   }
 
   void imageReady(JSONObject request, byte[] jpeg, int width, int height) {
     final int gen = request.optInt("vision_generation", -1);
     final String ident = request.optString("request_id");
+    final long route = request.optLong("vision_route", -1);
     new Thread(
             () -> {
               try {
@@ -1028,7 +1065,7 @@ final class VoiceSession {
                 Wire.put(head, "width", width);
                 Wire.put(head, "height", height);
                 Wire.put(head, "sha256", hex.toString());
-                sendImageEvent(head, gen, ident);
+                sendCameraEvent(head, gen, ident, route);
                 int index = 0;
                 for (int at = 0; at < jpeg.length; at += 12288) {
                   JSONObject chunk = Wire.event("camera_image_chunk");
@@ -1039,25 +1076,38 @@ final class VoiceSession {
                       android.util.Base64.encodeToString(
                           java.util.Arrays.copyOfRange(jpeg, at, Math.min(jpeg.length, at + 12288)),
                           android.util.Base64.NO_WRAP));
-                  sendImageEvent(chunk, gen, ident);
+                  sendCameraEvent(chunk, gen, ident, route);
                 }
-                sendImageEvent(Wire.event("camera_image_end"), gen, ident);
+                sendCameraEvent(Wire.event("camera_image_end"), gen, ident, route);
               } catch (Exception error) {
-                if (visual && visualGeneration == gen)
-                  cameraFailed(request, "image_transfer_failed");
+                cameraFailed(request, "image_transfer_failed");
               }
             },
             "cc8-camera-transfer")
         .start();
   }
 
-  private void sendImageEvent(JSONObject e, int gen, String ident) throws IOException {
+  private void sendCameraEvent(JSONObject e, int gen, String ident, long route) throws IOException {
     synchronized (routeLock) {
-      if (!foreground || !visual || gen != visualGeneration || gen < minimumGeneration)
-        throw new IOException("Stale camera request");
+      Link destination = activeLink;
+      if (!ownsVisionRequest(gen, ident, route)
+          || destination == null
+          || !destination.ready
+          || destination.closed) throw new IOException("Stale camera request");
       Wire.put(e, "request_id", ident);
       Wire.put(e, "vision_generation", gen);
-      sendPacket(Wire.EVENT, epoch, 0, 0, System.nanoTime(), Wire.jsonBytes(e));
+      // A route switch cancels this capture. Never requeue its bytes on a backup.
+      destination.cameraEvent(e, gen, ident, route);
+    }
+  }
+
+  private boolean queuedCameraCurrent(Wire.Packet packet, Link link) {
+    if (packet.cameraRequestId == null) return true;
+    synchronized (routeLock) {
+      return activeLink == link
+          && link.ready
+          && !link.closed
+          && ownsVisionRequest(packet.cameraGeneration, packet.cameraRequestId, packet.cameraRoute);
     }
   }
 

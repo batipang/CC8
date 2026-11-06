@@ -11,6 +11,10 @@ final class Wire {
     int type, generation;
     long sequence, frame, nanos;
     byte[] data;
+    // Queue-only ownership for camera events. These fields never cross the wire.
+    String cameraRequestId;
+    long cameraRoute;
+    int cameraGeneration;
   }
 
   static Packet read(DataInputStream in) throws IOException {
