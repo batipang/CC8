@@ -14,7 +14,13 @@ import uuid
 from protocol import Packet, SPEAKER
 from reply_types import TextReply
 from session_ports import SessionHooks, SessionView
-from device_session import apply_settings, complete_handshake, rebind_capture
+from device_session import (
+    apply_settings,
+    complete_handshake,
+    rebind_capture,
+    start_capture,
+    stop_capture,
+)
 from capture_evidence import TOOL_TRANSCRIPT_MISMATCHES
 
 from qa_speech import (
@@ -479,113 +485,10 @@ class SessionController:
         return None
 
     def start_capture(self, j):
-        capture_id = j.get('capture_id')
-        negotiated = (
-            self.capture_start_ack or self.capture_id is not None or 'capture_start_token' in j
-        )
-        if negotiated:
-            if self.capture_claim_matches(j):
-                # The first ACK may have been lost before a surviving route took over.
-                self.rebind(j)
-                self.confirm_capture_start()
-                return
-            if (
-                not self.capture_start_ack
-                or capture_id is None
-                or j.get('capture_start_token') != self.capture_start_token
-                or capture_id in self.consumed_capture_ids
-                or (self.active and int(j['epoch']) == self.epoch)
-            ):
-                self.reject_capture_start(capture_id)
-                return
-            self.consumed_capture_ids.append(capture_id)
-        if self.resend_capture_rejection(capture_id):
-            return
-        self.rebind_seen = True
-        # A route rebind can arrive before the capture worker's first start.
-        # Both describe the same native recording epoch; never restart it.
-        if self.active and int(j['epoch']) == self.epoch:
-            return
-        if self.hooks.visual().generation is not None or self.text_generation is not None:
-            self.hooks.cancel('microphone_start')
-        if self.active or self.hooks.announcements().generation is not None:
-            self.hooks.stop()
-        self.epoch = int(j['epoch'])
-        self.capture_start_required = True
-        self.generation += 1
-        self.hooks.capture().reset_session()
-        self.hooks.playback().reset_session()
-        try:
-            self.hooks.capture().echo.open()
-        except (ImportError, OSError, RuntimeError, ValueError) as error:
-            if not self.capture_rejection_supported:
-                if isinstance(error, ImportError):
-                    raise RuntimeError('Local echo processor unavailable') from None
-                raise
-            self.rejected_capture_id = capture_id
-            self.hooks.log('capture_initialization_failed', error_type=type(error).__name__)
-            self.hooks.save_status()
-            # Keep the authenticated link on a local processor failure. If
-            # sending fails, a rebind can resend to this same recording only.
-            self.resend_capture_rejection(capture_id)
-            return
-        self.capture_start_required = False
-        self.active = True
-        self.capture_id = capture_id if negotiated else None
-        sample = self.tool_sample
-        if sample is not None:
-            bindable = (
-                sample.state == 'pending'
-                and time.monotonic() < sample.arm_until
-                and sample.generation == self.generation
-                and self.capture_id is not None
-                and self.transport_kind in ('usb', 'wifi')
-            )
-            sample.capture_id = self.capture_id
-            sample.state = 'bound' if bindable else 'closed'
-            if not bindable:
-                sample.closed_reason = 'capture_changed'
-        self.hooks.calibration().begin()
-        self.awake = not self.wake
-        self.screen_sleeping = False
-        self.last_interaction = time.monotonic()
-        self.hooks.wake_reset('start')
-        for k in [
-            'mic_frames',
-            'render_frames',
-            'sequence_gaps',
-            'interruptions',
-            'utterances',
-            'fast_stop_count',
-            'echo_transcripts_rejected',
-            'weak_near_rejections',
-        ]:
-            self.hooks.metric(k, 0)
-        generation = self.generation
-        self.hooks.prepare_brain(generation)
-        threading.Thread(target=self.hooks.calibrate(), args=(generation,), daemon=True).start()
-        self.hooks.log('foreground_capture_started')
-        if negotiated:
-            self.confirm_capture_start()
+        start_capture(self, j)
 
     def stop_capture(self, j):
-        capture_id = j.get('capture_id')
-        if (
-            self.capture_start_ack
-            and capture_id is not None
-            and capture_id not in self.consumed_capture_ids
-        ):
-            self.consumed_capture_ids.append(capture_id)
-        if self.capture_id is not None and (
-            capture_id != self.capture_id or j.get('epoch') != self.epoch
-        ):
-            return
-        if not self.active:
-            # A native capture worker can stop before its Start reaches us.
-            self.capture_start_required = True
-        elif int(j.get('epoch', self.epoch)) == self.epoch:
-            self.hooks.stop()
-            self.hooks.log('foreground_capture_stopped')
+        stop_capture(self, j)
 
     def interrupt(self, j):
         if (

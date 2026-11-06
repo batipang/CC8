@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import threading
+import time
 from typing import TYPE_CHECKING
 from wake_controller import WAITING
 
@@ -97,6 +98,117 @@ def rebind_capture(session: SessionController, j):
             hooks.status('listening', '连接已切换，我在听' if session.awake else WAITING)
     else:
         hooks.route_event({**j, 'event': 'session_start'})
+
+
+def start_capture(session: SessionController, j):
+    capture_id = j.get('capture_id')
+    negotiated = (
+        session.capture_start_ack or session.capture_id is not None or 'capture_start_token' in j
+    )
+    if negotiated:
+        if session.capture_claim_matches(j):
+            # The first ACK may have been lost before a surviving route took over.
+            session.rebind(j)
+            session.confirm_capture_start()
+            return
+        if (
+            not session.capture_start_ack
+            or capture_id is None
+            or j.get('capture_start_token') != session.capture_start_token
+            or capture_id in session.consumed_capture_ids
+            or (session.active and int(j['epoch']) == session.epoch)
+        ):
+            session.reject_capture_start(capture_id)
+            return
+        session.consumed_capture_ids.append(capture_id)
+    if session.resend_capture_rejection(capture_id):
+        return
+    session.rebind_seen = True
+    # A route rebind can arrive before the capture worker's first start.
+    # Both describe the same native recording epoch; never restart it.
+    if session.active and int(j['epoch']) == session.epoch:
+        return
+    if session.hooks.visual().generation is not None or session.text_generation is not None:
+        session.hooks.cancel('microphone_start')
+    if session.active or session.hooks.announcements().generation is not None:
+        session.hooks.stop()
+    session.epoch = int(j['epoch'])
+    session.capture_start_required = True
+    session.generation += 1
+    session.hooks.capture().reset_session()
+    session.hooks.playback().reset_session()
+    try:
+        session.hooks.capture().echo.open()
+    except (ImportError, OSError, RuntimeError, ValueError) as error:
+        if not session.capture_rejection_supported:
+            if isinstance(error, ImportError):
+                raise RuntimeError('Local echo processor unavailable') from None
+            raise
+        session.rejected_capture_id = capture_id
+        session.hooks.log('capture_initialization_failed', error_type=type(error).__name__)
+        session.hooks.save_status()
+        # Keep the authenticated link on a local processor failure. If
+        # sending fails, a rebind can resend to this same recording only.
+        session.resend_capture_rejection(capture_id)
+        return
+    session.capture_start_required = False
+    session.active = True
+    session.capture_id = capture_id if negotiated else None
+    sample = session.tool_sample
+    if sample is not None:
+        bindable = (
+            sample.state == 'pending'
+            and time.monotonic() < sample.arm_until
+            and sample.generation == session.generation
+            and session.capture_id is not None
+            and session.transport_kind in ('usb', 'wifi')
+        )
+        sample.capture_id = session.capture_id
+        sample.state = 'bound' if bindable else 'closed'
+        if not bindable:
+            sample.closed_reason = 'capture_changed'
+    session.hooks.calibration().begin()
+    session.awake = not session.wake
+    session.screen_sleeping = False
+    session.last_interaction = time.monotonic()
+    session.hooks.wake_reset('start')
+    for k in [
+        'mic_frames',
+        'render_frames',
+        'sequence_gaps',
+        'interruptions',
+        'utterances',
+        'fast_stop_count',
+        'echo_transcripts_rejected',
+        'weak_near_rejections',
+    ]:
+        session.hooks.metric(k, 0)
+    generation = session.generation
+    session.hooks.prepare_brain(generation)
+    threading.Thread(target=session.hooks.calibrate(), args=(generation,), daemon=True).start()
+    session.hooks.log('foreground_capture_started')
+    if negotiated:
+        session.confirm_capture_start()
+
+
+def stop_capture(session: SessionController, j):
+    capture_id = j.get('capture_id')
+    if (
+        session.capture_start_ack
+        and capture_id is not None
+        and capture_id not in session.consumed_capture_ids
+    ):
+        session.consumed_capture_ids.append(capture_id)
+    if session.capture_id is not None and (
+        capture_id != session.capture_id or j.get('epoch') != session.epoch
+    ):
+        return
+    if not session.active:
+        # A native capture worker can stop before its Start reaches us.
+        session.capture_start_required = True
+    elif int(j.get('epoch', session.epoch)) == session.epoch:
+        session.hooks.stop()
+        session.hooks.log('foreground_capture_stopped')
 
 
 def apply_settings(session: SessionController, j):
