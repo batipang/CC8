@@ -239,6 +239,35 @@ class AnnouncementTests(unittest.TestCase):
                     bridge.session.arm_tool_sample.assert_called_once_with(5, compare_engine=engine)
         bridge.announce.assert_not_called()
 
+    def test_tool_rejection_diagnosis_requires_explicit_local_engine(self):
+        bridge = Mock()
+        bridge.session.arm_tool_sample.return_value = {'status': 'armed'}
+        server = AnnouncementServer(bridge, Path('/unused'))
+        base = {'operation': 'tool_sample_diagnose_arm', 'case': 5}
+        for fields, accepted in (
+            ({'engine': 'sensevoice'}, True),
+            ({}, False),
+            ({'engine': 'owner/path'}, False),
+            ({'engine': 'whisper', 'text': 'arbitrary input'}, False),
+        ):
+            with self.subTest(fields=fields):
+                bridge.session.arm_tool_sample.reset_mock()
+                reader, writer = socket.socketpair()
+                with writer:
+                    self.assertTrue(server.slots.acquire(blocking=False))
+                    writer.sendall((json.dumps({**base, **fields}) + '\n').encode())
+                    server.handle(reader)
+                    result = json.loads(writer.recv(4096))
+                if accepted:
+                    self.assertEqual(result, {'status': 'armed'})
+                    bridge.session.arm_tool_sample.assert_called_once_with(
+                        5, diagnose_engine='sensevoice'
+                    )
+                else:
+                    self.assertEqual(result, {'status': 'invalid_request'})
+                    bridge.session.arm_tool_sample.assert_not_called()
+        bridge.announce.assert_not_called()
+
     def test_live_device_status_is_not_blocked_by_a_running_announcement(self):
         job = Announcement(1, 'test')
         job.result = 'completed'

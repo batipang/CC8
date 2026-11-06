@@ -198,9 +198,7 @@ def receipt(value):
         result['tool_sample_rejection'] = reason
     if 'tool_asr_comparison' in value:
         comparison = value['tool_asr_comparison']
-        if result.get(
-            'tool_sample_rejection'
-        ) != 'comparison_only' or not valid_tool_asr_comparison(comparison):
+        if not valid_tool_asr_comparison(comparison, result.get('tool_sample_rejection')):
             raise ValueError('Invalid tool ASR comparison receipt')
         result['tool_asr_comparison'] = dict(comparison)
     for stage, field in DOT_CONTEXT_FIELDS.items():

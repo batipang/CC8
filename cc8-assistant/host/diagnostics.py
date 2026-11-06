@@ -251,9 +251,8 @@ class TraceBook:
             or tool_sample_rejection not in TOOL_SAMPLE_REJECTION_REASONS
         ):
             raise ValueError('Invalid tool sample rejection')
-        if tool_asr_comparison is not None and (
-            tool_sample_rejection != 'comparison_only'
-            or not valid_tool_asr_comparison(tool_asr_comparison)
+        if tool_asr_comparison is not None and not valid_tool_asr_comparison(
+            tool_asr_comparison, tool_sample_rejection
         ):
             raise ValueError('Invalid tool ASR comparison')
         with self.lock:

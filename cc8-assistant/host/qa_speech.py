@@ -53,13 +53,14 @@ def tool_sample_request(value):
     if not isinstance(value, dict):
         return False
     operation = value.get('operation')
-    if operation in ('tool_sample_arm', 'tool_sample_compare_arm'):
+    if operation in ('tool_sample_arm', 'tool_sample_compare_arm', 'tool_sample_diagnose_arm'):
+        fields = set(value)
         return (
             (
-                set(value) == {'operation', 'case'}
+                (operation != 'tool_sample_diagnose_arm' and fields == {'operation', 'case'})
                 or (
-                    operation == 'tool_sample_compare_arm'
-                    and set(value) == {'operation', 'case', 'engine'}
+                    operation != 'tool_sample_arm'
+                    and fields == {'operation', 'case', 'engine'}
                     and value['engine'] in TOOL_COMPARE_ENGINES
                 )
             )

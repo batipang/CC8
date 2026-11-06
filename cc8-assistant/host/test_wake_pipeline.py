@@ -427,12 +427,12 @@ class WakePipelineTests(unittest.TestCase):
                 self.assertTrue(b.session.awake)
                 self.assertEqual(len(audio), 1)
 
-    def arm_tool_capture(self, b, before_start=lambda _: None, *, engine=None):
+    def arm_tool_capture(self, b, before_start=lambda _: None, *, engine=None, diagnose=None):
         s = b.session
         s.active = False
         s.transport_kind = 'usb'
         s.capture_start_ack = True
-        token = s.arm_tool_sample(1, compare_engine=engine)['token']
+        token = s.arm_tool_sample(1, compare_engine=engine, diagnose_engine=diagnose)['token']
         self.assertIsNone(s.capture_id)
         self.assertEqual(s.begin_tool_sample(token), {'status': 'unavailable'})
         before_start(s)
@@ -489,6 +489,70 @@ class WakePipelineTests(unittest.TestCase):
         self.assertEqual(requests, [question])
         self.assertEqual(s.tool_sample_rejection(question, True, time.monotonic()), 'not_open')
         s.stop()
+
+    def test_tool_rejection_diagnosis_reuses_audio_without_releasing_the_guard(self):
+        question = SCENARIO_QUESTIONS['tool'][0]
+        for mode in ('rejected', 'cancelled', 'accepted', 'not_open', 'empty'):
+            with self.subTest(mode=mode):
+                transcript = (
+                    '大黄蜂，' + question
+                    if mode == 'accepted'
+                    else ''
+                    if mode == 'empty'
+                    else '大黄蜂，' + question.replace('只读', '')
+                )
+                b, _, primary_audio, requests, events, _, answered = self.session(
+                    '大黄蜂', transcript
+                )
+                s = b.session
+                token = self.arm_tool_capture(b, diagnose='sensevoice')
+                if mode != 'not_open':
+                    self.assertEqual(s.begin_tool_sample(token), {'status': 'ready'})
+
+                def compare(case, audio, current, *, engine):
+                    self.assertEqual((case, engine), (1, 'sensevoice'))
+                    np.testing.assert_array_equal(audio, primary_audio[0])
+                    self.assertTrue(current())
+                    if mode == 'cancelled':
+                        s.cancel('transport_switch')
+                        self.assertFalse(current())
+                    return 'matched'
+
+                with patch('recognition_worker.compare_local', side_effect=compare) as decode:
+                    self.frames(b)
+                    if mode == 'accepted':
+                        self.assertTrue(answered.wait(1))
+                        self.assertEqual(requests, [question])
+                        decode.assert_not_called()
+                    else:
+                        deadline = time.monotonic() + 1
+                        while time.monotonic() < deadline:
+                            rows = b.diagnostics_report()['requests']
+                            if rows and rows[0]['outcome'] is not None:
+                                break
+                            time.sleep(0.005)
+                        row = rows[0]
+                        self.assertEqual(row['outcome'], 'rejected')
+                        self.assertEqual(requests, [])
+                        self.assertNotIn('brain_start', row['stages'])
+                        self.assertFalse(any(name == 'transcript' for name, _ in events))
+                        if mode in ('rejected', 'cancelled'):
+                            decode.assert_called_once()
+                            self.assertEqual(row['tool_sample_rejection'], 'read_only_missing')
+                        else:
+                            decode.assert_not_called()
+                        if mode == 'rejected':
+                            self.assertEqual(
+                                row['tool_asr_comparison'],
+                                {
+                                    'primary': 'read_only_missing',
+                                    'local': 'matched',
+                                    'local_engine': 'sensevoice',
+                                },
+                            )
+                        else:
+                            self.assertNotIn('tool_asr_comparison', row)
+                s.stop()
 
     def test_tool_sample_classifies_mismatches_without_relaxing_admission(self):
         expected = SCENARIO_QUESTIONS['tool'][0]
