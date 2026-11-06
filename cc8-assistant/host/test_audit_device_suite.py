@@ -14,6 +14,7 @@ from device_smoke import (
     ACOUSTIC_RESPONSE_METRIC,
     AWAKE_DIALOGUE_CHECK,
     BARGE_DEVICE_METRIC,
+    ENGLISH_WAKE_PHASES,
     FAST_STOP_DEVICE_METRIC,
     QA_PLAYOUT_METRIC,
     QA_STAGE_METRICS,
@@ -23,6 +24,236 @@ from device_smoke import (
     run_device_suite,
 )
 from qa_speech import SCENARIO_QUESTIONS
+
+
+def saved_english_pair():
+    from test_wake_input_probe import metadata
+
+    phases = []
+    for name, options in ENGLISH_WAKE_PHASES:
+        standby = name == 'standby'
+        report = {
+            'schema': 1,
+            'state': 'passed',
+            'automation_source_sha256': 'a' * 64,
+            'speech_probe_source_sha256': 'b' * 64,
+            'expected_apk_version': '0.9.42',
+            'expected_apk_code': 79,
+            'capture_tests_enabled': True,
+            'cleanup_microphone_off_verified': True,
+            'english_fixture_played': True,
+            'awake_dialogue_enabled': not standby,
+            'standby_enabled': standby,
+            'synthetic_acoustic_probe_enabled': True,
+            'raw_audio_saved': False,
+            'contains_conversation_content': False,
+            'elapsed_seconds': 960 if standby else 60,
+            'checks': [{'name': check, 'state': 'passed'} for check in planned_checks(options)],
+            'acoustic_evidence': {
+                'wake_language': 'en',
+                'new_voice_requests': 1,
+                'admitted_voice_requests': 1,
+                'completed_requests': 1,
+                'completed_tasks': 1,
+                'local_wake_detections': 1,
+                'english_wake_detections': 1,
+                'rejected_voice_candidates': 0,
+                'pending_voice_candidates': 0,
+                'unclassified_terminal_candidates': 0,
+                'unresumed_rejected_pauses': 0,
+                'cancelled_requests': 0,
+                'recognized_stimulus_matches': True,
+                'post_playback_quiet_seconds': 20,
+                'stage_counts': dict.fromkeys(
+                    (
+                        'wake_detected',
+                        'asr_start',
+                        'asr_end',
+                        'brain_start',
+                        'playout_ack',
+                        'playback_done',
+                    ),
+                    1,
+                ),
+                'response_playout_timing': {
+                    'status': 'observed',
+                    'utterance_end_ms': 1,
+                    'confirmed_playout_ack_ms': 2,
+                    'confirmed_playback_done_ms': 3,
+                    QA_PLAYOUT_METRIC: 1,
+                },
+            },
+        }
+        if standby:
+            report['standby_evidence'] = {
+                'last_awake_seconds': 895,
+                'black_screen_poll_started_seconds': 900,
+                'first_black_screen_seconds': 902,
+                'quiet_counter_deltas': {
+                    'local_wake_count': 0,
+                    'voice_asr_attempts': 0,
+                    'render_frames': 0,
+                },
+            }
+        phases.append({'name': name, 'state': 'passed', 'report': report})
+    return {
+        'schema': 1,
+        'scope': 'english_wake_pair',
+        'state': 'passed',
+        'backend_version': '0.15.33',
+        'protocol_version': 2,
+        'full_p0_acceptance': False,
+        'raw_audio_saved': False,
+        'contains_conversation_content': False,
+        'prepared_english_input': metadata(),
+        'prepared_english_input_cleaned': True,
+        'phases': phases,
+    }
+
+
+class EnglishWakeAuditTests(unittest.TestCase):
+    def test_valid_pair_and_awake_only(self):
+        pair = saved_english_pair()
+        reviewed = audit(
+            pair, expect_backend='0.15.33', expect_apk_code=79, require_standby_quiet=True
+        )
+        self.assertIs(reviewed['verified'], True)
+        self.assertEqual(reviewed['completed_phases'], 2)
+        self.assertFalse(reviewed['full_p0_acceptance'])
+        awake = {**pair, 'scope': 'english_wake_awake', 'phases': pair['phases'][:1]}
+        self.assertIs(audit(awake)['verified'], True)
+        self.assertEqual(audit(awake)['completed_phases'], 1)
+
+    def test_turn_and_fixture_tampering_cannot_pass(self):
+        original = saved_english_pair()
+        for change, expected in (
+            ('digest', 'english_fixture_unconfirmed'),
+            ('fixture_cleanup', 'english_fixture_unconfirmed'),
+            ('apk', 'english_phase_provenance_unconfirmed'),
+            ('source', 'phase_source_mismatch'),
+            ('silence', 'standby_quiet_counters_unconfirmed'),
+            ('short_standby', 'standby_duration_unconfirmed'),
+            ('report_cleanup', 'english_phase_provenance_unconfirmed'),
+            ('short_playout_observation', 'english_playout_unconfirmed'),
+            ('duplicate_turn', 'english_turn_unconfirmed'),
+            ('summary', 'english_report_outcome_mismatch'),
+        ):
+            with self.subTest(change=change):
+                pair = deepcopy(original)
+                standby = pair['phases'][1]['report']
+                ev = standby['acoustic_evidence']
+                if change == 'digest':
+                    pair['prepared_english_input']['pcm_sha256'] = '0' * 64
+                elif change == 'fixture_cleanup':
+                    pair['prepared_english_input_cleaned'] = False
+                elif change == 'apk':
+                    standby['expected_apk_code'] = 80
+                elif change == 'source':
+                    standby['speech_probe_source_sha256'] = '0' * 64
+                elif change == 'silence':
+                    standby['standby_evidence']['quiet_counter_deltas']['voice_asr_attempts'] = 1
+                elif change == 'short_standby':
+                    standby['standby_evidence']['black_screen_poll_started_seconds'] = 899
+                elif change == 'report_cleanup':
+                    standby['cleanup_microphone_off_verified'] = False
+                elif change == 'short_playout_observation':
+                    ev['post_playback_quiet_seconds'] = 19.999
+                elif change == 'duplicate_turn':
+                    ev['stage_counts']['brain_start'] = 2
+                else:
+                    pair['state'] = 'failed'
+                review = audit(pair)
+                self.assertFalse(review['verified'])
+                self.assertEqual(review['reason'], expected)
+
+    def test_awake_miss_can_be_followed_by_verified_standby(self):
+        pair = saved_english_pair()
+        pair['state'] = 'failed'
+        phase = pair['phases'][0]
+        phase['state'] = 'failed'
+        report = phase['report']
+        report['state'] = 'failed'
+        while report['checks'][-1]['name'] != AWAKE_DIALOGUE_CHECK:
+            report['checks'].pop()
+        report['checks'][-1].update(state='failed', reason='synthetic_acoustic_chain_not_confirmed')
+        ev = report['acoustic_evidence']
+        for key in (
+            'admitted_voice_requests',
+            'completed_requests',
+            'completed_tasks',
+            'local_wake_detections',
+            'english_wake_detections',
+        ):
+            ev[key] = 0
+        ev['stage_counts'] = dict.fromkeys(ev['stage_counts'], 0)
+        ev['rejected_voice_candidates'] = 1
+        ev['rejected_voice_gates'] = {'wake_closed': 1}
+        reviewed = audit(pair)
+        self.assertFalse(reviewed['verified'])
+        self.assertEqual(reviewed['completed_phases'], 1)
+        self.assertEqual([row['outcome'] for row in reviewed['phases']], ['wake_closed', 'passed'])
+
+    def test_safe_failed_standby_preserves_redacted_probe_evidence(self):
+        pair = saved_english_pair()
+        pair['state'] = 'failed'
+        phase = pair['phases'][1]
+        phase['state'] = 'failed'
+        report = phase['report']
+        report['state'] = 'failed'
+        report['checks'][-1].update(state='failed', reason='synthetic_acoustic_chain_not_confirmed')
+        ev = report['acoustic_evidence']
+        for key in (
+            'admitted_voice_requests',
+            'completed_requests',
+            'completed_tasks',
+            'local_wake_detections',
+            'english_wake_detections',
+        ):
+            ev[key] = 0
+        ev['stage_counts'] = dict.fromkeys(ev['stage_counts'], 0)
+        ev['rejected_voice_candidates'] = 1
+        ev['rejected_voice_gates'] = {'wake_closed': 1}
+        shape = {
+            'status': 'matched',
+            'question_ncc': 0.5,
+            'question_rival_ncc': 0.1,
+            'question_half_ncc': [0.5, 0.5],
+            'name_ncc': 0.5,
+            'name_rms': 0.1,
+            'question_rms': 0.1,
+            'name_relative_frames': 0,
+        }
+        ev['english_wake_input_shape'] = {
+            'status': 'measured',
+            'raw_audio_saved': False,
+            'primary_frames': 52160,
+            'alternate_frames': 52160,
+            'primary': shape,
+            'alternate': shape,
+            'live_decoder': {
+                'primary_samples_before': 14400000,
+                'alternate_samples_before': 14400000,
+                'render_rejections': 0,
+            },
+            'fresh_replay': {'status': 'measured', 'primary_hit': True, 'alternate_hit': True},
+        }
+        ev['private'] = 'should never be printed'
+        reviewed = audit(pair)
+        self.assertFalse(reviewed['verified'])
+        self.assertEqual(reviewed['completed_phases'], 1)
+        self.assertEqual(reviewed['reason'], 'english_wake_miss')
+        failed = reviewed['phases'][1]
+        self.assertEqual(failed['outcome'], 'wake_closed')
+        self.assertEqual(failed['live_decoder']['render_rejections'], 0)
+        self.assertNotIn('should never be printed', json.dumps(reviewed))
+        ev['english_wake_input_shape']['live_decoder']['render_rejections'] = 1
+        self.assertEqual(audit(pair)['reason'], 'english_probe_invalid')
+        ev['english_wake_input_shape']['live_decoder']['render_rejections'] = 0
+        ev['stage_counts']['asr_start'] = 1
+        reviewed = audit(pair)
+        self.assertEqual(reviewed['reason'], 'english_turn_unconfirmed')
+        self.assertIn('live_decoder', reviewed['phases'][1])
+        self.assertNotIn('outcome', reviewed['phases'][1])
 
 
 class PreparedInputAuditTests(unittest.TestCase):

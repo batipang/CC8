@@ -7,6 +7,8 @@ import re
 from types import SimpleNamespace
 
 from device_smoke import (
+    AWAKE_DIALOGUE_CHECK,
+    ENGLISH_WAKE_PHASES,
     ECHO_SOAK_MIN_BACKEND,
     CheckFailure,
     ECHO_SOAK_SCOPE,
@@ -30,9 +32,12 @@ from device_smoke import (
     standby_failure,
     tool_dialogue_failure_reason,
 )
+from mac_voice import validate_prepared_speech
 from private_output import read_private_json
 from qa_speech import SCENARIO_DIGESTS
 from soak_background import valid_background
+from wake_input_receipt import FIXTURE_FRAMES, FIXTURE_PCM_SHA256, FIXTURE_WAV_SHA256
+from wake_input_receipt import summarize as summarize_wake_input
 
 VERSION = r'[0-9]{1,8}(?:\.[0-9]{1,8}){2}'
 SOURCE_DIGEST = r'[a-f0-9]{64}'
@@ -89,6 +94,169 @@ def recorded_tool_failure(report, expected, previous):
     return reason if reason in TOOL_DIALOGUE_FAILURES else None
 
 
+ENGLISH_WAKE_SCOPES = ('english_wake_awake', 'english_wake_pair')
+ENGLISH_TURN_COUNTS = (
+    'admitted_voice_requests',
+    'completed_requests',
+    'completed_tasks',
+    'local_wake_detections',
+    'english_wake_detections',
+)
+ENGLISH_TURN_STAGES = (
+    'wake_detected',
+    'asr_start',
+    'asr_end',
+    'brain_start',
+    'playout_ack',
+    'playback_done',
+)
+
+
+def counters_equal(row, keys, count):
+    return isinstance(row, dict) and all(
+        type(row.get(key)) is int and row[key] == count for key in keys
+    )
+
+
+def audit_english_wake(data, expect_backend, expect_apk_code):
+    scope, backend = data['scope'], data.get('backend_version')
+    plan = ENGLISH_WAKE_PHASES if scope == 'english_wake_pair' else ENGLISH_WAKE_PHASES[:1]
+    phases = data.get('phases')
+    result = {
+        'scope': scope,
+        'verified': False,
+        'full_p0_acceptance': False,
+        'completed_phases': 0,
+        'expected_phases': len(plan),
+        'phases': [],
+    }
+    if not (
+        isinstance(backend, str)
+        and re.fullmatch(VERSION, backend)
+        and type(data.get('protocol_version')) is int
+        and data['protocol_version'] > 0
+        and isinstance(phases, list)
+        and len(phases) == len(plan)
+        and all(
+            data.get(key) is False
+            for key in ('raw_audio_saved', 'contains_conversation_content', 'full_p0_acceptance')
+        )
+    ):
+        raise ValueError('Invalid English wake report')
+    if expect_backend is not None and backend != expect_backend:
+        return {**result, 'reason': 'backend_version_mismatch'}
+    fixture = validate_prepared_speech(data.get('prepared_english_input'))
+    if data.get('prepared_english_input_cleaned') is not True or (
+        fixture['frames'],
+        fixture['pcm_sha256'],
+        fixture['wav_sha256'],
+    ) != (FIXTURE_FRAMES, FIXTURE_PCM_SHA256, FIXTURE_WAV_SHA256):
+        return {**result, 'reason': 'english_fixture_unconfirmed'}
+
+    identity = None
+    sources = None
+    for phase, (name, options) in zip(phases, plan, strict=True):
+        if not isinstance(phase, dict) or phase.get('name') != name:
+            return {**result, 'reason': 'phase_plan_mismatch'}
+        row = {'name': name}
+        result['phases'].append(row)
+        report = phase.get('report')
+        state = phase.get('state')
+        identity = phase_apk_identity(report, expect_apk_code, identity)
+        if not (
+            identity
+            and content_free_phase(report)
+            and state in ('passed', 'failed')
+            and report.get('state') == state
+            and report.get('cleanup_microphone_off_verified') is True
+            and report.get('english_fixture_played') is True
+            and report.get('awake_dialogue_enabled') is (name == 'awake')
+            and report.get('standby_enabled') is (name == 'standby')
+            and report.get('synthetic_acoustic_probe_enabled') is True
+        ):
+            return {**result, 'reason': 'english_phase_provenance_unconfirmed'}
+        current_sources = tuple(report[key] for key in SOURCE_FIELDS)
+        if sources is not None and sources != current_sources:
+            return {**result, 'reason': 'phase_source_mismatch'}
+        sources = current_sources
+        if name == 'standby':
+            reason = standby_failure(
+                report.get('standby_evidence'), report.get('elapsed_seconds'), require_quiet=True
+            )
+            if reason:
+                return {**result, 'reason': reason}
+        checks = report.get('checks')
+        expected = planned_checks(options)
+        if state == 'failed' and name == 'awake':
+            expected = expected[: expected.index(AWAKE_DIALOGUE_CHECK) + 1]
+        states = ['passed'] * len(expected)
+        if state == 'failed':
+            states[-1] = 'failed'
+        if (
+            not isinstance(checks, list)
+            or not all(isinstance(check, dict) for check in checks)
+            or [(check.get('name'), check.get('state')) for check in checks]
+            != list(zip(expected, states, strict=True))
+        ):
+            return {**result, 'reason': 'english_phase_checks_unconfirmed'}
+
+        ev = report.get('acoustic_evidence')
+        if isinstance(ev, dict) and 'english_wake_input_shape' in ev:
+            probe = summarize_wake_input(ev['english_wake_input_shape'])
+            if probe['status'] == 'invalid' or 'language' in probe:
+                return {**result, 'reason': 'english_probe_invalid'}
+            row['input_shape'] = probe['status']
+            if probe['status'] == 'measured':
+                row['stream_shape'] = {
+                    name: probe[name]['status'] for name in ('primary', 'alternate')
+                }
+            for field in ('live_decoder', 'fresh_replay'):
+                if field in probe:
+                    row[field] = probe[field]
+        count = int(state == 'passed')
+        if not (
+            isinstance(ev, dict)
+            and ev.get('wake_language') == 'en'
+            and counters_equal(ev, ('new_voice_requests',), 1)
+            and counters_equal(ev, ('rejected_voice_candidates',), 1 - count)
+            and counters_equal(
+                ev,
+                (
+                    'pending_voice_candidates',
+                    'unclassified_terminal_candidates',
+                    'unresumed_rejected_pauses',
+                    'cancelled_requests',
+                ),
+                0,
+            )
+            and counters_equal(ev, ENGLISH_TURN_COUNTS, count)
+            and counters_equal(ev.get('stage_counts'), ENGLISH_TURN_STAGES, count)
+        ):
+            return {**result, 'reason': 'english_turn_unconfirmed'}
+        if count:
+            if not (
+                ev.get('recognized_stimulus_matches') is True
+                and matched_playout(ev)
+                and bounded_number(
+                    ev.get('post_playback_quiet_seconds'), POST_DIALOGUE_SECONDS, 86400
+                )
+            ):
+                return {**result, 'reason': 'english_playout_unconfirmed'}
+        elif not (
+            checks[-1].get('reason') == 'synthetic_acoustic_chain_not_confirmed'
+            and counters_equal(ev.get('rejected_voice_gates'), ('wake_closed',), 1)
+        ):
+            return {**result, 'reason': 'english_wake_failure_unconfirmed'}
+
+        row['outcome'] = 'passed' if count else 'wake_closed'
+        result['completed_phases'] += count
+
+    passed = result['completed_phases'] == len(plan)
+    if data.get('state') != ('passed' if passed else 'failed'):
+        return {**result, 'reason': 'english_report_outcome_mismatch'}
+    return {**result, 'verified': True} if passed else {**result, 'reason': 'english_wake_miss'}
+
+
 def audit(
     data,
     *,
@@ -100,6 +268,12 @@ def audit(
     if not isinstance(data, dict) or type(data.get('schema')) is not int or data['schema'] != 1:
         raise ValueError('Unknown report schema')
     scope = data.get('scope')
+    if scope in ENGLISH_WAKE_SCOPES:
+        if require_qa_fixture_binding:
+            raise ValueError('QA fixture binding requires a QA latency suite')
+        if require_standby_quiet and scope == 'english_wake_awake':
+            raise ValueError('Standby quiet evidence requires a standby suite')
+        return audit_english_wake(data, expect_backend, expect_apk_code)
     backend = data.get('backend_version')
     if (
         scope
