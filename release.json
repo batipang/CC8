@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "p0-english-wake-fresh-replay-20261106.1",
+  "release_id": "p0-camera-route-ownership-20261106.1",
   "backend": {
     "version": "0.15.3"
   },
   "assistant": {
-    "version": "0.9.39",
-    "version_code": 76,
+    "version": "0.9.41",
+    "version_code": 78,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {

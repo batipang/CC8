@@ -21,6 +21,7 @@ SESSION_INTERFACES = r"""
   boolean dotChatSupported,savedTasksSupported;
   int epoch,minimumGeneration,lifecycle,requests,announcementGeneration,outputStarts;
   CaptureWindow captureWindow;
+  int visualGeneration;String visionRequestId="",pendingVisionNonce="",desktopVisionNonce="";
   volatile long routeEpoch;
   Link activeLink,usbLink,wifiLink;
   Socket socket;DataOutputStream output;ServerSocket server;
@@ -40,6 +41,7 @@ SESSION_INTERFACES = r"""
   void microphoneFrame(int captureEpoch)throws IOException{
    sendPacket(Wire.MIC,captureEpoch,0,0,10,new byte[320]);
   }
+  void send(JSONObject j){try{sendPacket(Wire.EVENT,epoch,0,0,10,Wire.jsonBytes(j));}catch(IOException ignored){}}
   void beginTaskOutput(String role,int generation){outputStarts++;}
   String transportName(){return activeLink==null?"none":activeLink.kind;}
   void workspaceGet(){requests++;}
@@ -57,16 +59,26 @@ SESSION_INTERFACES = r"""
   Socket connection;DataOutputStream out;
   Link(String name){kind=name;}
   final List<JSONObject> events=new ArrayList<>();
-  final List<Wire.Packet> packets=new ArrayList<>();
-  void event(JSONObject data){events.add(data);}void close(){closed=true;}
-  void offer(Wire.Packet packet)throws IOException{packets.add(packet);}
+  final List<Wire.Packet> packets=new ArrayList<>(),queuedCamera=new ArrayList<>();
+  Runnable failOffer;
+  void failIfRequested()throws IOException{
+   if(failOffer!=null){failOffer.run();throw new IOException("fixture write failure");}
+  }
+  void event(JSONObject data)throws IOException{failIfRequested();events.add(data);}
+  void cameraEvent(JSONObject data,int gen,String ident,long route)throws IOException{
+   event(data);Wire.Packet packet=new Wire.Packet(data);packet.cameraGeneration=gen;
+   packet.cameraRequestId=ident;packet.cameraRoute=route;queuedCamera.add(packet);
+  }
+  void close(){closed=true;}
+  void offer(Wire.Packet packet)throws IOException{failIfRequested();packets.add(packet);}
  }
  static class Wire{
   static final int EVENT=1,MIC=2;
   static boolean block;static int parses,blockAt=2;
   static final java.util.concurrent.CountDownLatch entered=new java.util.concurrent.CountDownLatch(1),release=new java.util.concurrent.CountDownLatch(1);
   static class Packet{
-   int type=EVENT,generation=7;Object data;long sequence,frame,nanos;
+   int type=EVENT,generation=7,cameraGeneration;Object data;long sequence,frame,nanos,cameraRoute;
+   String cameraRequestId;
    Packet(){}Packet(JSONObject value){data=value;}
   }
   static JSONObject json(Packet p)throws Exception{
@@ -75,8 +87,11 @@ SESSION_INTERFACES = r"""
    return (JSONObject)p.data;
   }
   static JSONObject event(String name){return new JSONObject("event",name);}
+  static byte[] jsonBytes(JSONObject value){return new byte[]{1};}
   static void put(JSONObject data,String key,Object value){data.values.put(key,value);}
  }
+ JSONObject cameraRequest;
+ void cameraCapture(JSONObject value){cameraRequest=value;}
  void vision(boolean active,String message,boolean preserve){}
  void announcement(){}
  void captureRejected(int stoppedEpoch){}
@@ -203,6 +218,64 @@ SCENARIOS = r"""
     yes(!s.recording&&s.captureWindow==null,"new host instance inherited previous capture");
     break;
    }
+   case "camera_stale_id":case "camera_stale_activation":case "camera_link_failure":case "camera_current":{
+    long originalRoute=s.routeEpoch;String id="a".repeat(32);
+    Link backup=new Link("wifi");
+    if("camera_stale_activation".equals(args[0])){activate(c,backup);activate(c,old);}
+    s.visual=true;s.visualGeneration=7;s.visionRequestId=id;
+    if("camera_stale_id".equals(args[0]))id="b".repeat(32);
+    if("camera_link_failure".equals(args[0])){
+     backup.ready=true;s.wifiLink=backup;old.failOffer=()->s.lost(old);
+    }
+    JSONObject chunk=new JSONObject("event","camera_image_chunk","data","synthetic");
+    int originalEvents=old.events.size();boolean refused=false;
+    try{s.cameraSendForTest(chunk,7,id,originalRoute);}catch(IOException expected){refused=true;}
+    if("camera_current".equals(args[0])){
+     yes(!refused&&old.events.size()+old.packets.size()==originalEvents+1,"current picture was not enqueued once");
+     yes(id.equals(chunk.optString("request_id")),"current picture lost its request binding");
+    }else{
+     yes(refused,"stale or failed picture send succeeded");
+     yes(old.events.size()==originalEvents&&old.packets.isEmpty(),"stale picture reached old route");
+     yes(backup.packets.isEmpty()&&backup.events.stream().noneMatch(e->"camera_image_chunk".equals(e.optString("event"))),"picture crossed to backup");
+    }
+    break;
+   }
+   case "camera_queue":{
+    long route=s.routeEpoch;String id="a".repeat(32);
+    s.visual=true;s.visualGeneration=7;s.visionRequestId=id;
+    s.cameraSendForTest(new JSONObject("event","camera_image_chunk"),7,id,route);
+    yes(old.queuedCamera.size()==1,"camera event was not marked in the queue");
+    Wire.Packet queued=old.queuedCamera.get(0);
+    yes(s.queuedCameraCurrent(queued,old),"live picture was dropped before write");
+    yes(s.queuedCameraCurrent(new Wire.Packet(),old),"ordinary packets must keep their existing path");
+    old.closed=true;
+    yes(!s.queuedCameraCurrent(queued,old),"closed original link could still write a picture");
+    old.closed=false;
+    s.visual=false;
+    yes(!s.queuedCameraCurrent(queued,old),"cancelled picture could still be written");
+    activate(c,new Link("wifi"));activate(c,old);
+    s.visual=true;s.visualGeneration=7;s.visionRequestId=id;
+    yes(!s.queuedCameraCurrent(queued,old),"old queue survived reuse of the same Link");
+    break;
+   }
+   case "camera_dispatch":{
+    s.visual=true;s.visualGeneration=7;s.recording=true;
+    String id="a".repeat(32);long route=s.routeEpoch;
+    JSONObject request=new JSONObject("event","camera_capture","origin","voice","request_id",id,"vision_route",-1);
+    s.deliver(new Wire.Packet(request),old);
+    yes(c.cameraRequest==request&&request.optLong("vision_route",-1)==route,
+        "camera callback did not receive a locally owned activation");
+    yes(s.isVisionRequestCurrent(request),"current request could not open preview");
+    int oldEvents=old.events.size();s.cameraFailed(request,"permission_required");
+    yes(old.events.size()==oldEvents+1&&"camera_error".equals(old.events.get(oldEvents).optString("event")),
+        "current camera error was not sent on its own route");
+    Link next=new Link("wifi");activate(c,next);
+    s.visual=true;s.visualGeneration=7;s.visionRequestId=id;
+    yes(!s.isVisionRequestCurrent(request),"queued camera callback opened preview on a new activation");
+    int newEvents=next.events.size();s.cameraFailed(request,"not_foreground");
+    yes(next.events.size()==newEvents&&next.packets.isEmpty(),"old camera error reached the new route");
+    break;
+   }
    case "inactive_source":{
     activate(c,new Link("wifi"));c.drain();c.snapshot(0);c.drain();
     int before=Wire.parses;s.deliver(oldWorkspace(),old);c.drain();
@@ -252,11 +325,40 @@ class WorkspaceRouteTests(unittest.TestCase):
                 'private void confirmCaptureStart(',
                 'private void sendPacket(',
                 'private boolean captureRegistered(',
+                'boolean isVisionRequestCurrent(',
+                'void cameraFailed(',
                 'private void lost(',
                 'void pause(',
                 'private void closeSocket(',
             )
         ]
+        camera_route_bound = 'private void sendCameraEvent(' in session
+        if camera_route_bound:
+            route_methods.extend(
+                method(session, signature)
+                for signature in (
+                    'private boolean ownsVisionRequest(',
+                    'private void sendCameraEvent(',
+                )
+            )
+        else:
+            route_methods.append(method(session, 'private void sendImageEvent('))
+        route_methods.append(
+            'void cameraSendForTest(JSONObject e,int gen,String id,long route)throws IOException{'
+            + (
+                'sendCameraEvent(e,gen,id,route);'
+                if camera_route_bound
+                else 'sendImageEvent(e,gen,id);'
+            )
+            + '}'
+        )
+        queued_camera_guard = 'private boolean queuedCameraCurrent(' in session
+        if queued_camera_guard:
+            route_methods.append(method(session, 'private boolean queuedCameraCurrent('))
+        else:
+            route_methods.append(
+                'boolean queuedCameraCurrent(Wire.Packet p,Link link){return true;}'
+            )
         bound = 'final long route = routeFor(source);' in session
         start = session.index('{', session.index('private void handle(')) + 1
         end = session.index('      if ("hello".equals(event)) {', start)
@@ -271,6 +373,8 @@ class WorkspaceRouteTests(unittest.TestCase):
             + branch(session, 'workspace_result')
             + '}else if("announcement_begin".equals(event)){'
             + branch(session, 'announcement_begin')
+            + '}else if("camera_capture".equals(event)){'
+            + branch(session, 'camera_capture')
             + '}' * (session[start:end].count('{') - session[start:end].count('}') + 2)
         )
         if bound:
@@ -288,7 +392,7 @@ class WorkspaceRouteTests(unittest.TestCase):
         )
         harness = harness.replace(
             'String optString(String key)',
-            'Object opt(String key){return values.get(key);}JSONObject getJSONObject(String key){return (JSONObject)values.get(key);}boolean optBoolean(String key){return Boolean.TRUE.equals(values.get(key));}String optString(String key)',
+            'Object opt(String key){return values.get(key);}int optInt(String key,int fallback){return (int)optLong(key,fallback);}JSONObject getJSONObject(String key){return (JSONObject)values.get(key);}boolean optBoolean(String key){return Boolean.TRUE.equals(values.get(key));}String optString(String key)',
         )
         harness = harness.replace(method(harness, 'static class Session'), SESSION_INTERFACES)
         harness = harness.replace(
@@ -342,6 +446,20 @@ class WorkspaceRouteTests(unittest.TestCase):
             timeout=10,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_camera_transfer_is_bound_to_the_current_request_and_activation(self):
+        for scenario in ('camera_stale_id', 'camera_stale_activation', 'camera_current'):
+            with self.subTest(scenario=scenario):
+                self.scenario(scenario)
+
+    def test_queued_camera_chunk_is_rechecked_after_cancel_and_link_reuse(self):
+        self.scenario('camera_queue')
+
+    def test_camera_dispatch_binds_preview_and_error_to_its_own_activation(self):
+        self.scenario('camera_dispatch')
+
+    def test_camera_transfer_never_falls_back_after_enqueue_failure(self):
+        self.scenario('camera_link_failure')
 
     def test_backup_activation_rebinds_the_exact_current_capture_id(self):
         self.scenario('capture_rebind_id')
