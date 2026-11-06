@@ -45,11 +45,16 @@ class DiagnosticRunTests(unittest.TestCase):
         self.assertEqual(
             receipt({**row, 'tool_asr_comparison': sensevoice})['tool_asr_comparison'], sensevoice
         )
+        self.assertEqual(
+            receipt({**row, 'tool_sample_rejection': 'read_only_missing'})['tool_asr_comparison'],
+            result,
+        )
         for override in (
             {'tool_asr_comparison': {**result, 'local': 'private text'}},
             {'tool_asr_comparison': {**result, 'text': 'private text'}},
             {'tool_asr_comparison': {**result, 'local_engine': 'private text'}},
-            {'tool_sample_rejection': 'read_only_missing'},
+            {'tool_sample_rejection': 'arithmetic_mismatch'},
+            {'tool_sample_rejection': 'route_changed'},
         ):
             with self.subTest(override=override):
                 with self.assertRaisesRegex(ValueError, 'Invalid tool ASR comparison receipt'):

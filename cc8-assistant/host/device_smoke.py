@@ -143,6 +143,7 @@ ASR_STOP_MIN_BACKEND = '0.14.66'
 ROUTED_LATENCY_MIN_BACKEND = '0.14.62'
 TOOL_SAMPLE_MIN_BACKEND = '0.15.4'
 TOOL_COMPARE_MIN_BACKEND = '0.15.11'
+TOOL_REJECTION_MIN_BACKEND = '0.15.20'
 TOOL_COMPARISON_CHECK = 'fixed_tool_asr_comparison'
 FIXED_TOOL_CASE_SCOPE = 'fixed_tool_case'
 RENDER_OVERLAP_MIN_BACKEND = '0.14.83'
@@ -883,6 +884,7 @@ class SmokeRun:
         tool_local_compare=False,
         fixed_tool_case=False,
         tool_compare_engine='whisper',
+        tool_diagnose_engine=None,
         latency_scenario='qa',
         qa_question=ACOUSTIC_QUESTION,
         response_acoustic_evidence=False,
@@ -928,6 +930,12 @@ class SmokeRun:
             raise ValueError('Tool check requires a bounded fixed awake question')
         if tool_local_compare and fixed_tool_case:
             raise ValueError('Tool execution and recognition comparison are separate checks')
+        if tool_diagnose_engine is not None and (
+            tool_local_compare
+            or tool_diagnose_engine not in TOOL_COMPARE_ENGINES
+            or not (capture and latency_sample and latency_scenario == 'tool' and awake_dialogue)
+        ):
+            raise ValueError('Rejection diagnosis requires a bounded tool execution')
         if tool_compare_engine not in TOOL_COMPARE_ENGINES or (
             tool_compare_engine != 'whisper' and not tool_local_compare
         ):
@@ -935,6 +943,7 @@ class SmokeRun:
         self.tool_local_compare = tool_local_compare
         self.fixed_tool_case = fixed_tool_case
         self.tool_compare_engine = tool_compare_engine
+        self.tool_diagnose_engine = tool_diagnose_engine
         self.tool_sample_token = None
         self.qa_question = ENGLISH_QUESTION if english_wake else qa_question
         self.response_acoustic_evidence = response_acoustic_evidence
@@ -1645,10 +1654,15 @@ class SmokeRun:
         limit = self.capture_limit_ms
         if self.latency_sample and self.latency_scenario == 'tool':
             case = SCENARIO_QUESTIONS['tool'].index(self.qa_question) + 1
-            operation = 'tool_sample_compare_arm' if self.tool_local_compare else 'tool_sample_arm'
-            request = {'operation': operation, 'case': case}
-            if self.tool_compare_engine != 'whisper':
-                request['engine'] = self.tool_compare_engine
+            request = {'operation': 'tool_sample_arm', 'case': case}
+            if self.tool_diagnose_engine is not None:
+                request.update(
+                    operation='tool_sample_diagnose_arm', engine=self.tool_diagnose_engine
+                )
+            elif self.tool_local_compare:
+                request['operation'] = 'tool_sample_compare_arm'
+                if self.tool_compare_engine != 'whisper':
+                    request['engine'] = self.tool_compare_engine
             armed = self.request(request)
             token = armed.get('token')
             require(
@@ -2103,6 +2117,15 @@ class SmokeRun:
                         ASR_INPUT_SAMPLES: samples if valid_asr_input_samples(samples) else None,
                         'capture': summarize_rejection_capture(row),
                     }
+                    comparison = row.get('tool_asr_comparison')
+                    if (
+                        field == 'sole_tool_rejection_input'
+                        and self.tool_diagnose_engine is not None
+                        and valid_asr_input_samples(samples)
+                        and valid_tool_asr_comparison(comparison, reason)
+                        and comparison.get('local_engine', 'whisper') == self.tool_diagnose_engine
+                    ):
+                        self.acoustic_evidence[field]['tool_asr_comparison'] = dict(comparison)
             if wake_before is not None:
                 local, english = english_wake_counts(health)
                 wake_delta = local - wake_before[0]
@@ -3695,6 +3718,11 @@ def main(argv=None):
     parser.add_argument('--background-sha256')
     parser.add_argument('--tool-asr-comparison', choices=TOOL_COMPARE_ENGINES)
     parser.add_argument(
+        '--tool-diagnose-rejection',
+        choices=TOOL_COMPARE_ENGINES,
+        help='Compare the same audio locally if the fixed tool transcript is rejected',
+    )
+    parser.add_argument(
         '--tool-case', type=int, metavar='1..30', help='Select one fixed read-only tool question'
     )
     parser.add_argument(
@@ -3847,6 +3875,13 @@ def main(argv=None):
             )
     elif args.tool_case is not None:
         parser.error('--tool-case requires --tool-asr-comparison or --latency-scenario tool')
+    diagnose_tool = args.tool_diagnose_rejection
+    if diagnose_tool is not None and (
+        tool_comparison
+        or args.latency_scenario != 'tool'
+        or not (fixed_tool_case or args.qa_latency_suite)
+    ):
+        parser.error('--tool-diagnose-rejection requires a fixed tool case or tool latency suite')
     asr_stop = args.stop_route == 'asr'
     if args.known_speech_room_model and not args.known_speech_evidence:
         parser.error('--known-speech-room-model requires --known-speech-evidence')
@@ -3950,7 +3985,9 @@ def main(argv=None):
     elif args.self_playback_soak:
         minimum_batch_backend = ECHO_SOAK_MIN_BACKEND
     elif args.latency_scenario == 'tool':
-        minimum_batch_backend = TOOL_SAMPLE_MIN_BACKEND
+        minimum_batch_backend = (
+            TOOL_REJECTION_MIN_BACKEND if diagnose_tool else TOOL_SAMPLE_MIN_BACKEND
+        )
     elif args.latency_scenario == 'web':
         minimum_batch_backend = ROUTED_LATENCY_MIN_BACKEND
     elif args.extended_voice_evidence or args.interruption_suite:
@@ -4054,9 +4091,11 @@ def main(argv=None):
                 tool_case=args.tool_case,
                 latency_scenario='tool',
                 qa_corpus_sha256=SCENARIO_DIGESTS['tool'],
-                minimum_backend_version=TOOL_SAMPLE_MIN_BACKEND,
+                minimum_backend_version=minimum_batch_backend,
                 dot_dispatch_expected=True,
             )
+        if diagnose_tool:
+            plan['tool_rejection_diagnose_engine'] = diagnose_tool
         print(json.dumps(plan, ensure_ascii=False, indent=2))
         return 0
     try:
@@ -4109,6 +4148,13 @@ def main(argv=None):
             require(
                 health.get('tool_sample_guard_supported') is True,
                 'backend_tool_sample_guard_unsupported',
+            )
+        if diagnose_tool:
+            require(
+                health.get('tool_rejection_diagnosis_supported') is True
+                and health.get('asr_engine') in ('minimax', *TOOL_COMPARE_ENGINES)
+                and health['asr_engine'] != diagnose_tool,
+                'runtime_tool_rejection_diagnosis_unsupported',
             )
         if tool_comparison:
             require(
@@ -4173,7 +4219,10 @@ def main(argv=None):
                     and result.get('bridge_version') == manifest.backend_version
                     and type(result.get('protocol_version')) is int
                     and result['protocol_version'] == manifest.protocol_version
-                    and (not tool_comparison or result.get('asr_engine') == health['asr_engine'])
+                    and (
+                        not (tool_comparison or diagnose_tool)
+                        or result.get('asr_engine') == health['asr_engine']
+                    )
                 ):
                     raise RuntimeChanged('suite_runtime_changed')
             return result
@@ -4213,7 +4262,12 @@ def main(argv=None):
                             'protocol_version': health.get('protocol_version'),
                             **(
                                 {'tool_primary_engine': health['asr_engine']}
-                                if tool_comparison
+                                if tool_comparison or diagnose_tool
+                                else {}
+                            ),
+                            **(
+                                {'tool_rejection_diagnose_engine': diagnose_tool}
+                                if diagnose_tool
                                 else {}
                             ),
                             **({'release_id': manifest.release_id} if bound_runtime else {}),
@@ -4249,6 +4303,7 @@ def main(argv=None):
                         tool_local_compare=tool_comparison,
                         fixed_tool_case=fixed_tool_case,
                         tool_compare_engine=args.tool_asr_comparison or 'whisper',
+                        tool_diagnose_engine=diagnose_tool,
                         background=background,
                         stop_route=args.stop_route,
                         english_wake=args.english_wake,

@@ -113,13 +113,18 @@ class AnnouncementServer:
                     elif request.get('operation') in (
                         'tool_sample_arm',
                         'tool_sample_compare_arm',
+                        'tool_sample_diagnose_arm',
                         'tool_sample_begin',
                         'tool_sample_release',
                     ):
                         if not tool_sample_request(request):
                             raise ValueError('Tool sample accepts only a fixed case or its token')
                         operation = request['operation']
-                        if operation in ('tool_sample_arm', 'tool_sample_compare_arm'):
+                        if operation == 'tool_sample_diagnose_arm':
+                            result = self.bridge.session.arm_tool_sample(
+                                request['case'], diagnose_engine=request['engine']
+                            )
+                        elif operation in ('tool_sample_arm', 'tool_sample_compare_arm'):
                             engine = (
                                 request.get('engine', 'whisper')
                                 if operation == 'tool_sample_compare_arm'
