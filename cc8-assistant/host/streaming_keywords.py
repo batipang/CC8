@@ -47,6 +47,11 @@ class StreamingKeywords:
             if clear_metrics:
                 self.samples = 0
                 self.compute_seconds = 0.0
+            self.stream_start_samples = self.samples
+
+    @property
+    def stream_samples(self):
+        return self.samples - self.stream_start_samples
 
     def feed(self, pcm):
         pcm = np.asarray(pcm, dtype=np.float32)

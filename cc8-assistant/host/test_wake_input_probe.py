@@ -294,6 +294,51 @@ class WakeInputTests(unittest.TestCase):
         self.assertTrue(probe.closed)
         self.assertEqual(bridge.wake.read_input_probe(token), {'status': 'unavailable'})
 
+    def test_english_probe_records_decoder_start_and_only_observed_render_rejections(self):
+        pcm, _ = synthesize()
+        bridge, detector = self.bridge()
+        probe = fixture_probe(pcm)
+        bridge.wake.input_probe = probe
+        frame = np.zeros(FRAME)
+        detector.english_stream_samples = (14_400_000, 320)
+
+        def feed(*_args, **_kwargs):
+            # Moving positions after native feed cannot alter the snapshot.
+            detector.english_stream_samples = (14_400_160, 480)
+            return ''
+
+        detector.feed.side_effect = feed
+        bridge.wake.feed(frame, bridge.generation, capture_nanos=0, alternate_pcm=frame)
+        detector.feed.side_effect = None
+        detector.feed.return_value = 'Bumblebee'
+        self.assertFalse(
+            bridge.wake.feed(
+                frame, bridge.generation, capture_nanos=1, echo_risk=True, render_text='Bumblebee'
+            )
+        )
+        report = bridge.wake.read_input_probe(probe.token)
+        state = report['live_decoder']
+        self.assertEqual(
+            state,
+            {
+                'primary_samples_before': 14_400_000,
+                'alternate_samples_before': 320,
+                'render_rejections': 1,
+            },
+        )
+        self.assertEqual(report['primary_frames'], 2 * FRAME)
+        self.assertEqual(report['alternate_frames'], FRAME)
+        self.assertEqual(summarize(report), report)
+        legacy = {key: value for key, value in report.items() if key != 'live_decoder'}
+        self.assertEqual(summarize(legacy), legacy)
+        for invalid in (
+            {**state, 'primary_samples_before': True},
+            {**state, 'alternate_samples_before': -1},
+            {**state, 'render_rejections': 2},
+            {**state, 'audio': 'private'},
+        ):
+            self.assertEqual(summarize({**report, 'live_decoder': invalid}), {'status': 'invalid'})
+
     def test_prearm_native_frame_is_not_copied_to_new_probe(self):
         pcm, _ = synthesize()
         bridge, detector = self.bridge()

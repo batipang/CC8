@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-worker-pid-recovery-20261107.1",
+  "release_id": "p0-wake-stream-positions-20261107.1",
   "backend": {
-    "version": "0.15.32"
+    "version": "0.15.33"
   },
   "assistant": {
     "version": "0.9.42",

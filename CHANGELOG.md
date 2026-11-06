@@ -1,5 +1,13 @@
 # Changelog
 
+## Backend 0.15.33 — report live English wake stream positions
+
+- In the existing opt-in fixed English fixture probe, record each live stream's
+  submitted sample position before the first observed frame, plus any English
+  keyword results rejected by the render guard in the sampled window.
+- Keep the reports audio-free, accept older probe receipts, and preserve live
+  wake decisions and the independent fresh-stream replay.
+
 ## Backend 0.15.32 — recover safely from worker PID write failures
 
 - Reap the new child under the shared launcher lease if PID publication fails.
