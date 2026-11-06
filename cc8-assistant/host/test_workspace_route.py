@@ -30,7 +30,16 @@ SESSION_INTERFACES = r"""
   final Context context=new Context();final Lan lan=new Lan();
   final Auth desktopCameraAuth=new Auth();final Feedback statusFeedback=new Feedback();
   final Output speakerOwner=new Output();
-  void cancelVision(){visual=false;}void stopMicrophone(){recording=false;}void cancelPlayback(){}
+  void cancelVision(){visual=false;}void stopMicrophone(){recording=false;captureWindow=null;}
+  boolean stopMicrophone(CaptureWindow expected){
+   if(captureWindow!=expected)return false;stopMicrophone();return true;
+  }
+  void cancelPlayback(){}
+  boolean receiveHello(Link link,JSONObject hello)throws IOException{return captureHello(link,hello);}
+  void receiveCaptureStart(JSONObject receipt,long route){confirmCaptureStart(receipt,route);}
+  void microphoneFrame(int captureEpoch)throws IOException{
+   sendPacket(Wire.MIC,captureEpoch,0,0,10,new byte[320]);
+  }
   void beginTaskOutput(String role,int generation){outputStarts++;}
   String transportName(){return activeLink==null?"none":activeLink.kind;}
   void workspaceGet(){requests++;}
@@ -42,28 +51,35 @@ SESSION_INTERFACES = r"""
  static class Feedback{void reset(){}boolean begin(int generation){return true;}}
  static class Output{void endTasksThrough(int generation){}}
  static class BuildConfig{static final int CC8_PROTOCOL=2;}
+ static class SystemClock{static long now;static long elapsedRealtime(){return now;}}
  static class Link{
-  boolean closed,ready;int ticket;String kind;
+  boolean closed,ready;int ticket;String kind,captureStartToken;
   Socket connection;DataOutputStream out;
   Link(String name){kind=name;}
   final List<JSONObject> events=new ArrayList<>();
+  final List<Wire.Packet> packets=new ArrayList<>();
   void event(JSONObject data){events.add(data);}void close(){closed=true;}
+  void offer(Wire.Packet packet)throws IOException{packets.add(packet);}
  }
  static class Wire{
-  static final int EVENT=1;
+  static final int EVENT=1,MIC=2;
   static boolean block;static int parses,blockAt=2;
   static final java.util.concurrent.CountDownLatch entered=new java.util.concurrent.CountDownLatch(1),release=new java.util.concurrent.CountDownLatch(1);
-  static class Packet{int type=EVENT,generation=7;JSONObject data;Packet(JSONObject value){data=value;}}
+  static class Packet{
+   int type=EVENT,generation=7;Object data;long sequence,frame,nanos;
+   Packet(){}Packet(JSONObject value){data=value;}
+  }
   static JSONObject json(Packet p)throws Exception{
    parses++;
    if(block&&parses==blockAt){entered.countDown();if(!release.await(2,java.util.concurrent.TimeUnit.SECONDS))throw new AssertionError("fixture barrier timeout");}
-   return p.data;
+   return (JSONObject)p.data;
   }
   static JSONObject event(String name){return new JSONObject("event",name);}
   static void put(JSONObject data,String key,Object value){data.values.put(key,value);}
  }
  void vision(boolean active,String message,boolean preserve){}
  void announcement(){}
+ void captureRejected(int stoppedEpoch){}
  void playback(boolean active){}void caption(String value,String mood){}void state(String value,String message){}
  final Queue<Runnable> ui=new java.util.concurrent.ConcurrentLinkedQueue<>();
  void drain(){Runnable r;while((r=ui.poll())!=null)r.run();}
@@ -133,8 +149,11 @@ SCENARIOS = r"""
    }
    case "capture_rebind_id":{
     s.recording=true;s.epoch=7;s.captureWindow=new CaptureWindow(0,0);
+    s.captureWindow.nativeReady=true;s.captureWindow.startConfirmed=true;s.captureWindow.startToken="";
     Link backup=new Link("wifi");
     activate(c,backup);
+    yes(backup.events.size()==1,"capture registered before its hello");
+    s.receiveHello(backup,new JSONObject());
     yes(backup.events.size()==2,"new active link did not receive ready and rebind");
     JSONObject ready=backup.events.get(0),rebind=backup.events.get(1);
     yes(Integer.valueOf(1).equals(ready.values.get("capture_reject_version")),
@@ -143,6 +162,45 @@ SCENARIOS = r"""
         &&s.captureWindow.id.equals(rebind.optString("capture_id"))
         &&Integer.valueOf(7).equals(rebind.values.get("epoch")),
         "new active link lost capture identity");
+    break;
+   }
+   case "capture_pending_start":{
+    String token="a".repeat(32);String another="b".repeat(32);
+    JSONObject hello=new JSONObject("capture_start_token",token);
+    s.recording=true;s.epoch=7;s.captureWindow=new CaptureWindow(0,0);
+    s.captureWindow.nativeReady=true;
+    s.receiveHello(old,hello);
+    JSONObject first=old.events.get(old.events.size()-1);
+    yes("session_start".equals(first.optString("event")),"fresh capture did not enter old queue");
+    String id=first.optString("capture_id");long firstRoute=s.routeEpoch;
+    Link backup=new Link("wifi");activate(c,backup);
+    s.microphoneFrame(7);
+    yes(backup.packets.isEmpty(),"capture audio preceded its registration on the backup");
+    s.receiveCaptureStart(new JSONObject("capture_id",id,"epoch",7),firstRoute);
+    yes(!s.captureWindow.startConfirmed,"old route confirmed a pending capture");
+    yes(backup.events.size()==1,"audio registration was attempted before backup hello");
+    s.receiveHello(backup,hello);s.receiveHello(backup,hello);
+    yes(backup.events.size()==2,"backup must receive one replay of the fresh start");
+    JSONObject retry=backup.events.get(1);
+    yes("session_start".equals(retry.optString("event"))&&id.equals(retry.optString("capture_id"))
+        &&token.equals(retry.optString("capture_start_token")),"backup changed capture identity");
+    s.microphoneFrame(6);s.microphoneFrame(7);
+    yes(backup.packets.size()==1&&backup.packets.get(0).generation==7,
+        "backup received a stale microphone epoch");
+    s.receiveCaptureStart(new JSONObject("capture_id",id,"epoch",6),s.routeEpoch);
+    yes(!s.captureWindow.startConfirmed,"an old epoch confirmed the recording");
+    SystemClock.now=8000;
+    s.receiveCaptureStart(new JSONObject("capture_id",id,"epoch",7),s.routeEpoch);
+    yes(!s.captureWindow.startConfirmed,"an expired start accepted a late confirmation");
+    SystemClock.now=1;
+    s.receiveCaptureStart(new JSONObject("capture_id",id,"epoch",7),s.routeEpoch);
+    yes(s.captureWindow.startConfirmed,"current route did not confirm the recording");
+    activate(c,old);s.receiveHello(old,hello);
+    JSONObject rebind=old.events.get(old.events.size()-1);
+    yes("session_rebind".equals(rebind.optString("event"))&&id.equals(rebind.optString("capture_id")),
+        "confirmed capture sent another fresh start");
+    activate(c,backup);s.receiveHello(backup,new JSONObject("capture_start_token",another));
+    yes(!s.recording&&s.captureWindow==null,"new host instance inherited previous capture");
     break;
    }
    case "inactive_source":{
@@ -188,6 +246,12 @@ class WorkspaceRouteTests(unittest.TestCase):
             method(session, signature)
             for signature in (
                 'private void select(',
+                'private String recordingPhase(',
+                'private void registerCapture(',
+                'private boolean captureHello(',
+                'private void confirmCaptureStart(',
+                'private void sendPacket(',
+                'private boolean captureRegistered(',
                 'private void lost(',
                 'void pause(',
                 'private void closeSocket(',
@@ -224,7 +288,7 @@ class WorkspaceRouteTests(unittest.TestCase):
         )
         harness = harness.replace(
             'String optString(String key)',
-            'JSONObject getJSONObject(String key){return (JSONObject)values.get(key);}boolean optBoolean(String key){return Boolean.TRUE.equals(values.get(key));}String optString(String key)',
+            'Object opt(String key){return values.get(key);}JSONObject getJSONObject(String key){return (JSONObject)values.get(key);}boolean optBoolean(String key){return Boolean.TRUE.equals(values.get(key));}String optString(String key)',
         )
         harness = harness.replace(method(harness, 'static class Session'), SESSION_INTERFACES)
         harness = harness.replace(
@@ -281,6 +345,9 @@ class WorkspaceRouteTests(unittest.TestCase):
 
     def test_backup_activation_rebinds_the_exact_current_capture_id(self):
         self.scenario('capture_rebind_id')
+
+    def test_backup_replays_only_the_unconfirmed_start_and_rejects_new_backend(self):
+        self.scenario('capture_pending_start')
 
     def test_packet_parsed_after_loss_is_rejected(self):
         self.scenario('late_loss')

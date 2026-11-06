@@ -6,8 +6,10 @@ existing session-lock then component-lock order, never the reverse.
 """
 
 from __future__ import annotations
+from collections import deque
 import threading
 import time
+import uuid
 from protocol import Packet, SPEAKER
 from reply_types import TextReply
 from session_ports import SessionHooks, SessionView
@@ -24,6 +26,12 @@ class SessionController:
         self.capture_start_required = False
         self.capture_rejection_supported = False
         self.rejected_capture_id = None
+        self.capture_start_ack = False
+        self.capture_start_token = uuid.uuid4().hex
+        self.capture_id = None
+        # One device can only retry its current explicitly requested capture.
+        # Remember recent consumed IDs across route loss and failed native starts.
+        self.consumed_capture_ids = deque(maxlen=64)
         self.playback_interrupted_by_transport = False
         self.write_lock = threading.RLock()
         self.guard = threading.RLock()
@@ -88,6 +96,7 @@ class SessionController:
         self.hooks.visual().clear_challenge()
         self.rebind_seen = False
         self.capture_rejection_supported = False
+        self.capture_start_ack = False
         self.transport_kind = channel.kind if channel else 'none'
         self.hooks.capture().reset_transport(self.transport_kind)
         self.hooks.wake_reset('transport')
@@ -226,6 +235,7 @@ class SessionController:
         with self.guard:
             self.capture_start_required = True
             self.active = False
+            self.capture_id = None
             self.screen_sleeping = False
             # A wake can restore the display after disconnect. Sleep belongs
             # to the capture that just ended.
@@ -270,6 +280,23 @@ class SessionController:
     def rebind(self, j):
         rebind_capture(self, j)
 
+    def reject_capture_start(self, capture_id):
+        if self.capture_rejection_supported and isinstance(capture_id, str):
+            self.hooks.event('capture_rejected', capture_id=capture_id)
+
+    def capture_claim_matches(self, j):
+        return (
+            self.capture_start_ack
+            and self.active
+            and j.get('capture_id') == self.capture_id
+            and self.capture_id is not None
+            and j.get('capture_start_token') == self.capture_start_token
+            and j.get('epoch') == self.epoch
+        )
+
+    def confirm_capture_start(self):
+        self.hooks.event('capture_started', capture_id=self.capture_id, epoch=self.epoch)
+
     def update_wake_mode(self, value):
         with self.guard:
             if value == self.wake:
@@ -287,6 +314,25 @@ class SessionController:
 
     def start_capture(self, j):
         capture_id = j.get('capture_id')
+        negotiated = (
+            self.capture_start_ack or self.capture_id is not None or 'capture_start_token' in j
+        )
+        if negotiated:
+            if self.capture_claim_matches(j):
+                # The first ACK may have been lost before a surviving route took over.
+                self.rebind(j)
+                self.confirm_capture_start()
+                return
+            if (
+                not self.capture_start_ack
+                or capture_id is None
+                or j.get('capture_start_token') != self.capture_start_token
+                or capture_id in self.consumed_capture_ids
+                or (self.active and int(j['epoch']) == self.epoch)
+            ):
+                self.reject_capture_start(capture_id)
+                return
+            self.consumed_capture_ids.append(capture_id)
         if self.resend_capture_rejection(capture_id):
             return
         self.rebind_seen = True
@@ -319,6 +365,7 @@ class SessionController:
             return
         self.capture_start_required = False
         self.active = True
+        self.capture_id = capture_id if negotiated else None
         self.hooks.calibration().begin()
         self.awake = not self.wake
         self.screen_sleeping = False
@@ -339,8 +386,21 @@ class SessionController:
         self.hooks.prepare_brain(generation)
         threading.Thread(target=self.hooks.calibrate(), args=(generation,), daemon=True).start()
         self.hooks.log('foreground_capture_started')
+        if negotiated:
+            self.confirm_capture_start()
 
     def stop_capture(self, j):
+        capture_id = j.get('capture_id')
+        if (
+            self.capture_start_ack
+            and capture_id is not None
+            and capture_id not in self.consumed_capture_ids
+        ):
+            self.consumed_capture_ids.append(capture_id)
+        if self.capture_id is not None and (
+            capture_id != self.capture_id or j.get('epoch') != self.epoch
+        ):
+            return
         if not self.active:
             # A native capture worker can stop before its Start reaches us.
             self.capture_start_required = True

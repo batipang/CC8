@@ -751,6 +751,115 @@ class HandoverTests(unittest.TestCase):
 
 
 class RebindIdempotenceTests(unittest.TestCase):
+    def test_lost_acceptance_on_live_handover_rebinds_calibration_once(self):
+        bridge = Bridge(None, None)
+        bridge.save_status = lambda: None
+        ready = {
+            'event': 'device_ready',
+            'capture_active': True,
+            'capture_reject_version': 1,
+            'capture_start_ack_version': 1,
+        }
+        start = {
+            'event': 'session_start',
+            'epoch': 11,
+            'capture_id': 'b' * 32,
+            'capture_start_token': bridge.session.capture_start_token,
+        }
+        with (
+            patch('bridge.WebRtcEchoCanceller') as echo,
+            patch('threading.Thread.start') as calibration,
+        ):
+            bridge.change_transport(FakeChannel('usb'))
+            bridge.on_event({**ready, 'capture_active': False})
+            bridge.on_event(start)
+            self.assertTrue(bridge.calibration.active)
+            bridge.change_transport(FakeChannel('wifi'))
+            bridge.on_event(ready)
+            generation = bridge.generation
+            bridge.on_event(start)
+            bridge.on_event(start)
+            self.assertEqual(bridge.generation, generation)
+            self.assertEqual(calibration.call_count, 2)
+            self.assertEqual(echo.call_count, 1)
+            self.assertEqual(bridge.session.capture_id, start['capture_id'])
+
+    def test_unconfirmed_explicit_capture_can_transfer_without_reopening_stopped_capture(self):
+        bridge = Bridge(None, None)
+        bridge.save_status = lambda: None
+        ready = {
+            'event': 'device_ready',
+            'capture_active': True,
+            'capture_reject_version': 1,
+            'capture_start_ack_version': 1,
+        }
+        old, backup, restarted = FakeChannel('usb'), FakeChannel('wifi'), FakeChannel('usb')
+        token = bridge.session.capture_start_token
+        first = {
+            'event': 'session_start',
+            'epoch': 7,
+            'capture_id': '1' * 32,
+            'capture_start_token': token,
+        }
+        rebound = {**first, 'event': 'session_rebind', 'capture_active': True}
+        with patch('bridge.WebRtcEchoCanceller'), patch('threading.Thread.start') as calibration:
+            bridge.change_transport(old)
+            bridge.on_event({**ready, 'capture_active': False})
+            # The initial Start was still queued when this route disappeared.
+            bridge.change_transport(None)
+            bridge.change_transport(backup)
+            bridge.on_event(ready)
+            bridge.on_event(rebound)
+            self.assertFalse(bridge.session.active)
+            self.assertEqual(calibration.call_count, 0)
+            bridge.on_event(first)
+            self.assertTrue(bridge.session.active)
+            self.assertEqual(calibration.call_count, 1)
+            bridge.on_event(first)
+            self.assertEqual(calibration.call_count, 1)
+            acks = [
+                event
+                for raw in backup.sent
+                if (
+                    event := decode_event(receive(SimpleNamespace(recv=io.BytesIO(raw).read)).data)
+                )['event']
+                == 'capture_started'
+            ]
+            self.assertEqual([ack['capture_id'] for ack in acks], ['1' * 32, '1' * 32])
+
+            # Even if the app never received either ACK, the accepted ID is
+            # consumed and cannot start after the host has stopped capture.
+            bridge.change_transport(None)
+            bridge.change_transport(restarted)
+            bridge.on_event(ready)
+            bridge.on_event(first)
+            bridge.on_event(rebound)
+            self.assertFalse(bridge.session.active)
+            self.assertEqual(calibration.call_count, 1)
+            self.assertEqual(
+                decode_event(
+                    receive(SimpleNamespace(recv=io.BytesIO(restarted.sent[-1]).read)).data
+                ),
+                {'event': 'capture_rejected', 'capture_id': '1' * 32},
+            )
+            stale_host = {**first, 'capture_id': '2' * 32, 'capture_start_token': '0' * 32}
+            bridge.on_event(stale_host)
+            self.assertFalse(bridge.session.active)
+
+            # Stop may arrive before a pending start. A new identity still works.
+            stopped = {**first, 'epoch': 8, 'capture_id': '3' * 32}
+            bridge.on_event({**stopped, 'event': 'session_stop'})
+            bridge.on_event(stopped)
+            self.assertFalse(bridge.session.active)
+            fresh = {**first, 'epoch': 9, 'capture_id': '4' * 32}
+            bridge.on_event(fresh)
+            self.assertTrue(bridge.session.active)
+            bridge.on_event({'event': 'session_stop', 'epoch': 9, 'capture_id': '3' * 32})
+            self.assertTrue(bridge.session.active)
+            bridge.on_event({'event': 'session_stop', 'epoch': 9, 'capture_id': '4' * 32})
+            self.assertFalse(bridge.session.active)
+            self.assertEqual(calibration.call_count, 2)
+
     def test_start_and_rebind_for_same_epoch_cannot_duplicate_calibration(self):
         for order in [('session_rebind', 'session_start'), ('session_start', 'session_rebind')]:
             with self.subTest(order=order):

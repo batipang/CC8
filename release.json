@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "p0-production-wake-shape-20261106.1",
+  "release_id": "p0-capture-start-handover-20261106.1",
   "backend": {
-    "version": "0.15.1"
+    "version": "0.15.2"
   },
   "assistant": {
-    "version": "0.9.38",
-    "version_code": 75,
+    "version": "0.9.39",
+    "version_code": 76,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {

@@ -213,11 +213,12 @@ class VoiceSession {
  void change(){synchronized(routeLock){routeEpoch++;activeLink=new Link("new");}}
  void select(Link link)throws IOException{activeLink=link;routeEpoch++;}
  void workspaceGet(){}
+ boolean captureRegistered(int epoch){throw new AssertionError("Workspace action sent microphone data");}
  SESSION_METHODS
  LEGACY_ADAPTERS
 }
 class Wire {
- static final int EVENT=1;
+ static final int MIC=1,EVENT=3;
  static class Packet{int type,generation;long sequence,frame,nanos;byte[] data;}
  static String pauseOn="";
  static final java.util.concurrent.CountDownLatch entered=new java.util.concurrent.CountDownLatch(1),release=new java.util.concurrent.CountDownLatch(1);
