@@ -231,32 +231,54 @@ final class VoiceSession {
   }
 
   private void accept(int ticket) {
-    try (ServerSocket ss = new ServerSocket()) {
-      synchronized (routeLock) {
-        if (!foreground || lifecycle != ticket) return;
-        ss.setReuseAddress(true);
-        ss.bind(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), 18765), 1);
-        server = ss;
-      }
-      while (foreground && lifecycle == ticket) {
-        Socket connection = ss.accept();
-        if (!foreground || lifecycle != ticket) {
-          connection.close();
-          break;
+    boolean reportedUnavailable = false;
+    while (foreground && lifecycle == ticket) {
+      try (ServerSocket ss = new ServerSocket()) {
+        synchronized (routeLock) {
+          if (!foreground || lifecycle != ticket) return;
+          ss.setReuseAddress(true);
+          ss.bind(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), 18765), 1);
+          server = ss;
         }
-        Link old = usbLink;
-        if (old != null && !old.closed) {
-          connection.close();
-          continue;
+        reportedUnavailable = false;
+        while (foreground && lifecycle == ticket) {
+          Socket connection = ss.accept();
+          Link next;
+          synchronized (routeLock) {
+            if (!foreground || lifecycle != ticket) {
+              connection.close();
+              return;
+            }
+            Link old = usbLink;
+            if (old != null && !old.closed) {
+              connection.close();
+              continue;
+            }
+            next = new Link(connection, "usb", ticket);
+            usbLink = next;
+          }
+          new Thread(next, "cc8-usb-link").start();
         }
-        Link next = new Link(connection, "usb", ticket);
-        usbLink = next;
-        new Thread(next, "cc8-usb-link").start();
+      } catch (IOException error) {
+        synchronized (routeLock) {
+          if (!foreground || lifecycle != ticket) return;
+          if (!reportedUnavailable && activeLink == null)
+            listener.state("idle", "USB 通道等待重连，Wi-Fi 仍可连接");
+          reportedUnavailable = true;
+        }
+      } finally {
+        synchronized (routeLock) {
+          if (lifecycle == ticket) server = null;
+        }
       }
-    } catch (IOException error) {
-      if (foreground && lifecycle == ticket) listener.state("idle", "USB 通道等待重连，Wi-Fi 仍可连接");
-    } finally {
-      if (lifecycle == ticket) server = null;
+      // A bind or accept error must not permanently disable USB in this foreground session.
+      if (!foreground || lifecycle != ticket) return;
+      try {
+        Thread.sleep(1000);
+      } catch (InterruptedException error) {
+        Thread.currentThread().interrupt();
+        return;
+      }
     }
   }
 
