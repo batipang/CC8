@@ -85,9 +85,16 @@ def accept_device_receipt(playback: PlaybackController, event):
                 ):
                     return
             playback.hooks.diagnostics().failure(generation, 'playback', RuntimeError())
-            playback.hooks.log(
-                'device_playback_error', error_type=str(event.get('error_type', 'Unknown'))[:50]
-            )
+            error_type = event.get('error_type')
+            # The peer reports a class name. Its payload is still untrusted.
+            if not isinstance(error_type, str) or error_type not in (
+                'IOException',
+                'InterruptedException',
+                'IllegalStateException',
+                'IllegalArgumentException',
+            ):
+                error_type = 'Unknown'
+            playback.hooks.log('device_playback_error', error_type=error_type)
             playback.hooks.cancel_session('playback_error')
             playback.hooks.failure(
                 '设备播放失败',
