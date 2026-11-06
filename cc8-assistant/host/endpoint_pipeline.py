@@ -178,7 +178,9 @@ class EndpointPipeline:
             and self.hooks.wake_allowed()
             and not self.hooks.playing()
         ):
-            self.hooks.status('listening', '这句话太长了，请分成几句说')
+            # The shipped HUD reserves its listening label for the generic
+            # indicator. Recoverable failures use the visible detail label.
+            self.hooks.status('error', '这句话太长了，请分成几句说')
 
     def consume(self, frame):
         stamp = frame.nanos
