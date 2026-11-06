@@ -287,20 +287,27 @@ class LiveService:
         os.kill(previous['supervisor_pid'], signal.SIGKILL)
 
     def resume_sample(self, expected_usb):
-        before, _, _ = read_usb(3)
+        def read_expected_usb():
+            device, _, _ = read_usb(3)
+            if device is not None:
+                require(
+                    (device.serial, device.location) == expected_usb,
+                    'resume_usb_identity_changed',
+                )
+            return device
+
+        before = read_expected_usb()
         if before is None:
             return None
-        require(
-            (before.serial, before.location) == expected_usb,
-            'resume_usb_identity_changed',
-        )
         try:
             device = Device()
+            device.verify_usb_serial(before.serial)
+        except CheckFailure:
+            raise
         except (OSError, RuntimeError, subprocess.SubprocessError):
             # The same USB device can appear before its engineering shell.
-            return None
-        after, _, _ = read_usb(3)
-        if before != after:
+            device = None
+        if read_expected_usb() != before or device is None:
             return None
         self.device = device
         try:
@@ -308,12 +315,13 @@ class LiveService:
         except CheckFailure as error:
             if str(error) != 'usb_target_changed':
                 raise
-            return None
+            snapshot = None
         except (OSError, RuntimeError, subprocess.SubprocessError):
-            return None
+            snapshot = None
 
-        # Readiness is only usable if it belongs to a single USB enumeration.
-        return snapshot if snapshot is not None and read_usb(3)[0] == before else None
+        # Recheck identity even when the service or ADB sample was unavailable.
+        # Readiness is usable only within a single enumeration of that device.
+        return snapshot if read_expected_usb() == before else None
 
 
 class RecoveryRun:
@@ -523,6 +531,7 @@ class SleepRecoveryRun:
             usb, _, _ = self.usb_reader(3)
             require(usb is not None, 'resume_usb_baseline_missing')
             identity = (usb.serial, usb.location)
+            self.service.device.verify_usb_serial(usb.serial)
             baseline = self.service.supervisor_sample(include_activity=True)
             require(baseline is not None, 'preflight_service_not_ready')
             require(self.usb_reader(3)[0] == usb, 'resume_usb_baseline_changed')

@@ -736,6 +736,15 @@ class Device:
         self.access.probe(self.transport)
         self.fixture_directory = fixture_directory
 
+    def verify_usb_serial(self, expected):
+        serial = subprocess.check_output(
+            [str(self.access.ADB), '-t', self.transport, 'get-serialno'],
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=3,
+        ).strip()
+        require(serial == expected, 'usb_serial_mismatch')
+
     def shell(self, command):
         # Recheck the physical target before each operation, never choose a new
         # USB target after a cable/device replacement during this test.
