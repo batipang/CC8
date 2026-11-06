@@ -144,9 +144,12 @@ class ResponseWorker:
 
     def answer(self, text, generation, image=None):
         # 任务成功以大脑真实回执为准，后续停止朗读不能把已完成工作改为取消。
-        self.hooks.diagnostics().ensure(generation, 'vision' if image is not None else 'text')
-        self.hooks.diagnostics().mark(generation, 'brain_start')
-        task_id = self.hooks.workspace().task_start(generation, text)
+        with self.hooks.lock:
+            if not self.hooks.valid(generation):
+                return
+            self.hooks.diagnostics().ensure(generation, 'vision' if image is not None else 'text')
+            self.hooks.diagnostics().mark(generation, 'brain_start')
+            task_id = self.hooks.workspace().task_start(generation, text)
         result_text = ['']
         clauses = None
 
@@ -249,8 +252,11 @@ class ResponseWorker:
         failure = None
         spoken = []
         try:
-            self.hooks.publish_workspace()
-            self.hooks.status('thinking', '正在准备回答…')
+            with self.hooks.lock:
+                if not self.hooks.valid(generation):
+                    return
+                self.hooks.publish_workspace()
+                self.hooks.status('thinking', '正在准备回答…')
             clauses = (
                 self.hooks.brain().vision_clauses(
                     text, image, self.history, lambda: self.hooks.valid(generation), web_update
@@ -316,7 +322,11 @@ class ResponseWorker:
                 self.hooks.diagnostics().task_result(generation, status)
                 self.hooks.diagnostics().finish(generation, status)
                 self.hooks.publish_workspace()
-        if completed and self.hooks.valid(generation):
+        # Do not let a new turn start between ownership admission and its
+        # predecessor's final status or history update.
+        with self.hooks.lock:
+            if not completed or not self.hooks.valid(generation):
+                return
             answer = ''.join(spoken)
             self.history.extend(
                 [{'role': 'user', 'content': text}, {'role': 'assistant', 'content': answer}]
