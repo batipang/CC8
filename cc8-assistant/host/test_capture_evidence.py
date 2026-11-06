@@ -19,7 +19,7 @@ from bridge import Bridge
 from capture_evidence import CaptureEvidence, TEMPORAL_COUNTS, validate
 from diagnostic_run import DiagnosticRun
 from diagnostics import TraceBook
-from dsp import FRAME, RATE, VoiceDetector
+from dsp import FRAME, MAX_UTTERANCE_FRAMES, RATE, VoiceDetector
 from echo_pipeline import CleanFrame
 from test_barge_in import Sink
 
@@ -409,6 +409,60 @@ class CaptureDiagnosticsTests(unittest.TestCase):
         )
         self.assertNotIn('input_end_ns', json.dumps(row))
         self.assertIn('utterance_end', row['stages'])
+
+    def test_overlong_voice_is_withheld_until_a_new_utterance_after_silence(self):
+        bridge, frame, _ = self.endpoint()
+        endpoint = bridge.capture.endpoint
+        endpoint.vad = VoiceDetector()
+        bridge.playback.playing = False
+        frame = replace(frame, reference=np.zeros(FRAME))
+        events = []
+        endpoint.hooks = replace(endpoint.hooks, status=lambda *args: events.append(args))
+        index = 0
+
+        def feed(count, voiced):
+            nonlocal index
+            endpoint.near_speech.feed = lambda *_: (voiced, voiced)
+            for _ in range(count):
+                endpoint.consume(replace(frame, nanos=frame.nanos + index * 10_000_000))
+                index += 1
+
+        feed(MAX_UTTERANCE_FRAMES + 100, True)
+        feed(79, False)
+        feed(25, True)
+        self.assertTrue(bridge.recognition.queue.empty())
+        self.assertIsNone(endpoint.voice_trace)
+        (row,) = bridge.diagnostics.report()['requests']
+        self.assertEqual((row['gate'], row['outcome']), ('utterance_too_long', 'rejected'))
+        self.assertNotIn('asr_start', row['stages'])
+        self.assertEqual(events.count(('listening', '这句话太长了，请分成几句说')), 1)
+        feed(80, False)
+        feed(30, True)
+        feed(80, False)
+        job = bridge.recognition.queue.get_nowait()
+        self.assertNotEqual(job[6], row['request_id'])
+        self.assertTrue(bridge.recognition.queue.empty())
+
+    def test_overlong_interruption_resumes_only_its_own_pause(self):
+        for owned in (True, False):
+            with self.subTest(owned=owned):
+                bridge, frame, _ = self.endpoint()
+                endpoint = bridge.capture.endpoint
+                endpoint.vad = VoiceDetector()
+                endpoint.near_speech.feed = lambda *_: (True, True)
+                resumed = []
+                endpoint.hooks = replace(
+                    endpoint.hooks,
+                    paused=lambda: not owned or endpoint.owns_turn_pause,
+                    pause_token=lambda: None if owned else 55,
+                    pause_voice=lambda _stamp: 23,
+                    resume_rejected=lambda token, generation: resumed.append((token, generation)),
+                )
+                for index in range(MAX_UTTERANCE_FRAMES + 1):
+                    endpoint.consume(replace(frame, nanos=frame.nanos + index * 10_000_000))
+                self.assertTrue(bridge.recognition.queue.empty())
+                self.assertEqual(resumed, [(23, bridge.generation)] if owned else [])
+                self.assertIsNone(endpoint.turn_pause_token)
 
     def test_endpoint_routes_recent_unreferenced_playback_tail_through_echo_gate(self):
         spoken = '这次联网查询没有成功，请稍后再查。'

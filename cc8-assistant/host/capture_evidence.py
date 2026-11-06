@@ -44,6 +44,7 @@ DECISIONS = frozenset(
         'echo_text',
         'echo_render',
         'weak_near',
+        'utterance_too_long',
         'wake_closed',
         'wake_only',
         'wake_sleep',

@@ -12,6 +12,10 @@ from recognition_commands import STOP_COMMANDS as STOP_COMMANDS
 from recognition_echo import resembles_playback as resembles_playback
 
 
+MAX_UTTERANCE_FRAMES = 1200
+UTTERANCE_TOO_LONG = object()
+
+
 class RenderTimeline:
     # 把设备播放帧映射到设备纳秒时钟，为 AEC 提供同一时刻的扬声器参考。
     # 暂停时暂存未播片段，恢复时整体平移，不能把静音间隙当作连续播放。
@@ -112,15 +116,12 @@ class ReferenceCapture:
                 self.frames = list(self.pre)
                 self.pre.clear()
                 self.active = True
-        else:
+        elif len(self.frames) < MAX_UTTERANCE_FRAMES:
             self.frames.append(reference.copy())
         if finished:
             output = np.concatenate(self.frames) if self.frames else np.zeros(0)
             self.reset()
             return output
-        if len(self.frames) > 1200:
-            self.reset()
-            raise ValueError('Render capture exceeds VAD bound')
         return None
 
 
@@ -166,12 +167,14 @@ class VoiceDetector:
     """Energy VAD for prototype testing, not a semantic speech detector."""
 
     ONSET_FRAMES = 14
+    END_SILENCE_FRAMES = 80
 
     def __init__(self):
         self.pre = deque(maxlen=50)
         self.audio = []
         self.hot = self.quiet = 0
         self.talking = False
+        self.discarding = False
         self.noise = -55.0
         self.external_voice = None
 
@@ -180,11 +183,19 @@ class VoiceDetector:
         self.audio.clear()
         self.hot = self.quiet = 0
         self.talking = False
+        self.discarding = False
 
     def feed(self, pcm):
         db = level(pcm)
         threshold = max(-40.0, min(-32.0, self.noise + 10))
         voiced = db > threshold if self.external_voice is None else self.external_voice
+        quiet = db < threshold - 3 if self.external_voice is None else not voiced
+        if self.discarding:
+            self.quiet = self.quiet + 1 if quiet else 0
+            if self.quiet >= self.END_SILENCE_FRAMES:
+                self.reset()
+            return False, None, db
+
         started = False
         result = None
         if not self.talking:
@@ -201,10 +212,15 @@ class VoiceDetector:
                 self.quiet = 0
                 started = True
         else:
-            self.audio.append(pcm.copy())
-            quiet = db < threshold - 3 if self.external_voice is None else not voiced
+            if len(self.audio) < MAX_UTTERANCE_FRAMES:
+                self.audio.append(pcm.copy())
+            elif not quiet:
+                # Never dispatch a clipped prefix or re-arm on its tail.
+                self.reset()
+                self.discarding = True
+                return False, UTTERANCE_TOO_LONG, db
             self.quiet = self.quiet + 1 if quiet else 0
-            if self.quiet >= 80 or len(self.audio) >= 1200:
+            if self.quiet >= self.END_SILENCE_FRAMES:
                 result = np.concatenate(self.audio)
                 self.reset()
         return started, result, db

@@ -7,7 +7,7 @@ from typing import Callable, Protocol
 import numpy as np
 from diagnostics import TraceBook
 from capture_evidence import CaptureEvidence, OnsetPrefix, FRAME_NS, FRAME_JITTER_NS
-from dsp import VoiceDetector, ReferenceCapture, NearSpeechDetector, level
+from dsp import UTTERANCE_TOO_LONG, VoiceDetector, ReferenceCapture, NearSpeechDetector, level
 from fast_stop import can_fast_stop
 from protocol import JsonValue
 from session_ports import EventSink, MetricSink
@@ -161,6 +161,25 @@ class EndpointPipeline:
         if token is not None:
             self.hooks.resume_rejected(token, generation)
 
+    def discard_overlong_utterance(self):
+        self.hooks.diagnostics().gate(self.voice_trace, 'utterance_too_long')
+        self.hooks.diagnostics().finish(self.voice_trace, 'rejected')
+        self.voice_trace = None
+        self.reset_voice_onset()
+        self.reference_capture.reset()
+        self.capture_evidence = None
+        token = self.turn_pause_token if self.owns_turn_pause else None
+        self.turn_pause_token = None
+        self.owns_turn_pause = False
+        if token is not None:
+            self.hooks.resume_rejected(token, self.live_turn)
+        if (
+            self.live_turn == self.hooks.generation()
+            and self.hooks.wake_allowed()
+            and not self.hooks.playing()
+        ):
+            self.hooks.status('listening', '这句话太长了，请分成几句说')
+
     def consume(self, frame):
         stamp = frame.nanos
         reference = frame.reference
@@ -212,6 +231,9 @@ class EndpointPipeline:
         self.vad.external_voice = voiced
         was_talking = self.vad.talking
         began, utterance, _ = self.vad.feed(cleaned)
+        if utterance is UTTERANCE_TOO_LONG:
+            self.discard_overlong_utterance()
+            return
         render_audio = self.reference_capture.feed(reference, began, utterance is not None)
         claimed_wake = (
             self.hooks.claim_wake() if began or self.vad.talking or utterance is not None else False
