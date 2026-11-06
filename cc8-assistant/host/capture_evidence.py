@@ -54,6 +54,7 @@ DECISIONS = frozenset(
     )
 )
 TOOL_TRANSCRIPT_MISMATCHES = (
+    'empty',
     'transcript_mismatch',
     'formatting_mismatch',
     'read_only_missing',
@@ -70,7 +71,7 @@ TOOL_SAMPLE_REJECTION_REASONS = (
     'local_wake_missing',
     'capture_window',
 ) + TOOL_TRANSCRIPT_MISMATCHES
-TOOL_ASR_MATCH_RESULTS = ('matched', 'empty') + TOOL_TRANSCRIPT_MISMATCHES
+TOOL_ASR_MATCH_RESULTS = ('matched',) + TOOL_TRANSCRIPT_MISMATCHES
 TOOL_ASR_LOCAL_RESULTS = TOOL_ASR_MATCH_RESULTS + ('error', 'timeout')
 
 
