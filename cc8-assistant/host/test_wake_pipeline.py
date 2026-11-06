@@ -675,7 +675,7 @@ class WakePipelineTests(unittest.TestCase):
     def test_pending_tool_sample_stays_closed_if_capture_binding_is_invalid(self):
         question = SCENARIO_QUESTIONS['tool'][0]
         for invalid in (
-            lambda s: setattr(s.tool_sample, 'arm_until', 0),
+            lambda s: setattr(s.tool_samples._sample, 'arm_until', 0),
             lambda s: s.cancel('button'),
             lambda s: s.stop(),
         ):
@@ -734,7 +734,7 @@ class WakePipelineTests(unittest.TestCase):
                 token = self.arm_tool_capture(b)
                 self.assertEqual(s.begin_tool_sample('0' * 32), {'status': 'unavailable'})
                 self.assertEqual(s.begin_tool_sample(token), {'status': 'ready'})
-                started = s.tool_sample.opened_at
+                started = s.tool_samples._sample.opened_at
                 if case == 'new_generation':
                     s.generation += 1
                 self.assertEqual(

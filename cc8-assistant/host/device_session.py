@@ -154,19 +154,7 @@ def start_capture(session: SessionController, j):
     session.capture_start_required = False
     session.active = True
     session.capture_id = capture_id if negotiated else None
-    sample = session.tool_sample
-    if sample is not None:
-        bindable = (
-            sample.state == 'pending'
-            and time.monotonic() < sample.arm_until
-            and sample.generation == session.generation
-            and session.capture_id is not None
-            and session.transport_kind in ('usb', 'wifi')
-        )
-        sample.capture_id = session.capture_id
-        sample.state = 'bound' if bindable else 'closed'
-        if not bindable:
-            sample.closed_reason = 'capture_changed'
+    session.tool_samples.bind_capture(session)
     session.hooks.calibration().begin()
     session.awake = not session.wake
     session.screen_sleeping = False
