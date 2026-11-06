@@ -55,8 +55,15 @@ def text(value, maximum):
     return value
 
 
-def normalized(value):
+def normalized_word_hyphens(value):
     value = unicodedata.normalize('NFKC', value).casefold()
+    # NFKC turns a nonbreaking hyphen into U+2010. Canonicalize this
+    # spelling inside English words without treating numeric signs as punctuation.
+    return re.sub(r'(?<=[a-z])\u2010(?=[a-z])', '-', value)
+
+
+def normalized(value):
+    value = normalized_word_hyphens(value)
     return ''.join(
         char
         for index, char in enumerate(value)
@@ -71,9 +78,7 @@ def normalized(value):
 
 def normalized_field(value):
     # Manual numeric annotations must keep signs, decimal points and units.
-    return ''.join(
-        char for char in unicodedata.normalize('NFKC', value).casefold() if not char.isspace()
-    )
+    return ''.join(char for char in normalized_word_hyphens(value) if not char.isspace())
 
 
 def han(value):
@@ -85,9 +90,7 @@ def han(value):
 
 
 def words(value):
-    return re.findall(
-        r"[a-z]+[0-9]*(?:['-][a-z]+)*", unicodedata.normalize('NFKC', value).casefold()
-    )
+    return re.findall(r"[a-z]+[0-9]*(?:['-][a-z]+)*", normalized_word_hyphens(value))
 
 
 def edit_counts(reference, hypothesis):
