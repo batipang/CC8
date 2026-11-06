@@ -4077,6 +4077,36 @@ class DeviceAutomationTests(unittest.TestCase):
         self.assertEqual(evidence['stage_counts']['playback_done'], 1)
         self.assertNotIn('PRIVATE', json.dumps(evidence))
 
+    def test_acoustic_checkpoint_delay_cannot_replace_a_final_quiet_observation(self):
+        for extra_voice in (False, True):
+            with self.subTest(extra_voice=extra_voice):
+
+                def rows(elapsed):
+                    original = self.acoustic_row()
+                    if extra_voice and elapsed >= 20:
+                        return [original, self.acoustic_row(request_id='extra')]
+                    return [original]
+
+                run, _, _, now = self.acoustic_fixture(rows, awake=True)
+
+                def sleep(seconds):
+                    now[0] += seconds - (0.003 if now[0] == 19.5 else 0)
+
+                def checkpoint(report):
+                    evidence = report.get('acoustic_evidence') or {}
+                    if evidence.get('post_playback_quiet_seconds') == 19.997 and now[0] < 20:
+                        now[0] += 0.004
+
+                run.sleep = sleep
+                run.checkpoint = checkpoint
+                if extra_voice:
+                    with self.assertRaisesRegex(CheckFailure, 'unexpected_extra_voice_request'):
+                        run.acoustic_probe(awake=True)
+                else:
+                    run.acoustic_probe(awake=True)
+                    evidence = run.report('passed')['acoustic_evidence']
+                    self.assertEqual(evidence['post_playback_quiet_seconds'], 20.001)
+
     def test_acoustic_probe_rejects_unmatched_or_ambiguous_workspace_receipts(self):
         match = {'generation': 8, 'status': 'completed', 'title': '一加一等于几？'}
         for tasks in (
