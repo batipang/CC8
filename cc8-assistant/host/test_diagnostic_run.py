@@ -41,9 +41,14 @@ class DiagnosticRunTests(unittest.TestCase):
         self.book.finish(ident, 'rejected')
         row = self.book.report()['requests'][0]
         self.assertEqual(receipt(row)['tool_asr_comparison'], result)
+        sensevoice = {**result, 'local_engine': 'sensevoice'}
+        self.assertEqual(
+            receipt({**row, 'tool_asr_comparison': sensevoice})['tool_asr_comparison'], sensevoice
+        )
         for override in (
             {'tool_asr_comparison': {**result, 'local': 'private text'}},
             {'tool_asr_comparison': {**result, 'text': 'private text'}},
+            {'tool_asr_comparison': {**result, 'local_engine': 'private text'}},
             {'tool_sample_rejection': 'read_only_missing'},
         ):
             with self.subTest(override=override):

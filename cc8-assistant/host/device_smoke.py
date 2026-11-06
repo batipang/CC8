@@ -60,6 +60,7 @@ from qa_speech import (
     MATH_SCENARIOS,
     SCENARIO_DIGESTS,
     SCENARIO_QUESTIONS,
+    TOOL_COMPARE_ENGINES,
     tool_sample_request,
     math_answer_status,
     normalize_question,
@@ -871,6 +872,7 @@ class SmokeRun:
         wake_input_shape=False,
         latency_sample=False,
         tool_local_compare=False,
+        tool_compare_engine='whisper',
         latency_scenario='qa',
         qa_question=ACOUSTIC_QUESTION,
         response_acoustic_evidence=False,
@@ -907,7 +909,12 @@ class SmokeRun:
         self.latency_scenario = latency_scenario
         if tool_local_compare and not (capture and latency_sample and latency_scenario == 'tool'):
             raise ValueError('Local comparison requires a bounded tool sample')
+        if tool_compare_engine not in TOOL_COMPARE_ENGINES or (
+            tool_compare_engine != 'whisper' and not tool_local_compare
+        ):
+            raise ValueError('Local comparison engine requires an explicit comparison')
         self.tool_local_compare = tool_local_compare
+        self.tool_compare_engine = tool_compare_engine
         self.tool_sample_token = None
         self.qa_question = ENGLISH_QUESTION if english_wake else qa_question
         self.response_acoustic_evidence = response_acoustic_evidence
@@ -1599,7 +1606,10 @@ class SmokeRun:
         if self.latency_sample and self.latency_scenario == 'tool':
             case = SCENARIO_QUESTIONS['tool'].index(self.qa_question) + 1
             operation = 'tool_sample_compare_arm' if self.tool_local_compare else 'tool_sample_arm'
-            armed = self.request({'operation': operation, 'case': case})
+            request = {'operation': operation, 'case': case}
+            if self.tool_compare_engine != 'whisper':
+                request['engine'] = self.tool_compare_engine
+            armed = self.request(request)
             token = armed.get('token')
             require(
                 armed.get('status') == 'armed'

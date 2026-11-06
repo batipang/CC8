@@ -9,10 +9,38 @@ from unittest.mock import patch
 
 import numpy as np
 
-from tool_asr_compare import compare_local, verified_whisper_snapshot
+from tool_asr_compare import compare_local, decode, verified_whisper_snapshot
 
 
 class ToolAsrCompareTests(unittest.TestCase):
+    def test_sensevoice_refuses_invalid_files_and_model_change_during_decode(self):
+        with TemporaryDirectory() as directory:
+            folder = Path(directory)
+            manifest = folder / 'manifest.json'
+            manifest.write_text('{"sha256":{"model":"fixed"}}')
+            model = folder / 'model'
+            samples = np.zeros(16)
+
+            def replace_model(_):
+                model.write_bytes(b'replaced model')
+                return 'private transcript'
+
+            with (
+                patch('recognition.MODEL', folder),
+                patch('recognition.MANIFEST', manifest),
+                patch('recognition.MandarinRecognizer') as factory,
+            ):
+                model.symlink_to(manifest)
+                with self.assertRaisesRegex(ValueError, 'regular file'):
+                    decode(samples, 'sensevoice')
+                factory.assert_not_called()
+                model.unlink()
+                model.write_bytes(b'old model')
+                factory.return_value.recognize.side_effect = replace_model
+                with self.assertRaisesRegex(ValueError, 'changed during comparison'):
+                    decode(samples, 'sensevoice')
+                factory.assert_called_once_with(engine='sensevoice')
+
     def test_fixed_model_checks_snapshot_hash_and_file_type(self):
         with TemporaryDirectory() as directory:
             cache = Path(directory) / 'cache'

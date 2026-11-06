@@ -120,8 +120,13 @@ class AnnouncementServer:
                             raise ValueError('Tool sample accepts only a fixed case or its token')
                         operation = request['operation']
                         if operation in ('tool_sample_arm', 'tool_sample_compare_arm'):
+                            engine = (
+                                request.get('engine', 'whisper')
+                                if operation == 'tool_sample_compare_arm'
+                                else None
+                            )
                             result = self.bridge.session.arm_tool_sample(
-                                request['case'], compare=operation == 'tool_sample_compare_arm'
+                                request['case'], compare_engine=engine
                             )
                         elif operation == 'tool_sample_begin':
                             result = self.bridge.session.begin_tool_sample(request['token'])

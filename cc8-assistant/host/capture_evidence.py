@@ -77,7 +77,13 @@ TOOL_ASR_LOCAL_RESULTS = TOOL_ASR_MATCH_RESULTS + ('error', 'timeout')
 def valid_tool_asr_comparison(value):
     return (
         isinstance(value, dict)
-        and set(value) == {'primary', 'local'}
+        and (
+            set(value) == {'primary', 'local'}
+            or (
+                set(value) == {'primary', 'local', 'local_engine'}
+                and value['local_engine'] == 'sensevoice'
+            )
+        )
         and isinstance(value['primary'], str)
         and value['primary'] in TOOL_ASR_MATCH_RESULTS
         and isinstance(value['local'], str)
