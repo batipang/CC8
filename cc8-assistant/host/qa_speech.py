@@ -108,6 +108,8 @@ def normalize_question(text):
 
 def tool_transcript_rejection(text, expected):
     """Classify a fixed-tool mismatch without broadening admission or exposing text."""
+    if re.search(r'\w', text) is None:
+        return 'empty'
     actual = normalize_question(text)
     if actual == expected:
         return None
@@ -132,8 +134,6 @@ def tool_transcript_rejection(text, expected):
 
 
 def tool_asr_result(text, expected):
-    if re.search(r'\w', text) is None:
-        return 'empty'
     return tool_transcript_rejection(text, expected) or 'matched'
 
 

@@ -124,8 +124,9 @@ class RecognitionWorker:
                     with self.hooks.lock:
                         if not self.hooks.valid(generation) or not self.hooks.wake_allowed():
                             continue
-                        # A matched local cue can still produce an empty cloud
-                        # transcript. Pair it only inside the explicit QA guard.
+                        # An eligible QA utterance consumes its guard even
+                        # when ASR returned no words. A later utterance must
+                        # not dispatch in place of this sample.
                         if (
                             not clean
                             and evidence is not None
@@ -133,8 +134,6 @@ class RecognitionWorker:
                             and evidence.get('echo_risk') is False
                             and not self.hooks.playing()
                             and not (self.hooks.echo_running() or self.hooks.echo_failed())
-                            and (target := self.hooks.tool_sample_comparison('comparison_only'))
-                            is not None
                         ):
                             tool_sample_rejection = self.hooks.tool_sample_rejection(
                                 text, True, evidence.get('captured_at')
@@ -142,11 +141,12 @@ class RecognitionWorker:
                             if tool_sample_rejection is not None:
                                 decision = 'tool_sample_guard'
                                 rejected = True
-                                if tool_sample_rejection == 'comparison_only':
-                                    compare_target = target
+                                compare_target = self.hooks.tool_sample_comparison(
+                                    tool_sample_rejection
+                                )
                                 self.hooks.status(
                                     'listening',
-                                    '识别对照采样完成'
+                                    '正在核对工具测试语音'
                                     if compare_target is not None
                                     else '工具测试语音未通过核对',
                                 )

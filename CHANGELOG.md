@@ -1,5 +1,13 @@
 # Changelog
 
+## Backend 0.15.29 — consume the fixed tool reservation on empty ASR
+
+- Close the eligible fixed-tool turn when ASR returns no words, so a later
+  utterance cannot replace the reserved sample or dispatch its tool.
+- Keep empty transcripts as a guarded failure. When the owner enables paired
+  diagnosis, compare the same input locally and retain only fixed categories.
+  APK and protocol are unchanged.
+
 ## Device checks — retain a safe cleanup failure phase
 
 - Identify which cleanup phase was unconfirmed without exporting device/IPC

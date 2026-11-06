@@ -92,6 +92,7 @@ def saved_suite(
     misplaced_fixture=None,
     tool_coverage=False,
     tool_misses=(),
+    tool_miss_reason='read_only_missing',
 ):
     index = 0
 
@@ -214,7 +215,7 @@ def saved_suite(
                 )
                 report['acoustic_evidence'] = {
                     'tool_sample_guarded': True,
-                    'tool_sample_rejections': {'read_only_missing': 1},
+                    'tool_sample_rejections': {tool_miss_reason: 1},
                     'rejected_voice_gates': {'tool_sample_guard': 1},
                     'sole_tool_rejection_input': {'asr_input_samples': 98720},
                     'new_voice_requests': 1,
@@ -264,6 +265,22 @@ def saved_suite(
 
 
 class AuditDeviceSuiteTests(unittest.TestCase):
+    def test_tool_coverage_counts_empty_asr_without_latency_or_success(self):
+        observed = saved_suite(
+            qa=True,
+            scenario='tool',
+            fixture_bound=True,
+            tool_coverage=True,
+            tool_misses=(2,),
+            tool_miss_reason='empty',
+        )
+        self.assertEqual(observed['phases'][1]['state'], 'guard_rejected')
+        checked = audit(observed, expect_apk_code=71)
+        self.assertFalse(checked['verified'])
+        self.assertEqual(checked['reason'], 'suite_tool_transcript_coverage_incomplete')
+        self.assertEqual(checked['tool_transcript_misses'], 1)
+        self.assertEqual(checked['latencies_ms'][QA_PLAYOUT_METRIC]['samples'], 29)
+
     def test_tool_coverage_counts_guarded_misses_without_latency_or_success(self):
         options = dict(qa=True, scenario='tool', fixture_bound=True, tool_misses=(2, 9))
         strict = saved_suite(**options)

@@ -536,19 +536,26 @@ class WakePipelineTests(unittest.TestCase):
                         self.assertEqual(requests, [])
                         self.assertNotIn('brain_start', row['stages'])
                         self.assertFalse(any(name == 'transcript' for name, _ in events))
-                        if mode in ('rejected', 'cancelled'):
+                        if mode in ('rejected', 'cancelled', 'empty'):
                             decode.assert_called_once()
-                            self.assertEqual(row['tool_sample_rejection'], 'read_only_missing')
+                            self.assertEqual(
+                                row['tool_sample_rejection'],
+                                'empty' if mode == 'empty' else 'read_only_missing',
+                            )
                         else:
                             decode.assert_not_called()
-                        if mode == 'rejected':
+                        if mode in ('rejected', 'empty'):
                             self.assertEqual(
                                 row['tool_asr_comparison'],
                                 {
-                                    'primary': 'read_only_missing',
+                                    'primary': 'empty' if mode == 'empty' else 'read_only_missing',
                                     'local': 'matched',
                                     'local_engine': 'sensevoice',
                                 },
+                            )
+                            self.assertEqual(
+                                s.tool_sample_rejection(question, True, time.monotonic()),
+                                'not_open',
                             )
                         else:
                             self.assertNotIn('tool_asr_comparison', row)
@@ -557,6 +564,7 @@ class WakePipelineTests(unittest.TestCase):
     def test_tool_sample_classifies_mismatches_without_relaxing_admission(self):
         expected = SCENARIO_QUESTIONS['tool'][0]
         for actual, reason in (
+            ('。', 'empty'),
             (expected.replace('计算', '计算：'), 'formatting_mismatch'),
             (expected.replace('本机', '服务器'), 'tool_instruction_mismatch'),
             (SCENARIO_QUESTIONS['tool'][1], 'arithmetic_mismatch'),
@@ -624,7 +632,7 @@ class WakePipelineTests(unittest.TestCase):
     def test_empty_tool_comparison_requires_the_explicit_open_guard(self):
         for mode, gate, rejection in (
             ('ordinary', 'empty', None),
-            ('dispatch', 'empty', None),
+            ('dispatch', 'tool_sample_guard', 'empty'),
             ('not_open', 'tool_sample_guard', 'not_open'),
             ('echo_failed', 'empty', None),
         ):
@@ -656,6 +664,13 @@ class WakePipelineTests(unittest.TestCase):
                 self.assertEqual(rows[0].get('tool_sample_rejection'), rejection)
                 self.assertNotIn('tool_asr_comparison', rows[0])
                 self.assertEqual(requests, [])
+                if mode == 'dispatch':
+                    self.assertEqual(
+                        b.session.tool_sample_rejection(
+                            SCENARIO_QUESTIONS['tool'][0], True, time.monotonic()
+                        ),
+                        'not_open',
+                    )
                 b.session.stop()
 
     def test_tool_sample_cannot_begin_inside_usb_replacement_cancellation(self):
