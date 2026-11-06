@@ -1,6 +1,6 @@
 # 大黄蜂统一待办：功能与工程质量
 
-更新于 2026-11-06。原排期基线为 Android 0.8.6 / 后台 0.11.0。当前部署为后台 0.15.16 / 原签名 APK 0.9.41（code78），源码 `716bc2d`。部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)。P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)。复选框按完整验收标准关闭。
+更新于 2026-11-06。原排期基线为 Android 0.8.6 / 后台 0.11.0。当前部署为后台 0.15.17 / 原签名 APK 0.9.41（code78），源码 `3cd76cf`。部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)。P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)。复选框按完整验收标准关闭。
 
 依据：[竞品复盘](COMPETITOR_REVIEW_2026-11-01.md)、[当前架构](ARCHITECTURE.md)、[实机与回归记录](VALIDATION.md)。本次已合并 [ToFix](ToFix.md) 的 20 个工程条目；这是功能与工程质量的唯一详细清单；[ROADMAP](ROADMAP.md)保留完成情况和阶段概览。
 
@@ -137,7 +137,7 @@
   - 依赖：P0-01；常驻体验依赖 P0-02。范围：Mac 首版，CC8 端部署只做可行性评估，不承诺硬件低功耗唤醒。MiniMax ASR / TTS 和 Dot 分工不变。
 
 - [ ] **P0-04 — 降低听错、截句和误打断，保持普通音量插话**
-  - 0.15.17 候选按实际播放顺序检查跨段停止词。收音入口的离线回归覆盖播报跨段命中、倒序误拼和上一段参考过期。实机待验。 [跨段停止词](VOICE_GATE_OBSERVATIONS.md#跨段停止词)
+  - 0.15.17 已部署。固定合成停止词实机九项通过，检测帧至停播 128.900 毫秒，停播至字幕和嘴型清除 34.316 毫秒，零云端语音识别。跨段命中、倒序误拼和参考过期由离线回归验证。 [现场验证](CURRENT_DEPLOYMENT.md#01517-本地停播与画面清除) [跨段停止词](VOICE_GATE_OBSERVATIONS.md#跨段停止词)
   - 0.15.16 已部署。中英文自播报和清醒问答分别通过八项现场检查，结束确认双端停采。缺失参考帧的短尾音分支通过 VAD 至识别线程的离线回归，覆盖匹配播报、新问题及窗口外重问。 [现场验证](CURRENT_DEPLOYMENT.md#01516-自播报与清醒问答) [播放完成回执与成句](VOICE_GATE_OBSERVATIONS.md#播报完成回执与成句回声门控)
   - 0.15.12 复放第 27 题固定混音。MiniMax 与 SenseVoice 使用同一段 102,880 个采样，MiniMax 漏掉“只读”，SenseVoice 匹配，零工具派发。日常识别继续使用 MiniMax。 [固定题同段对照](CURRENT_DEPLOYMENT.md#01512-中文混噪唤醒定位)
   - 工具限定词对照（0.14.94／code75）：现用录音源绕过 Mac 前端时两段均完整识别；冻结前导静音裁剪后，60 条合成语料的完整匹配同为 54 条，两个有效实机复放样本分别改善和退步。保留原生产路径及失败证据，继续查找能稳定保留限定词的方案。 [ASR 配对结果](ASR_EVALUATION.md#工具指令限定词与前导静音对照)
