@@ -22,6 +22,7 @@ class WakeFrame(Protocol):
         capture_nanos: int,
         echo_risk: bool,
         render_text: str,
+        alternate_pcm: np.ndarray | None = None,
     ) -> bool: ...
 
 
@@ -184,6 +185,7 @@ class EndpointPipeline:
             capture_nanos=stamp,
             echo_risk=echo_risk or recent_output,
             render_text=render_text,
+            alternate_pcm=stop_cleaned if self.fast_stop is not None else None,
         )
         if not self.hooks.capture_current(stamp):
             return

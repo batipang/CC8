@@ -12,9 +12,11 @@ class FakeDetector:
         self.word = '大黄蜂'
         self.calls = 0
         self.resets = []
+        self.alternate_frames = []
 
-    def feed(self, pcm):
+    def feed(self, pcm, *, alternate_pcm=None):
         self.calls += 1
+        self.alternate_frames.append(alternate_pcm)
         return self.word
 
     def reset(self, *, clear_metrics=True):
@@ -114,6 +116,16 @@ class WakeControllerTests(unittest.TestCase):
         self.assertEqual(self.metrics['wake_render_rejections'], 1)
         self.assertTrue(self.feed(echo_risk=True, render_text='现在是下午三点'))
         self.assertTrue(self.state.awake)
+
+    def test_alternate_pcm_only_reaches_detector_without_playback_risk(self):
+        self.detector.word = ''
+        alternate = np.ones(320)
+        self.assertFalse(self.feed(alternate_pcm=alternate, echo_risk=True))
+        self.assertIsNone(self.detector.alternate_frames[-1])
+        self.detector.word = 'Bumblebee'
+        self.assertTrue(self.feed(alternate_pcm=alternate))
+        self.assertIs(self.detector.alternate_frames[-1], alternate)
+        self.assertEqual(self.metrics['local_wake_english_count'], 1)
 
     def test_missing_detector_or_inactive_session_never_falls_back_to_cloud(self):
         self.controller.detector = None

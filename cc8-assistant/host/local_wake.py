@@ -6,6 +6,8 @@ from streaming_keywords import StreamingKeywords
 
 RESOURCES = Path(__file__).parent / 'resources'
 ENGLISH_MODEL = ROOT / '.toolchains/cc8/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01'
+# Match the spoken confusable on the alternate stream and discard its result.
+ENGLISH_ALTERNATE_COMPETITOR = '▁BU B B LE ▁BE E @BubbleBeeSpaced'
 
 
 class ChineseWake(StreamingKeywords):
@@ -50,9 +52,11 @@ class EnglishWake(StreamingKeywords):
 class WakeDetector:
     KEYWORDS = ChineseWake.KEYWORDS | EnglishWake.KEYWORDS
 
-    def __init__(self, chinese, english):
+    def __init__(self, chinese, english, english_alternate=None):
         self.chinese = chinese
         self.english = english
+        self.english_alternate = english_alternate
+        self.alternate_active = False
 
     @classmethod
     def load(cls, stop=None, *, english_model=ENGLISH_MODEL):
@@ -61,17 +65,36 @@ class WakeDetector:
             if stop is not None
             else ChineseWake(keyword_spotter(MODEL))
         )
-        return cls(chinese, EnglishWake.load(english_model))
+        english = EnglishWake.load(english_model)
+        alternate = EnglishWake(
+            english.detector,
+            gain=english.gain,
+            lock=english.engine_lock,
+            keywords=ENGLISH_ALTERNATE_COMPETITOR,
+        )
+        return cls(chinese, english, alternate)
 
     def reset(self, *, clear_metrics=True):
         self.chinese.reset(clear_metrics=clear_metrics)
         self.english.reset(clear_metrics=clear_metrics)
+        if self.english_alternate is not None:
+            self.english_alternate.reset(clear_metrics=clear_metrics)
+        self.alternate_active = False
 
-    def feed(self, pcm):
+    def feed(self, pcm, *, alternate_pcm=None):
         # Each native lock is released before entering the next; no callbacks.
         chinese = self.chinese.feed(pcm)
         english = self.english.feed(pcm)
-        return chinese or english
+        alternate = ''
+        if self.english_alternate is not None:
+            if alternate_pcm is not None:
+                alternate = self.english_alternate.feed(alternate_pcm)
+                self.alternate_active = True
+            elif self.alternate_active:
+                # Do not stitch speech across a playback or source gap.
+                self.english_alternate.reset(clear_metrics=False)
+                self.alternate_active = False
+        return chinese or english or alternate
 
     @property
     def samples(self):
@@ -79,4 +102,9 @@ class WakeDetector:
 
     @property
     def compute_seconds(self):
-        return self.chinese.compute_seconds + self.english.compute_seconds
+        alternate = self.english_alternate
+        return (
+            self.chinese.compute_seconds
+            + self.english.compute_seconds
+            + (alternate.compute_seconds if alternate is not None else 0.0)
+        )

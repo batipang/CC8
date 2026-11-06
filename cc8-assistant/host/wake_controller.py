@@ -18,7 +18,7 @@ WAITING = '等待唤醒 · 请说“大黄蜂”或“Bumblebee”'
 
 
 class Detector(Protocol):
-    def feed(self, pcm: np.ndarray) -> str: ...
+    def feed(self, pcm: np.ndarray, *, alternate_pcm: np.ndarray | None = None) -> str: ...
     def reset(self, *, clear_metrics: bool = True) -> None: ...
 
 
@@ -115,7 +115,9 @@ class WakeController:
             if self.hooks.active() and self.hooks.awake() and self.hooks.wake_mode():
                 self.deadline = self.clock() + self.window_seconds
 
-    def feed(self, pcm, generation, *, capture_nanos, echo_risk=False, render_text=''):
+    def feed(
+        self, pcm, generation, *, capture_nanos, echo_risk=False, render_text='', alternate_pcm=None
+    ):
         with self.hooks.lock:
             if (
                 self.detector is None
@@ -132,7 +134,10 @@ class WakeController:
             # frame into a fresh stream, even though its result would be rejected.
             if serial != self.serial:
                 return False
-            keyword = self.detector.feed(pcm)
+            if alternate_pcm is not None and not echo_risk:
+                keyword = self.detector.feed(pcm, alternate_pcm=alternate_pcm)
+            else:
+                keyword = self.detector.feed(pcm)
         with self.hooks.lock:
             if (
                 not isinstance(keyword, str)
