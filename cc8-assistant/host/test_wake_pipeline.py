@@ -512,12 +512,15 @@ class WakePipelineTests(unittest.TestCase):
 
     def test_tool_comparison_uses_same_audio_and_never_dispatches(self):
         question = SCENARIO_QUESTIONS['tool'][0]
-        for omit, cancel in ((False, False), (True, False), (True, True)):
-            with self.subTest(omit=omit, cancel=cancel):
-                transcript = question.replace('只读', '') if omit else question
-                b, _, primary_audio, requests, events, _, _ = self.session(
-                    '大黄蜂', '大黄蜂，' + transcript
-                )
+        for transcript, primary, cancel in (
+            ('大黄蜂，' + question, 'matched', False),
+            ('大黄蜂，' + question.replace('只读', ''), 'read_only_missing', False),
+            ('大黄蜂，' + question.replace('只读', ''), 'read_only_missing', True),
+            ('。', 'empty', False),
+            ('', 'empty', True),
+        ):
+            with self.subTest(primary=primary, cancel=cancel):
+                b, _, primary_audio, requests, events, _, _ = self.session('大黄蜂', transcript)
                 s = b.session
                 token = self.arm_tool_capture(b, compare=True)
                 self.assertEqual(s.begin_tool_sample(token), {'status': 'ready'})
@@ -549,9 +552,44 @@ class WakePipelineTests(unittest.TestCase):
                 else:
                     self.assertEqual(
                         rows[0]['tool_asr_comparison'],
-                        {'primary': 'read_only_missing' if omit else 'matched', 'local': 'matched'},
+                        {'primary': primary, 'local': 'matched'},
                     )
                 s.stop()
+
+    def test_empty_tool_comparison_requires_the_explicit_open_guard(self):
+        for mode, gate, rejection in (
+            ('ordinary', 'empty', None),
+            ('dispatch', 'empty', None),
+            ('not_open', 'tool_sample_guard', 'not_open'),
+            ('echo_failed', 'empty', None),
+        ):
+            with self.subTest(mode=mode):
+                b, _, _, requests, _, _, _ = self.session('大黄蜂', '')
+                if mode != 'ordinary':
+                    token = self.arm_tool_capture(b, compare=mode != 'dispatch')
+                    if mode != 'not_open':
+                        self.assertEqual(b.session.begin_tool_sample(token), {'status': 'ready'})
+                if mode == 'echo_failed':
+
+                    def recognize(_audio):
+                        b.calibration.failed = True
+                        return ''
+
+                    b.speech.recognize = recognize
+                with patch('recognition_worker.compare_local') as decode:
+                    self.frames(b)
+                    deadline = time.monotonic() + 1
+                    while time.monotonic() < deadline:
+                        rows = b.diagnostics_report()['requests']
+                        if rows and rows[0]['outcome'] is not None:
+                            break
+                        time.sleep(0.005)
+                decode.assert_not_called()
+                self.assertEqual(rows[0]['gate'], gate)
+                self.assertEqual(rows[0].get('tool_sample_rejection'), rejection)
+                self.assertNotIn('tool_asr_comparison', rows[0])
+                self.assertEqual(requests, [])
+                b.session.stop()
 
     def test_tool_sample_cannot_begin_inside_usb_replacement_cancellation(self):
         b, *_ = self.session('大黄蜂')

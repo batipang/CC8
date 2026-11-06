@@ -122,6 +122,12 @@ def tool_transcript_rejection(text, expected):
     )
 
 
+def tool_asr_result(text, expected):
+    if re.search(r'\w', text) is None:
+        return 'empty'
+    return tool_transcript_rejection(text, expected) or 'matched'
+
+
 def math_answer_status(question, result):
     """Classify only unambiguous short answers to the fixed public additions."""
     operands = FIXED_ADDITION.fullmatch(normalize_question(question.removeprefix(TOOL_PREFIX)))
