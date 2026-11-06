@@ -321,7 +321,16 @@ class ResponseWorker:
                 )
                 self.hooks.diagnostics().task_result(generation, status)
                 self.hooks.diagnostics().finish(generation, status)
-                self.hooks.publish_workspace()
+                try:
+                    self.hooks.publish_workspace()
+                except (OSError, EOFError) as delivery_error:
+                    if failure is None:
+                        raise
+                    # Keep the original error for the response worker's guidance.
+                    self.hooks.log(
+                        'failed_response_workspace_undelivered',
+                        error_type=type(delivery_error).__name__,
+                    )
         # Do not let a new turn start between ownership admission and its
         # predecessor's final status or history update.
         with self.hooks.lock:

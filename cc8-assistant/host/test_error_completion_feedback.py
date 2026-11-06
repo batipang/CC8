@@ -10,6 +10,7 @@ import numpy as np
 
 from bridge import Bridge
 from dot_client import DotError
+from dot_receipt import UnconfirmedTurnStart
 from failure_feedback import feedback
 from reply_types import Reply, TextReply
 from test_failure_feedback import Brain, SECRET
@@ -73,6 +74,49 @@ class TextFailureTests(unittest.TestCase):
                     self.assertEqual(b.workspace.tasks[-1]['status'], 'failed')
                     self.assertEqual(result['generation'], job.generation)
                     self.assertNotIn(SECRET, str((b.events, b.logs)))
+
+    def test_workspace_send_failure_preserves_unconfirmed_start_guidance(self):
+        for send_error in (BrokenPipeError, EOFError):
+            with self.subTest(send_error=send_error.__name__):
+                brain = Brain(UnconfirmedTurnStart(kind='timeout'))
+                b = self.bridge(brain)
+                b.submit_text('固定公开测试指令')
+                job = b.response.queue.get_nowait()
+                publish = b.publish_workspace
+
+                def send_workspace():
+                    if b.workspace.tasks[-1]['status'] == 'failed':
+                        raise send_error(SECRET)
+                    publish()
+
+                with patch.object(b, 'publish_workspace', side_effect=send_workspace) as send:
+                    self.work(b, [job])
+                self.assertEqual(send.call_count, 2)
+                message = feedback('brain', 'timeout', unconfirmed=True).message
+                self.assertEqual(b.workspace.tasks[-1]['result'], message)
+                errors = [
+                    fields['message']
+                    for event, fields in b.events
+                    if event == 'status' and fields.get('phase') == 'error'
+                ]
+                self.assertEqual(errors, [message])
+                self.assertIn(
+                    (
+                        'failed_response_workspace_undelivered',
+                        {'error_type': send_error.__name__},
+                    ),
+                    b.logs,
+                )
+                self.assertEqual(brain.calls, 1)
+                self.assertIsNone(b.session.text_generation)
+                self.assertNotIn(SECRET, str((b.events, b.logs)))
+
+                brain.error = None
+                b.speak = lambda text, generation: True
+                b.submit_text('新的固定公开测试指令')
+                self.work(b, [b.response.queue.get_nowait()])
+                self.assertEqual(brain.calls, 2)
+                self.assertEqual(b.workspace.tasks[-1]['status'], 'completed')
 
     def test_failure_publication_and_new_owner_admission_are_one_transaction(self):
         b = self.bridge(Brain(DotError(SECRET, kind='timeout')))
