@@ -4,13 +4,13 @@ from pathlib import Path
 import argparse
 import os
 import signal
-import shlex
 import subprocess
 import sys
 import time
 from configuration import load_config
 from config_schema import ConfigError
 from runtime_guard import ensure_available, RuntimeConflict
+from process_arguments import process_arguments
 from process_lock import ProcessLease, atomic_private_bytes
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -46,22 +46,28 @@ def own_process(pid):
     # PID 会复用，必须核对当前用户及脚本绝对路径，避免停止别的工作区服务。
     if type(pid) is not int or pid <= 0:
         return False
-    result = subprocess.run(
-        ['ps', '-p', str(pid), '-o', 'uid=', '-o', 'command='], capture_output=True, text=True
-    )
     try:
-        owner, command = result.stdout.strip().split(None, 1)
-        owner = int(owner)
-        arguments = shlex.split(command)
-        script = arguments[2:] if arguments[1:2] == ['-u'] else arguments[1:]
-    except ValueError:
+        owner = subprocess.run(
+            ['/bin/ps', '-p', str(pid), '-o', 'uid='],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
+        if int(owner.stdout) != os.getuid():
+            return False
+    except (OSError, ValueError, subprocess.SubprocessError):
         return False
-    return (
-        result.returncode == 0
-        and owner == os.getuid()
-        and bool(script)
-        and script[0] == str(BRIDGE)
-    )
+    args = process_arguments(pid)
+    # macOS can briefly withhold argv while the Python launcher re-execs.
+    # Wait only for unavailable arguments; a definite mismatch stays a denial.
+    for _ in range(4):
+        if args:
+            break
+        time.sleep(0.02)
+        args = process_arguments(pid)
+    script = args[2:] if args[1:2] == ['-u'] else args[1:]
+    return bool(script) and script[0] == str(BRIDGE)
 
 
 def main():

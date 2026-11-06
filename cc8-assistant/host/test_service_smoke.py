@@ -569,21 +569,32 @@ class RecoveryTests(unittest.TestCase):
 
     def test_exact_script_uid_and_arguments_required_for_process_selection(self):
         root = Path('/a/project space')
-        bridge = "'/a/project space/cc8-assistant/host/bridge.py'"
-        supervisor = "'/a/project space/cc8-assistant/host/service.py' run"
+        bridge = str(root / 'cc8-assistant/host/bridge.py')
+        supervisor = str(root / 'cc8-assistant/host/service.py')
+        args = {
+            20: ['python', '-u', bridge],
+            10: ['python', supervisor, 'run'],
+            22: ['python', '-u', bridge, '--unexpected'],
+            24: ['python', '-u', '/a/project', 'space/cc8-assistant/host/bridge.py'],
+            25: [],
+        }
         text = '\n'.join(
             (
                 f'20 501 10 /python -u {bridge}',
-                f'10 501 1 /python {supervisor}',
+                f'10 501 1 /python {supervisor} run',
                 f'21 502 10 /python -u {bridge}',
                 f'22 501 10 /python -u {bridge} --unexpected',
                 '23 501 10 /python -u /other/bridge.py',
+                f'24 501 10 /python -u {bridge}',
+                f'25 501 10 /python -u {bridge}',
                 'broken row',
             )
         )
-        rows = process_rows(text, root, 501)
+        with patch('service_smoke.process_arguments', side_effect=args.__getitem__):
+            rows = process_rows(text, root, 501)
         self.assertEqual(
-            rows, {'bridge': [(20, 10)], 'supervisor': [(10, 1)], 'unexpected': [(22, 10)]}
+            rows,
+            {'bridge': [(20, 10)], 'supervisor': [(10, 1)], 'unexpected': [(22, 10), (25, 10)]},
         )
 
     def test_crash_revalidates_entire_snapshot_before_sigkill(self):

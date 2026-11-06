@@ -10,7 +10,6 @@ import os
 from pathlib import Path
 import plistlib
 import re
-import shlex
 import signal
 import stat
 import subprocess
@@ -19,6 +18,7 @@ import time
 import uuid
 
 from device_smoke import CheckFailure, Device, ROOT, require, rpc
+from process_arguments import process_arguments
 from private_output import PrivateOutput, private_directory
 from release_info import load_release
 from usb_handover import read_usb
@@ -27,22 +27,30 @@ from usb_handover import read_usb
 def process_rows(text, root, uid):
     """Match full script arguments and UID, never a process-name substring."""
     scripts = {
-        'bridge': ['-u', str(root / 'cc8-assistant/host/bridge.py')],
-        'supervisor': [str(root / 'cc8-assistant/host/service.py'), 'run'],
+        'bridge': str(root / 'cc8-assistant/host/bridge.py'),
+        'supervisor': str(root / 'cc8-assistant/host/service.py'),
     }
     result = {'bridge': [], 'supervisor': [], 'unexpected': []}
     for line in text.splitlines():
         try:
             raw_pid, raw_uid, raw_parent, command = line.split(None, 3)
             pid, owner, parent = int(raw_pid), int(raw_uid), int(raw_parent)
-            args = shlex.split(command)
         except ValueError:
             continue
-        for kind, expected in scripts.items():
-            if owner == uid and pid > 1 and args[1:] == expected:
+        if owner != uid or pid <= 1 or not any(script in command for script in scripts.values()):
+            continue
+        args = process_arguments(pid)
+        if not args:
+            # An unreadable candidate makes a destructive fault check unsafe.
+            result['unexpected'].append((pid, parent))
+            continue
+        for kind, script in scripts.items():
+            expected = ['-u', script] if kind == 'bridge' else [script, 'run']
+            if args[1:] == expected:
                 result[kind].append((pid, parent))
-            elif owner == uid and pid > 1 and expected[-1 if kind == 'bridge' else 0] in args[1:3]:
+            elif script in args[1:3]:
                 result['unexpected'].append((pid, parent))
+
     return result
 
 
@@ -69,7 +77,7 @@ class LiveService:
 
     def processes(self):
         result = subprocess.run(
-            ['/bin/ps', '-ax', '-o', 'pid=', '-o', 'uid=', '-o', 'ppid=', '-o', 'command='],
+            ['/bin/ps', '-axww', '-o', 'pid=', '-o', 'uid=', '-o', 'ppid=', '-o', 'command='],
             capture_output=True,
             text=True,
             timeout=5,

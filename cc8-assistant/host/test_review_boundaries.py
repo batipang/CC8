@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
 from types import SimpleNamespace
@@ -177,19 +178,59 @@ class TurnOwnershipTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
 
     def test_launcher_never_matches_other_checkout_or_embedded_command_text(self):
-        good = f'{os.getuid()} /usr/bin/python3 {launch.BRIDGE}'
-        for line, expected in [
-            (good, True),
-            (f'{os.getuid()} /usr/bin/python3 /other/cc8-assistant/host/bridge.py', False),
-            (f'{os.getuid()} /usr/bin/python3 -c "print(\'{launch.BRIDGE}\')"', False),
-            (f'{os.getuid() + 1} /usr/bin/python3 {launch.BRIDGE}', False),
-            (f'{os.getuid()} /usr/bin/python3 /other.py {launch.BRIDGE}', False),
-            ('not-a-uid python bridge.py', False),
-        ]:
-            with patch.object(
-                launch.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, line, '')
+        bridge = str(launch.BRIDGE)
+        for owner, args, expected in (
+            (os.getuid(), ['python3', bridge], True),
+            (os.getuid(), ['python3', '-u', bridge], True),
+            (os.getuid(), ['python3', '/other/cc8-assistant/host/bridge.py'], False),
+            (os.getuid(), ['python3', '-c', f'print({bridge!r})'], False),
+            (os.getuid() + 1, ['python3', bridge], False),
+            (os.getuid(), ['python3', '/other.py', bridge], False),
+            ('invalid', ['python3', bridge], False),
+            (os.getuid(), [], False),
+        ):
+            with (
+                patch.object(
+                    launch.subprocess,
+                    'run',
+                    return_value=subprocess.CompletedProcess([], 0, str(owner), ''),
+                ),
+                patch.object(launch, 'process_arguments', return_value=args),
             ):
                 self.assertEqual(launch.own_process(123), expected)
+
+    def test_launcher_rechecks_transiently_unavailable_arguments(self):
+        with (
+            patch.object(
+                launch.subprocess, 'run', return_value=SimpleNamespace(stdout=str(os.getuid()))
+            ),
+            patch.object(
+                launch, 'process_arguments', side_effect=([], ['python', '-u', str(launch.BRIDGE)])
+            ) as args,
+            patch.object(launch.time, 'sleep'),
+        ):
+            self.assertTrue(launch.own_process(123))
+        self.assertEqual(args.call_count, 2)
+
+    @unittest.skipUnless(sys.platform in ('darwin', 'linux'), 'kernel argv reader platform')
+    def test_launcher_owns_spaced_worker_and_rejects_flattened_argument_collision(self):
+        with tempfile.TemporaryDirectory(prefix='cc8 checkout ') as directory:
+            root = Path(directory) / 'project space'
+            bridge = root / 'cc8-assistant/host/bridge.py'
+            bridge.parent.mkdir(parents=True)
+            decoy = root.with_name('project')
+            for script in (bridge, decoy):
+                script.write_text('import time\ntime.sleep(10)\n')
+            commands = ([str(bridge)], [str(decoy), 'space/cc8-assistant/host/bridge.py'])
+            for args, owned in zip(commands, (True, False), strict=True):
+                with (
+                    subprocess.Popen([sys.executable, '-u', *args]) as child,
+                    patch.object(launch, 'BRIDGE', bridge),
+                ):
+                    try:
+                        self.assertIs(launch.own_process(child.pid), owned)
+                    finally:
+                        child.terminate()
 
 
 class CaptureAndTransportTests(unittest.TestCase):

@@ -1,5 +1,12 @@
 # Changelog
 
+## Backend 0.15.34 — recognize workers in paths with spaces
+
+- Read argument boundaries from the OS before accepting a worker's PID. The
+  launcher and service verifier can identify the real script in a workspace
+  path with spaces, including when a different process has the same flattened
+  command line.
+
 ## Backend 0.15.33 — report live English wake stream positions
 
 - In the existing opt-in fixed English fixture probe, record each live stream's
