@@ -1,5 +1,13 @@
 # 当前 CC8 部署与验收范围
 
+2026-11-06，Mac 后台更新到 **0.15.6／原签名 APK 0.9.41（code78）／协议 2**，运行源码 `9445fc0`。后台维护和就绪复核用时 17.385 秒，保留原 APK 和配置，维护期间保持关麦。 [拒绝分类实现](https://github.com/batipang/CC8/pull/294) [部署源码 CI](https://github.com/batipang/CC8/actions/runs/42165384839)
+
+### 0.15.6 第 5 题同源音频对照
+
+MiniMax 直送对照和 Mac 扬声器播放、CC8 麦克风收音对照使用同一份 83,660 样本的合成 PCM。直送识别匹配，CC8 路径完成本地唤醒与识别后以 `transcript_mismatch` 拒绝。Dot 启动零次，现场用时 30.877 秒。收尾确认双端停采并删除临时合成音频。两条路径的最终 ASR 输入未做等同验证，当前证据无法确定具体差异。 [采样记录](MEASUREMENT_RUNS.md#联网与工具任务分别采样)
+
+## 0.15.5／code78 部署
+
 2026-11-06，Mac 后台更新到 **0.15.5／原签名 APK 0.9.41（code78）／协议 2**，运行源码 `fc1a072`。后台维护和就绪复核用时 16.992 秒，保留原 APK 和配置，维护期间保持关麦。 [启动换线修复](https://github.com/batipang/CC8/pull/291) [部署源码 CI](https://github.com/batipang/CC8/actions/runs/42162715699)
 
 ### 0.15.5 工具题正反对照

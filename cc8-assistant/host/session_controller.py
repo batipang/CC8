@@ -16,7 +16,12 @@ from reply_types import TextReply
 from session_ports import SessionHooks, SessionView
 from device_session import apply_settings, complete_handshake, rebind_capture
 
-from qa_speech import SCENARIO_QUESTIONS, normalize_question, tool_sample_request
+from qa_speech import (
+    SCENARIO_QUESTIONS,
+    normalize_question,
+    tool_sample_request,
+    tool_transcript_rejection,
+)
 
 
 @dataclass
@@ -439,7 +444,7 @@ class SessionController:
             and sample.opened_at <= captured_at <= sample.opened_at + 20
         ):
             return 'capture_window'
-        return 'transcript_mismatch' if normalize_question(text) != sample.expected else None
+        return tool_transcript_rejection(text, sample.expected)
 
     def start_capture(self, j):
         capture_id = j.get('capture_id')
