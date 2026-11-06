@@ -11,6 +11,7 @@ from capture_evidence import (
     validate as validate_capture,
     DECISIONS,
     TOOL_SAMPLE_REJECTION_REASONS,
+    valid_tool_asr_comparison,
     VAD_TAIL,
 )
 from operation_failure import OperationFailure, ClassifiedFailure, STAGES as ERROR_STAGES
@@ -242,7 +243,7 @@ class TraceBook:
                 self._voice_detail(key, ASR_INPUT_SAMPLES, samples)
             self.mark(key, 'asr_start')
 
-    def gate(self, key, value, tool_sample_rejection=None):
+    def gate(self, key, value, tool_sample_rejection=None, tool_asr_comparison=None):
         if not isinstance(value, str) or value not in DECISIONS:
             raise ValueError('Invalid voice gate decision')
         if tool_sample_rejection is not None and (
@@ -250,10 +251,17 @@ class TraceBook:
             or tool_sample_rejection not in TOOL_SAMPLE_REJECTION_REASONS
         ):
             raise ValueError('Invalid tool sample rejection')
+        if tool_asr_comparison is not None and (
+            tool_sample_rejection != 'comparison_only'
+            or not valid_tool_asr_comparison(tool_asr_comparison)
+        ):
+            raise ValueError('Invalid tool ASR comparison')
         with self.lock:
             self._voice_detail(key, 'gate', value)
             if tool_sample_rejection is not None:
                 self._voice_detail(key, 'tool_sample_rejection', tool_sample_rejection)
+            if tool_asr_comparison is not None:
+                self._voice_detail(key, 'tool_asr_comparison', dict(tool_asr_comparison))
 
     def _voice_detail(self, key, name, value):
         # These observations may finish after cancellation/terminal receipt.

@@ -116,6 +116,7 @@ def build_audio_pipeline(
                 token, generation
             ),
             tool_sample_rejection=host.session.tool_sample_rejection,
+            tool_sample_compare_case=host.session.tool_sample_compare_case,
             bind_response_probe=lambda text, generation, input_end_ns: (
                 host.capture.bind_response_probe(text, generation, input_end_ns)
             ),

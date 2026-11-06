@@ -34,6 +34,22 @@ class DiagnosticRunTests(unittest.TestCase):
         row.pop('tool_sample_rejection')
         self.assertNotIn('tool_sample_rejection', receipt(row))
 
+    def test_tool_comparison_receipt_never_accepts_transcription(self):
+        ident = self.book.begin('voice')
+        result = {'primary': 'read_only_missing', 'local': 'matched'}
+        self.book.gate(ident, 'tool_sample_guard', 'comparison_only', result)
+        self.book.finish(ident, 'rejected')
+        row = self.book.report()['requests'][0]
+        self.assertEqual(receipt(row)['tool_asr_comparison'], result)
+        for override in (
+            {'tool_asr_comparison': {**result, 'local': 'private text'}},
+            {'tool_asr_comparison': {**result, 'text': 'private text'}},
+            {'tool_sample_rejection': 'read_only_missing'},
+        ):
+            with self.subTest(override=override):
+                with self.assertRaisesRegex(ValueError, 'Invalid tool ASR comparison receipt'):
+                    receipt({**row, **override})
+
     def test_repeated_progress_updates_are_one_sample_with_real_latency(self):
         ident = self.request()
         self.run.ingest(self.book.report())

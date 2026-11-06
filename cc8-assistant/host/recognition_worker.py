@@ -15,8 +15,10 @@ from typing import Callable, ContextManager, Mapping, Pattern, Protocol
 import numpy as np
 from diagnostics import ASR_STOP_STAGE, TraceBook
 from dsp import RATE, STOP_COMMANDS, resembles_playback
+from qa_speech import SCENARIO_QUESTIONS, normalize_question, tool_transcript_rejection
 from reply_types import Reply
 from session_ports import EventSink, MetricSink
+from tool_asr_compare import compare_local
 from vision import visual_request
 from wake_controller import WAITING
 
@@ -67,6 +69,7 @@ class RecognitionHooks:
     resume_rejected: Callable[[int | None, int], None]
     bind_response_probe: Callable[[str, int, int | None], None] = lambda *_: None
     tool_sample_rejection: Callable[[str, bool, float | None], str | None] = lambda *_: None
+    tool_sample_compare_case: Callable[[], int | None] = lambda: None
 
 
 MIN_ECHO_RISK_CREDIBLE_FRAMES = 5
@@ -162,6 +165,7 @@ class RecognitionWorker:
             rejected = False
             decision = 'stale'
             tool_sample_rejection = None
+            compare_case = None
             try:
                 # The dequeued job can lose ownership before announcing ASR.
                 with self.hooks.lock:
@@ -347,8 +351,15 @@ class RecognitionWorker:
                     if tool_sample_rejection is not None:
                         decision = 'tool_sample_guard'
                         rejected = True
+                        if tool_sample_rejection == 'comparison_only':
+                            compare_case = self.hooks.tool_sample_compare_case()
                         if not self.hooks.playing():
-                            self.hooks.status('listening', '工具测试语音未通过核对')
+                            self.hooks.status(
+                                'listening',
+                                '识别对照采样完成'
+                                if compare_case is not None
+                                else '工具测试语音未通过核对',
+                            )
                         continue
                     sleep_text = payload if payload is not None else text
                     if wake_mode and SLEEP_COMMAND.fullmatch(sleep_text.strip().rstrip('。.!！')):
@@ -401,11 +412,26 @@ class RecognitionWorker:
                             pass
                         self.hooks.failure('这次识别没有完成，请再说一次', e, trace_key=trace_id)
             finally:
-                self.hooks.diagnostics().gate(
-                    trace_id,
-                    decision,
-                    tool_sample_rejection if decision == 'tool_sample_guard' else None,
-                )
+                reason = tool_sample_rejection if decision == 'tool_sample_guard' else None
+                if reason == 'comparison_only' and compare_case is not None:
+                    expected = normalize_question(SCENARIO_QUESTIONS['tool'][compare_case - 1])
+                    primary = tool_transcript_rejection(text, expected) or 'matched'
+                    try:
+                        local = compare_local(
+                            compare_case, audio, lambda: self.hooks.valid(generation)
+                        )
+                    except Exception:
+                        # An optional local diagnostic cannot stop the recognition worker.
+                        local = 'error'
+                    with self.hooks.lock:
+                        comparison = (
+                            {'primary': primary, 'local': local}
+                            if local is not None and self.hooks.valid(generation)
+                            else None
+                        )
+                        self.hooks.diagnostics().gate(trace_id, decision, reason, comparison)
+                else:
+                    self.hooks.diagnostics().gate(trace_id, decision, reason)
                 self.busy = False
                 if not accepted:
                     self.hooks.diagnostics().finish(

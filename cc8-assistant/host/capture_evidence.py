@@ -53,13 +53,7 @@ DECISIONS = frozenset(
         'error',
     )
 )
-TOOL_SAMPLE_REJECTION_REASONS = (
-    'not_open',
-    'capture_changed',
-    'generation_changed',
-    'route_changed',
-    'local_wake_missing',
-    'capture_window',
+TOOL_TRANSCRIPT_MISMATCHES = (
     'transcript_mismatch',
     'formatting_mismatch',
     'read_only_missing',
@@ -67,6 +61,28 @@ TOOL_SAMPLE_REJECTION_REASONS = (
     'arithmetic_mismatch',
     'arithmetic_form_mismatch',
 )
+TOOL_SAMPLE_REJECTION_REASONS = (
+    'comparison_only',
+    'not_open',
+    'capture_changed',
+    'generation_changed',
+    'route_changed',
+    'local_wake_missing',
+    'capture_window',
+) + TOOL_TRANSCRIPT_MISMATCHES
+TOOL_ASR_MATCH_RESULTS = ('matched',) + TOOL_TRANSCRIPT_MISMATCHES
+TOOL_ASR_LOCAL_RESULTS = TOOL_ASR_MATCH_RESULTS + ('error', 'timeout')
+
+
+def valid_tool_asr_comparison(value):
+    return (
+        isinstance(value, dict)
+        and set(value) == {'primary', 'local'}
+        and isinstance(value['primary'], str)
+        and value['primary'] in TOOL_ASR_MATCH_RESULTS
+        and isinstance(value['local'], str)
+        and value['local'] in TOOL_ASR_LOCAL_RESULTS
+    )
 
 
 def validate(value):

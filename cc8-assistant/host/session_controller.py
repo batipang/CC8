@@ -30,6 +30,7 @@ class ToolSample:
     expected: str
     generation: int
     arm_until: float
+    compare_case: int | None = None
     capture_id: str | None = None
     state: str = 'pending'
     opened_at: float = 0.0
@@ -366,7 +367,7 @@ class SessionController:
     def settings(self, j):
         apply_settings(self, j)
 
-    def arm_tool_sample(self, case):
+    def arm_tool_sample(self, case, *, compare=False):
         if not tool_sample_request({'operation': 'tool_sample_arm', 'case': case}):
             raise ValueError('Invalid tool sample case')
         with self.guard:
@@ -388,6 +389,7 @@ class SessionController:
                 normalize_question(SCENARIO_QUESTIONS['tool'][case - 1]),
                 self.generation + 1,
                 now + 30,
+                compare_case=case if compare else None,
             )
             return {'status': 'armed', 'token': token}
 
@@ -444,7 +446,12 @@ class SessionController:
             and sample.opened_at <= captured_at <= sample.opened_at + 20
         ):
             return 'capture_window'
+        if sample.compare_case is not None:
+            return 'comparison_only'
         return tool_transcript_rejection(text, sample.expected)
+
+    def tool_sample_compare_case(self):
+        return self.tool_sample.compare_case if self.tool_sample is not None else None
 
     def start_capture(self, j):
         capture_id = j.get('capture_id')
