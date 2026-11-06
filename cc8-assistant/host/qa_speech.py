@@ -46,6 +46,26 @@ SCENARIO_QUESTIONS = {
     'web': tuple(f'联网查找{topic}的官方网站。' for topic in WEB_TOPICS),
     'tool': tuple(TOOL_PREFIX + question for question in QUESTIONS),
 }
+
+
+def tool_sample_request(value):
+    if not isinstance(value, dict):
+        return False
+    operation = value.get('operation')
+    if operation == 'tool_sample_arm':
+        return (
+            set(value) == {'operation', 'case'}
+            and type(value['case']) is int
+            and 1 <= value['case'] <= len(SCENARIO_QUESTIONS['tool'])
+        )
+    return (
+        operation in ('tool_sample_begin', 'tool_sample_release')
+        and set(value) == {'operation', 'token'}
+        and isinstance(value['token'], str)
+        and re.fullmatch('[a-f0-9]{32}', value['token']) is not None
+    )
+
+
 ALL_QUESTIONS = tuple(question for group in SCENARIO_QUESTIONS.values() for question in group)
 SCENARIO_DIGESTS = {
     scenario: hashlib.sha256('\n'.join(questions).encode()).hexdigest()

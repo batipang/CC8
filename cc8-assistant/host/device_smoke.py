@@ -56,6 +56,7 @@ from qa_speech import (
     MATH_SCENARIOS,
     SCENARIO_DIGESTS,
     SCENARIO_QUESTIONS,
+    tool_sample_request,
     math_answer_status,
     normalize_question,
 )
@@ -460,7 +461,14 @@ def valid_leading_evidence(value, delay_ms):
     )
 
 
-REJECTED_VOICE_GATES = ('empty', 'echo_text', 'echo_render', 'weak_near', 'wake_closed')
+REJECTED_VOICE_GATES = (
+    'empty',
+    'echo_text',
+    'echo_render',
+    'weak_near',
+    'wake_closed',
+    'tool_sample_guard',
+)
 
 
 def classify_voice_records(rows):
@@ -630,6 +638,7 @@ def rpc(path, request, timeout=5):
         or request == {'operation': 'playback_probe'}
         or known_speech_request(request)
         or wake_input_request(request)
+        or tool_sample_request(request)
         or (
             request.get('operation') == 'response_probe_arm'
             and set(request) == {'operation', 'case'}
@@ -890,6 +899,7 @@ class SmokeRun:
         self.english_fixture_played = False
         self.latency_sample = latency_sample
         self.latency_scenario = latency_scenario
+        self.tool_sample_token = None
         self.qa_question = ENGLISH_QUESTION if english_wake else qa_question
         self.response_acoustic_evidence = response_acoustic_evidence
         self.response_acoustic_coverage = response_acoustic_coverage
@@ -1577,6 +1587,16 @@ class SmokeRun:
 
     def start_capture(self):
         limit = self.capture_limit_ms
+        if self.latency_sample and self.latency_scenario == 'tool':
+            case = SCENARIO_QUESTIONS['tool'].index(self.qa_question) + 1
+            armed = self.request({'operation': 'tool_sample_arm', 'case': case})
+            token = armed.get('token')
+            require(
+                armed.get('status') == 'armed'
+                and tool_sample_request({'operation': 'tool_sample_begin', 'token': token}),
+                'tool_sample_guard_not_armed',
+            )
+            self.tool_sample_token = token
         self.device.open(True, capture_limit_ms=limit)
         try:
             self.wait(
@@ -1831,6 +1851,15 @@ class SmokeRun:
                 and re.fullmatch('[a-f0-9]{32}', input_token) is not None,
                 'wake_input_probe_not_armed',
             )
+        if self.latency_sample and self.latency_scenario == 'tool':
+            require(
+                self.tool_sample_token is not None
+                and self.request(
+                    {'operation': 'tool_sample_begin', 'token': self.tool_sample_token}
+                )
+                == {'status': 'ready'},
+                'tool_sample_guard_not_ready',
+            )
         if self.english_fixture is not None:
             self.english_fixture.play()
             self.english_fixture_played = True
@@ -1923,6 +1952,11 @@ class SmokeRun:
                 'cancelled_requests': sum(r.get('outcome') == 'cancelled' for r in rows),
                 'completed_tasks': sum(r.get('task_outcome') == 'completed' for r in rows),
                 'recognized_stimulus_matches': recognized_stimulus_matches,
+                **(
+                    {'tool_sample_guarded': True}
+                    if self.latency_sample and self.latency_scenario == 'tool'
+                    else {}
+                ),
                 **({'math_answer_status': math_answer} if math_answer is not None else {}),
                 'response_playout_timing': response_playout_timing(completed),
                 **(
@@ -1974,6 +2008,11 @@ class SmokeRun:
                     'english_wake_counter_delta_invalid',
                 )
             self.checkpoint(self.report('running'))
+            if self.latency_sample and self.latency_scenario == 'tool':
+                require(
+                    not any(row['gate'] == 'tool_sample_guard' for row in rejected),
+                    'tool_sample_transcript_not_confirmed',
+                )
             require(len(admitted) <= 1, 'unexpected_extra_voice_request')
             if admitted:
                 current_id = admitted[0]['request_id']
@@ -2780,6 +2819,14 @@ class SmokeRun:
             and self.inactive(),
             'cleanup_not_confirmed',
         )
+        if self.tool_sample_token is not None:
+            self.cleanup_reason = 'cleanup_tool_sample_guard_unconfirmed'
+            require(
+                self.request({'operation': 'tool_sample_release', 'token': self.tool_sample_token})
+                == {'status': 'released'},
+                'cleanup_tool_sample_guard_not_released',
+            )
+            self.tool_sample_token = None
         self.cleanup_verified = True
         self.cleanup_reason = None
 
@@ -3633,7 +3680,9 @@ def main(argv=None):
         minimum_batch_backend = RENDER_OVERLAP_MIN_BACKEND
     elif args.self_playback_soak:
         minimum_batch_backend = ECHO_SOAK_MIN_BACKEND
-    elif args.latency_scenario != 'qa':
+    elif args.latency_scenario == 'tool':
+        minimum_batch_backend = '0.15.4'
+    elif args.latency_scenario == 'web':
         minimum_batch_backend = ROUTED_LATENCY_MIN_BACKEND
     elif args.extended_voice_evidence or args.interruption_suite:
         minimum_batch_backend = EXTENDED_VOICE_MIN_BACKEND
@@ -3763,6 +3812,11 @@ def main(argv=None):
                 'runtime_english_wake_evidence_unsupported',
             )
             english_wake_counts(health)
+        if args.qa_latency_suite and args.latency_scenario == 'tool':
+            require(
+                health.get('tool_sample_guard_supported') is True,
+                'backend_tool_sample_guard_unsupported',
+            )
         if args.wake_input_shape:
             require(
                 health.get('wake_input_probe_supported') is True, 'wake_input_probe_unsupported'
