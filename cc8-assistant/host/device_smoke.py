@@ -520,6 +520,7 @@ REJECTED_VOICE_GATES = (
     'echo_text',
     'echo_render',
     'weak_near',
+    'utterance_too_long',
     'wake_closed',
     'tool_sample_guard',
 )

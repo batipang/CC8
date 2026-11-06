@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 
 from recognition import MandarinRecognizer, prepare_audio
-from dsp import FRAME, VoiceDetector, ReferenceCapture
+from dsp import FRAME, MAX_UTTERANCE_FRAMES, VoiceDetector, ReferenceCapture
 
 
 class FakeRecognizer:
@@ -81,6 +81,25 @@ class RecognitionTests(unittest.TestCase):
             if utterance is not None:
                 ends.append(utterance)
         self.assertEqual(len(ends), 1)
+
+    def test_sentence_at_audio_cap_can_finish_in_trailing_silence(self):
+        vad = VoiceDetector()
+        reference = ReferenceCapture()
+        near, render = np.ones(FRAME), np.full(FRAME, 0.5)
+        quiet = np.zeros(FRAME)
+        outputs = []
+        for index in range(MAX_UTTERANCE_FRAMES + vad.END_SILENCE_FRAMES):
+            voiced = index < MAX_UTTERANCE_FRAMES
+            vad.external_voice = voiced
+            began, audio, _ = vad.feed(near if voiced else quiet)
+            aligned = reference.feed(render if voiced else quiet, began, audio is not None)
+            if audio is not None:
+                outputs.append((index, audio, aligned))
+        self.assertEqual(len(outputs), 1)
+        index, audio, aligned = outputs[0]
+        self.assertEqual(index, MAX_UTTERANCE_FRAMES + vad.END_SILENCE_FRAMES - 1)
+        self.assertEqual(len(audio), MAX_UTTERANCE_FRAMES * FRAME)
+        np.testing.assert_array_equal(audio, aligned * 2)
 
     def test_longer_preroll_keeps_soft_syllables_and_matching_reference(self):
         vad = VoiceDetector()

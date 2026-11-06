@@ -1,5 +1,13 @@
 # Changelog
 
+## Backend 0.15.35 — withhold overlong continuous utterances
+
+- Keep microphone and playback reference buffers bounded while waiting for a
+  normal endpoint at the capture limit. If speech crosses the bound, discard
+  the whole utterance and its continuation up to the next clear pause.
+- Report the rejection before recognition. Resume only playback paused by
+  that capture.
+
 ## Backend 0.15.34 — recognize workers in paths with spaces
 
 - Read argument boundaries from the OS before accepting a worker's PID. The
