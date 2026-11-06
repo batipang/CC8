@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-answer-completion-owner-20261107.1",
+  "release_id": "p0-answer-failure-receipt-20261107.1",
   "backend": {
-    "version": "0.15.26"
+    "version": "0.15.27"
   },
   "assistant": {
     "version": "0.9.42",
