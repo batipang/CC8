@@ -140,6 +140,71 @@ class TextFailureTests(unittest.TestCase):
         )
         self.assertEqual(b.session.text_generation, b.generation)
 
+    def test_answer_status_cannot_overtake_a_new_owner(self):
+        b = self.bridge(Brain())
+        b.speak = lambda *args: True
+        generation = b.submit_text('固定公开测试指令')['generation']
+        job = b.response.queue.get_nowait()
+        admitted, release, owner_done = threading.Event(), threading.Event(), threading.Event()
+        errors = []
+        original = b.valid
+
+        def valid(candidate):
+            result = original(candidate)
+            if (
+                result
+                and candidate == generation
+                and b.response.busy
+                and not admitted.is_set()
+                and b.workspace.tasks[-1]['status'] == 'completed'
+            ):
+                admitted.set()
+                if not release.wait(2):
+                    raise RuntimeError('answer completion barrier')
+            return result
+
+        b.valid = valid
+
+        def worker():
+            try:
+                self.work(b, [job])
+            except BaseException as error:
+                errors.append(type(error).__name__)
+
+        def owner():
+            try:
+                b.submit_text('新的固定公开指令')
+                owner_done.set()
+            except BaseException as error:
+                errors.append(type(error).__name__)
+
+        first, second = (
+            threading.Thread(target=worker, daemon=True),
+            threading.Thread(target=owner, daemon=True),
+        )
+        first.start()
+        try:
+            self.assertTrue(admitted.wait(1))
+            second.start()
+            owner_ran_early = owner_done.wait(0.1)
+        finally:
+            release.set()
+            first.join(2)
+            if second.ident is not None:
+                second.join(2)
+        self.assertEqual(errors, [])
+        self.assertFalse(first.is_alive() or second.is_alive())
+        self.assertTrue(owner_done.is_set())
+        new_begin = max(i for i, (event, _) in enumerate(b.events) if event == 'text_begin')
+        answer_done = next(
+            i
+            for i, (event, fields) in enumerate(b.events)
+            if event == 'status' and fields.get('message') == '回答已完成 · 麦克风关闭'
+        )
+        self.assertLess(answer_done, new_begin)
+        self.assertFalse(owner_ran_early)
+        self.assertEqual(b.workspace.tasks[-1]['status'], 'completed')
+
     def test_text_completion_cannot_overtake_a_new_owner(self):
         b = self.bridge(Brain())
         old = b.submit_text('固定公开测试指令')['generation']

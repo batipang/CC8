@@ -316,7 +316,11 @@ class ResponseWorker:
                 self.hooks.diagnostics().task_result(generation, status)
                 self.hooks.diagnostics().finish(generation, status)
                 self.hooks.publish_workspace()
-        if completed and self.hooks.valid(generation):
+        # Do not let a new turn start between ownership admission and its
+        # predecessor's final status or history update.
+        with self.hooks.lock:
+            if not completed or not self.hooks.valid(generation):
+                return
             answer = ''.join(spoken)
             self.history.extend(
                 [{'role': 'user', 'content': text}, {'role': 'assistant', 'content': answer}]
