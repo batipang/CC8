@@ -15,6 +15,7 @@ from protocol import Packet, SPEAKER
 from reply_types import TextReply
 from session_ports import SessionHooks, SessionView
 from device_session import apply_settings, complete_handshake, rebind_capture
+from capture_evidence import TOOL_TRANSCRIPT_MISMATCHES
 
 from qa_speech import (
     SCENARIO_QUESTIONS,
@@ -32,6 +33,7 @@ class ToolSample:
     generation: int
     arm_until: float
     comparison: tuple[int, str] | None = None
+    rejection_diagnosis: tuple[int, str] | None = None
     capture_id: str | None = None
     state: str = 'pending'
     opened_at: float = 0.0
@@ -368,10 +370,11 @@ class SessionController:
     def settings(self, j):
         apply_settings(self, j)
 
-    def arm_tool_sample(self, case, *, compare_engine=None):
+    def arm_tool_sample(self, case, *, compare_engine=None, diagnose_engine=None):
         if not tool_sample_request({'operation': 'tool_sample_arm', 'case': case}):
             raise ValueError('Invalid tool sample case')
-        if compare_engine is not None and compare_engine not in TOOL_COMPARE_ENGINES:
+        engines = [engine for engine in (compare_engine, diagnose_engine) if engine is not None]
+        if len(engines) > 1 or any(engine not in TOOL_COMPARE_ENGINES for engine in engines):
             raise ValueError('Invalid tool comparison engine')
         with self.guard:
             existing = self.tool_sample
@@ -393,6 +396,9 @@ class SessionController:
                 self.generation + 1,
                 now + 30,
                 comparison=(case, compare_engine) if compare_engine is not None else None,
+                rejection_diagnosis=(case, diagnose_engine)
+                if diagnose_engine is not None
+                else None,
             )
             return {'status': 'armed', 'token': token}
 
@@ -453,8 +459,24 @@ class SessionController:
             return 'comparison_only'
         return tool_transcript_rejection(text, sample.expected)
 
-    def tool_sample_comparison(self):
-        return self.tool_sample.comparison if self.tool_sample is not None else None
+    def tool_sample_comparison(self, reason='comparison_only'):
+        sample = self.tool_sample
+        if sample is None:
+            return None
+        if reason == 'comparison_only':
+            return sample.comparison
+        if (
+            reason in TOOL_TRANSCRIPT_MISMATCHES
+            and sample.state == 'closed'
+            and self.active
+            and sample.capture_id == self.capture_id
+            and sample.generation == self.generation
+            and self.transport_kind == 'usb'
+            and self.capture_start_ack
+            and self.rebind_seen
+        ):
+            return sample.rejection_diagnosis
+        return None
 
     def start_capture(self, j):
         capture_id = j.get('capture_id')

@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-response-room-reference-readiness-20261106.1",
+  "release_id": "p0-tool-rejection-diagnosis-20261106.1",
   "backend": {
-    "version": "0.15.19"
+    "version": "0.15.20"
   },
   "assistant": {
     "version": "0.9.42",
