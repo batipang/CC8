@@ -1,6 +1,8 @@
 """Service lifecycle boundaries; never calls launchctl or loads real voice models."""
 
+import errno
 import json
+import os
 from pathlib import Path
 import signal
 import subprocess
@@ -136,6 +138,70 @@ class ServiceTests(unittest.TestCase):
             self.assertEqual(
                 json.loads((Path(folder) / 'supervisor.json').read_text())['phase'], 'stopped'
             )
+
+    def test_state_write_failure_keeps_healthy_worker_and_recovers_receipt(self):
+        for error in (PermissionError('private path'), OSError(errno.ENOSPC, 'private path')):
+            with self.subTest(error=type(error).__name__), tempfile.TemporaryDirectory() as folder:
+                private = Path(folder)
+                status = private / 'supervisor.json'
+                replace = os.replace
+                health_checks = []
+                publications = []
+                stopped = []
+                with (
+                    patch.object(service, 'PRIVATE', private),
+                    patch.object(service, 'enabled', return_value=True),
+                    patch.object(service, 'read_pid', return_value=123),
+                    patch.object(service, 'own_process', return_value=True) as owns,
+                ):
+                    supervisor = service.Supervisor()
+                    supervisor.state('starting', 0)
+                    previous = status.read_bytes()
+                    supervisor.stop.wait = lambda _seconds: supervisor.stop.is_set()
+
+                    def publish(source, target):
+                        if target == status:
+                            publications.append(json.loads(Path(source).read_bytes())['phase'])
+                            if len(publications) == 1:
+                                raise error
+                        return replace(source, target)
+
+                    def health(*, operation):
+                        self.assertEqual(operation, 'health')
+                        health_checks.append(supervisor.pid)
+                        if len(health_checks) == 2:
+                            self.assertEqual(status.read_bytes(), previous)
+                        if len(health_checks) == 3:
+                            recovered = json.loads(status.read_bytes())
+                            self.assertEqual((recovered['phase'], recovered['pid']), ('ready', 123))
+                            supervisor.stop.set()
+                        return dict.fromkeys(
+                            ('model_ready', 'recognition_worker', 'response_worker'), True
+                        )
+
+                    def stop_worker(_pid, _sig):
+                        stopped.append(supervisor.stop.is_set())
+                        owns.return_value = False
+
+                    with (
+                        patch.object(os, 'replace', side_effect=publish),
+                        patch.object(service, 'query', side_effect=health),
+                        patch.object(supervisor, 'start_child') as start,
+                        patch.object(os, 'kill', side_effect=stop_worker) as kill,
+                    ):
+                        supervisor.run()
+                        start.assert_not_called()
+                        kill.assert_called_once_with(123, signal.SIGTERM)
+                self.assertEqual(health_checks, [123, 123, 123])
+                self.assertEqual(stopped, [True])
+                self.assertEqual(publications, ['ready', 'ready', 'ready', 'stopped'])
+                self.assertEqual(list(private.glob('.supervisor.json-*')), [])
+                self.assertEqual(json.loads(status.read_bytes())['phase'], 'stopped')
+                log = (private / 'service.log').read_text()
+                self.assertIn(
+                    'supervisor_state_write_failed error_type=' + type(error).__name__, log
+                )
+                self.assertNotIn('private path', log)
 
     def test_stop_during_runtime_preflight_does_not_spawn_worker(self):
         for trigger in ('marker', 'signal'):
