@@ -369,6 +369,18 @@ class RecoveryTests(unittest.TestCase):
             health['response_worker'] = False
             self.assertIsNone(service.sample())
 
+    def test_live_distinguishes_missing_and_duplicate_supervisors_before_signalling(self):
+        service, _, _, _, processes, _, _, _, _, _ = self.live_fixture()
+        for supervisors, reason in (
+            ([], 'supervisor_missing'),
+            ([(10, 1), (11, 1)], 'duplicate_supervisor'),
+        ):
+            with self.subTest(reason=reason), patch('service_smoke.os.kill') as kill:
+                processes['supervisor'] = supervisors
+                with self.assertRaisesRegex(CheckFailure, f'^{reason}$'):
+                    service.crash({'pid': 20, 'instance': 'fixture', 'mic_frames': 0})
+                kill.assert_not_called()
+
     def run_check(self, service, cycles=10):
         clock = Clock()
         reports = []
@@ -416,6 +428,36 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(result['state'], 'recovery_unconfirmed')
         self.assertEqual(service.crashes, 1)
         self.assertEqual(result['checks'][0]['reason'], 'service_recovery_timeout')
+
+    def test_failed_cycle_records_the_gate_that_rejected_it(self):
+        for sample_number, stage in enumerate(
+            ('fault_gate', 'waiting_for_ready', 'checking_stability'), start=2
+        ):
+            with self.subTest(stage=stage):
+                service = Service()
+                old_sample = service.sample
+                samples = 0
+
+                def sample():
+                    nonlocal samples
+                    samples += 1
+                    if samples == sample_number:
+                        raise CheckFailure('supervisor_missing')
+                    return old_sample()
+
+                def crash(previous):
+                    service.sample()
+                    service.crashes += 1
+                    service.pid += 1
+
+                service.sample = sample
+                service.crash = crash
+                result, _ = self.run_check(service, 2)
+                self.assertEqual(result['state'], 'failed')
+                self.assertEqual(result['checks'][0].get('failure_stage'), stage)
+                self.assertEqual(result['checks'][0]['reason'], 'supervisor_missing')
+                self.assertEqual(service.crashes, int(stage != 'fault_gate'))
+                self.assertEqual(result['recovery_verified'], stage != 'fault_gate')
 
     def test_interrupt_after_fault_only_observes_existing_supervisor(self):
         service = Service()
@@ -661,14 +703,14 @@ class RecoveryTests(unittest.TestCase):
 
     def test_missing_supervisor_is_transient_only_after_our_fault(self):
         def missing(**kwargs):
-            raise CheckFailure('supervisor_missing_or_ambiguous')
+            raise CheckFailure('supervisor_missing')
 
         service = SimpleNamespace(
             supervisor_sample=missing,
             processes=lambda: {'bridge': [(20, 1)], 'supervisor': [], 'unexpected': []},
         )
         run = SupervisorRecoveryRun(service, 1)
-        with self.assertRaises(CheckFailure):
+        with self.assertRaisesRegex(CheckFailure, '^supervisor_missing$'):
             run.sample()
 
         run.fault_sent = True
@@ -690,8 +732,14 @@ class RecoveryTests(unittest.TestCase):
             'supervisor': [(10, 1), (11, 1)],
             'unexpected': [],
         }
-        with self.assertRaises(CheckFailure):
+        with self.assertRaisesRegex(CheckFailure, '^duplicate_supervisor$'):
             run.sample()
+
+        service.supervisor_sample = Mock(side_effect=CheckFailure('duplicate_supervisor'))
+        service.processes = Mock()
+        with self.assertRaisesRegex(CheckFailure, '^duplicate_supervisor$'):
+            run.sample()
+        service.processes.assert_not_called()
 
     def test_post_fault_ready_boundary_is_taken_after_the_verified_signal(self):
         events = []
