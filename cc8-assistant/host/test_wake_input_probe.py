@@ -12,6 +12,7 @@ import numpy as np
 from bridge import Bridge
 from announce import AnnouncementServer
 from dsp import FRAME
+from local_wake import replay_english_inputs
 from wake_input_probe import NAME_END, WakeInputProbe, compare_stream
 from wake_input_receipt import (
     FIXTURE_FRAMES,
@@ -121,10 +122,83 @@ class WakeInputTests(unittest.TestCase):
         self.assertEqual(summarize(report), report)
         self.assertEqual(report['primary']['status'], 'matched')
         self.assertEqual(report['alternate'], {'status': 'input_gap'})
+        self.assertEqual(report['fresh_replay'], {'status': 'not_run'})
+        self.assertEqual(
+            summarize({k: v for k, v in report.items() if k != 'fresh_replay'})['status'],
+            'measured',
+        )
         self.assertEqual(report['alternate_frames'], len(received) - FRAME)
         self.assertEqual(probe.read(), {'status': 'unavailable'})
         self.assertTrue(all(not np.any(array) for array in retained))
         self.assertEqual(summarize({**report, 'pcm': 'secret'}), {'status': 'invalid'})
+
+    def test_exact_matched_buffers_replay_once_and_clear_even_on_failure(self):
+        pcm, source = synthesize()
+        primary = np.zeros(51200)
+        primary[3200 : 3200 + len(source)] = source
+        alternate = -primary / 2
+        for failed in (False, True):
+            with self.subTest(failed=failed):
+                probe = fixture_probe(pcm)
+                retained = (probe.reference, probe.primary, probe.alternate)
+                for left, right in zip(primary.reshape(-1, FRAME), alternate.reshape(-1, FRAME)):
+                    probe.observe(left, right)
+
+                def replay(left, right, cancelled):
+                    np.testing.assert_array_equal(left, primary)
+                    np.testing.assert_array_equal(right, alternate)
+                    self.assertFalse(cancelled())
+                    if failed:
+                        raise RuntimeError('private decoder detail')
+                    return {'status': 'measured', 'primary_hit': False, 'alternate_hit': True}
+
+                with patch('local_wake.replay_english_inputs', side_effect=replay) as decode:
+                    report = probe.read()
+                    self.assertEqual(probe.read(), {'status': 'unavailable'})
+                decode.assert_called_once()
+                self.assertEqual(summarize(report), report)
+                self.assertEqual(
+                    report['fresh_replay']['status'], 'unavailable' if failed else 'measured'
+                )
+                self.assertTrue(all(not np.any(array) for array in retained))
+                self.assertEqual(
+                    summarize({**report, 'fresh_replay': {'status': 'measured', 'pcm': 'secret'}}),
+                    {'status': 'invalid'},
+                )
+                if not failed:
+                    self.assertEqual(
+                        summarize({**report, 'alternate_frames': report['primary_frames'] - FRAME}),
+                        {'status': 'invalid'},
+                    )
+
+    def test_replay_consumes_actual_frame_order_and_checks_cancellation_between_frames(self):
+        primary = np.arange(3 * FRAME, dtype=float)
+        alternate = -primary
+        main, secondary = Mock(), Mock()
+        main.alternate.return_value = secondary
+        main.feed.side_effect = ('', 'Bumblebee', '')
+        secondary.feed.side_effect = ('', 'BubbleBeeSpaced', '')
+        with patch('local_wake.EnglishWake.load', return_value=main):
+            self.assertEqual(
+                replay_english_inputs(primary, alternate, lambda: False),
+                {'status': 'measured', 'primary_hit': True, 'alternate_hit': False},
+            )
+            for decoder, source in ((main, primary), (secondary, alternate)):
+                self.assertEqual(decoder.feed.call_count, 3)
+                for call, frame in zip(decoder.feed.call_args_list, source.reshape(-1, FRAME)):
+                    np.testing.assert_array_equal(call.args[0], frame)
+                decoder.feed.reset_mock(side_effect=True)
+            cancelled = Mock(side_effect=(False, False, True))
+            self.assertEqual(
+                replay_english_inputs(primary, alternate, cancelled), {'status': 'unavailable'}
+            )
+            main.feed.assert_called_once()
+            secondary.feed.assert_called_once()
+            cancelled_after_last = Mock(side_effect=(False, False, False, False, True))
+            self.assertEqual(
+                replay_english_inputs(primary, alternate, cancelled_after_last),
+                {'status': 'unavailable'},
+            )
 
     def test_expiry_and_bad_shape_zero_held_buffers(self):
         pcm, _ = synthesize()
@@ -210,7 +284,10 @@ class WakeInputTests(unittest.TestCase):
         real_read = probe.read
 
         def stale_read():
+            with self.assertRaisesRegex(RuntimeError, 'already armed'):
+                bridge.wake.arm_input_probe(pcm)
             bridge.wake.reset('transport')
+            self.assertTrue(probe.cancelled.is_set())
             return real_read()
 
         with patch.object(probe, 'read', side_effect=stale_read):

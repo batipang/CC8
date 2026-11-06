@@ -7,7 +7,7 @@ import uuid
 import numpy as np
 
 from dsp import FRAME
-from wake_input_receipt import FIXTURE_FRAMES, FIXTURE_PCM_SHA256, MAX_FRAMES
+from wake_input_receipt import FIXTURE_FRAMES, FIXTURE_PCM_SHA256, MAX_FRAMES, MIN_MATCH_FRAMES
 
 TTL_SECONDS = 7
 DECIMATION = 8
@@ -39,7 +39,7 @@ def _scores(audio, reference):
 
 
 def compare_stream(samples, reference):
-    if len(samples) < FIXTURE_FRAMES + 1280:
+    if len(samples) < MIN_MATCH_FRAMES:
         return {'status': 'capture_incomplete'}
     audio, source = _downsample(samples), _downsample(reference)
     name_end = NAME_END // DECIMATION
@@ -99,6 +99,7 @@ class WakeInputProbe:
         self.primary, self.alternate = np.empty(MAX_FRAMES), np.empty(MAX_FRAMES)
         self.frames = self.alternate_frames = 0
         self.closed = False
+        self.cancelled = threading.Event()
         self.timer = timer(TTL_SECONDS, self.cancel)
         self.timer.daemon = True
         try:
@@ -115,6 +116,7 @@ class WakeInputProbe:
         return arrays
 
     def cancel(self):
+        self.cancelled.set()
         with self.lock:
             for audio in self._close():
                 audio.fill(0)
@@ -138,20 +140,34 @@ class WakeInputProbe:
         with self.lock:
             if self.closed:
                 return {'status': 'unavailable'}
-            reference, primary, alternate = self._close()
+            arrays = self._close()
+            reference, primary, alternate = arrays
         try:
+            primary = primary[: self.frames]
+            alternate_view = alternate[: self.frames]
+            primary_shape = compare_stream(primary, reference)
+            alternate_shape = (
+                compare_stream(alternate_view, reference)
+                if self.alternate_frames == self.frames
+                else {'status': 'input_gap'}
+            )
+            replay = {'status': 'not_run'}
+            if primary_shape['status'] == alternate_shape['status'] == 'matched':
+                from local_wake import replay_english_inputs
+
+                try:
+                    replay = replay_english_inputs(primary, alternate_view, self.cancelled.is_set)
+                except (ImportError, OSError, RuntimeError, ValueError):
+                    replay = {'status': 'unavailable'}
             return {
                 'status': 'measured',
                 'raw_audio_saved': False,
                 'primary_frames': self.frames,
                 'alternate_frames': self.alternate_frames,
-                'primary': compare_stream(primary[: self.frames], reference),
-                'alternate': (
-                    compare_stream(alternate[: self.frames], reference)
-                    if self.alternate_frames == self.frames
-                    else {'status': 'input_gap'}
-                ),
+                'primary': primary_shape,
+                'alternate': alternate_shape,
+                'fresh_replay': replay,
             }
         finally:
-            for audio in (reference, primary, alternate):
+            for audio in arrays:
                 audio.fill(0)
