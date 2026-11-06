@@ -14,6 +14,11 @@ def complete_handshake(session: SessionController, j):
     session.capture_rejection_supported = (
         type(j.get('capture_reject_version')) is int and j['capture_reject_version'] == 1
     )
+    session.capture_start_ack = (
+        session.capture_rejection_supported
+        and type(j.get('capture_start_ack_version')) is int
+        and j['capture_start_ack_version'] == 1
+    )
     hooks.visual().update_peer(j)
     hooks.playback().set_pause_capability(
         bool(j.get('supports_playback_pause')),
@@ -52,6 +57,11 @@ def complete_handshake(session: SessionController, j):
         supports_dot_chat_handoff=True,
         supports_saved_task_results=True,
         asr_engine=getattr(getattr(hooks.speech(), 'recognizer', None), 'engine', 'sensevoice'),
+        **(
+            {'capture_start_token': session.capture_start_token}
+            if session.capture_start_ack
+            else {}
+        ),
     )
     # A failed send leaves the notice for the next authenticated route.
     session.playback_interrupted_by_transport = False
@@ -68,6 +78,10 @@ def rebind_capture(session: SessionController, j):
     hooks = session.hooks
     if session.resend_capture_rejection(j.get('capture_id')):
         return
+    if session.capture_start_ack or session.capture_id is not None or 'capture_start_token' in j:
+        if not session.capture_claim_matches(j):
+            session.reject_capture_start(j.get('capture_id'))
+            return
     # A rebind can recover existing capture, but cannot undo a stop.
     if session.rebind_seen or session.capture_start_required:
         return

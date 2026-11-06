@@ -28,6 +28,7 @@ class AudioFormat {static final int CHANNEL_IN_MONO=1,ENCODING_PCM_16BIT=2;}
 class MediaRecorder {static class AudioSource {static final int VOICE_COMMUNICATION=7;}}
 class JSONObject {
  final Map<String,Object> data=new ConcurrentHashMap<>();
+ Object opt(String key){return data.get(key);}
 }
 class Wire {
  static final int MIC=2;
@@ -107,6 +108,7 @@ class VoiceSession {
  volatile String phase="idle";
  volatile AudioRecord recorder;
  volatile CaptureWindow captureWindow;
+ final Link activeLink=new Link();
  Player player;
  final Listener listener=new Listener();
  final Status statusFeedback=new Status();
@@ -120,6 +122,10 @@ class VoiceSession {
  void cancelPlayback(){playbackCancels++;player=null;}
  void cancelForTest(int generation,long route){cancelPlaybackForCommand(generation,route);}
  void send(JSONObject event){events.add(event);}
+ class Link {
+  String captureStartToken="";
+  void event(JSONObject event)throws IOException{send(event);}
+ }
  void sendPacket(int kind,int epoch,long sequence,long frame,long stamp,byte[] data){packets.incrementAndGet();}
  static class Status{void reset(){}}
  static class Player {
@@ -156,11 +162,23 @@ public final class CaptureCheck {
   s.stopMicrophone();AudioRecord.releaseOld.countDown();
   for(AudioRecord r:AudioRecord.created)r.stop();
   waitFor(()->Thread.getAllStackTraces().keySet().stream().noneMatch(t->t.isAlive()&&
-   ("cc8-microphone".equals(t.getName())||"cc8-test-capture-timeout".equals(t.getName()))),"capture worker leaked");
+   ("cc8-microphone".equals(t.getName())||"cc8-capture-timeout".equals(t.getName()))),"capture worker leaked");
  }
  public static void main(String[] args)throws Exception {
   test=args[0];VoiceSession s=new VoiceSession();
   try {
+   if("unconfirmed_timeout".equals(test)){
+    s.activeLink.captureStartToken="a".repeat(32);
+    s.startMicrophone();
+    yes(AudioRecord.entered.await(3,TimeUnit.SECONDS),"capture did not start");
+    int pendingEpoch=s.epoch;
+    yes(!s.captureWindow.startConfirmed,"capture was confirmed without host receipt");
+    clock.set(8100);
+    waitFor(()->s.listener.rejected.get()==pendingEpoch+1,"unconfirmed capture did not stop");
+    yes(!s.recording&&AudioRecord.created.get(0).released.await(3,TimeUnit.SECONDS),
+        "unconfirmed capture hardware still active");
+    return;
+   }
    if("rejected_capture".equals(test)){
     s.startMicrophone();
     yes(AudioRecord.entered.await(3,TimeUnit.SECONDS),"capture did not start");
@@ -323,7 +341,7 @@ public final class CaptureCheck {
     yes(s.captureWindow.clockStats==null&&AudioRecord.created.get(0).timestamps==0,
         "normal capture queried hardware clock");
     yes(s.recording&&s.captureWindow.limitMs==0&&clock.get()>=1800000,"normal capture gained a test timeout");
-    yes(Thread.getAllStackTraces().keySet().stream().noneMatch(t->t.isAlive()&&"cc8-test-capture-timeout".equals(t.getName())),"normal capture spawned watchdog");
+    yes(Thread.getAllStackTraces().keySet().stream().noneMatch(t->t.isAlive()&&"cc8-capture-timeout".equals(t.getName())),"legacy normal capture spawned watchdog");
    } else if("replacement".equals(test)){
     s.startMicrophone(1000);yes(AudioRecord.entered.await(2,TimeUnit.SECONDS),"old read not entered");
     s.stopMicrophone();s.startMicrophone();clock.set(5000);AudioRecord.releaseOld.countDown();
@@ -432,6 +450,8 @@ class CaptureWindowTests(unittest.TestCase):
             for signature in (
                 'void startMicrophone()',
                 'void startMicrophone(long testLimitMs)',
+                'private void registerCapture(CaptureWindow window, int captureEpoch)',
+                'private void watchCapture(CaptureWindow window, int mine, AudioRecord ownedRecord)',
                 'void stopMicrophone()',
                 'private boolean stopMicrophone(CaptureWindow expected)',
                 'private void rejectCapture(Object captureId, long route)',
@@ -512,6 +532,9 @@ class CaptureWindowTests(unittest.TestCase):
 
     def test_default_capture_has_no_limit_or_watchdog(self):
         self.check_worker('normal')
+
+    def test_unconfirmed_capture_expires_even_for_unlimited_voice(self):
+        self.check_worker('unconfirmed_timeout')
 
     def test_capture_clock_uses_only_plausible_advancing_anchors(self):
         self.check_worker('clock_math')

@@ -128,10 +128,12 @@ def validate_device_event(value: object) -> JsonObject:
                 task_id = value.get('id')
                 if not isinstance(task_id, str) or not re.fullmatch('[a-f0-9]{16}', task_id):
                     raise ValueError('Invalid saved task ID')
-    if name in ('session_start', 'session_rebind') and 'capture_id' in value:
-        capture_id = value['capture_id']
-        if not isinstance(capture_id, str) or not re.fullmatch('[a-f0-9]{32}', capture_id):
-            raise ValueError('Invalid capture ID')
+    if name in ('session_start', 'session_rebind', 'session_stop'):
+        for key in ('capture_id', 'capture_start_token'):
+            if key in value:
+                identifier = value[key]
+                if not isinstance(identifier, str) or not re.fullmatch('[a-f0-9]{32}', identifier):
+                    raise ValueError('Invalid capture identity field: ' + key)
     integers = {
         'epoch': 32,
         'generation': 32,
@@ -139,6 +141,7 @@ def validate_device_event(value: object) -> JsonObject:
         'nanos': 64,
         'desktop_camera_version': 32,
         'capture_reject_version': 32,
+        'capture_start_ack_version': 32,
         'playout_receipt_version': 32,
         'render_clock_report_version': 32,
         'playback_done_id_version': 32,

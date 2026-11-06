@@ -295,12 +295,10 @@ final class VoiceSession {
       next.ready = true;
       boolean changed = activeLink != next;
       final CaptureWindow currentCapture;
-      final int captureEpoch;
       synchronized (this) {
         currentCapture = recording ? captureWindow : null;
-        captureEpoch = epoch;
       }
-      boolean captureWasActive = currentCapture != null;
+      boolean captureWasActive = currentCapture != null && currentCapture.nativeReady;
       if (changed) {
         // A reused USB Link after Wi-Fi is still a new activation. Invalidate
         // queued workspace callbacks before publishing this route's ready state.
@@ -319,10 +317,11 @@ final class VoiceSession {
         minimumGeneration = 0;
         statusFeedback.reset();
         activeLink = next;
+        next.captureStartToken = null;
         dotChatSupported = savedTasksSupported = false;
         socket = next.connection;
         output = next.out;
-        phase = recording ? "listening" : "idle";
+        phase = recordingPhase();
       }
       JSONObject hello = Wire.event("device_ready");
       Wire.put(hello, "supports_playback_pause", true);
@@ -336,21 +335,72 @@ final class VoiceSession {
       Wire.put(hello, "sample_rate", 16000);
       Wire.put(hello, "capture_active", captureWasActive);
       Wire.put(hello, "capture_reject_version", 1);
+      Wire.put(hello, "capture_start_ack_version", 1);
       Wire.put(hello, "wake_mode", wakeMode);
       next.event(hello);
-      if (captureWasActive) {
-        JSONObject rebound = Wire.event("session_rebind");
-        Wire.put(rebound, "capture_active", true);
-        Wire.put(rebound, "epoch", captureEpoch);
-        Wire.put(rebound, "capture_id", currentCapture.id);
-        Wire.put(rebound, "source", 7);
-        Wire.put(rebound, "sample_rate", 16000);
-        Wire.put(rebound, "render_gain", .35);
-        next.event(rebound);
-      }
-      // Ready/rebind must enter the wire before a UI callback can start capture.
+      // The hello receipt registers any current capture on the new route.
       if (changed) listener.link(true, routeEpoch);
     }
+  }
+
+  private String recordingPhase() {
+    CaptureWindow window = captureWindow;
+    if (!recording || window == null) return "idle";
+    return window.startConfirmed ? "listening" : "calibrating";
+  }
+
+  private void registerCapture(CaptureWindow window, int captureEpoch) throws IOException {
+    Link destination = activeLink;
+    if (!foreground
+        || !recording
+        || window == null
+        || captureWindow != window
+        || epoch != captureEpoch
+        || !window.nativeReady
+        || window.registeredRoute == routeEpoch
+        || window.watchdogRemaining(SystemClock.elapsedRealtime()) == 0
+        || destination == null
+        || destination.captureStartToken == null) return;
+    String token = destination.captureStartToken;
+    if (window.startToken == null) window.startToken = token;
+    if (!window.startToken.equals(token)) {
+      if (stopMicrophone(window)) listener.captureRejected(captureEpoch + 1);
+      return;
+    }
+    boolean rebind = window.startConfirmed;
+    JSONObject event = Wire.event(rebind ? "session_rebind" : "session_start");
+    if (rebind) Wire.put(event, "capture_active", true);
+    Wire.put(event, "epoch", captureEpoch);
+    Wire.put(event, "capture_id", window.id);
+    if (!token.isEmpty()) Wire.put(event, "capture_start_token", token);
+    Wire.put(event, "source", 7);
+    Wire.put(event, "sample_rate", 16000);
+    Wire.put(event, "render_gain", .35);
+    destination.event(event);
+    window.registeredRoute = routeEpoch;
+    // Older Mac backends have no acceptance receipt.
+    if (token.isEmpty()) window.startConfirmed = true;
+  }
+
+  private boolean captureHello(Link source, JSONObject hello) throws IOException {
+    Object token = hello.opt("capture_start_token");
+    if (token != null && (!(token instanceof String) || !((String) token).matches("[a-f0-9]{32}")))
+      throw new IOException("Invalid capture start capability");
+    source.captureStartToken = token == null ? "" : (String) token;
+    CaptureWindow window = captureWindow;
+    registerCapture(window, epoch);
+    return window == null || captureWindow == window;
+  }
+
+  private void confirmCaptureStart(JSONObject receipt, long route) {
+    CaptureWindow window = captureWindow;
+    if (recording
+        && currentRoute(route)
+        && window != null
+        && window.registeredRoute == route
+        && window.watchdogRemaining(SystemClock.elapsedRealtime()) > 0
+        && window.id.equals(receipt.opt("capture_id"))
+        && Integer.valueOf(epoch).equals(receipt.opt("epoch"))) window.startConfirmed = true;
   }
 
   private void lost(Link link) {
@@ -387,6 +437,7 @@ final class VoiceSession {
     final int ticket;
     final ArrayBlockingQueue<Wire.Packet> queue = new ArrayBlockingQueue<>(128);
     volatile boolean closed, ready;
+    String captureStartToken;
     DataOutputStream out;
 
     Link(Socket connection, String kind, int ticket) {
@@ -502,6 +553,7 @@ final class VoiceSession {
         if (!foreground || !currentRoute(route)) return;
         String event = j.optString("event");
         if ("hello".equals(event)) {
+          boolean keepVoiceStatus = captureHello(source, j);
           dotChatSupported = Boolean.TRUE.equals(j.opt("supports_dot_chat_handoff"));
           savedTasksSupported = Boolean.TRUE.equals(j.opt("supports_saved_task_results"));
           listener.recognition(j.optString("asr_engine", "sensevoice"));
@@ -511,11 +563,17 @@ final class VoiceSession {
               if (!statusFeedback.transportInterruption(p.generation)) return;
               phase = "error";
               listener.state(phase, j.optString("message", "播报因连接切换中断，可在任务页查看已完成结果。"));
-            } else if (!statusFeedback.transportInterrupted(p.generation)) {
+            } else if (keepVoiceStatus && !statusFeedback.transportInterrupted(p.generation)) {
+              String voicePhase = recordingPhase();
               listener.state(
-                  recording ? "listening" : "idle", j.optString("message", "Mac 已连接，点击开始语音"));
+                  voicePhase,
+                  "calibrating".equals(voicePhase)
+                      ? "正在准备音频，请保持安静"
+                      : j.optString("message", "Mac 已连接，点击开始语音"));
             }
           }
+        } else if ("capture_started".equals(event)) {
+          confirmCaptureStart(j, route);
         } else if ("capture_rejected".equals(event)) {
           rejectCapture(j.opt("capture_id"), route);
         } else if ("screen_sleep".equals(event)) {
@@ -875,6 +933,7 @@ final class VoiceSession {
         destination = activeLink;
       }
       if (destination == null || destination.closed) throw new IOException("Mac disconnected");
+      if (type == Wire.MIC && !captureRegistered(generation)) return;
       Wire.Packet packet = new Wire.Packet();
       packet.type = type;
       packet.generation = generation;
@@ -886,10 +945,18 @@ final class VoiceSession {
         destination.offer(packet);
       } catch (IOException error) {
         Link fallback = activeLink;
-        if (fallback != null && fallback != destination && !fallback.closed) fallback.offer(packet);
-        else throw error;
+        if (fallback == null || fallback == destination || fallback.closed) throw error;
+        if (type != Wire.MIC || captureRegistered(generation)) fallback.offer(packet);
       }
     }
+  }
+
+  private boolean captureRegistered(int captureEpoch) {
+    CaptureWindow window = captureWindow;
+    return recording
+        && epoch == captureEpoch
+        && window != null
+        && window.registeredRoute == routeEpoch;
   }
 
   boolean isVisionRequestCurrent(JSONObject request) {
@@ -1094,47 +1161,23 @@ final class VoiceSession {
                     if (record.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING)
                       throw new IOException("麦克风无法开始");
                   }
-                  if (window.limitMs > 0) {
+                  synchronized (routeLock) {
+                    if (!recording || !foreground || epoch != mine) return;
+                    window.nativeReady = true;
+                    try {
+                      registerCapture(window, mine);
+                    } catch (IOException routeLost) {
+                      // The link closes on failed enqueue. A surviving route can
+                      // register the same, still pending recording after its hello.
+                    }
+                  }
+                  if (window.limitMs > 0 || !window.startConfirmed) {
                     final AudioRecord ownedRecord = record;
                     timeout =
                         new Thread(
-                            () -> {
-                              try {
-                                while (recording
-                                    && epoch == mine
-                                    && window.allows(SystemClock.elapsedRealtime())) {
-                                  Thread.sleep(
-                                      Math.min(
-                                          1000, window.remaining(SystemClock.elapsedRealtime())));
-                                }
-                                // Stop only this worker's hardware,
-                                // never a replacement
-                                // recording. This also unblocks a
-                                // stalled native read.
-                                if (recording
-                                    && epoch == mine
-                                    && !window.allows(SystemClock.elapsedRealtime()))
-                                  ownedRecord.stop();
-                              } catch (InterruptedException interrupted) {
-                                Thread.currentThread().interrupt();
-                              } catch (RuntimeException alreadyReleased) {
-                                // The epoch owner may already have
-                                // closed this record.
-                              }
-                            },
-                            "cc8-test-capture-timeout");
+                            () -> watchCapture(window, mine, ownedRecord), "cc8-capture-timeout");
                     timeout.setDaemon(true);
                     timeout.start();
-                  }
-                  JSONObject began = Wire.event("session_start");
-                  Wire.put(began, "epoch", mine);
-                  Wire.put(began, "capture_id", window.id);
-                  Wire.put(began, "source", 7);
-                  Wire.put(began, "sample_rate", 16000);
-                  Wire.put(began, "render_gain", .35);
-                  synchronized (routeLock) {
-                    if (!recording || !foreground || epoch != mine) return;
-                    send(began);
                   }
                   CaptureClockStats clockStats = window.clockStats;
                   AudioTimestamp captureStamp =
@@ -1229,6 +1272,7 @@ final class VoiceSession {
                     listener.microphone(false);
                     JSONObject stopped = Wire.event("session_stop");
                     Wire.put(stopped, "epoch", mine);
+                    Wire.put(stopped, "capture_id", window.id);
                     send(stopped);
                   }
                 }
@@ -1236,6 +1280,36 @@ final class VoiceSession {
             },
             "cc8-microphone")
         .start();
+  }
+
+  private void watchCapture(CaptureWindow window, int mine, AudioRecord ownedRecord) {
+    try {
+      while (recording && epoch == mine) {
+        long remaining = window.watchdogRemaining(SystemClock.elapsedRealtime());
+        if (remaining == Long.MAX_VALUE) return;
+        if (remaining > 0) {
+          Thread.sleep(Math.min(1000, remaining));
+          continue;
+        }
+        synchronized (routeLock) {
+          if (!recording || epoch != mine) return;
+          long now = SystemClock.elapsedRealtime();
+          if (window.watchdogRemaining(now) > 0) continue;
+          if (window.allows(now)) {
+            if (stopMicrophone(window)) listener.captureRejected(mine + 1);
+            return;
+          }
+        }
+        // The test cap owns this AudioRecord. Do not hold the route lock while
+        // unblocking a native read on the expired hardware.
+        ownedRecord.stop();
+        return;
+      }
+    } catch (InterruptedException interrupted) {
+      Thread.currentThread().interrupt();
+    } catch (RuntimeException alreadyReleased) {
+      // The original recording may have already released its AudioRecord.
+    }
   }
 
   private void rejectCapture(Object captureId, long route) {
@@ -1260,10 +1334,12 @@ final class VoiceSession {
     // 先推进 epoch 再停止硬件，使阻塞 read 返回后的旧帧无法进入新会话。
     final int stoppedEpoch;
     final AudioRecord r;
+    final CaptureWindow stoppedWindow;
     synchronized (this) {
       if (expected != null && captureWindow != expected) return false;
       stoppedEpoch = epoch++;
       recording = false;
+      stoppedWindow = captureWindow;
       captureWindow = null;
       r = recorder;
       recorder = null;
@@ -1282,6 +1358,7 @@ final class VoiceSession {
     listener.microphone(false);
     JSONObject stopped = Wire.event("session_stop");
     Wire.put(stopped, "epoch", stoppedEpoch);
+    if (stoppedWindow != null) Wire.put(stopped, "capture_id", stoppedWindow.id);
     send(stopped);
     return true;
   }

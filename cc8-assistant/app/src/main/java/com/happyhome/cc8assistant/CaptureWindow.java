@@ -4,12 +4,18 @@ import java.text.Normalizer;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
-/** Device-clock bound for one explicitly requested test capture; zero is normal use. */
+/** Own one explicitly requested recording and its device-clock limits. */
 final class CaptureWindow {
   final String id = UUID.randomUUID().toString().replace("-", "");
   static final long MIN_TEST_MS = 1000, MAX_TEST_MS = 1500000;
   final long limitMs;
   private final long deadline;
+  private final long startDeadline;
+  // Registration belongs to the route lock. The watchdog also reads confirmation.
+  boolean nativeReady;
+  String startToken;
+  long registeredRoute = -1;
+  volatile boolean startConfirmed;
   final CaptureClockStats clockStats;
   private TranscriptEvidence transcript;
   private StopEvidence stop;
@@ -56,7 +62,8 @@ final class CaptureWindow {
     limitMs = limit;
     clockStats = limit == 0 ? null : new CaptureClockStats();
     deadline = limit == 0 ? 0 : now + limit;
-    if (limit != 0 && deadline < now)
+    startDeadline = now + 8000;
+    if ((limit != 0 && deadline < now) || startDeadline < now)
       throw new IllegalArgumentException("Capture deadline overflow");
   }
 
@@ -66,6 +73,11 @@ final class CaptureWindow {
 
   long remaining(long now) {
     return limitMs == 0 ? 0 : Math.max(0, deadline - now);
+  }
+
+  long watchdogRemaining(long now) {
+    long capture = limitMs == 0 ? Long.MAX_VALUE : remaining(now);
+    return startConfirmed ? capture : Math.min(capture, Math.max(0, startDeadline - now));
   }
 
   synchronized void observeTranscript(long route, int generation, String text, long now) {

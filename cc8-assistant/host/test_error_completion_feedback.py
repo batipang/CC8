@@ -352,6 +352,11 @@ class FeedbackCheck {
  int minimumGeneration=0,textGeneration=0,announcementGeneration=0,visualGeneration=0;
  final Object routeLock=new Object();long route=5, activeRoute=5;
  boolean dotChatSupported,savedTasksSupported;
+ // The transport handshake itself is covered by the capture route tests.
+ static class Link {}
+ final Link source=new Link();
+ boolean captureHello(Link link,Data hello){return true;}
+ String recordingPhase(){return recording?"listening":"idle";}
  boolean currentRoute(long wanted){return activeRoute==wanted;}
  String phase="idle";
  String pendingVisionNonce="",desktopVisionNonce="";
@@ -390,7 +395,8 @@ class FeedbackCheck {
             command = [str(java / 'javac'), '-encoding', 'UTF-8', '-d', str(folder), str(test)]
             if helper.exists():
                 command.append(str(helper))
-            subprocess.run(command, capture_output=True, check=True, timeout=30)
+            compiled = subprocess.run(command, capture_output=True, text=True, timeout=30)
+            self.assertEqual(compiled.returncode, 0, compiled.stderr)
             result = subprocess.run(
                 [
                     str(java / 'java'),
