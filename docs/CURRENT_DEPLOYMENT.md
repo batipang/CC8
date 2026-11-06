@@ -1,5 +1,15 @@
 # 当前 CC8 部署与验收范围
 
+2026-11-06，Mac 后台更新到 **0.15.11／原签名 APK 0.9.41（code78）／协议 2**，运行源码 `0372dbb`。后台维护和就绪复核用时 20.403 秒，核对原 APK 和语音配置，结束确认 USB 就绪、双端关麦。SenseVoice 已校验的本地资产供明确开启的固定题对照，日常识别继续使用 MiniMax。 [SenseVoice 对照](https://github.com/batipang/CC8/pull/302) [部署源码 CI](https://github.com/batipang/CC8/actions/runs/42177990197)
+
+### 0.15.11 实机同段 SenseVoice 对照
+
+六条固定原速正例（第 5、1、10、15、20、30 题）经 Mac 扬声器和 CC8 麦克风收音，每题把同一段 PCM 分别交给 MiniMax 与本地 SenseVoice。SenseVoice 完整匹配 6/6，MiniMax 匹配 5/6，第 5 题缺少“只读”。两条固定负例在第 5 题分别省略“只读”、替换为“写入”，两侧都返回 `read_only_missing`。此前 18 条数字对照中，六条原句全部匹配，12 条负例中未见 SenseVoice 补出“只读”。
+
+实机八轮逐轮确认公开合成源摘要、零 Dot 派发、停采和临时音频清理，结束另行复核 USB 空闲就绪。该批覆盖所列固定题及负例，完整 30 轮工具执行、真人语音和不同噪声场景分别验收。默认识别仍为 MiniMax。 [同源对照](ASR_EVALUATION.md#minimax-与本地-whisper-同源对照)
+
+## 0.15.10／code78 部署
+
 2026-11-06，Mac 后台更新到 **0.15.10／原签名 APK 0.9.41（code78）／协议 2**，运行源码 `1c0cbab`。后台维护和就绪复核用时 17.013 秒，保留原 APK、模型配置和签名，部署结束确认 USB 就绪、双端关麦。 [空转录对照](https://github.com/batipang/CC8/pull/300) [部署源码 CI](https://github.com/batipang/CC8/actions/runs/42174532008)
 
 ### 0.15.10 实机同段识别对照
