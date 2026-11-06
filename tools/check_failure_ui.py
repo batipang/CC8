@@ -20,13 +20,25 @@ sys.path.insert(0, str(ROOT / 'cc8-assistant/host'))
 
 if __package__:
     from .qa_variant import PACKAGE, COMPONENT, PORT, apk_metadata, safe_source, snapshot_files
-    from .qa_faults import CASE_SETS, DOT_FIXTURES, HTTP_FIXTURES, generate
+    from .qa_faults import (
+        CASE_SETS,
+        DOT_FIXTURES,
+        HTTP_FIXTURES,
+        OFFLINE_OUTPUT_CASE_SETS,
+        generate,
+    )
     from .qa_ui import stdout_hierarchy, status_target, dialog_close
     from .private_output import private_directory, PrivateOutput
 else:
     # Root entry imports this as tools.check_failure_ui to keep one module identity.
     from tools.qa_variant import PACKAGE, COMPONENT, PORT, apk_metadata, safe_source, snapshot_files
-    from tools.qa_faults import CASE_SETS, DOT_FIXTURES, HTTP_FIXTURES, generate
+    from tools.qa_faults import (
+        CASE_SETS,
+        DOT_FIXTURES,
+        HTTP_FIXTURES,
+        OFFLINE_OUTPUT_CASE_SETS,
+        generate,
+    )
     from tools.qa_ui import stdout_hierarchy, status_target, dialog_close
     from tools.private_output import private_directory, PrivateOutput
 
@@ -346,7 +358,7 @@ def run(
         'search_qa_requires_loopback_without_dot',
     )
     require(
-        case_set != 'playback' or http_fixture == dot_fixture == 'fake',
+        case_set not in OFFLINE_OUTPUT_CASE_SETS or http_fixture == dot_fixture == 'fake',
         'playback_qa_requires_offline_fixtures',
     )
     cases = CASE_SETS[case_set]
@@ -633,11 +645,11 @@ def main(argv=None):
         args.dot_fixture = args.dot_fixture or 'fake'
         if args.http_fixture == 'fake' or args.dot_fixture != 'fake':
             parser.error('Search QA requires loopback TLS and no Dot subprocess')
-    if args.case_set == 'playback':
+    if args.case_set in OFFLINE_OUTPUT_CASE_SETS:
         args.http_fixture = args.http_fixture or 'fake'
         args.dot_fixture = args.dot_fixture or 'fake'
         if args.http_fixture != 'fake' or args.dot_fixture != 'fake':
-            parser.error('Playback QA requires offline fixtures')
+            parser.error('Output QA requires offline fixtures')
     if args.host_only:
         if args.runtime_root is not None or args.qa_receipt is not None or args.shared_staging:
             parser.error('--host-only cannot be combined with device or installer options')

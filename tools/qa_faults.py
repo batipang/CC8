@@ -49,7 +49,14 @@ PLAYBACK_CASES = tuple(
     )
     for repeat in range(1, 4)
 )
-CASE_SETS = {'standard': CASES, 'search': SEARCH_CASES, 'playback': PLAYBACK_CASES}
+INTERRUPTION_CASES = (Case('interruption', 'timeout', 1),)
+CASE_SETS = {
+    'standard': CASES,
+    'search': SEARCH_CASES,
+    'playback': PLAYBACK_CASES,
+    'interruption': INTERRUPTION_CASES,
+}
+OFFLINE_OUTPUT_CASE_SETS = ('playback', 'interruption')
 
 
 def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
@@ -57,12 +64,13 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
         raise ValueError('Unknown QA HTTP fixture')
     if dot_fixture not in DOT_FIXTURES:
         raise ValueError('Unknown QA Dot fixture')
-    search = isinstance(cases, tuple) and bool(cases) and cases[0] in SEARCH_CASES
-    playback = isinstance(cases, tuple) and bool(cases) and cases[0] in PLAYBACK_CASES
-    allowed = PLAYBACK_CASES if playback else SEARCH_CASES if search else CASES
+    first = cases[0] if isinstance(cases, tuple) and cases else None
+    allowed = next((group for group in CASE_SETS.values() if first in group), ())
+    search = allowed is SEARCH_CASES
+    playback = allowed is PLAYBACK_CASES or allowed is INTERRUPTION_CASES
     if (
-        not isinstance(cases, tuple)
-        or not 1 <= len(cases) <= len(allowed)
+        not allowed
+        or len(cases) > len(allowed)
         or any(
             not isinstance(case, Case) or type(case.repeat) is not int or case not in allowed
             for case in cases
@@ -73,7 +81,7 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
     if search and (http_fixture == 'fake' or dot_fixture != 'fake'):
         raise ValueError('Search QA requires loopback TLS and no Dot subprocess')
     if playback and (http_fixture != 'fake' or dot_fixture != 'fake'):
-        raise ValueError('Playback QA requires offline fixtures')
+        raise ValueError('Output QA requires offline fixtures')
     import numpy as np
     import requests
 
@@ -189,7 +197,8 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
 
             def stream(self, text, current, on_subtitle=None):
                 if playback:
-                    return iter((np.zeros(320, dtype=np.int16),))
+                    frames = 640 if state.case.stage == 'interruption' else 320
+                    return iter((np.zeros(frames, dtype=np.int16),))
                 return voice.pcm(text, current, on_subtitle)
 
             def cancel(self):
@@ -240,6 +249,11 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
                 state.pcm_attempts += 1
                 if state.case.stage == 'transport':
                     raise BrokenPipeError('qa-injected-sensitive-body')
+                if state.case.stage == 'interruption':
+                    if b.pause_for_voice() is None:
+                        raise AssertionError('Fixture did not acquire a tentative pause')
+                    b.playback.pause_state['started'] -= 21
+                    return
                 if state.case.kind == 'provider_or_runtime':
                     b.on_event(
                         {
@@ -280,6 +294,12 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
             prefix = '联网查询' if search else ''
             b.submit_text(prefix + '自动故障测试 ' + case.ident)
             job = b.response.queue.get_nowait()
+            interruption = case.stage == 'interruption'
+            if interruption:
+                # Simulate the host-side recording flag only. Never send PCM or
+                # start the microphone on the isolated Android receiver.
+                b.session.active = True
+                b.playback.set_pause_capability(True)
             if case.stage == 'asr':
                 # The UI owner is text-only, but this virtual recognizer job
                 # has a voice diagnostic trace. No microphone is opened.
@@ -293,13 +313,23 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
                 b.finish_text_response(job.generation)
             else:
                 run_one(b.response, job)
+            if interruption:
+                if not b.session.active or b.playback.pause_state is not None:
+                    raise AssertionError(
+                        'Interruption timeout changed capture or retained the pause'
+                    )
+                b.session.active = False
             error_packets = list(packets)
             unknown_start = (
                 local_dot is not None
                 and case.stage == 'brain'
                 and case.kind in ('transport_or_io', 'timeout')
             )
-            expected_message = feedback(case.stage, case.kind, unconfirmed=unknown_start).message
+            expected_message = (
+                '插话识别超时，已停止旧播报'
+                if interruption
+                else feedback(case.stage, case.kind, unconfirmed=unknown_start).message
+            )
             errors = [
                 p
                 for p in error_packets
@@ -309,10 +339,9 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
             if len(errors) != 1 or decode_event(errors[0].data)['message'] != expected_message:
                 raise AssertionError('Fixture did not preserve its declared failure')
             report = b.diagnostics.report()['requests'][-1]
-            if report['outcome'] != 'failed' or report['error'] != {
-                'stage': case.stage,
-                'kind': case.kind,
-            }:
+            expected_outcome = 'cancelled' if interruption else 'failed'
+            expected_error = None if interruption else {'stage': case.stage, 'kind': case.kind}
+            if report['outcome'] != expected_outcome or report['error'] != expected_error:
                 raise AssertionError('Fixture diagnostic mismatch')
             expected_http = 2 if search else 0 if playback or case.stage == 'brain' else 1
             expected_brain = int(playback or case.stage in ('brain', 'tts'))

@@ -183,6 +183,31 @@ class ControllerFixtureTests(unittest.TestCase):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 qa_faults.generate(cases=qa_faults.PLAYBACK_CASES, **kwargs)
 
+    def test_interruption_expiry_cancels_output_and_keeps_the_completed_task(self):
+        with (
+            patch.object(socket.socket, 'connect', side_effect=AssertionError('network forbidden')),
+            patch.object(subprocess, 'Popen', side_effect=AssertionError('process forbidden')),
+        ):
+            (row,) = qa_faults.generate(cases=qa_faults.INTERRUPTION_CASES)
+        from protocol import EVENT, decode_event
+
+        self.assertEqual(row['expected_task'], 'completed')
+        self.assertEqual(row['provider_requests'], 1)
+        self.assertTrue(all(p.kind == EVENT for p in row['error'] + row['recovery']))
+        events = [(decode_event(p.data), p.generation) for p in row['error']]
+        (paused,) = [(e, g) for e, g in events if e['event'] == 'playback_pause']
+        (cancelled,) = [(e, g) for e, g in events if e['event'] == 'cancel' and g > paused[1]]
+        failure = (decode_event(row['stale_error'].data), row['stale_error'].generation)
+        self.assertEqual(failure[1], cancelled[1])
+        self.assertEqual(failure[0]['message'], '插话识别超时，已停止旧播报')
+        self.assertLess(events.index(paused), events.index(cancelled))
+        self.assertLess(events.index(cancelled), events.index(failure))
+        self.assertNotIn('play_end', [e['event'] for e, _ in events])
+
+        for kwargs in ({'http_fixture': 'loopback_tls'}, {'dot_fixture': 'local_stdio'}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                qa_faults.generate(cases=qa_faults.INTERRUPTION_CASES, **kwargs)
+
     def test_all_48_real_controller_failures_and_owned_recoveries_are_offline(self):
         # Fail immediately if fake I/O accidentally falls through to a network.
         with (
