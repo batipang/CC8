@@ -134,6 +134,7 @@ ALL_ROUTE_LOSS_REQUEST = {'operation': 'transport_all_test'}
 WAKE_SELF_CHECK = 'self_playback_does_not_wake'
 POST_DIALOGUE_SECONDS = 20
 STANDBY_SECONDS = 900
+STANDBY_QUIET_COUNTERS = ('local_wake_count', 'voice_asr_attempts', 'render_frames')
 PAIRED_PLAYOUT_MIN_BACKEND = '0.14.50'
 RESPONSE_ACOUSTIC_MIN_BACKEND = '0.14.57'
 EXTENDED_VOICE_MIN_BACKEND = '0.14.60'
@@ -1780,8 +1781,12 @@ class SmokeRun:
         require(before == after, 'home_microphone_frames_increasing')
 
     def idle(self):
+        baseline = self.audio_counters(self.health())
         began = self.clock()
         self.start_capture()
+        # Calibration plays the startup reference. Only the render counter
+        # gets a fresh baseline after it; wake and ASR must remain quiet.
+        baseline['render_frames'] = self.audio_counters(self.health())['render_frames']
         deadline = self.clock() + 970
         evidence = {
             'last_awake_seconds': None,
@@ -1789,13 +1794,22 @@ class SmokeRun:
             'first_black_screen_seconds': None,
         }
         self.standby_evidence = evidence
-        while True:
-            poll_started = self.clock()
+
+        def quiet_capture():
             h = self.health()
             require(
                 h.get('microphone_active') is True and h.get('connected') is True,
                 'idle_capture_or_connection_lost',
             )
+            counters = self.audio_counters(h)
+            deltas = {key: counters[key] - baseline[key] for key in STANDBY_QUIET_COUNTERS}
+            evidence['quiet_counter_deltas'] = deltas
+            require(not any(deltas.values()), 'idle_unexpected_audio_activity')
+            return h
+
+        while True:
+            poll_started = self.clock()
+            quiet_capture()
             d, ui = self.device.status()
             observed = self.clock()
             require(observed <= deadline, 'idle_black_screen_timeout')
@@ -1812,6 +1826,7 @@ class SmokeRun:
                     'idle_black_screen_too_early',
                 )
                 require(evidence['last_awake_seconds'] is not None, 'idle_awake_state_unobserved')
+                h = quiet_capture()
                 require(
                     h.get('waiting_for_wake') is True and h.get('local_wake_ready') is True,
                     'idle_local_wake_not_ready',
