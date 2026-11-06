@@ -158,6 +158,31 @@ class HierarchyTests(unittest.TestCase):
 
 
 class ControllerFixtureTests(unittest.TestCase):
+    def test_playback_cases_keep_completed_work_and_only_replay_control_events(self):
+        with (
+            patch.object(socket.socket, 'connect', side_effect=AssertionError('network forbidden')),
+            patch.object(subprocess, 'Popen', side_effect=AssertionError('process forbidden')),
+        ):
+            rows = qa_faults.generate(cases=qa_faults.PLAYBACK_CASES[::3])
+        from protocol import EVENT, decode_event
+
+        for row in rows:
+            with self.subTest(case=row['case'].ident):
+                self.assertEqual(row['expected_task'], 'completed')
+                self.assertEqual(row['provider_requests'], 1)
+                self.assertTrue(all(p.kind == EVENT for p in row['error'] + row['recovery']))
+                self.assertEqual(
+                    decode_event(row['stale_error'].data)['message'], row['expected_message']
+                )
+                events = [decode_event(p.data)['event'] for p in row['error']]
+                self.assertIn('play_begin', events)
+                self.assertIn('cancel', events)
+                self.assertEqual('play_end' in events, row['case'].kind == 'timeout')
+
+        for kwargs in ({'http_fixture': 'loopback_tls'}, {'dot_fixture': 'local_stdio'}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                qa_faults.generate(cases=qa_faults.PLAYBACK_CASES, **kwargs)
+
     def test_all_48_real_controller_failures_and_owned_recoveries_are_offline(self):
         # Fail immediately if fake I/O accidentally falls through to a network.
         with (

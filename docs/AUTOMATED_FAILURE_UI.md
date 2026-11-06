@@ -79,6 +79,16 @@ TLS 模式在安装 QA 前生成协议包，再由实体 QA 界面重放。报�
 
 切换到真实启动回执超时后，从仓库根目录及最小 PATH 重跑 `loopback_tls` 和 `loopback_business`，均通过 48 项。本地子进程每轮记录 3 次未应答启动、33 次初始请求、48 次明确恢复请求和 3 次拒绝审批。实体屏幕回放见[业务错误与本地 Dot 的实机记录](#业务错误与本地-dot-的实体回放2026-11-05)。
 
+## 设备播放与输出连接专项
+
+```sh
+.toolchains/cc8/dev-venv/bin/python cc8 verify-failure-ui --host-only --case-set playback --execute
+.toolchains/cc8/dev-venv/bin/python cc8 verify-failure-ui --case-set playback --runtime-root /absolute/live/workspace \
+  --qa-receipt /absolute/private/new-qa-build/qa-build.json --execute
+```
+
+设备播放错误、播完回执超时、输出连接断管各三次。主机先取得固定任务完成回执，再经真实播放控制器注入故障。检查原任务仍为已完成、录音关闭、没有重试或遗留播报，并在下一条独立请求时核对恢复。两端只用隔离替身，发送至 QA 包的回放只有协议控制事件。实体模式核对错误详情及新请求状态，音频设备性能另行验收。
+
 ## MiniMax 业务错误与下一次请求恢复
 
 ### 联网检索专项
