@@ -353,6 +353,39 @@ class AuditDeviceSuiteTests(unittest.TestCase):
         self.assertFalse(reviewed['verified'])
         self.assertEqual(reviewed['reason'], 'suite_latency_route_incomplete')
 
+    def test_tool_guard_evidence_is_required_for_current_batches_only(self):
+        data = saved_suite(qa=True, scenario='tool')
+        self.assertTrue(audit(data)['verified'])
+        self.assertIsNot(audit(data).get('tool_sample_guard_required'), True)
+        data['backend_version'] = '0.15.4'
+        reviewed = audit(data)
+        self.assertFalse(reviewed['verified'])
+        self.assertEqual(reviewed['reason'], 'phase_tool_sample_guard_unconfirmed')
+        for phase in data['phases']:
+            phase['report']['acoustic_evidence'].update(
+                tool_sample_guarded=True, rejected_voice_gates={'tool_sample_guard': 0}
+            )
+        reviewed = audit(data)
+        self.assertTrue(reviewed['verified'])
+        self.assertTrue(reviewed['tool_sample_guard_required'])
+        evidence = data['phases'][1]['report']['acoustic_evidence']
+        for field, value in (
+            ('tool_sample_guarded', 1),
+            ('admitted_voice_requests', True),
+            ('admitted_voice_requests', 2),
+            ('rejected_voice_gates', {}),
+            ('rejected_voice_gates', {'tool_sample_guard': False}),
+            ('rejected_voice_gates', {'tool_sample_guard': 1}),
+        ):
+            with self.subTest(field=field, value=value):
+                original = evidence[field]
+                evidence[field] = value
+                reviewed = audit(data)
+                self.assertFalse(reviewed['verified'])
+                self.assertEqual(reviewed['reason'], 'phase_tool_sample_guard_unconfirmed')
+                self.assertEqual(reviewed['completed_phases'], 1)
+                evidence[field] = original
+
     def test_partial_qa_replays_only_completed_prefix(self):
         for state in ('running', 'failed'):
             with self.subTest(state=state):

@@ -194,6 +194,8 @@ cp .toolchains/cc8/paths.json /absolute/qa-checkout/.toolchains/cc8/paths.json
 
 ### 离线复核既有报告
 
+工具题批次用 `audit-device-suite` 逐轮复核。从后台 0.15.4 起，每个合格样本须有门控启用记录、恰好一次语音准入，且门控拒绝次数为零。旧批次仍可按当时的回执复核，结果注明当时未要求门控证据。
+
 ```sh
 ./cc8 audit-measure /absolute/private/run.json
 ```
