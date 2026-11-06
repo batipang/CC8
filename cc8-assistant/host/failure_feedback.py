@@ -35,6 +35,15 @@ RECOVERY = {
     'vision': '请确认助手在前台、镜头无遮挡并允许摄像头权限；检查 USB 或已配对 Wi-Fi 后，在原入口重新发起拍照或看图。',
     'runtime': '请查看电脑端诊断；本次不会自动重试任务。',
 }
+VISION_GUIDANCE = {
+    'credential_or_permission': (
+        '摄像头权限或拍摄授权不可用。请将大黄蜂留在前台，在 CC8 的应用权限中确认允许使用摄像头，'
+        '再从原入口重新发起拍照或看图。'
+    ),
+    'timeout': '等待画面超时。请将大黄蜂留在前台，检查 USB 或已配对 Wi-Fi，再从原入口重新发起拍照或看图。',
+    'transport_or_io': '画面传输中断。请检查 USB 或已配对 Wi-Fi，连接恢复后再从原入口重新发起拍照或看图。',
+    'provider_or_runtime': '未能取得画面。请关闭占用摄像头的页面，确认镜头无遮挡，再从原入口重新发起拍照或看图。',
+}
 
 
 @dataclass(frozen=True)
@@ -53,6 +62,8 @@ def feedback(stage, kind, *, unconfirmed=False):
             kind,
             '助理执行 · 结果待核对。Dot 未返回有效启动回执，请在电脑端核对已执行步骤，再决定是否重新发起。',
         )
+    if stage == 'vision' and kind in VISION_GUIDANCE:
+        return FailureFeedback(stage, kind, LABELS[stage] + ' · ' + VISION_GUIDANCE[kind])
     recovery = RECOVERY[stage]
     if kind == 'approval_declined':
         recovery = '请在电脑端核对已执行步骤和权限后重新发起；当前没有待批准的请求。'
