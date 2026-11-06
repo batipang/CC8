@@ -74,6 +74,15 @@ def private_staging(transport: str) -> str:
     return directory
 
 
+def install_notice(*parts: str) -> None:
+    # A disconnected progress reader must not interrupt package verification.
+    if sys.stderr is not None:
+        try:
+            print(*parts, file=sys.stderr, flush=True)
+        except (OSError, ValueError):
+            pass
+
+
 def install_stream(
     transport: str, package: str, payload: bytes, digest: str, shared_staging: bool = False
 ):
@@ -82,9 +91,8 @@ def install_stream(
     helper_hash = hashlib.sha256(helper).hexdigest()
     directory = '/sdcard/Download' if shared_staging else private_staging(transport)
     if shared_staging:
-        print(
-            'Shared staging explicitly selected: other storage-enabled apps may replace the temporary helper.',
-            flush=True,
+        install_notice(
+            'Shared staging explicitly selected: other storage-enabled apps may replace the temporary helper.'
         )
     remote = directory + '/.cc8-installer-' + uuid.uuid4().hex + '.jar'
     quoted = shlex.quote(remote)
@@ -118,12 +126,12 @@ def install_stream(
             or 'CC8_PACKAGE_INSTALLED ' + package + ' ' not in output
         ):
             raise RuntimeError('System installer completion was not verified: ' + output[:500])
-        print('APK stream hash and system install callback verified.', flush=True)
+        install_notice('APK stream hash and system install callback verified.')
     finally:
         try:
             shell(transport, 'rm -f ' + quoted)
         except (RuntimeError, subprocess.TimeoutExpired):
-            print('Temporary helper cleanup could not be verified:', remote, flush=True)
+            install_notice('Temporary helper cleanup could not be verified:', remote)
 
 
 def target() -> str:
@@ -432,7 +440,7 @@ def _perform_actions(args, output=None):
                 'APK action may have completed; private report save failed. Verify the installed package before retrying.'
             ) from None
         print(json.dumps(report, indent=2), flush=True)
-        print('Private install report saved: ' + str(output.path), flush=True)
+        install_notice('Private install report saved:', str(output.path))
 
 
 if __name__ == '__main__':
