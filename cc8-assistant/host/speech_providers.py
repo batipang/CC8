@@ -43,6 +43,9 @@ class LocalSpeech:
     def recognize(self, samples):
         return self.recognizer.recognize(samples)
 
+    def recognize_current(self, samples, is_current):
+        return self.recognizer.recognize(samples, is_current=is_current)
+
     def synthesize(self, text):
         if text in self.cache:
             return self.cache[text]
