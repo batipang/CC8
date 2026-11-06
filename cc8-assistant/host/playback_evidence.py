@@ -145,6 +145,7 @@ class PlaybackEvidence:
         self.segment_frame = 0
         self.template_start = None
         self.template_offset = None
+        self.pending_room_result = None
         self.clock_resets = 0
         self.max_clock_step_ms = 0
 
@@ -169,7 +170,11 @@ class PlaybackEvidence:
 
     def cancel(self, status='cancelled', probe=None):
         with self.lock:
-            if self.current is not None and (probe is None or probe is self.current):
+            if self.current is None or (probe is not None and probe is not self.current):
+                return
+            if status == 'expired' and self.pending_room_result is not None:
+                self._finish('observed', **self.pending_room_result)
+            else:
                 self._finish(status)
 
     def _finish(self, status, **evidence):
@@ -190,6 +195,7 @@ class PlaybackEvidence:
         self.render_start = self.render_end = self.render_frame = None
         self.segment_frame = 0
         self.template_start = self.template_offset = None
+        self.pending_room_result = None
         probe.result = {
             'schema': 2,
             'status': status,
@@ -404,7 +410,14 @@ class PlaybackEvidence:
         stop = local + 2 * ROOM_SPAN + context
         capture = origin + start
         capture_stop = capture + 2 * ROOM_SPAN
-        if stop > len(self.reference) or offset + WINDOW + context > len(self.response_prefix):
+        prefix_stop = offset + WINDOW + context
+        if stop > len(self.reference) or prefix_stop > len(self.response_prefix):
+            if (
+                not confirm_alignment
+                and stop <= ROOM_REFERENCE_LIMIT
+                and prefix_stop <= RESPONSE_PREFIX_LIMIT
+            ):
+                return 'reference_pending'
             return 'reference_coverage_missing'
         if capture < 0 or capture_stop > len(self.mic):
             return 'capture_coverage_missing'
@@ -480,6 +493,7 @@ class PlaybackEvidence:
         return leading
 
     def _analyze(self):
+        self.pending_room_result = None
         if self.template_start is None or self.mic_start is None:
             return
         left = round((self.template_start - self.mic_start) * RATE / 1e9) + MIN_DELAY
@@ -511,8 +525,7 @@ class PlaybackEvidence:
                     self.reference,
                     offset,
                 )
-        self._finish(
-            status,
+        evidence = dict(
             leading_acoustic_evidence=leading,
             correlation=round(confidence, 4),
             competing_correlation=round(rival, 4),
@@ -522,3 +535,10 @@ class PlaybackEvidence:
             if status == 'observed'
             else None,
         )
+        if leading.get('room_fit_status') == 'reference_pending':
+            # MIC can cover the fit before its later RENDER packets arrive.
+            # Keep only the unconfirmed receipt for the existing probe deadline.
+            leading['room_fit_status'] = 'reference_coverage_missing'
+            self.pending_room_result = evidence
+            return
+        self._finish(status, **evidence)

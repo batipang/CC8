@@ -339,6 +339,76 @@ class AcousticEvidenceTests(unittest.TestCase):
                     self.assertNotIn(metric, evidence)
                 self.assertFalse(observer.response_prefix.size or observer.mic.size)
 
+    def test_response_room_fit_waits_for_later_reference_packets(self):
+        reference = public_signal()
+        reference[640:960] = 0.12 * np.sin(2 * np.pi * 250 * np.arange(320) / RATE)
+        room = np.zeros(25)
+        room[0], room[-1] = 0.55, 0.5
+        for condition in (
+            'continuous',
+            'missing_block',
+            'expired',
+            'render_gap',
+            'capture_clock_gap',
+            'new_clock_step',
+            'cancelled',
+        ):
+            with self.subTest(condition=condition):
+                observer = PlaybackEvidence()
+                probe = observer.arm(101, 7, input_end_ns=START - 600_000_000)
+                self.addCleanup(observer.cancel)
+
+                def render(start, stop):
+                    for frame in range(start, stop, 320):
+                        stamp = START + round(frame * 1e9 / RATE)
+                        if frame < 640:
+                            stamp += 120_000_000
+                        observer.render(101, frame, stamp, reference[frame : frame + 320])
+
+                render(0, 3840)
+                mic = np.zeros(32000)
+                echoed = np.convolve(reference, room)
+                mic[5120 : 5120 + len(echoed)] = echoed * 0.35
+                if condition == 'missing_block':
+                    mic[5120 + 640 : 5120 + 960] = 0
+                for frame in range(0, len(mic), 320):
+                    stamp = START - 200_000_000 + round(frame * 1e9 / RATE)
+                    observer.microphone(7, stamp, mic[frame : frame + 320])
+                self.assertFalse(probe.done.is_set())
+                if condition == 'expired':
+                    observer.cancel('expired', probe)
+                elif condition == 'render_gap':
+                    render(4160, 4480)
+                elif condition == 'capture_clock_gap':
+                    observer.microphone(7, START + 3_000_000_000, mic[:320])
+                elif condition == 'new_clock_step':
+                    observer.render(101, 3840, START + 360_000_000, reference[3840:4160])
+                    observer.cancel('expired', probe)
+                elif condition == 'cancelled':
+                    observer.cancel(probe=probe)
+                else:
+                    render(3840, 5760)
+                self.assertTrue(probe.done.is_set())
+                leading = probe.result['leading_acoustic_evidence']
+                metric = 'last_voiced_to_confirmed_output_block_ms'
+                if condition == 'continuous':
+                    self.assertEqual(leading['alignment'], 'matched_render_frames_room_fit')
+                    self.assertAlmostEqual(leading[metric], 720, delta=1)
+                else:
+                    self.assertNotIn(metric, leading)
+                    if condition in ('expired', 'missing_block'):
+                        self.assertEqual(leading['status'], 'response_prefix_discontinuous')
+                        self.assertEqual(
+                            leading['room_fit_status'],
+                            'reference_coverage_missing'
+                            if condition == 'expired'
+                            else 'prefix_capture_below_floor',
+                        )
+                    else:
+                        expected = 'expired' if condition == 'new_clock_step' else condition
+                        self.assertEqual(probe.result['status'], expected)
+                self.assertFalse(observer.response_prefix.size or observer.mic.size)
+
     def test_room_model_realigns_multipath_but_rejects_missing_or_shifted_audio(self):
         # Changing pitch and envelope make the two unfiltered windows favor
         # different peaks of the same stationary two-path acoustic response.
@@ -728,6 +798,7 @@ class ProbeIntegrationTests(unittest.TestCase):
                 token = capture.arm_response_probe(1)
                 capture.bind_response_probe('一加一等于几？', 101, START - 600_000_000)
                 observer = capture.evidence
+                probe = observer.current
                 render_end = 3840 if condition == 'reference' else len(reference)
                 for frame in range(0, render_end, 320):
                     stamp = START + round(frame * 1e9 / RATE)
@@ -754,6 +825,9 @@ class ProbeIntegrationTests(unittest.TestCase):
                     observer.microphone(
                         7, START - 200_000_000 + round(frame * 1e9 / RATE), mic[frame : frame + 320]
                     )
+                if condition == 'reference':
+                    self.assertFalse(probe.done.is_set())
+                    observer.cancel('expired', probe)
                 self.assertEqual(
                     capture.read_response_probe(token),
                     {
