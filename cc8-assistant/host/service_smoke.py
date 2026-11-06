@@ -107,7 +107,8 @@ class LiveService:
         processes = self.processes()
         require(not processes['unexpected'], 'unexpected_service_process')
         require(len(processes['bridge']) <= 1, 'duplicate_backend')
-        require(len(processes['supervisor']) == 1, 'supervisor_missing_or_ambiguous')
+        require(processes['supervisor'], 'supervisor_missing')
+        require(len(processes['supervisor']) == 1, 'duplicate_supervisor')
         d, ui = self.device.status()
         require(d.get('foreground') is True, 'assistant_left_foreground')
         require(d.get('microphone_active') is False, 'device_capture_active')
@@ -376,6 +377,7 @@ class RecoveryRun:
     def run(self):
         state = 'failed'
         previous = None
+        stage = None
         try:
             # Preflight must be ready now; never wait for or start an idle service.
             previous = self.sample()
@@ -383,12 +385,15 @@ class RecoveryRun:
             for index in range(self.cycles):
                 row = {'cycle': index + 1, 'state': 'running'}
                 self.rows.append(row)
+                stage = 'fault_gate'
                 self.checkpoint(self.report('running'))
                 began = self.clock()
                 self.crash(previous)
                 self.fault_sent = True
                 self.recovery_verified = False
+                stage = 'waiting_for_ready'
                 current = self.wait_ready(previous)
+                stage = 'checking_stability'
                 self.sleep(3)
                 stable = self.sample()
                 require(stable == current, 'recovered_service_not_stable')
@@ -404,11 +409,11 @@ class RecoveryRun:
         except CheckFailure as error:
             self.reason = str(error)
             if self.rows and self.rows[-1]['state'] == 'running':
-                self.rows[-1].update(state='failed', reason=str(error))
+                self.rows[-1].update(state='failed', reason=self.reason, failure_stage=stage)
         except Exception:
             self.reason = 'service_test_operation_failed'
             if self.rows and self.rows[-1]['state'] == 'running':
-                self.rows[-1].update(state='failed', reason='service_test_operation_failed')
+                self.rows[-1].update(state='failed', reason=self.reason, failure_stage=stage)
         finally:
             if self.fault_sent and not self.recovery_verified:
                 # Observe the existing supervisor only. Do not override a user
@@ -433,12 +438,11 @@ class SupervisorRecoveryRun(RecoveryRun):
                 )
             return self.service.supervisor_sample()
         except CheckFailure as error:
-            if self.fault_sent and str(error) == 'supervisor_missing_or_ambiguous':
+            if self.fault_sent and str(error) == 'supervisor_missing':
                 processes = self.service.processes()
+                require(len(processes['supervisor']) <= 1, 'duplicate_supervisor')
                 require(
-                    not processes['unexpected']
-                    and len(processes['supervisor']) <= 1
-                    and len(processes['bridge']) <= 1,
+                    not processes['unexpected'] and len(processes['bridge']) <= 1,
                     'unexpected_recovery_processes',
                 )
                 # launchd may already have spawned the replacement between the
@@ -583,7 +587,7 @@ def main(argv=None):
     parser.add_argument('--runtime-root', type=Path, required=True)
     parser.add_argument('--cycles', type=int, choices=range(1, 11))
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument('--fault', choices=('backend', 'supervisor'), default='backend')
+    mode.add_argument('--fault', choices=('backend', 'supervisor'))
     mode.add_argument('--observe-sleep', action='store_true')
     parser.add_argument('--sleep-wait', type=int, metavar='SECONDS')
     parser.add_argument('--execute', action='store_true')
@@ -595,6 +599,7 @@ def main(argv=None):
     ):
         parser.error('--sleep-wait requires --observe-sleep and accepts 10–3600 seconds')
     cycles = args.cycles if args.cycles is not None else 10
+    fault = args.fault or 'backend'
     sleep_wait = args.sleep_wait if args.sleep_wait is not None else 900
     if not args.execute:
         print(
@@ -609,7 +614,7 @@ def main(argv=None):
                             'forces_sleep': False,
                         }
                         if args.observe_sleep
-                        else {'cycles': cycles, 'fault': 'owned_' + args.fault + '_sigkill'}
+                        else {'cycles': cycles, 'fault': 'owned_' + fault + '_sigkill'}
                     ),
                     'starts_capture': False,
                     'opens_ui': False,
@@ -670,7 +675,7 @@ def main(argv=None):
                         for key in ('state', 'minimum_sleep_seconds', 'recovery_verified')
                     }
                 else:
-                    runner = SupervisorRecoveryRun if args.fault == 'supervisor' else RecoveryRun
+                    runner = SupervisorRecoveryRun if fault == 'supervisor' else RecoveryRun
                     result = runner(service, cycles, checkpoint=save).run()
                     summary = {
                         'state': result['state'],
