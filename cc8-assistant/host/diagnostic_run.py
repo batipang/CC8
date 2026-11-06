@@ -19,7 +19,12 @@ from diagnostics import (
     summarize_dot_contexts,
     valid_asr_input_samples,
 )
-from capture_evidence import validate as validate_capture, DECISIONS, TOOL_SAMPLE_REJECTION_REASONS
+from capture_evidence import (
+    validate as validate_capture,
+    DECISIONS,
+    TOOL_SAMPLE_REJECTION_REASONS,
+    valid_tool_asr_comparison,
+)
 from operation_failure import STAGES as ERROR_STAGES
 
 ERRORS = frozenset(
@@ -51,6 +56,7 @@ ROW_FIELDS = frozenset(
         ASR_INPUT_SAMPLES,
         'gate',
         'tool_sample_rejection',
+        'tool_asr_comparison',
         'confirmed_playback_clauses',
         'device_pause_from_trigger_ms',
         VAD_ONSET_PAUSE,
@@ -190,6 +196,13 @@ def receipt(value):
         ):
             raise ValueError('Invalid tool sample rejection receipt')
         result['tool_sample_rejection'] = reason
+    if 'tool_asr_comparison' in value:
+        comparison = value['tool_asr_comparison']
+        if result.get(
+            'tool_sample_rejection'
+        ) != 'comparison_only' or not valid_tool_asr_comparison(comparison):
+            raise ValueError('Invalid tool ASR comparison receipt')
+        result['tool_asr_comparison'] = dict(comparison)
     for stage, field in DOT_CONTEXT_FIELDS.items():
         if stage in clean_stages or field in value:
             if stage not in clean_stages or type(value.get(field)) is not bool:

@@ -870,6 +870,7 @@ class SmokeRun:
         english_fixture=None,
         wake_input_shape=False,
         latency_sample=False,
+        tool_local_compare=False,
         latency_scenario='qa',
         qa_question=ACOUSTIC_QUESTION,
         response_acoustic_evidence=False,
@@ -904,6 +905,9 @@ class SmokeRun:
         self.english_fixture_played = False
         self.latency_sample = latency_sample
         self.latency_scenario = latency_scenario
+        if tool_local_compare and not (capture and latency_sample and latency_scenario == 'tool'):
+            raise ValueError('Local comparison requires a bounded tool sample')
+        self.tool_local_compare = tool_local_compare
         self.tool_sample_token = None
         self.qa_question = ENGLISH_QUESTION if english_wake else qa_question
         self.response_acoustic_evidence = response_acoustic_evidence
@@ -1594,7 +1598,8 @@ class SmokeRun:
         limit = self.capture_limit_ms
         if self.latency_sample and self.latency_scenario == 'tool':
             case = SCENARIO_QUESTIONS['tool'].index(self.qa_question) + 1
-            armed = self.request({'operation': 'tool_sample_arm', 'case': case})
+            operation = 'tool_sample_compare_arm' if self.tool_local_compare else 'tool_sample_arm'
+            armed = self.request({'operation': operation, 'case': case})
             token = armed.get('token')
             require(
                 armed.get('status') == 'armed'

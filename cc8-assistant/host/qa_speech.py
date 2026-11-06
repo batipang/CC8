@@ -52,7 +52,7 @@ def tool_sample_request(value):
     if not isinstance(value, dict):
         return False
     operation = value.get('operation')
-    if operation == 'tool_sample_arm':
+    if operation in ('tool_sample_arm', 'tool_sample_compare_arm'):
         return (
             set(value) == {'operation', 'case'}
             and type(value['case']) is int

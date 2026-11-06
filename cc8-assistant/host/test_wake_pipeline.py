@@ -427,12 +427,12 @@ class WakePipelineTests(unittest.TestCase):
                 self.assertTrue(b.session.awake)
                 self.assertEqual(len(audio), 1)
 
-    def arm_tool_capture(self, b, before_start=lambda _: None):
+    def arm_tool_capture(self, b, before_start=lambda _: None, *, compare=False):
         s = b.session
         s.active = False
         s.transport_kind = 'usb'
         s.capture_start_ack = True
-        token = s.arm_tool_sample(1)['token']
+        token = s.arm_tool_sample(1, compare=compare)['token']
         self.assertIsNone(s.capture_id)
         self.assertEqual(s.begin_tool_sample(token), {'status': 'unavailable'})
         before_start(s)
@@ -508,6 +508,49 @@ class WakePipelineTests(unittest.TestCase):
                 self.assertEqual(
                     s.tool_sample_rejection(expected, True, time.monotonic()), 'not_open'
                 )
+                s.stop()
+
+    def test_tool_comparison_uses_same_audio_and_never_dispatches(self):
+        question = SCENARIO_QUESTIONS['tool'][0]
+        for omit, cancel in ((False, False), (True, False), (True, True)):
+            with self.subTest(omit=omit, cancel=cancel):
+                transcript = question.replace('只读', '') if omit else question
+                b, _, primary_audio, requests, events, _, _ = self.session(
+                    '大黄蜂', '大黄蜂，' + transcript
+                )
+                s = b.session
+                token = self.arm_tool_capture(b, compare=True)
+                self.assertEqual(s.begin_tool_sample(token), {'status': 'ready'})
+
+                def compare(case, audio, is_current):
+                    self.assertEqual(case, 1)
+                    np.testing.assert_array_equal(audio, primary_audio[0])
+                    self.assertTrue(is_current())
+                    if cancel:
+                        s.cancel('button')
+                        self.assertFalse(is_current())
+                    return 'matched'
+
+                with patch('recognition_worker.compare_local', side_effect=compare) as decode:
+                    self.frames(b)
+                    deadline = time.monotonic() + 1
+                    while time.monotonic() < deadline:
+                        rows = b.diagnostics_report()['requests']
+                        if rows and rows[0]['outcome'] is not None:
+                            break
+                        time.sleep(0.005)
+                decode.assert_called_once()
+                self.assertEqual(rows[0]['tool_sample_rejection'], 'comparison_only')
+                self.assertEqual(rows[0]['outcome'], 'rejected')
+                self.assertEqual(requests, [])
+                self.assertFalse(any(name == 'transcript' for name, _ in events))
+                if cancel:
+                    self.assertNotIn('tool_asr_comparison', rows[0])
+                else:
+                    self.assertEqual(
+                        rows[0]['tool_asr_comparison'],
+                        {'primary': 'read_only_missing' if omit else 'matched', 'local': 'matched'},
+                    )
                 s.stop()
 
     def test_tool_sample_cannot_begin_inside_usb_replacement_cancellation(self):

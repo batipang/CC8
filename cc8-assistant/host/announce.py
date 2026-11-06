@@ -112,14 +112,17 @@ class AnnouncementServer:
                         result = self.playback_probe(connection, request)
                     elif request.get('operation') in (
                         'tool_sample_arm',
+                        'tool_sample_compare_arm',
                         'tool_sample_begin',
                         'tool_sample_release',
                     ):
                         if not tool_sample_request(request):
                             raise ValueError('Tool sample accepts only a fixed case or its token')
                         operation = request['operation']
-                        if operation == 'tool_sample_arm':
-                            result = self.bridge.session.arm_tool_sample(request['case'])
+                        if operation in ('tool_sample_arm', 'tool_sample_compare_arm'):
+                            result = self.bridge.session.arm_tool_sample(
+                                request['case'], compare=operation == 'tool_sample_compare_arm'
+                            )
                         elif operation == 'tool_sample_begin':
                             result = self.bridge.session.begin_tool_sample(request['token'])
                         else:
