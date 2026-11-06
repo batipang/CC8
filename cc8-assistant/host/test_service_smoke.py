@@ -14,7 +14,7 @@ import unittest
 from unittest.mock import Mock, patch
 from types import SimpleNamespace
 
-from device_smoke import CheckFailure
+from device_smoke import CheckFailure, Device
 from service_smoke import (
     LiveService,
     RecoveryRun,
@@ -101,6 +101,7 @@ class RecoveryTests(unittest.TestCase):
             ('new_request', 'resume_runtime_or_activity_changed'),
             ('unstable', 'resume_service_not_stable'),
             ('extra_sleep', 'resume_additional_sleep_observed'),
+            ('foreign_adb_at_baseline', 'usb_serial_mismatch'),
         ):
             with self.subTest(case=case), redirect_stdout(io.StringIO()):
                 fake = Clock()
@@ -112,6 +113,10 @@ class RecoveryTests(unittest.TestCase):
                     return fake.now + offset, offset - 0.001, offset
 
                 service = Mock()
+                if case == 'foreign_adb_at_baseline':
+                    service.device.verify_usb_serial.side_effect = CheckFailure(
+                        'usb_serial_mismatch'
+                    )
                 baseline = dict(
                     pid=20, instance='private-runtime', mic_frames=10, requests=frozenset()
                 )
@@ -143,7 +148,7 @@ class RecoveryTests(unittest.TestCase):
                 self.assertEqual(checkpoints[-1], result)
                 self.assertNotIn('private-', json.dumps(result))
                 if reason:
-                    self.assertEqual(result['reason'], reason)
+                    self.assertEqual(result.get('reason'), reason)
                     self.assertFalse(result['recovery_verified'])
                 else:
                     self.assertEqual(result['state'], 'passed')
@@ -152,6 +157,9 @@ class RecoveryTests(unittest.TestCase):
                     self.assertEqual(result['post_resume_ready_observed_seconds'], 1)
                 service.crash.assert_not_called()
                 service.crash_supervisor.assert_not_called()
+                if case == 'foreign_adb_at_baseline':
+                    service.supervisor_sample.assert_not_called()
+                    service.resume_sample.assert_not_called()
 
     def test_sleep_budget_excludes_time_suspended_and_does_not_sum_separate_samples(self):
         for case, offset_at, expected in (
@@ -227,14 +235,73 @@ class RecoveryTests(unittest.TestCase):
 
     def test_resume_never_targets_a_different_usb_identity(self):
         service = LiveService.__new__(LiveService)
-        unexpected = SimpleNamespace(serial='other', location=9)
-        with (
-            patch('service_smoke.read_usb', return_value=(unexpected, None, None)),
-            patch('service_smoke.Device') as device,
+        original = SimpleNamespace(serial='original', location=9, entry=21)
+        for unexpected in (
+            SimpleNamespace(serial='other', location=9, entry=22),
+            SimpleNamespace(serial='original', location=8, entry=22),
         ):
-            with self.assertRaisesRegex(CheckFailure, 'resume_usb_identity_changed'):
+            for stage in range(3):
+                observations = [original] * stage + [unexpected]
+                with (
+                    self.subTest(unexpected=unexpected, stage=stage),
+                    patch(
+                        'service_smoke.read_usb',
+                        side_effect=[(d, None, None) for d in observations],
+                    ),
+                    patch('service_smoke.Device') as device,
+                    patch.object(service, 'supervisor_sample', return_value=None) as sample,
+                ):
+                    with self.assertRaisesRegex(CheckFailure, 'resume_usb_identity_changed'):
+                        service.resume_sample(('original', 9))
+                    self.assertEqual(device.call_count, int(stage > 0))
+                    self.assertEqual(sample.call_count, int(stage == 2))
+
+    def test_resume_checks_usb_identity_even_when_adb_target_disappears(self):
+        service = LiveService.__new__(LiveService)
+        original = SimpleNamespace(serial='original', location=9, entry=21)
+        unexpected = SimpleNamespace(serial='other', location=9, entry=22)
+        for during_probe in (True, False):
+            observations = [original] * (1 if during_probe else 2) + [unexpected]
+            with (
+                self.subTest(during_probe=during_probe),
+                patch(
+                    'service_smoke.read_usb',
+                    side_effect=[(d, None, None) for d in observations],
+                ),
+                patch('service_smoke.Device', side_effect=OSError() if during_probe else None),
+                patch.object(
+                    service, 'supervisor_sample', side_effect=CheckFailure('usb_target_changed')
+                ) as sample,
+            ):
+                with self.assertRaisesRegex(CheckFailure, 'resume_usb_identity_changed'):
+                    service.resume_sample(('original', 9))
+                self.assertEqual(sample.call_count, int(not during_probe))
+
+    def test_resume_rejects_mismatched_adb_target_even_when_usb_registry_is_stable(self):
+        service = LiveService.__new__(LiveService)
+        original = SimpleNamespace(serial='original', location=9, entry=21)
+        device = Mock()
+        device.verify_usb_serial.side_effect = CheckFailure('usb_serial_mismatch')
+        with (
+            patch('service_smoke.read_usb', return_value=(original, None, None)),
+            patch('service_smoke.Device', return_value=device),
+            patch.object(service, 'supervisor_sample') as sample,
+        ):
+            with self.assertRaisesRegex(CheckFailure, 'usb_serial_mismatch'):
                 service.resume_sample(('original', 9))
-            device.assert_not_called()
+            device.verify_usb_serial.assert_called_once_with('original')
+            sample.assert_not_called()
+
+    def test_adb_serial_verification_addresses_only_the_bound_transport(self):
+        device = Device.__new__(Device)
+        device.access = SimpleNamespace(ADB='/tools/adb')
+        device.transport = '8'
+        with patch('device_smoke.subprocess.check_output', return_value='original\n') as read:
+            device.verify_usb_serial('original')
+            with self.assertRaisesRegex(CheckFailure, '^usb_serial_mismatch$'):
+                device.verify_usb_serial('other')
+            for call in read.call_args_list:
+                self.assertEqual(call.args[0], ['/tools/adb', '-t', '8', 'get-serialno'])
 
     def live_fixture(self):
         service = LiveService.__new__(LiveService)
