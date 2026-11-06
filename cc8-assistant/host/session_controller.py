@@ -7,7 +7,6 @@ existing session-lock then component-lock order, never the reverse.
 
 from __future__ import annotations
 from collections import deque
-from dataclasses import dataclass
 import threading
 import time
 import uuid
@@ -21,29 +20,7 @@ from device_session import (
     start_capture,
     stop_capture,
 )
-from capture_evidence import TOOL_TRANSCRIPT_MISMATCHES
-
-from qa_speech import (
-    SCENARIO_QUESTIONS,
-    TOOL_COMPARE_ENGINES,
-    normalize_question,
-    tool_sample_request,
-    tool_transcript_rejection,
-)
-
-
-@dataclass
-class ToolSample:
-    token: str
-    expected: str
-    generation: int
-    arm_until: float
-    comparison: tuple[int, str] | None = None
-    rejection_diagnosis: tuple[int, str] | None = None
-    capture_id: str | None = None
-    state: str = 'pending'
-    opened_at: float = 0.0
-    closed_reason: str = 'not_open'
+from tool_sample_gate import ToolSampleGate
 
 
 class SessionController:
@@ -59,7 +36,7 @@ class SessionController:
         self.capture_start_ack = False
         self.capture_start_token = uuid.uuid4().hex
         self.capture_id = None
-        self.tool_sample: ToolSample | None = None
+        self.tool_samples = ToolSampleGate()
         # One device can only retry its current explicitly requested capture.
         # Remember recent consumed IDs across route loss and failed native starts.
         self.consumed_capture_ids = deque(maxlen=64)
@@ -232,30 +209,7 @@ class SessionController:
             )
             self.generation += 1
             generation = self.generation
-            sample = self.tool_sample
-            if sample is not None:
-                if sample.state == 'pending':
-                    if reason in ('transport_switch', 'transport_disconnect') and (
-                        sample.generation == generation
-                    ):
-                        # An Activity reopen may reconnect both routes before Start.
-                        sample.generation = generation + 1
-                elif (
-                    reason == 'transport_switch'
-                    and sample.state == 'bound'
-                    and sample.generation == generation - 1
-                ):
-                    # No stimulus is authorized yet. Begin still needs a valid
-                    # rebind of this exact capture on the authenticated USB route.
-                    sample.generation = generation
-                elif reason == 'voice' and sample.state == 'open':
-                    # The endpoint may advance a live turn when VAD begins.
-                    sample.generation = generation
-                elif sample.state != 'closed':
-                    sample.state = 'closed'
-                    sample.closed_reason = (
-                        'route_changed' if reason == 'transport_switch' else 'generation_changed'
-                    )
+            self.tool_samples.advance_generation(generation, reason)
             was_playing = self.hooks.playback().stop_output()
             if reason == 'transport_switch' and was_playing and not self.hooks.calibration().active:
                 self.playback_interrupted_by_transport = True
@@ -294,11 +248,7 @@ class SessionController:
             self.capture_start_required = True
             self.active = False
             self.capture_id = None
-            # An idle stop may race the already requested QA capture start.
-            # Keep that reservation so the late start cannot bypass its gate.
-            pending_sample = self.tool_sample is not None and self.tool_sample.state == 'pending'
-            if not pending_sample:
-                self.tool_sample = None
+            pending_sample = self.tool_samples.stop_capture()
             self.screen_sleeping = False
             # A wake can restore the display after disconnect. Sleep belongs
             # to the capture that just ended.
@@ -377,112 +327,21 @@ class SessionController:
         apply_settings(self, j)
 
     def arm_tool_sample(self, case, *, compare_engine=None, diagnose_engine=None):
-        if not tool_sample_request({'operation': 'tool_sample_arm', 'case': case}):
-            raise ValueError('Invalid tool sample case')
-        engines = [engine for engine in (compare_engine, diagnose_engine) if engine is not None]
-        if len(engines) > 1 or any(engine not in TOOL_COMPARE_ENGINES for engine in engines):
-            raise ValueError('Invalid tool comparison engine')
-        with self.guard:
-            existing = self.tool_sample
-            now = time.monotonic()
-            if (
-                self.active
-                or self.connection is None
-                or self.transport_kind != 'usb'
-                or not self.capture_start_ack
-                or not self.wake
-                or self.hooks.voice_busy()
-                or (existing is not None and now < existing.arm_until)
-            ):
-                raise RuntimeError('Tool sample requires an idle USB session')
-            token = uuid.uuid4().hex
-            self.tool_sample = ToolSample(
-                token,
-                normalize_question(SCENARIO_QUESTIONS['tool'][case - 1]),
-                self.generation + 1,
-                now + 30,
-                comparison=(case, compare_engine) if compare_engine is not None else None,
-                rejection_diagnosis=(case, diagnose_engine)
-                if diagnose_engine is not None
-                else None,
-            )
-            return {'status': 'armed', 'token': token}
+        return self.tool_samples.arm(
+            self, case, compare_engine=compare_engine, diagnose_engine=diagnose_engine
+        )
 
     def begin_tool_sample(self, token):
-        with self.guard:
-            sample = self.tool_sample
-            if (
-                sample is None
-                or sample.token != token
-                or sample.state != 'bound'
-                or not self.active
-                or sample.capture_id != self.capture_id
-                or sample.generation != self.generation
-                or self.transport_kind != 'usb'
-                or not self.capture_start_ack
-                or not self.rebind_seen
-                or time.monotonic() >= sample.arm_until
-                or not self.wake
-                or self.awake
-                or self.hooks.calibration().active
-                or self.hooks.voice_busy()
-            ):
-                return {'status': 'unavailable'}
-            sample.opened_at = time.monotonic()
-            sample.state = 'open'
-            return {'status': 'ready'}
+        return self.tool_samples.begin(self, token)
 
     def release_tool_sample(self, token):
-        with self.guard:
-            sample = self.tool_sample
-            # Only capture teardown can remove a guard already bound to it.
-            if sample is not None and sample.token == token and sample.state == 'pending':
-                self.tool_sample = None
-            return {'status': 'released' if self.tool_sample is None else 'unavailable'}
+        return self.tool_samples.release(self, token)
 
     def tool_sample_rejection(self, text, local_wake, captured_at):
-        # Called at the final ASR admission boundary under the session guard.
-        sample = self.tool_sample
-        if sample is None:
-            return None
-        if sample.state != 'open':
-            return sample.closed_reason
-        sample.state = 'closed'
-        if not self.active or sample.capture_id != self.capture_id:
-            return 'capture_changed'
-        if sample.generation != self.generation:
-            return 'generation_changed'
-        if self.transport_kind != 'usb' or not self.capture_start_ack or not self.rebind_seen:
-            return 'route_changed'
-        if not local_wake:
-            return 'local_wake_missing'
-        if not (
-            type(captured_at) in (int, float)
-            and sample.opened_at <= captured_at <= sample.opened_at + 20
-        ):
-            return 'capture_window'
-        if sample.comparison is not None:
-            return 'comparison_only'
-        return tool_transcript_rejection(text, sample.expected)
+        return self.tool_samples.rejection(self, text, local_wake, captured_at)
 
     def tool_sample_comparison(self, reason='comparison_only'):
-        sample = self.tool_sample
-        if sample is None:
-            return None
-        if reason == 'comparison_only':
-            return sample.comparison
-        if (
-            reason in TOOL_TRANSCRIPT_MISMATCHES
-            and sample.state == 'closed'
-            and self.active
-            and sample.capture_id == self.capture_id
-            and sample.generation == self.generation
-            and self.transport_kind == 'usb'
-            and self.capture_start_ack
-            and self.rebind_seen
-        ):
-            return sample.rejection_diagnosis
-        return None
+        return self.tool_samples.comparison(self, reason)
 
     def start_capture(self, j):
         start_capture(self, j)
