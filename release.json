@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-local-tool-asr-comparison-20261106.1",
+  "release_id": "p0-verified-tool-whisper-20261106.1",
   "backend": {
-    "version": "0.15.8"
+    "version": "0.15.9"
   },
   "assistant": {
     "version": "0.9.41",
