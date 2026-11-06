@@ -13,7 +13,7 @@ import time
 
 from protocol import EVENT, decode_event
 from transport import Pairing, TransportHub
-from dsp import WebRtcEchoCanceller
+from echo_processors import WebRtcEchoCanceller
 from fast_stop import FastStopDetector
 from local_wake import WakeDetector
 from brain_router import BrainRouter
