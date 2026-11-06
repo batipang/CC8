@@ -489,11 +489,25 @@ class WakePipelineTests(unittest.TestCase):
         self.assertFalse(s.tool_sample_allows(question, True, time.monotonic()))
         s.stop()
 
+    def test_tool_sample_cannot_begin_inside_usb_replacement_cancellation(self):
+        b, *_ = self.session('大黄蜂')
+        s = b.session
+        token = self.arm_tool_capture(b)
+        begin_during_switch = []
+        with patch.object(
+            b.brain,
+            'cancel',
+            side_effect=lambda: begin_during_switch.append(s.begin_tool_sample(token)),
+        ):
+            s.change_transport(Channel('usb'))
+        self.assertEqual(begin_during_switch, [{'status': 'unavailable'}])
+        s.stop()
+
     def test_pending_tool_sample_stays_closed_if_capture_binding_is_invalid(self):
         question = SCENARIO_QUESTIONS['tool'][0]
         for invalid in (
             lambda s: setattr(s.tool_sample, 'arm_until', 0),
-            lambda s: s.cancel('transport_switch'),
+            lambda s: s.cancel('button'),
             lambda s: s.stop(),
         ):
             with self.subTest(invalid=invalid):
@@ -505,6 +519,36 @@ class WakePipelineTests(unittest.TestCase):
                 s.stop()
                 self.assertEqual(s.release_tool_sample(token), {'status': 'released'})
                 self.assertTrue(s.tool_sample_allows(question, True, time.monotonic()))
+
+    def test_tool_sample_requires_same_capture_to_finish_startup_on_usb(self):
+        question = SCENARIO_QUESTIONS['tool'][0]
+        b, *_ = self.session('大黄蜂', question)
+        s = b.session
+        capabilities = {'capture_reject_version': 1, 'capture_start_ack_version': 1}
+
+        def startup_on_wifi(session):
+            for route in (Channel('wifi'), None, Channel('wifi')):
+                session.change_transport(route)
+            session.ready(capabilities)
+
+        token = self.arm_tool_capture(b, startup_on_wifi)
+        self.assertEqual(s.begin_tool_sample(token), {'status': 'unavailable'})
+        self.assertFalse(s.tool_sample_allows(question, True, time.monotonic()))
+        s.change_transport(Channel('usb'))
+        s.ready({**capabilities, 'capture_active': True})
+        self.assertEqual(s.begin_tool_sample(token), {'status': 'unavailable'})
+        claim = {'epoch': 1, 'capture_start_token': s.capture_start_token}
+        s.rebind({**claim, 'capture_id': '0' * 32})
+        self.assertEqual(s.begin_tool_sample(token), {'status': 'unavailable'})
+        s.rebind({**claim, 'capture_id': 'f' * 32})
+        self.assertEqual(s.begin_tool_sample(token), {'status': 'ready'})
+        s.change_transport(Channel('wifi'))
+        s.change_transport(Channel('usb'))
+        s.ready({**capabilities, 'capture_active': True})
+        s.rebind({**claim, 'capture_id': 'f' * 32})
+        self.assertEqual(s.begin_tool_sample(token), {'status': 'unavailable'})
+        self.assertFalse(s.tool_sample_allows(question, True, time.monotonic()))
+        s.stop()
 
     def test_tool_sample_scope_rejects_old_audio_route_changes_and_invalid_ipc(self):
         question = SCENARIO_QUESTIONS['tool'][0]

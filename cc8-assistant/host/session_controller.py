@@ -103,21 +103,24 @@ class SessionController:
         if old is channel:
             return
         was_active = self.active
+        # Admission must see the route unconfirmed before cancellation advances
+        # the generation, including while cancellation notifies the old route.
+        with self.guard:
+            self.rebind_seen = False
+            self.capture_rejection_supported = False
+            self.capture_start_ack = False
         try:
             self.hooks.cancel('transport_switch')
         except (OSError, EOFError):
             pass
         self.connection = channel
         self.hooks.visual().clear_challenge()
-        self.rebind_seen = False
-        self.capture_rejection_supported = False
-        self.capture_start_ack = False
         self.transport_kind = channel.kind if channel else 'none'
         self.hooks.capture().reset_transport(self.transport_kind)
         self.hooks.wake_reset('transport')
         self.hooks.playback().clear_transport_pause()
         if channel is None:
-            self.hooks.stop()
+            self.stop(transport_lost=True)
         elif was_active:
             # AudioRecord was already enabled locally. The new channel must
             # explicitly confirm the same capture epoch; it cannot start a mic.
@@ -214,8 +217,22 @@ class SessionController:
             self.generation += 1
             generation = self.generation
             sample = self.tool_sample
-            if sample is not None and sample.state != 'pending':
-                if reason == 'voice' and sample.state == 'open':
+            if sample is not None:
+                if sample.state == 'pending':
+                    if reason in ('transport_switch', 'transport_disconnect') and (
+                        sample.generation == generation
+                    ):
+                        # An Activity reopen may reconnect both routes before Start.
+                        sample.generation = generation + 1
+                elif (
+                    reason == 'transport_switch'
+                    and sample.state == 'bound'
+                    and sample.generation == generation - 1
+                ):
+                    # No stimulus is authorized yet. Begin still needs a valid
+                    # rebind of this exact capture on the authenticated USB route.
+                    sample.generation = generation
+                elif reason == 'voice' and sample.state == 'open':
                     # The endpoint may advance a live turn when VAD begins.
                     sample.generation = generation
                 else:
@@ -253,14 +270,15 @@ class SessionController:
                 self.hooks.log('playback_cancelled', reason=reason, generation=generation)
         return generation
 
-    def stop(self):
+    def stop(self, *, transport_lost=False):
         with self.guard:
             self.capture_start_required = True
             self.active = False
             self.capture_id = None
             # An idle stop may race the already requested QA capture start.
             # Keep that reservation so the late start cannot bypass its gate.
-            if self.tool_sample is not None and self.tool_sample.state != 'pending':
+            pending_sample = self.tool_sample is not None and self.tool_sample.state == 'pending'
+            if not pending_sample:
                 self.tool_sample = None
             self.screen_sleeping = False
             # A wake can restore the display after disconnect. Sleep belongs
@@ -269,7 +287,8 @@ class SessionController:
                 self.pending_screen_event = None
         self.hooks.calibration().stop()
         try:
-            self.hooks.cancel('session_stop')
+            reason = 'transport_disconnect' if transport_lost and pending_sample else 'session_stop'
+            self.hooks.cancel(reason)
         finally:
             try:
                 self.hooks.capture().close()
@@ -374,6 +393,9 @@ class SessionController:
                 or sample.capture_id != self.capture_id
                 or sample.generation != self.generation
                 or self.transport_kind != 'usb'
+                or not self.capture_start_ack
+                or not self.rebind_seen
+                or time.monotonic() >= sample.arm_until
                 or not self.wake
                 or self.awake
                 or self.hooks.calibration().active
@@ -405,6 +427,8 @@ class SessionController:
             and sample.capture_id == self.capture_id
             and sample.generation == self.generation
             and self.transport_kind == 'usb'
+            and self.capture_start_ack
+            and self.rebind_seen
             and local_wake
             and type(captured_at) in (int, float)
             and sample.opened_at <= captured_at <= sample.opened_at + 20
@@ -472,7 +496,7 @@ class SessionController:
                 and time.monotonic() < sample.arm_until
                 and sample.generation == self.generation
                 and self.capture_id is not None
-                and self.transport_kind == 'usb'
+                and self.transport_kind in ('usb', 'wifi')
             )
             sample.capture_id = self.capture_id
             sample.state = 'bound' if bindable else 'closed'
