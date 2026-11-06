@@ -248,6 +248,7 @@ class DeviceAutomationTests(unittest.TestCase):
             ['--capture', '--p0-device-suite', '--active-handover'],
             ['--active-handover'],
             ['--all-route-loss'],
+            ['--capture', '--connection-ui-evidence'],
             ['--capture', '--standby', '--all-route-loss'],
             ['--capture', '--standby', '--wake-self-playback'],
             ['--capture', '--synthetic-barge', '--wake-self-playback'],
@@ -1899,6 +1900,49 @@ class DeviceAutomationTests(unittest.TestCase):
             device.assert_not_called()
         self.assertEqual(json.loads(output.getvalue())['checks'][-1], ALL_ROUTE_LOSS_CHECK)
 
+    def test_connection_ui_plan_is_offline(self):
+        output = io.StringIO()
+        with patch('device_smoke.Device') as device, redirect_stdout(output):
+            self.assertEqual(
+                main(
+                    [
+                        '--runtime-root',
+                        '/unused',
+                        '--capture',
+                        '--all-route-loss',
+                        '--connection-ui-evidence',
+                    ]
+                ),
+                0,
+            )
+            device.assert_not_called()
+        self.assertIs(json.loads(output.getvalue())['connection_ui_evidence'], True)
+
+    def test_connection_ui_requires_fixed_labels_from_production_package(self):
+        device = Device.__new__(Device)
+        device.shell = Mock()
+        notice = '连接已断开，正在自动重连 · 麦克风已关闭'
+        mic_off = '麦克风关闭'
+
+        def node(text, *, package='com.happyhome.cc8assistant', bounds='[0,1][42,29]'):
+            return f'<node package="{package}" text="{text}" bounds="{bounds}" />'
+
+        for connected, nodes, expected in (
+            (False, [node('未连接'), node(mic_off), node(notice)], True),
+            (False, [node('未连接'), node(mic_off), node(notice, package='other')], False),
+            (True, [node('USB 优先'), node(mic_off), node(notice, package='other')], True),
+            (True, [node('USB 优先'), node(mic_off), node(notice)], False),
+            (True, [node('USB 优先'), node(mic_off), node('Wi-Fi')], False),
+            (True, [node('USB 优先'), node(mic_off), node(mic_off)], False),
+            (True, [node('USB 优先'), node(mic_off), node('麦克风开启')], False),
+        ):
+            with self.subTest(connected=connected, nodes=nodes):
+                device.shell.return_value = '<hierarchy>' + ''.join(nodes) + '</hierarchy>'
+                self.assertIs(device.connection_ui_matches(connected=connected), expected)
+        device.shell.return_value = '<hierarchy>' + node(mic_off, bounds='') + '</hierarchy>'
+        with self.assertRaisesRegex(ValueError, 'Invalid UI bounds'):
+            device.connection_ui_matches(connected=True)
+
     def test_all_route_loss_requires_stop_and_idle_reconnect_on_both_ends(self):
         for case, expected in (
             ('valid', None),
@@ -1908,9 +1952,15 @@ class DeviceAutomationTests(unittest.TestCase):
             ('native_frames_changed', 'all_route_loss_device_reopened_capture'),
             ('native_restart', 'all_route_loss_device_reopened_capture'),
             ('new_request', 'all_route_loss_unexpected_request'),
+            ('ui_valid', None),
+            ('ui_stale', 'all_route_loss_restored_ui_mismatch'),
+            ('ui_late', 'all_route_loss_window_ended'),
         ):
             with self.subTest(case=case):
-                run, device, health, now = self.fixture(capture=True, all_route_loss=True)
+                ui_evidence = case.startswith('ui_')
+                run, device, health, now = self.fixture(
+                    capture=True, all_route_loss=True, connection_ui_evidence=ui_evidence
+                )
                 health.update(
                     microphone_active=True,
                     waiting_for_wake=True,
@@ -1975,23 +2025,33 @@ class DeviceAutomationTests(unittest.TestCase):
                         transport='none' if down() else 'usb',
                     )
 
+                def connection_ui_matches(*, connected):
+                    self.assertEqual(connected, not down())
+                    if case == 'ui_late':
+                        now[0] = 10
+                    return not (connected and case == 'ui_stale')
+
                 run.request = request
                 device.status.side_effect = status
+                device.connection_ui_matches.side_effect = connection_ui_matches
                 if expected:
                     with self.assertRaisesRegex(CheckFailure, expected):
                         run.all_routes_loss_probe()
                 else:
                     run.all_routes_loss_probe()
                     report = run.report('passed')
-                    self.assertEqual(
-                        report['all_route_loss_evidence'],
-                        dict(
-                            both_routes_down=True,
-                            capture_stopped=True,
-                            usb_priority_restored=True,
-                            post_reconnect_mic_off_seconds=5,
-                        ),
+                    evidence = dict(
+                        both_routes_down=True,
+                        capture_stopped=True,
+                        usb_priority_restored=True,
+                        post_reconnect_mic_off_seconds=5,
                     )
+                    if ui_evidence:
+                        evidence['connection_ui'] = dict(disconnected=True, usb_restored=True)
+                        self.assertEqual(device.connection_ui_matches.call_count, 2)
+                    else:
+                        device.connection_ui_matches.assert_not_called()
+                    self.assertEqual(report['all_route_loss_evidence'], evidence)
                     self.assertFalse(report['physical_usb_unplug_tested'])
                 run.start_capture.assert_called_once()
                 device.speak_probe.assert_not_called()

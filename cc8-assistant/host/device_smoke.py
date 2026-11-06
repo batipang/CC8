@@ -159,6 +159,7 @@ SMOKE_OPTIONS = (
     'wake_self_playback',
     'active_handover',
     'all_route_loss',
+    'connection_ui_evidence',
     'multi_clause',
     'playback_evidence',
     'clock_evidence',
@@ -764,6 +765,23 @@ class Device:
         text = self.shell('dumpsys activity ' + COMPONENT)
         return objects(text, 'CC8_ASSISTANT_STATUS '), objects(text, 'HUD_UI_STATUS ')
 
+    def connection_ui_matches(self, *, connected):
+        from tools.qa_ui import point, stdout_hierarchy
+
+        raw = self.shell('uiautomator dump --compressed /proc/self/fd/1 | toybox head -c 262145')
+        root = stdout_hierarchy(raw)
+        package = COMPONENT.split('/', 1)[0]
+        notice = '连接已断开，正在自动重连 · 麦克风已关闭'
+        labels = {'USB 优先', 'Wi-Fi', '未连接', '麦克风开启', '麦克风关闭', notice}
+        visible = []
+        for node in root.iter('node'):
+            label = node.get('text')
+            if node.get('package') == package and label in labels:
+                point(node)
+                visible.append(label)
+        expected = ['USB 优先', '麦克风关闭'] if connected else ['未连接', '麦克风关闭', notice]
+        return sorted(visible) == sorted(expected)
+
     def prepare_speech_probe(self, *, english=False):
         return resolve_voice('Daniel' if english else 'Tingting')
 
@@ -900,6 +918,7 @@ class SmokeRun:
         background=None,
         active_handover=False,
         all_route_loss=False,
+        connection_ui_evidence=False,
         multi_clause=False,
         playback_evidence=False,
         clock_evidence=False,
@@ -963,6 +982,7 @@ class SmokeRun:
         self.active_handover = active_handover
         self.active_handover_evidence = None
         self.all_route_loss = all_route_loss
+        self.connection_ui_evidence = connection_ui_evidence
         self.all_route_loss_evidence = None
         self.wake_self_evidence = None
         self.barge_evidence = None
@@ -1542,6 +1562,8 @@ class SmokeRun:
             'usb_priority_restored': False,
             'post_reconnect_mic_off_seconds': 0,
         }
+        if self.connection_ui_evidence:
+            evidence['connection_ui'] = {'disconnected': False, 'usb_restored': False}
         self.all_route_loss_evidence = evidence
         self.checkpoint(self.report('running'))
         reply = self.request(ALL_ROUTE_LOSS_REQUEST)
@@ -1602,6 +1624,14 @@ class SmokeRun:
             'all_route_loss_unexpected_audio',
         )
         evidence.update(both_routes_down=True, capture_stopped=True)
+        if self.connection_ui_evidence:
+            require(
+                self.device.connection_ui_matches(connected=False),
+                'all_route_loss_disconnected_ui_mismatch',
+            )
+            # Bind the hierarchy read to the same bounded suppression window.
+            require(disconnected() == (stopped, native_frames), 'all_route_loss_ui_state_changed')
+            evidence['connection_ui']['disconnected'] = True
         self.checkpoint(self.report('running'))
 
         def reconnect():
@@ -1628,6 +1658,12 @@ class SmokeRun:
             self.sleep(min(0.5, 5 - (self.clock() - quiet)))
             require(reconnect(), 'all_route_loss_restored_route_changed')
             evidence['post_reconnect_mic_off_seconds'] = round(self.clock() - quiet, 3)
+        if self.connection_ui_evidence:
+            require(
+                self.device.connection_ui_matches(connected=True),
+                'all_route_loss_restored_ui_mismatch',
+            )
+            require(reconnect(), 'all_route_loss_restored_route_changed')
         device, ui_state = self.device.status()
         require(
             device.get('connected') is True
@@ -1641,6 +1677,8 @@ class SmokeRun:
             'all_route_loss_unexpected_request',
         )
         evidence['usb_priority_restored'] = True
+        if self.connection_ui_evidence:
+            evidence['connection_ui']['usb_restored'] = True
 
     @property
     def capture_limit_ms(self):
@@ -3813,6 +3851,11 @@ def main(argv=None):
         help='Temporarily close both assistant channels and verify recording stops and stays off',
     )
     parser.add_argument(
+        '--connection-ui-evidence',
+        action='store_true',
+        help='Also verify the CC8 connection and microphone labels during --all-route-loss',
+    )
+    parser.add_argument(
         '--multi-clause',
         action='store_true',
         help='Verify separate device receipts for both clauses of a fixed announcement',
@@ -3971,6 +4014,8 @@ def main(argv=None):
         parser.error('--active-handover requires --capture')
     if args.all_route_loss and (not args.capture or args.standby):
         parser.error('--all-route-loss requires --capture and a separate run from --standby')
+    if args.connection_ui_evidence and not args.all_route_loss:
+        parser.error('--connection-ui-evidence requires --all-route-loss')
     if args.playback_evidence and not args.capture:
         parser.error('--playback-evidence requires --capture')
     if args.clock_evidence and not args.playback_evidence:
@@ -4056,6 +4101,7 @@ def main(argv=None):
                     key: getattr(args, key)
                     for key in SMOKE_OPTIONS
                     if key not in ('standby', 'acoustic')
+                    and (key != 'connection_ui_evidence' or args.connection_ui_evidence)
                 },
                 'full_p0_acceptance': False,
                 'response_acoustic_evidence': args.response_acoustic_evidence,
