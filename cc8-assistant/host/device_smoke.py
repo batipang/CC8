@@ -135,6 +135,7 @@ WAKE_SELF_CHECK = 'self_playback_does_not_wake'
 POST_DIALOGUE_SECONDS = 20
 STANDBY_SECONDS = 900
 STANDBY_QUIET_COUNTERS = ('local_wake_count', 'voice_asr_attempts', 'render_frames')
+STANDBY_SUITE_SCOPE = 'fixed_standby_suite'
 PAIRED_PLAYOUT_MIN_BACKEND = '0.14.50'
 RESPONSE_ACOUSTIC_MIN_BACKEND = '0.14.57'
 EXTENDED_VOICE_MIN_BACKEND = '0.14.60'
@@ -162,6 +163,9 @@ SMOKE_OPTIONS = (
     'capture_clock_evidence',
     'leading_acoustic_evidence',
 )
+STANDBY_PHASES = tuple(
+    (f'standby_{index}', ('capture', 'standby', 'acoustic')) for index in range(1, 4)
+)
 P0_DEVICE_PHASES = (
     (
         'transport_and_self_wake',
@@ -179,9 +183,7 @@ P0_DEVICE_PHASES = (
         ),
     ),
     ('awake_dialogue', ('capture', 'awake_dialogue')),
-    ('standby_1', ('capture', 'standby', 'acoustic')),
-    ('standby_2', ('capture', 'standby', 'acoustic')),
-    ('standby_3', ('capture', 'standby', 'acoustic')),
+    *STANDBY_PHASES,
 )
 QA_LATENCY_PHASES = tuple(
     (f'qa_{index:02}', ('capture', 'awake_dialogue', 'latency_sample'))
@@ -1096,7 +1098,13 @@ class SmokeRun:
             english_wake_counts(h)
         if self.multi_clause or self.wake_self_playback or self.echo_soak:
             require(h.get('clause_receipts_supported') is True, 'clause_receipts_unsupported')
-        if self.wake_self_playback or self.active_handover or self.all_route_loss or self.echo_soak:
+        if (
+            self.standby
+            or self.wake_self_playback
+            or self.active_handover
+            or self.all_route_loss
+            or self.echo_soak
+        ):
             self.audio_counters(h)
         if self.echo_soak:
             self.echo_soak_counters(h)
@@ -3186,9 +3194,44 @@ def matched_playout(evidence):
     )
 
 
+def standby_failure(evidence, elapsed, *, require_quiet):
+    if not (
+        isinstance(evidence, dict)
+        and type(elapsed) in (int, float)
+        and STANDBY_SECONDS <= elapsed <= 86400
+    ):
+        return 'standby_duration_unconfirmed'
+    awake = evidence.get('last_awake_seconds')
+    poll = evidence.get('black_screen_poll_started_seconds')
+    black = evidence.get('first_black_screen_seconds')
+    if not (
+        all(type(value) in (int, float) and 0 <= value <= elapsed for value in (awake, poll, black))
+        and awake <= poll <= black
+        and poll >= STANDBY_SECONDS
+    ):
+        return 'standby_duration_unconfirmed'
+    if require_quiet or 'quiet_counter_deltas' in evidence:
+        deltas = evidence.get('quiet_counter_deltas')
+        if (
+            not isinstance(deltas, dict)
+            or set(deltas) != set(STANDBY_QUIET_COUNTERS)
+            or any(type(value) is not int or value != 0 for value in deltas.values())
+        ):
+            return 'standby_quiet_counters_unconfirmed'
+    return None
+
+
 def device_suite_phases(
-    *, qa_latency, extended_voice, interruption=False, echo_soak=False, legacy_echo_soak=False
+    *,
+    qa_latency,
+    extended_voice,
+    interruption=False,
+    echo_soak=False,
+    legacy_echo_soak=False,
+    standby_only=False,
 ):
+    if standby_only:
+        return STANDBY_PHASES
     if echo_soak:
         return ECHO_SOAK_PHASES[:2] if legacy_echo_soak else ECHO_SOAK_PHASES
     if interruption:
@@ -3212,7 +3255,10 @@ def run_device_suite(
     echo_soak=False,
     background=None,
     legacy_echo_soak=False,
+    standby_only=False,
 ):
+    if standby_only and (qa_latency or extended_voice or interruption or echo_soak):
+        raise ValueError('Standby suite must run separately')
     if require_render_overlap and not interruption:
         raise ValueError('Render overlap requires an interruption suite')
     if response_acoustic_coverage and (
@@ -3225,12 +3271,15 @@ def run_device_suite(
         interruption=interruption,
         echo_soak=echo_soak,
         legacy_echo_soak=legacy_echo_soak,
+        standby_only=standby_only,
     )
     scope = 'synthetic_qa_latency' if qa_latency else 'fixed_device_suite'
     if interruption:
         scope = 'synthetic_interruption_latency'
     if echo_soak:
         scope = ECHO_SOAK_SCOPE
+    if standby_only:
+        scope = STANDBY_SUITE_SCOPE
     phases = [
         dict(name=name, state='not_run', expected_checks=planned_checks(set(options)))
         for name, options in planned
@@ -3325,6 +3374,14 @@ def run_device_suite(
                 != [(name, 'passed') for name in phase['expected_checks']]
             ):
                 phase.update(state='failed', reason='suite_phase_evidence_incomplete')
+            if phase['state'] == 'passed' and standby_only:
+                reason = standby_failure(
+                    result.get('standby_evidence'),
+                    result.get('elapsed_seconds'),
+                    require_quiet=True,
+                )
+                if reason:
+                    phase.update(state='failed', reason=reason)
             if phase['state'] == 'passed' and 'synthetic_stop' in options:
                 stop = result.get('barge_evidence')
                 apk = result.get('expected_apk_code')
@@ -3416,15 +3473,20 @@ def run_device_suite(
                 evidence = evidence if isinstance(evidence, dict) else {}
                 quiet = evidence.get('post_playback_quiet_seconds')
                 timing = evidence.get('response_playout_timing')
-                if 'awake_dialogue' in options and (
+                if ('awake_dialogue' in options or standby_only) and (
                     type(quiet) not in (int, float)
                     or not isfinite(quiet)
                     or quiet < POST_DIALOGUE_SECONDS
                 ):
-                    phase.update(state='failed', reason='suite_awake_dialogue_quiet_incomplete')
+                    phase.update(
+                        state='failed',
+                        reason='suite_standby_dialogue_quiet_incomplete'
+                        if standby_only
+                        else 'suite_awake_dialogue_quiet_incomplete',
+                    )
                 elif not isinstance(timing, dict) or timing.get('status') != 'observed':
                     phase.update(state='failed', reason='suite_response_playout_timing_incomplete')
-                elif response_acoustic_coverage and (
+                elif (response_acoustic_coverage or standby_only) and (
                     not matched_playout(evidence)
                     or any(
                         type(evidence.get(name)) is not int or evidence[name] != expected
@@ -3436,7 +3498,10 @@ def run_device_suite(
                     )
                 ):
                     phase.update(
-                        state='failed', reason='suite_acoustic_coverage_dialogue_incomplete'
+                        state='failed',
+                        reason='suite_standby_dialogue_evidence_incomplete'
+                        if standby_only
+                        else 'suite_acoustic_coverage_dialogue_incomplete',
                     )
                 elif evidence.get('recognized_stimulus_matches') is not True:
                     phase.update(state='failed', reason='suite_synthetic_stimulus_not_confirmed')
@@ -3558,6 +3623,11 @@ def main(argv=None):
         '--p0-device-suite',
         action='store_true',
         help='Run fixed device checks and three separate standby cycles with one runtime lock',
+    )
+    batches.add_argument(
+        '--standby-suite',
+        action='store_true',
+        help='Run three real standby and acoustic wake cycles with one runtime lock',
     )
     batches.add_argument(
         '--qa-latency-suite',
@@ -3705,6 +3775,7 @@ def main(argv=None):
     options = {key for key in SMOKE_OPTIONS if getattr(args, key)}
     batch = (
         args.p0_device_suite
+        or args.standby_suite
         or args.qa_latency_suite
         or args.interruption_suite
         or args.self_playback_soak
@@ -3852,6 +3923,7 @@ def main(argv=None):
                         extended_voice=args.extended_voice_evidence,
                         interruption=args.interruption_suite,
                         echo_soak=args.self_playback_soak,
+                        standby_only=args.standby_suite,
                     )
                 ],
                 'execute': False,
@@ -3867,6 +3939,8 @@ def main(argv=None):
                     plan['response_acoustic_evidence'] = True
                 if args.collect_acoustic_coverage:
                     plan['response_acoustic_coverage'] = True
+            if args.standby_suite:
+                plan['standby_seconds_per_phase'] = STANDBY_SECONDS
             if args.self_playback_soak:
                 plan['self_playback_seconds_per_phase'] = ECHO_SOAK_SECONDS
                 if background_receipt is not None:
@@ -4162,6 +4236,7 @@ def main(argv=None):
                             interruption=args.interruption_suite,
                             echo_soak=args.self_playback_soak,
                             background=background_receipt,
+                            standby_only=args.standby_suite,
                         )
                     elif tool_comparison:
                         result = make_run(

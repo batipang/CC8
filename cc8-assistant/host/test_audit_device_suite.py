@@ -83,6 +83,8 @@ def saved_suite(
     background=None,
     acoustic_coverage=False,
     missing_acoustic=(),
+    standby_only=False,
+    missing_standby_quiet=None,
 ):
     index = 0
 
@@ -110,6 +112,12 @@ def saved_suite(
                 'black_screen_poll_started_seconds': 901,
                 'first_black_screen_seconds': 902,
             }
+            if standby_only and index != missing_standby_quiet:
+                report['standby_evidence']['quiet_counter_deltas'] = {
+                    'local_wake_count': 0,
+                    'voice_asr_attempts': 0,
+                    'render_frames': 0,
+                }
         if 'synthetic_stop' in options:
             report['barge_evidence'] = {
                 'device_stop_applied': True,
@@ -196,6 +204,7 @@ def saved_suite(
         echo_soak=echo_soak,
         background=background,
         legacy_echo_soak=legacy_echo_soak,
+        standby_only=standby_only,
     )
     backend = '0.14.60' if scenario == 'qa' else '0.14.62'
     if echo_soak:
@@ -204,6 +213,29 @@ def saved_suite(
 
 
 class AuditDeviceSuiteTests(unittest.TestCase):
+    def test_standby_batch_always_requires_quiet_and_stops_at_the_first_miss(self):
+        complete = saved_suite(standby_only=True)
+        self.assertEqual(complete['scope'], 'fixed_standby_suite')
+        self.assertEqual(complete['state'], 'passed')
+        reviewed = audit(complete)
+        self.assertTrue(reviewed['verified'])
+        self.assertEqual(reviewed['completed_phases'], 3)
+        self.assertTrue(reviewed['require_standby_quiet'])
+        self.assertFalse(reviewed['full_p0_acceptance'])
+
+        incomplete = saved_suite(standby_only=True, missing_standby_quiet=2)
+        self.assertEqual(incomplete['state'], 'failed')
+        self.assertEqual(
+            [p['state'] for p in incomplete['phases']], ['passed', 'failed', 'not_run']
+        )
+        self.assertEqual(incomplete['phases'][1]['reason'], 'standby_quiet_counters_unconfirmed')
+
+        complete['phases'][1]['report']['standby_evidence'].pop('quiet_counter_deltas')
+        reviewed = audit(complete)
+        self.assertFalse(reviewed['verified'])
+        self.assertEqual(reviewed['completed_phases'], 1)
+        self.assertEqual(reviewed['reason'], 'standby_quiet_counters_unconfirmed')
+
     def test_standby_audit_rejects_nonquiet_or_malformed_optional_counts(self):
         zero = {'local_wake_count': 0, 'voice_asr_attempts': 0, 'render_frames': 0}
         for value, verified in (
