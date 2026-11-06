@@ -103,7 +103,16 @@ def run_backend(dependencies: BackendDependencies):
         else 'Streaming stop commands disabled.',
         flush=True,
     )
-    wake_detector = dependencies.wake_detector(fast_stop)
+    if config.chinese_wake_verifier == 'sensevoice':
+        wake_detector = dependencies.wake_detector(fast_stop, verify_chinese=True)
+        print(
+            'Chinese wake verifier ready.'
+            if wake_detector.chinese_verifier is not None
+            else 'Chinese wake verifier unavailable; using standard local wake.',
+            flush=True,
+        )
+    else:
+        wake_detector = dependencies.wake_detector(fast_stop)
     bridge = dependencies.bridge(
         speech,
         dependencies.brain_router(dependencies.minimax_brain(config=config), selected=config.brain)

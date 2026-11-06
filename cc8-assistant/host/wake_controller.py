@@ -65,6 +65,10 @@ class WakeController:
     def ready(self):
         return self.detector is not None
 
+    @property
+    def chinese_verifier_ready(self):
+        return getattr(self.detector, 'chinese_verifier', None) is not None
+
     def english_input_samples(self):
         # A stalled decoder must not block the service health endpoint.
         if not self.native_lock.acquire(timeout=0.01):

@@ -63,6 +63,16 @@ class ConfigurationTests(unittest.TestCase):
             with self.subTest(value_type=type(value).__name__), self.assertRaises(ConfigError):
                 self.save(wake_window_seconds=value)
 
+    def test_chinese_wake_verifier_is_opt_in_and_independent_of_utterance_asr(self):
+        self.assertEqual(load_config(self.root, {}).chinese_wake_verifier, 'off')
+        env = {'CC8_CHINESE_WAKE_VERIFIER': 'sensevoice'}
+        config = load_config(self.root, env)
+        self.assertEqual(config.chinese_wake_verifier, 'sensevoice')
+        self.assertEqual(config.asr, 'minimax')
+        self.assertEqual(config.service_environment(env), env)
+        with self.assertRaises(ConfigError):
+            load_config(self.root, {'CC8_CHINESE_WAKE_VERIFIER': 'minimax'})
+
     def test_invalid_fields_do_not_fallback_or_print_values(self):
         cases = (
             {'asr': 'PRIVATE-SENTINEL'},
