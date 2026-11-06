@@ -1,6 +1,6 @@
 """Stable content-free failures carried across provider/transport boundaries."""
 
-STAGES = frozenset(('asr', 'brain', 'tts', 'playback', 'transport', 'vision', 'runtime'))
+STAGES = frozenset(('asr', 'brain', 'search', 'tts', 'playback', 'transport', 'vision', 'runtime'))
 KINDS = frozenset(
     (
         'rate_limit',

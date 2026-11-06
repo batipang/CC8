@@ -1,6 +1,6 @@
 import json
 import unittest
-from minimax_client import MiniMaxBrain, MiniMaxError, Cancelled, Transport
+from minimax_client import MiniMaxBrain, MiniMaxError, MiniMaxSearchError, Cancelled, Transport
 from web_search import normalize, public_url, parse_plan, SpeechClauses, wants_web
 
 
@@ -168,8 +168,10 @@ class WebTurns(unittest.TestCase):
     def test_search_error_cannot_fall_back_to_model_facts(self):
         f = Fake(error=MiniMaxError('network', http_status=503))
         b = MiniMaxBrain(f)
-        with self.assertRaises(MiniMaxError):
+        with self.assertRaises(MiniMaxError) as raised:
             b.reply('今天最新新闻', [])
+        self.assertIsInstance(raised.exception, MiniMaxSearchError)
+        self.assertEqual(raised.exception.http_status, 503)
         self.assertEqual(len(f.calls), 2)
         self.assertTrue(b.last_metrics['web_error'])
 
@@ -180,12 +182,12 @@ class WebTurns(unittest.TestCase):
             MiniMaxBrain(f).clauses('查一下新闻', [], on_web=lambda kind, _: updates.append(kind))
         )
         self.assertIn('无法核实', answer)
-        self.assertEqual(updates, ['clear', 'searching'])
+        self.assertEqual(updates, ['clear', 'searching', 'no_results'])
         self.assertEqual(len(f.calls), 2)
 
     def test_missing_provider_status_is_failure(self):
         f = Fake(search={'organic': [result()]})
-        with self.assertRaises(MiniMaxError):
+        with self.assertRaises(MiniMaxSearchError):
             MiniMaxBrain(f).reply('查一下新闻', [])
         self.assertEqual(len(f.calls), 2)
 

@@ -61,7 +61,16 @@ class SearchFailureReceipts(unittest.TestCase):
                     row = b.diagnostics.report()['requests'][-1]
                     self.assertEqual(row['scenario'], 'web')
                     self.assertNotIn('web_route_completed', row['stages'])
-                    self.assertEqual(row['error'], {'stage': 'brain', 'kind': kind})
+                    self.assertEqual(row['error'], {'stage': 'search', 'kind': kind})
+                    status = [
+                        event['message']
+                        for name, event in events
+                        if name == 'status' and event.get('phase') == 'error'
+                    ]
+                    self.assertEqual(len(status), 1)
+                    self.assertTrue(status[0].startswith('联网检索 · '))
+                    self.assertIn('可以明确发起一次新的查询', status[0])
+                    self.assertEqual(b.workspace.tasks[-1]['result'], status[0])
                     self.assertFalse(b.response.busy)
                     self.assertFalse(mini.last_metrics['completed'])
                     self.assertNotIn(
@@ -83,6 +92,54 @@ class SearchFailureReceipts(unittest.TestCase):
         self.assertLessEqual(stages['brain_start'], stages['web_route_completed'])
         self.assertLessEqual(stages['web_route_completed'], stages['first_clause'])
         self.assertNotIn('tool_route_completed', stages)
+
+    def test_search_no_results_and_clarification_close_with_distinct_steps(self):
+        for transport, expected, requests in (
+            (
+                Fake(search={'base_resp': {'status_code': 0}, 'organic': []}),
+                '未找到可核实的网页结果',
+                2,
+            ),
+            (
+                Fake(plan={'query': '', 'clarification': '请补充查询日期。'}),
+                '需要补充查询条件',
+                1,
+            ),
+        ):
+            with self.subTest(expected=expected):
+                router = BrainRouter(
+                    MiniMaxBrain(transport), dot=StubBrain('unused-dot'), selected='minimax'
+                )
+                b, events, _, spoken = self.execute(router)
+                task = b.workspace.tasks[-1]
+                self.assertEqual(task['status'], 'completed')
+                self.assertIn(
+                    {'id': 'search', 'title': expected, 'status': 'completed'}, task['steps']
+                )
+                self.assertEqual(len(transport.calls), requests)
+                self.assertEqual(len(spoken), 1)
+                self.assertFalse(
+                    any(name == 'web_sources' and value.get('items') for name, value in events)
+                )
+                row = b.diagnostics.report()['requests'][-1]
+                self.assertNotIn('web_route_completed', row['stages'])
+                self.assertIsNone(row['error'])
+
+    def test_answer_failure_after_successful_search_keeps_the_brain_stage(self):
+        class AnswerFailure(Fake):
+            def events(self, route, body, current):
+                raise MiniMaxError(SECRET, kind='timeout')
+
+        router = BrainRouter(
+            MiniMaxBrain(AnswerFailure()), dot=StubBrain('unused-dot'), selected='minimax'
+        )
+        b, events, _, spoken = self.execute(router)
+        row = b.diagnostics.report()['requests'][-1]
+        self.assertIn('web_route_completed', row['stages'])
+        self.assertEqual(row['error'], {'stage': 'brain', 'kind': 'timeout'})
+        self.assertEqual(b.workspace.tasks[-1]['status'], 'failed')
+        self.assertEqual(spoken, [])
+        self.assertNotIn(SECRET, json.dumps(events))
 
     def test_failed_progress_callback_cannot_copy_provider_body_into_logs(self):
         class Brain:
