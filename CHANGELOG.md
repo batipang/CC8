@@ -1,5 +1,10 @@
 # Changelog
 
+## Backend 0.15.37 — expose interruption timeout feedback
+
+- Show the reason when an interruption timeout stops the original playback.
+  Preserve the existing cancellation order and leave capture active.
+
 ## Backend 0.15.36 — expose overlong-utterance guidance on the retained APK
 
 - Show the retry message through the existing visible error detail label. A

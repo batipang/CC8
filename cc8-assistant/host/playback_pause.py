@@ -195,7 +195,7 @@ class PlaybackPause:
                     if self.pause_state is not state:
                         continue
                     self.hooks.cancel_session('barge_in_timeout')
-                    self.hooks.status('listening', '插话识别超时，已停止旧播报')
+                    self.hooks.status('error', '插话识别超时，已停止旧播报')
                 break
             with self.done:
                 self.done.wait(0.02)

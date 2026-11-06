@@ -363,7 +363,7 @@ class CompletionRacesTests(unittest.TestCase):
         statuses, errors = [], []
 
         def status(phase, message):
-            if phase == 'listening':
+            if message == '插话识别超时，已停止旧播报':
                 reached.set()
                 if not release.wait(2):
                     raise RuntimeError('Expired-pause status barrier timed out')
@@ -402,7 +402,7 @@ class CompletionRacesTests(unittest.TestCase):
         self.assertFalse(control.is_alive())
         self.assertEqual(errors, [])
         self.assertTrue(submitted.is_set())
-        self.assertEqual(statuses[-1], 'thinking')
+        self.assertEqual(statuses, ['error', 'thinking'])
 
 
 if __name__ == '__main__':
