@@ -22,6 +22,7 @@ from protocol import Packet, SPEAKER
 from reply_types import mood
 from speech_providers import DirectSpeech
 from playback_pause import PauseHooks, PlaybackPause
+from playback_device_receipt import accept_device_receipt
 
 
 @dataclass(frozen=True)
@@ -133,92 +134,7 @@ class PlaybackController:
         self.last_audio_end = 0
 
     def device_event(self, event):
-        name = event.get('event')
-        if name == 'playout_progress':
-            generation = event['generation']
-            with self.publication_lock:
-                if (
-                    self.device_can_report_playout
-                    and self.playing
-                    and generation == self.hooks.generation()
-                    and self.playout_probe.accept(
-                        generation,
-                        event['playback_id'],
-                        event['first_signal_frame'],
-                        event['played_frames'],
-                        event['accepted_frames'],
-                    )
-                ):
-                    # The admission point precedes local stop/publication; its
-                    # clock and trace key are always the Mac and this generation.
-                    self.current_clause_ack_ms = self.hooks.diagnostics().mark(
-                        generation, 'playout_ack'
-                    )
-                    self.hooks.metric('playout_receipts', increment=True)
-            return
-        if name == 'play_done':
-            generation = int(event['generation'])
-            # Publish the old clause's state before waking its renderer. That
-            # renderer may immediately publish the next clause of this turn.
-            # Order is publication -> completion, never completion -> session.
-            with self.publication_lock:
-                played = event.get('played_frames')
-                if (
-                    generation != self.hooks.generation()
-                    or self.end_frames is None
-                    or not self.matches_completion(event)
-                    or (played is not None and played < self.end_frames)
-                ):
-                    return
-                with self.done:
-                    clock_id = event.get('playback_id')
-                    clock_frames = (
-                        self.playout_probe.expected_frames(generation, clock_id)
-                        if type(clock_id) is int
-                        else None
-                    )
-                    self.hooks.complete_clock_report(
-                        generation, clock_id, event.get('render_clock'), clock_frames
-                    )
-                    confirmed = (
-                        type(clock_id) is int
-                        and type(played) is int
-                        and self.playout_probe.observed(generation, clock_id)
-                    )
-                    self.hooks.diagnostics().playback_done(
-                        generation,
-                        confirmed_ack_ms=self.current_clause_ack_ms if confirmed else None,
-                    )
-                    self.completed = {generation}
-                    self.playing = False
-                    self.begin_pending = False
-                    self.end_frames = None
-                    self.last_audio_end = time.monotonic()
-                    self.done.notify_all()
-        elif name in ('playback_paused', 'playback_resumed'):
-            self.pause.accept_receipt(name, event)
-        elif name == 'playback_error':
-            generation = int(event.get('generation', self.hooks.generation()))
-            with self.hooks.lock:
-                if generation != self.hooks.generation():
-                    return
-                with self.publication_lock:
-                    if not self.matches_completion(event) or (
-                        self.device_can_report_completion and not self.playing
-                    ):
-                        return
-                self.hooks.diagnostics().failure(generation, 'playback', RuntimeError())
-                self.hooks.log(
-                    'device_playback_error', error_type=str(event.get('error_type', 'Unknown'))[:50]
-                )
-                self.hooks.cancel_session('playback_error')
-                self.hooks.failure(
-                    '设备播放失败',
-                    OperationFailure(
-                        'Device playback failed', stage='playback', kind='provider_or_runtime'
-                    ),
-                    trace_key=generation,
-                )
+        accept_device_receipt(self, event)
 
     def pause_for_voice(self, trigger_nanos=None):
         return self.pause.pause_for_voice(trigger_nanos)
