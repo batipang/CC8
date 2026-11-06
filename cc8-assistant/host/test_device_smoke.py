@@ -4105,6 +4105,7 @@ class DeviceAutomationTests(unittest.TestCase):
             'generation': None,
             'outcome': 'rejected',
             'gate': 'tool_sample_guard',
+            'tool_sample_rejection': 'transcript_mismatch',
             'stages': {'asr_end': 1},
         }
         run, device, _, now = self.acoustic_fixture(lambda _: [row], awake=True)
@@ -4121,6 +4122,7 @@ class DeviceAutomationTests(unittest.TestCase):
         self.assertLess(now[0], 1)
         evidence = run.report('failed')['acoustic_evidence']
         self.assertEqual(evidence['rejected_voice_gates']['tool_sample_guard'], 1)
+        self.assertEqual(evidence.get('tool_sample_rejections'), {'transcript_mismatch': 1})
         self.assertTrue(evidence['tool_sample_guarded'])
         self.assertEqual(evidence['admitted_voice_requests'], 0)
         self.assertNotIn('PRIVATE', json.dumps(evidence))

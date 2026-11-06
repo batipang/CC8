@@ -28,6 +28,7 @@ class ToolSample:
     capture_id: str | None = None
     state: str = 'pending'
     opened_at: float = 0.0
+    closed_reason: str = 'not_open'
 
 
 class SessionController:
@@ -235,8 +236,11 @@ class SessionController:
                 elif reason == 'voice' and sample.state == 'open':
                     # The endpoint may advance a live turn when VAD begins.
                     sample.generation = generation
-                else:
+                elif sample.state != 'closed':
                     sample.state = 'closed'
+                    sample.closed_reason = (
+                        'route_changed' if reason == 'transport_switch' else 'generation_changed'
+                    )
             was_playing = self.hooks.playback().stop_output()
             if reason == 'transport_switch' and was_playing and not self.hooks.calibration().active:
                 self.playback_interrupted_by_transport = True
@@ -414,26 +418,28 @@ class SessionController:
                 self.tool_sample = None
             return {'status': 'released' if self.tool_sample is None else 'unavailable'}
 
-    def tool_sample_allows(self, text, local_wake, captured_at):
+    def tool_sample_rejection(self, text, local_wake, captured_at):
         # Called at the final ASR admission boundary under the session guard.
         sample = self.tool_sample
         if sample is None:
-            return True
+            return None
         if sample.state != 'open':
-            return False
+            return sample.closed_reason
         sample.state = 'closed'
-        return (
-            self.active
-            and sample.capture_id == self.capture_id
-            and sample.generation == self.generation
-            and self.transport_kind == 'usb'
-            and self.capture_start_ack
-            and self.rebind_seen
-            and local_wake
-            and type(captured_at) in (int, float)
+        if not self.active or sample.capture_id != self.capture_id:
+            return 'capture_changed'
+        if sample.generation != self.generation:
+            return 'generation_changed'
+        if self.transport_kind != 'usb' or not self.capture_start_ack or not self.rebind_seen:
+            return 'route_changed'
+        if not local_wake:
+            return 'local_wake_missing'
+        if not (
+            type(captured_at) in (int, float)
             and sample.opened_at <= captured_at <= sample.opened_at + 20
-            and normalize_question(text) == sample.expected
-        )
+        ):
+            return 'capture_window'
+        return 'transcript_mismatch' if normalize_question(text) != sample.expected else None
 
     def start_capture(self, j):
         capture_id = j.get('capture_id')
@@ -500,6 +506,8 @@ class SessionController:
             )
             sample.capture_id = self.capture_id
             sample.state = 'bound' if bindable else 'closed'
+            if not bindable:
+                sample.closed_reason = 'capture_changed'
         self.hooks.calibration().begin()
         self.awake = not self.wake
         self.screen_sleeping = False

@@ -21,6 +21,19 @@ class DiagnosticRunTests(unittest.TestCase):
         self.book.mark(ident, 'asr_end')
         return ident
 
+    def test_tool_rejection_receipt_accepts_only_fixed_reasons_on_tool_gate(self):
+        ident = self.book.begin('voice')
+        self.book.gate(ident, 'tool_sample_guard', 'capture_window')
+        self.book.finish(ident, 'rejected')
+        row = self.book.report()['requests'][0]
+        self.assertEqual(receipt(row)['tool_sample_rejection'], 'capture_window')
+        for override in ({'tool_sample_rejection': 'private text'}, {'gate': 'accepted'}):
+            with self.subTest(override=override):
+                with self.assertRaisesRegex(ValueError, 'Invalid tool sample rejection receipt'):
+                    receipt({**row, **override})
+        row.pop('tool_sample_rejection')
+        self.assertNotIn('tool_sample_rejection', receipt(row))
+
     def test_repeated_progress_updates_are_one_sample_with_real_latency(self):
         ident = self.request()
         self.run.ingest(self.book.report())
