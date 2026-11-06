@@ -1,6 +1,6 @@
 # 大黄蜂统一待办：功能与工程质量
 
-更新于 2026-11-06。原排期基线为 Android 0.8.6 / 后台 0.11.0。当前部署为后台 0.15.17 / 原签名 APK 0.9.42（code79），源码 `828c945`。部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)。P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)。复选框按完整验收标准关闭。
+更新于 2026-11-06。原排期基线为 Android 0.8.6 / 后台 0.11.0。当前部署为后台 0.15.18 / 原签名 APK 0.9.42（code79），源码 `58da905`。部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)。P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)。复选框按完整验收标准关闭。
 
 依据：[竞品复盘](COMPETITOR_REVIEW_2026-11-01.md)、[当前架构](ARCHITECTURE.md)、[实机与回归记录](VALIDATION.md)。本次已合并 [ToFix](ToFix.md) 的 20 个工程条目；这是功能与工程质量的唯一详细清单；[ROADMAP](ROADMAP.md)保留完成情况和阶段概览。
 
@@ -29,6 +29,7 @@
 ## P0：稳定地听、说、运行
 
 - [ ] **P0-01 — 建立语音与运行基线、诊断报告**
+  - 0.15.18 已部署。0.15.17 与 0.15.18 的同一固定清醒问句各通过一轮实机检查，分别测得 5.741、6.057 秒的声学区间。参考分块延迟由配对离线回归覆盖，真人时延与工具题批次继续独立验收。 [清醒问答声学检查](CURRENT_DEPLOYMENT.md#01518-清醒问答声学检查)
   - 0.15.15 工具执行复测完成首轮，句尾至设备起播回执 12.737 秒，声学区间 13.873 秒。第 2 轮漏“只读”，零 Dot 派发并停采。另开同段对照时两侧均匹配。评分器候选支持首轮实际答案标签，原批次报告及严格准入保留。 [固定工具题实机复测](MEASUREMENT_RUNS.md#01515-固定工具题实机复测)
   - 0.15.15／code78 新测六条固定工具题。MiniMax 和 SenseVoice 同段均完整匹配 6/6，零 Dot 派发并逐轮确认停采。实际工具执行批次仍保留 4/30，真人准确率和时延分别验收。 [六题实机同段识别](CURRENT_DEPLOYMENT.md#01515-六题实机同段识别)
   - 六条留出题现场背景同段对照，SenseVoice 匹配 6/6、MiniMax 4/6。混噪六条中五条唤醒并在两侧匹配，第 27 题在本地唤醒门停止，零 Dot 派发。固定题对照已有独立验收命令。 [留出对照](CURRENT_DEPLOYMENT.md#留出题与混噪输入)
