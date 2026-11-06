@@ -200,7 +200,7 @@ class EndpointPipeline:
                 recent = self.hooks.playing() or time.monotonic() - self.hooks.last_audio_end() < 1
                 render_text = self.hooks.last_spoken() if recent else ''
                 if time.monotonic() < self.hooks.previous_spoken_until():
-                    render_text += self.hooks.previous_spoken()
+                    render_text = self.hooks.previous_spoken() + '\n' + render_text
                 if can_fast_stop(keyword, render_text):
                     self.apply_fast_stop(keyword, stamp)
                 else:

@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-endpoint-playback-tail-20261106.1",
+  "release_id": "p0-fast-stop-clause-order-20261106.1",
   "backend": {
-    "version": "0.15.16"
+    "version": "0.15.17"
   },
   "assistant": {
     "version": "0.9.41",
