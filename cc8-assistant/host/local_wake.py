@@ -1,6 +1,8 @@
 """Bilingual local wake streams; Chinese reuses stop weights, English uses BPE KWS."""
 
 from pathlib import Path
+
+from dsp import FRAME
 from fast_stop import MODEL, ROOT, keyword_spotter
 from streaming_keywords import StreamingKeywords
 
@@ -48,6 +50,31 @@ class EnglishWake(StreamingKeywords):
         )
         return cls(detector)
 
+    def alternate(self):
+        return EnglishWake(
+            self.detector,
+            gain=self.gain,
+            lock=self.engine_lock,
+            keywords=ENGLISH_ALTERNATE_COMPETITOR,
+        )
+
+
+def replay_english_inputs(primary, alternate, cancelled):
+    """Compare identical input frames on fresh native streams outside live wake state."""
+    if cancelled():
+        return {'status': 'unavailable'}
+    main = EnglishWake.load()
+    secondary = main.alternate()
+    primary_hit = alternate_hit = False
+    for offset in range(0, len(primary), FRAME):
+        if cancelled():
+            return {'status': 'unavailable'}
+        primary_hit |= main.feed(primary[offset : offset + FRAME]) == 'Bumblebee'
+        alternate_hit |= secondary.feed(alternate[offset : offset + FRAME]) == 'Bumblebee'
+    if cancelled():
+        return {'status': 'unavailable'}
+    return {'status': 'measured', 'primary_hit': primary_hit, 'alternate_hit': alternate_hit}
+
 
 class WakeDetector:
     KEYWORDS = ChineseWake.KEYWORDS | EnglishWake.KEYWORDS
@@ -66,13 +93,7 @@ class WakeDetector:
             else ChineseWake(keyword_spotter(MODEL))
         )
         english = EnglishWake.load(english_model)
-        alternate = EnglishWake(
-            english.detector,
-            gain=english.gain,
-            lock=english.engine_lock,
-            keywords=ENGLISH_ALTERNATE_COMPETITOR,
-        )
-        return cls(chinese, english, alternate)
+        return cls(chinese, english, english.alternate())
 
     def reset(self, *, clear_metrics=True):
         self.chinese.reset(clear_metrics=clear_metrics)

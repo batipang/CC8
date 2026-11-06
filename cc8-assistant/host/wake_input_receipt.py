@@ -8,6 +8,7 @@ from mac_voice import validate_prepared_speech
 FIXTURE_FRAMES = 39419
 FIXTURE_PCM_SHA256 = '56089a76c91d384a60fe8a011f70df7eebd6464603930671a6525f97f0ec71fe'
 FIXTURE_WAV_SHA256 = '9510d2d219f1bb277578db5add07052691d92cf9a0ab8798e7490fa28e5bcb4c'
+MIN_MATCH_FRAMES = FIXTURE_FRAMES + 1280
 MAX_FRAMES = 64000
 
 
@@ -72,12 +73,24 @@ def _valid_stream(value):
     )
 
 
+def _valid_replay(value, matched):
+    if not matched:
+        return value == {'status': 'not_run'}
+    return value == {'status': 'unavailable'} or (
+        isinstance(value, dict)
+        and set(value) == {'status', 'primary_hit', 'alternate_hit'}
+        and value['status'] == 'measured'
+        and type(value['primary_hit']) is bool
+        and type(value['alternate_hit']) is bool
+    )
+
+
 def summarize(value):
     if value == {'status': 'unavailable'}:
         return value
     if (
         not isinstance(value, dict)
-        or set(value)
+        or set(value) - {'fresh_replay'}
         != {
             'status',
             'raw_audio_saved',
@@ -91,6 +104,14 @@ def summarize(value):
         or any(type(value[key]) is not int for key in ('primary_frames', 'alternate_frames'))
         or not 0 <= value['alternate_frames'] <= value['primary_frames'] <= MAX_FRAMES
         or not all(_valid_stream(value[key]) for key in ('primary', 'alternate'))
+        or (
+            'fresh_replay' in value
+            and not _valid_replay(
+                value['fresh_replay'],
+                value['primary']['status'] == value['alternate']['status'] == 'matched'
+                and MIN_MATCH_FRAMES <= value['primary_frames'] == value['alternate_frames'],
+            )
+        )
     ):
         return {'status': 'invalid'}
     return value

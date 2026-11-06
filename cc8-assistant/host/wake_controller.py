@@ -59,6 +59,7 @@ class WakeController:
         self.serial = 0
         self.deadline = None
         self.input_probe = None
+        self.reading_input_probe = None
 
     @property
     def ready(self):
@@ -93,7 +94,9 @@ class WakeController:
             counts = self.english_input_samples()
             if counts is None or counts['alternate'] is None:
                 raise RuntimeError('English wake input accounting unavailable')
-            if self.input_probe is not None and not self.input_probe.closed:
+            if self.reading_input_probe is not None or (
+                self.input_probe is not None and not self.input_probe.closed
+            ):
                 raise RuntimeError('Wake input probe already armed')
             self.input_probe = WakeInputProbe(pcm)
             return {'status': 'armed', 'token': self.input_probe.token}
@@ -104,17 +107,22 @@ class WakeController:
             if probe is None or token != probe.token:
                 return {'status': 'unavailable'}
             self.input_probe = None
+            self.reading_input_probe = probe
             serial = self.serial
-        receipt = probe.read()
-        with self.hooks.lock:
-            if serial != self.serial or not self.hooks.active() or self.hooks.awake():
-                return {'status': 'unavailable'}
-        return receipt
+        try:
+            receipt = probe.read()
+        finally:
+            with self.hooks.lock:
+                self.reading_input_probe = None
+                current = serial == self.serial and self.hooks.active() and not self.hooks.awake()
+        return receipt if current else {'status': 'unavailable'}
 
     def _cancel_input_probe(self):
         probe, self.input_probe = self.input_probe, None
         if probe is not None:
             probe.cancel()
+        if self.reading_input_probe is not None:
+            self.reading_input_probe.cancel()
 
     def reset(self, reason):
         if reason not in ('start', 'stop', 'mode', 'cancel', 'transport', 'capture_gap'):
