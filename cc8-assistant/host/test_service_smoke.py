@@ -72,6 +72,7 @@ class RecoveryTests(unittest.TestCase):
         plan = json.loads(output.getvalue())
         self.assertEqual(plan['scope'], 'observed_mac_system_sleep')
         self.assertFalse(plan['forces_sleep'])
+        self.assertEqual(plan['wait_clock'], 'awake')
         for flags in (
             ['--observe-sleep', '--fault', 'backend'],
             ['--observe-sleep', '--cycles', '2'],
@@ -151,6 +152,78 @@ class RecoveryTests(unittest.TestCase):
                     self.assertEqual(result['post_resume_ready_observed_seconds'], 1)
                 service.crash.assert_not_called()
                 service.crash_supervisor.assert_not_called()
+
+    def test_sleep_budget_excludes_time_suspended_and_does_not_sum_separate_samples(self):
+        for case, offset_at, expected in (
+            ('long_sleep', lambda awake: 120 if awake >= 2 else 0, 'passed'),
+            ('small_separate_gaps', lambda awake: min(int(awake), 2) * 3, 'failed'),
+        ):
+            with self.subTest(case=case), redirect_stdout(io.StringIO()):
+                fake = Clock()
+                usb = SimpleNamespace(serial='private-serial', location=8)
+                service = Mock()
+                baseline = {'pid': 20, 'instance': 'private-runtime'}
+                service.supervisor_sample.return_value = baseline
+                service.resume_sample.return_value = baseline
+
+                def clocks():
+                    offset = offset_at(fake.now)
+                    return fake.now + offset, offset, offset
+
+                result = SleepRecoveryRun(
+                    service,
+                    10,
+                    clock=clocks,
+                    sleep=fake.sleep,
+                    usb_reader=lambda _: (usb, None, None),
+                ).run()
+                self.assertEqual(result['state'], expected)
+                if case == 'long_sleep':
+                    self.assertEqual(result['minimum_sleep_seconds'], 120)
+                    self.assertTrue(result['recovery_verified'])
+                else:
+                    self.assertEqual(result['reason'], 'resume_sleep_not_observed')
+                    self.assertIsNone(result['minimum_sleep_seconds'])
+                    service.resume_sample.assert_not_called()
+
+    def test_sleep_recovery_stops_at_deadline_when_every_sample_is_unready(self):
+        fake = Clock()
+        service = Mock()
+        service.resume_sample.return_value = None
+        usb = SimpleNamespace(serial='original', location=8)
+
+        def clocks():
+            offset = 15 if fake.now >= 1 else 0
+            return fake.now + offset, offset, offset
+
+        def sleep(seconds):
+            self.assertGreater(seconds, 0)
+            fake.sleep(seconds)
+
+        with redirect_stdout(io.StringIO()):
+            result = SleepRecoveryRun(
+                service, 30, clock=clocks, sleep=sleep, usb_reader=lambda _: (usb, None, None)
+            ).run()
+        self.assertEqual(result['reason'], 'resume_service_not_ready')
+        self.assertEqual(result['unready_samples_after_resume'], 91)
+        self.assertFalse(result['recovery_verified'])
+
+    def test_resume_requires_same_usb_enumeration_through_ready_sample(self):
+        service = LiveService.__new__(LiveService)
+        original = SimpleNamespace(serial='original', location=8, entry=21)
+        remounted = SimpleNamespace(serial='original', location=8, entry=22)
+        snapshot = {'pid': 20, 'instance': 'private-runtime'}
+        for final, expected in ((remounted, None), (original, snapshot)):
+            with (
+                self.subTest(final=final),
+                patch(
+                    'service_smoke.read_usb',
+                    side_effect=[(d, None, None) for d in (original, original, final)],
+                ),
+                patch('service_smoke.Device'),
+                patch.object(service, 'supervisor_sample', return_value=snapshot),
+            ):
+                self.assertEqual(service.resume_sample(('original', 8)), expected)
 
     def test_resume_never_targets_a_different_usb_identity(self):
         service = LiveService.__new__(LiveService)
