@@ -131,6 +131,7 @@ RESPONSE_ACOUSTIC_MIN_BACKEND = '0.14.57'
 EXTENDED_VOICE_MIN_BACKEND = '0.14.60'
 ASR_STOP_MIN_BACKEND = '0.14.66'
 ROUTED_LATENCY_MIN_BACKEND = '0.14.62'
+TOOL_SAMPLE_MIN_BACKEND = '0.15.4'
 RENDER_OVERLAP_MIN_BACKEND = '0.14.83'
 STOP_RECEIPT_MIN_APK_CODE = 69
 STOP_VISUAL_MIN_APK_CODE = 71
@@ -3681,7 +3682,7 @@ def main(argv=None):
     elif args.self_playback_soak:
         minimum_batch_backend = ECHO_SOAK_MIN_BACKEND
     elif args.latency_scenario == 'tool':
-        minimum_batch_backend = '0.15.4'
+        minimum_batch_backend = TOOL_SAMPLE_MIN_BACKEND
     elif args.latency_scenario == 'web':
         minimum_batch_backend = ROUTED_LATENCY_MIN_BACKEND
     elif args.extended_voice_evidence or args.interruption_suite:

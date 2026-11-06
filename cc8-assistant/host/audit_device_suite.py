@@ -16,6 +16,7 @@ from device_smoke import (
     ROUTED_LATENCY_MIN_BACKEND,
     RENDER_OVERLAP_MIN_BACKEND,
     STANDBY_SECONDS,
+    TOOL_SAMPLE_MIN_BACKEND,
     device_suite_phases,
     matched_playout,
     interruption_input,
@@ -159,6 +160,11 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
         'completed_phases': 0,
         'expected_phases': len(plan),
     }
+    tool_guard_required = scenario == 'tool' and tuple(map(int, backend.split('.'))) >= tuple(
+        map(int, TOOL_SAMPLE_MIN_BACKEND.split('.'))
+    )
+    if scenario == 'tool':
+        result['tool_sample_guard_required'] = tool_guard_required
     if render_overlap:
         result['require_render_overlap'] = True
     if echo_soak:
@@ -252,6 +258,19 @@ def audit(data, *, expect_backend=None, expect_apk_code=None):
             ):
                 failure = {'phase': name, 'reason': 'dialogue_timing_unconfirmed'}
                 break
+            if tool_guard_required:
+                gates = evidence.get('rejected_voice_gates')
+                rejected = gates.get('tool_sample_guard') if isinstance(gates, dict) else None
+                admitted = evidence.get('admitted_voice_requests')
+                if not (
+                    evidence.get('tool_sample_guarded') is True
+                    and type(admitted) is int
+                    and admitted == 1
+                    and type(rejected) is int
+                    and rejected == 0
+                ):
+                    failure = {'phase': name, 'reason': 'phase_tool_sample_guard_unconfirmed'}
+                    break
         reports.append(report)
 
     if failure is not None and not reports:
