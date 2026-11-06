@@ -7,7 +7,6 @@ import re
 from types import SimpleNamespace
 
 from device_smoke import (
-    AWAKE_DIALOGUE_CHECK,
     ECHO_SOAK_MIN_BACKEND,
     CheckFailure,
     ECHO_SOAK_SCOPE,
@@ -17,6 +16,7 @@ from device_smoke import (
     ROUTED_LATENCY_MIN_BACKEND,
     RENDER_OVERLAP_MIN_BACKEND,
     STANDBY_SUITE_SCOPE,
+    TOOL_REJECTION_MIN_BACKEND,
     TOOL_SAMPLE_MIN_BACKEND,
     device_suite_phases,
     matched_playout,
@@ -26,7 +26,9 @@ from device_smoke import (
     planned_checks,
     qa_fixture_matches,
     run_device_suite,
+    safe_tool_transcript_miss,
     standby_failure,
+    tool_dialogue_failure_reason,
 )
 from private_output import read_private_json
 from qa_speech import SCENARIO_DIGESTS
@@ -79,24 +81,11 @@ def phase_apk_identity(report, expect_apk_code, previous):
 def recorded_tool_failure(report, expected, previous):
     if not (
         isinstance(report, dict)
-        and report.get('state') == 'failed'
-        and report.get('cleanup_microphone_off_verified') is True
         and content_free_phase(report)
-        and AWAKE_DIALOGUE_CHECK in expected
         and (previous is None or all(report[key] == previous[key] for key in SOURCE_FIELDS))
     ):
         return None
-    index = expected.index(AWAKE_DIALOGUE_CHECK)
-    checks = report.get('checks')
-    if (
-        not isinstance(checks, list)
-        or len(checks) != index + 1
-        or not all(isinstance(check, dict) for check in checks)
-        or [(check.get('name'), check.get('state')) for check in checks]
-        != [(name, 'passed') for name in expected[:index]] + [(AWAKE_DIALOGUE_CHECK, 'failed')]
-    ):
-        return None
-    reason = checks[-1].get('reason')
+    reason = tool_dialogue_failure_reason(report, expected)
     return reason if reason in TOOL_DIALOGUE_FAILURES else None
 
 
@@ -154,6 +143,7 @@ def audit(
     room_coverage = data.get('response_acoustic_coverage', False)
     render_overlap = data.get('require_render_overlap', False)
     scenario = data.get('latency_scenario', 'qa')
+    tool_rejection_coverage = 'tool_rejection_coverage' in data
     if (
         type(extended) is not bool
         or type(room_latency) is not bool
@@ -191,6 +181,12 @@ def audit(
         or (room_latency and not qa_latency)
         or not isinstance(scenario, str)
         or scenario not in SCENARIO_DIGESTS
+        or (
+            tool_rejection_coverage
+            and not (
+                data['tool_rejection_coverage'] is True and qa_fixture_bound and scenario == 'tool'
+            )
+        )
         or (
             scenario != 'qa'
             and (
@@ -231,6 +227,12 @@ def audit(
     tool_guard_required = scenario == 'tool' and tuple(map(int, backend.split('.'))) >= tuple(
         map(int, TOOL_SAMPLE_MIN_BACKEND.split('.'))
     )
+    if tool_rejection_coverage:
+        if tuple(map(int, backend.split('.'))) < tuple(
+            map(int, TOOL_REJECTION_MIN_BACKEND.split('.'))
+        ):
+            raise ValueError('Tool rejection coverage requires bounded input evidence')
+        result['tool_transcript_misses'] = 0
     if scenario == 'tool':
         result['tool_sample_guard_required'] = tool_guard_required
     if qa_latency:
@@ -267,6 +269,18 @@ def audit(
             failure = {'phase': name, 'reason': 'suite_qa_fixture_mismatch'}
             break
         identity = phase_apk_identity(report, expect_apk_code, artifact)
+        if phase.get('state') == 'guard_rejected':
+            if not (
+                tool_rejection_coverage
+                and identity is not None
+                and content_free_phase(report)
+                and safe_tool_transcript_miss(report, phase['expected_checks'])
+            ):
+                failure = {'phase': name, 'reason': 'phase_tool_rejection_unconfirmed'}
+                break
+            artifact = identity
+            reports.append(report)
+            continue
         if phase.get('state') != 'passed' or not isinstance(report, dict):
             failure = {'phase': name, 'reason': 'phase_not_completed'}
             if (
@@ -367,6 +381,8 @@ def audit(
         replay,
         lambda _value: None,
         qa_latency=qa_latency,
+        qa_fixture_bound=qa_fixture_bound,
+        tool_rejection_coverage=tool_rejection_coverage,
         response_acoustic=room_latency,
         response_acoustic_coverage=room_coverage,
         require_render_overlap=render_overlap,
@@ -379,6 +395,8 @@ def audit(
         standby_only=standby_only,
     )
     result['completed_phases'] = sum(p['state'] == 'passed' for p in reviewed['phases'])
+    if tool_rejection_coverage:
+        result['tool_transcript_misses'] = reviewed['tool_transcript_misses']
     if room_coverage:
         result['response_acoustic_unconfirmed'] = reviewed['response_acoustic_unconfirmed']
     if (qa_latency or interruption) and result['completed_phases']:
@@ -387,6 +405,15 @@ def audit(
             result['math_answers'] = reviewed['math_answers']
         if scenario != 'qa':
             result['latency_scenario'] = scenario
+    if reviewed['state'] == 'tool_transcript_incomplete':
+        return {
+            **result,
+            'reason': 'suite_tool_transcript_coverage_incomplete'
+            if data.get('state') == 'tool_transcript_incomplete'
+            and type(data.get('tool_transcript_misses')) is int
+            and data['tool_transcript_misses'] == reviewed['tool_transcript_misses']
+            else 'report_not_completed',
+        }
     if reviewed['state'] == 'acoustic_incomplete':
         return {
             **result,
@@ -395,9 +422,13 @@ def audit(
             else 'report_not_completed',
         }
     if reviewed['state'] != 'passed':
-        if failure is not None and result['completed_phases'] == len(reports):
+        if failure is not None and (
+            result['completed_phases'] + result.get('tool_transcript_misses', 0) == len(reports)
+        ):
             return {**result, **failure}
-        failed = next(p for p in reviewed['phases'] if p['state'] != 'passed')
+        failed = next(
+            p for p in reviewed['phases'] if p['state'] not in ('passed', 'guard_rejected')
+        )
         return {
             **result,
             'phase': failed['name'],

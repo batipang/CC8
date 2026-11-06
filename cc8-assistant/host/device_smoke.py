@@ -3375,12 +3375,93 @@ def qa_fixture_matches(report, scenario, case):
     )
 
 
+def tool_dialogue_failure_reason(report, expected_checks):
+    if (
+        report.get('state') != 'failed'
+        or report.get('cleanup_microphone_off_verified') is not True
+        or AWAKE_DIALOGUE_CHECK not in expected_checks
+    ):
+        return None
+    checks = report.get('checks')
+    stop = expected_checks.index(AWAKE_DIALOGUE_CHECK)
+    if not (
+        isinstance(checks, list)
+        and len(checks) == stop + 1
+        and all(isinstance(row, dict) for row in checks)
+        and [(row.get('name'), row.get('state')) for row in checks]
+        == [(name, 'passed') for name in expected_checks[:stop]]
+        + [(AWAKE_DIALOGUE_CHECK, 'failed')]
+    ):
+        return None
+    return checks[-1].get('reason')
+
+
+def safe_tool_transcript_miss(report, expected_checks):
+    if (
+        tool_dialogue_failure_reason(report, expected_checks)
+        != 'tool_sample_transcript_not_confirmed'
+    ):
+        return False
+    evidence = report.get('acoustic_evidence')
+    if not isinstance(evidence, dict) or evidence.get('tool_sample_guarded') is not True:
+        return False
+    rejected = evidence.get('tool_sample_rejections')
+    gates = evidence.get('rejected_voice_gates')
+    sole_input = evidence.get('sole_tool_rejection_input')
+    counts = evidence.get('stage_counts')
+    return (
+        isinstance(rejected, dict)
+        and len(rejected) == 1
+        and all(
+            reason in TOOL_TRANSCRIPT_MISMATCHES and type(count) is int and count == 1
+            for reason, count in rejected.items()
+        )
+        and isinstance(gates, dict)
+        and 'tool_sample_guard' in gates
+        and all(
+            gate in REJECTED_VOICE_GATES
+            and type(count) is int
+            and count == int(gate == 'tool_sample_guard')
+            for gate, count in gates.items()
+        )
+        and isinstance(sole_input, dict)
+        and valid_asr_input_samples(sole_input.get(ASR_INPUT_SAMPLES))
+        and all(
+            type(evidence.get(key)) is int and evidence[key] == expected
+            for key, expected in (
+                ('new_voice_requests', 1),
+                ('admitted_voice_requests', 0),
+                ('rejected_voice_candidates', 1),
+                ('pending_voice_candidates', 0),
+                ('unclassified_terminal_candidates', 0),
+                ('rejected_pause_count', 0),
+                ('completed_requests', 0),
+                ('cancelled_requests', 0),
+                ('completed_tasks', 0),
+            )
+        )
+        and isinstance(counts, dict)
+        and all(
+            type(counts.get(key)) is int and counts[key] == expected
+            for key, expected in (
+                ('wake_detected', 1),
+                ('asr_start', 1),
+                ('asr_end', 1),
+                ('brain_start', 0),
+                ('playout_ack', 0),
+                ('playback_done', 0),
+            )
+        )
+    )
+
+
 def run_device_suite(
     make_run,
     save,
     *,
     qa_latency=False,
     qa_fixture_bound=False,
+    tool_rejection_coverage=False,
     response_acoustic=False,
     response_acoustic_coverage=False,
     require_render_overlap=False,
@@ -3392,6 +3473,10 @@ def run_device_suite(
     legacy_echo_soak=False,
     standby_only=False,
 ):
+    if tool_rejection_coverage and not (
+        qa_latency and qa_fixture_bound and latency_scenario == 'tool'
+    ):
+        raise ValueError('Tool rejection coverage requires a bound tool latency suite')
     if qa_fixture_bound and not qa_latency:
         raise ValueError('Fixture binding requires a QA latency suite')
     if standby_only and (qa_latency or extended_voice or interruption or echo_soak):
@@ -3437,6 +3522,8 @@ def run_device_suite(
         suite['qa_corpus_sha256'] = SCENARIO_DIGESTS[latency_scenario]
         if qa_fixture_bound:
             suite['qa_fixture_bound'] = True
+        if tool_rejection_coverage:
+            suite.update(tool_rejection_coverage=True, tool_transcript_misses=0)
         if latency_scenario != 'qa':
             suite['latency_scenario'] = latency_scenario
         suite['latencies_ms'] = {
@@ -3509,6 +3596,13 @@ def run_device_suite(
             phase['state'] = result['state']
             if qa_fixture_bound and not qa_fixture_matches(result, latency_scenario, index + 1):
                 phase.update(state='failed', reason='suite_qa_fixture_mismatch')
+            elif tool_rejection_coverage and safe_tool_transcript_miss(
+                result, phase['expected_checks']
+            ):
+                phase['state'] = 'guard_rejected'
+                suite['tool_transcript_misses'] += 1
+                save(suite)
+                continue
             if phase['state'] == 'passed' and (
                 result['cleanup_microphone_off_verified'] is not True
                 or [(row['name'], row['state']) for row in result['checks']]
@@ -3739,7 +3833,11 @@ def run_device_suite(
             return suite
         save(suite)
     suite['state'] = (
-        'acoustic_incomplete' if suite.get('response_acoustic_unconfirmed') else 'passed'
+        'tool_transcript_incomplete'
+        if suite.get('tool_transcript_misses')
+        else 'acoustic_incomplete'
+        if suite.get('response_acoustic_unconfirmed')
+        else 'passed'
     )
     save(suite)
     return suite
@@ -3921,6 +4019,11 @@ def main(argv=None):
         action='store_true',
         help='Continue a QA acoustic suite after a bounded acoustic-only miss',
     )
+    parser.add_argument(
+        '--collect-tool-rejection-coverage',
+        action='store_true',
+        help='Continue fixed tool trials after one confirmed pre-dispatch transcript rejection',
+    )
     args = parser.parse_args(argv)
     options = {key for key in SMOKE_OPTIONS if getattr(args, key)}
     batch = (
@@ -4017,6 +4120,10 @@ def main(argv=None):
         parser.error(
             '--collect-acoustic-coverage requires --qa-latency-suite and --response-acoustic-evidence'
         )
+    if args.collect_tool_rejection_coverage and not (
+        args.qa_latency_suite and args.latency_scenario == 'tool'
+    ):
+        parser.error('--collect-tool-rejection-coverage requires the fixed tool latency suite')
     if batch and options != {'capture'}:
         parser.error('Device batches require --capture and accept no individual check flags')
     if args.standby and not args.capture or args.acoustic and not args.standby:
@@ -4062,7 +4169,9 @@ def main(argv=None):
         minimum_batch_backend = ECHO_SOAK_MIN_BACKEND
     elif args.latency_scenario == 'tool':
         minimum_batch_backend = (
-            TOOL_REJECTION_MIN_BACKEND if diagnose_tool else TOOL_SAMPLE_MIN_BACKEND
+            TOOL_REJECTION_MIN_BACKEND
+            if diagnose_tool or args.collect_tool_rejection_coverage
+            else TOOL_SAMPLE_MIN_BACKEND
         )
     elif args.latency_scenario == 'web':
         minimum_batch_backend = ROUTED_LATENCY_MIN_BACKEND
@@ -4109,6 +4218,8 @@ def main(argv=None):
                     plan['response_acoustic_evidence'] = True
                 if args.collect_acoustic_coverage:
                     plan['response_acoustic_coverage'] = True
+                if args.collect_tool_rejection_coverage:
+                    plan['tool_rejection_coverage'] = True
             if args.standby_suite:
                 plan['standby_seconds_per_phase'] = STANDBY_SECONDS
             if args.self_playback_soak:
@@ -4430,6 +4541,7 @@ def main(argv=None):
                             save,
                             qa_latency=args.qa_latency_suite,
                             qa_fixture_bound=args.qa_latency_suite,
+                            tool_rejection_coverage=args.collect_tool_rejection_coverage,
                             response_acoustic=args.response_acoustic_evidence,
                             response_acoustic_coverage=args.collect_acoustic_coverage,
                             require_render_overlap=args.require_render_overlap,
@@ -4460,6 +4572,8 @@ def main(argv=None):
                             for phase in result['phases']
                         ],
                     }
+                    if args.collect_tool_rejection_coverage:
+                        summary['tool_transcript_misses'] = result['tool_transcript_misses']
                     if args.self_playback_soak:
                         summary['echo_soak_totals'] = result['echo_soak_totals']
                         if background_receipt is not None:
