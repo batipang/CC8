@@ -4157,6 +4157,110 @@ class DeviceAutomationTests(unittest.TestCase):
         self.assertEqual(error.exception.code, 2)
         device.assert_not_called()
 
+    def test_fixed_tool_comparison_plan_validates_case_and_individual_capture(self):
+        base = ['--runtime-root', '/unused']
+        flags = ['--tool-asr-comparison', 'sensevoice', '--tool-case', '5']
+        with patch('device_smoke.Device') as device, redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(main(base + flags + ['--capture', '--awake-dialogue']), 0)
+        device.assert_not_called()
+        plan = json.loads(output.getvalue())
+        self.assertEqual(plan['scope'], 'fixed_tool_asr_comparison')
+        self.assertEqual((plan['tool_case'], plan['tool_compare_engine']), (5, 'sensevoice'))
+        self.assertFalse(plan['dot_dispatch_expected'])
+        self.assertIn('fixed_tool_asr_comparison', plan['checks'])
+        self.assertNotIn('synthetic_awake_dialogue', plan['checks'])
+        for invalid in (
+            flags,
+            flags[:-1] + ['31', '--capture', '--awake-dialogue'],
+            ['--tool-case', '5'],
+        ):
+            with (
+                self.subTest(invalid=invalid),
+                redirect_stderr(io.StringIO()),
+                self.assertRaises(SystemExit),
+            ):
+                main(base + invalid)
+
+    def test_tool_comparison_measures_rejected_pair_without_any_task_dispatch(self):
+        result = {'primary': 'read_only_missing', 'local': 'matched', 'local_engine': 'sensevoice'}
+        row = {
+            'request_id': 'private',
+            'origin': 'voice',
+            'outcome': 'rejected',
+            'gate': 'tool_sample_guard',
+            'tool_sample_rejection': 'comparison_only',
+            'stages': {'wake_detected': 1, 'asr_start': 2, 'asr_end': 3},
+            'tool_asr_comparison': result,
+            'asr_input_samples': 99040,
+        }
+        for overrides, error in (
+            ({}, None),
+            (
+                {'tool_asr_comparison': {**result, 'local_engine': 'owner-private'}},
+                'receipt_invalid',
+            ),
+            ({'asr_input_samples': True}, 'receipt_invalid'),
+            ({'stages': {**row['stages'], 'brain_start': 4}}, 'unexpected_voice_activity'),
+            ({'gate': 'wake_closed', 'stages': {}}, 'local_wake_not_confirmed'),
+            ({'tool_asr_comparison': {**result, 'local': 'timeout'}}, 'decode_failed'),
+        ):
+            with self.subTest(error=error):
+                run, device, _, _ = self.acoustic_fixture(
+                    lambda _: [{**row, **overrides}], awake=True
+                )
+                run.latency_sample = True
+                run.latency_scenario = 'tool'
+                run.qa_question = SCENARIO_QUESTIONS['tool'][4]
+                run.tool_local_compare = True
+                run.tool_compare_engine = 'sensevoice'
+                run.tool_sample_token = 'a' * 32
+                if error is None:
+                    run.acoustic_probe(awake=True)
+                    report = run.report('passed')
+                    self.assertEqual(report['tool_case'], 5)
+                    evidence = report['acoustic_evidence']
+                    self.assertEqual(evidence['tool_asr_comparison'], result)
+                    self.assertEqual(evidence['same_input_samples'], 99040)
+                    self.assertNotIn('private', json.dumps(evidence))
+                else:
+                    with self.assertRaisesRegex(CheckFailure, f'tool_comparison_{error}'):
+                        run.acoustic_probe(awake=True)
+                device.speak_probe.assert_called_once_with(question=run.qa_question)
+
+    def test_tool_comparison_rejects_using_the_same_engine_before_device_access(self):
+        from release_info import RELEASE
+
+        health = {
+            'bridge_version': RELEASE.backend_version,
+            'protocol_version': RELEASE.protocol_version,
+            'release_id': RELEASE.release_id,
+            'runtime_instance': 'private',
+            'tool_sample_guard_supported': True,
+            'asr_engine': 'sensevoice',
+        }
+        with (
+            patch('device_smoke.rpc', return_value=health),
+            patch('device_smoke.load_release', return_value=RELEASE),
+            patch('device_smoke.Device') as device,
+            redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit) as error,
+        ):
+            main(
+                [
+                    '--runtime-root',
+                    '/unused',
+                    '--capture',
+                    '--awake-dialogue',
+                    '--tool-asr-comparison',
+                    'sensevoice',
+                    '--tool-case',
+                    '5',
+                    '--execute',
+                ]
+            )
+        self.assertEqual(error.exception.code, 2)
+        device.assert_not_called()
+
     def test_tool_guard_arms_before_a_capture_is_allowed_to_start(self):
         run, device, _, _ = self.acoustic_fixture(lambda _: [], awake=True)
         run.latency_sample = True

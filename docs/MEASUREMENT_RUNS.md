@@ -206,6 +206,17 @@ cp .toolchains/cc8/paths.json /absolute/qa-checkout/.toolchains/cc8/paths.json
 
 0.15.11 候选允许本机所有者在固定工具题的 `tool_sample_compare_arm` 请求中显式选择 `engine: sensevoice`，结果增加 `local_engine`。省略参数的旧请求仍使用 Whisper。SenseVoice 子进程核对仓库既有模型清单，解码结束复核本机模型文件身份。缺文件、校验失败或执行超时会返回固定分类。该分支只诊断同一段录音，仍在工具派发前结束，不将本地结果补入真实指令。默认 MiniMax 与正常录音路径保持原配置。 [同源识别器对照](ASR_EVALUATION.md#minimax-与本地-whisper-同源对照)
 
+设备检查可直接执行单个固定题对照，支持后台 0.15.11 或更新版本。以下命令先打印计划，追加 `--execute` 后才启用限时前台收音并播放固定公开问句。
+
+```sh
+./cc8 verify-device --runtime-root /absolute/runtime --capture --awake-dialogue \
+  --tool-asr-comparison sensevoice --tool-case 5
+```
+
+本机对照可选 `sensevoice` 或 `whisper`，题号为 1 至 30。报告记录固定题号、主识别器、本地识别器、两侧结果分类及共同输入样本数。通过要求同一新录音完成两侧识别、没有进入 Dot，且双端停采恢复确认。两侧结果可不同，完整匹配率仍从分类统计。唤醒失败、收据无效、引擎不符或本地解码失败各自保留诊断结果。既有工具执行批次仍按原来的严格准入单独验收。
+
+在后台 0.15.11／原签名 APK code78 上，正式命令的 SenseVoice 第 5 题与 Whisper 第 19 题各通过一次，分别记录 98,880 和 101,280 个同段样本。两份报告均核对主识别器为 MiniMax、零 Dot 派发和双端停采。
+
 ### 离线复核既有报告
 
 工具题批次用 `audit-device-suite` 逐轮复核。从后台 0.15.4 起，每个合格样本须有门控启用记录、恰好一次语音准入，且门控拒绝次数为零。旧批次仍可按当时的回执复核，结果注明当时未要求门控证据。
