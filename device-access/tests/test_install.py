@@ -2,7 +2,9 @@
 
 import hashlib
 import importlib.util
+import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -115,6 +117,59 @@ class InstallerTests(unittest.TestCase):
     def test_bad_helper_transfer_hash_prevents_install_and_still_cleans(self):
         calls = self.stream(hash_ok=False)
         self.assertFalse(any(command.startswith('CLASSPATH') for command, _ in calls))
+
+    def test_closed_console_pipe_cannot_interrupt_install_verification(self):
+        payload = b'apk'
+        digest = hashlib.sha256(payload).hexdigest()
+        for closed_stream in ('stdout', 'stderr'):
+            commands = []
+
+            def shell(transport, command, data=None, timeout=30):
+                commands.append(command)
+                if command.startswith('sha256sum /sdcard/'):
+                    return hashlib.sha256(b'helper').hexdigest()
+                if command.startswith('CLASSPATH='):
+                    self.assertEqual(data, payload)
+                    pipe_reader.close()
+                    return (
+                        'CC8_APK_STREAM_VERIFIED bytes=3\n'
+                        'CC8_PACKAGE_INSTALLED com.example.app version=1\n'
+                    )
+                if command == 'pm path com.example.app':
+                    return 'package:/data/app/test/base.apk'
+                if command == 'sha256sum /data/app/test/base.apk':
+                    return digest
+                return ''
+
+            reader, writer = os.pipe()
+            with (
+                self.subTest(closed_stream=closed_stream),
+                os.fdopen(reader, 'rb') as pipe_reader,
+                io.TextIOWrapper(
+                    os.fdopen(writer, 'wb', buffering=0), write_through=True
+                ) as broken,
+                patch.object(
+                    access.sys, 'stdout', broken if closed_stream == 'stdout' else io.StringIO()
+                ),
+                patch.object(
+                    access.sys, 'stderr', broken if closed_stream == 'stderr' else io.StringIO()
+                ),
+                patch.object(access, 'helper_artifact', return_value=b'helper'),
+                patch.object(access, 'shell', side_effect=shell),
+            ):
+                if closed_stream == 'stderr':
+                    pipe_reader.close()
+                receipt = access._install_verified(
+                    '7', 'com.example.app', None, payload, False, True, {}
+                )
+                self.assertTrue(receipt['installed_apk_hash_verified'])
+                self.assertEqual(sum(command.startswith('CLASSPATH=') for command in commands), 1)
+                self.assertEqual(sum(command.startswith('rm -f ') for command in commands), 1)
+                open_stream = access.sys.stderr if closed_stream == 'stdout' else access.sys.stdout
+                if closed_stream == 'stdout':
+                    self.assertIn('system install callback verified', open_stream.getvalue())
+                else:
+                    self.assertEqual(open_stream.getvalue(), '')
 
     def test_shell_uses_argument_array_engineering_prefix_and_binary_stdin(self):
         result = subprocess.CompletedProcess([], 0, b'ok', b'')
