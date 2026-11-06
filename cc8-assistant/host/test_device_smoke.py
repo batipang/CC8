@@ -2945,6 +2945,43 @@ class DeviceAutomationTests(unittest.TestCase):
                 self.assertNotIn(token, json.dumps(report))
                 self.assertNotIn('private-backend-error-body', json.dumps(report))
 
+    def test_response_window_diagnostic_is_bounded_and_owned(self):
+        expected = {'status': 'unconfirmed', 'reason': 'ambiguous'}
+        receipt = {**expected, 'generation': 8}
+        diagnostic = {'correlation': 0.84, 'competing_correlation': 0.73}
+        self.assertEqual(summarize_response_acoustic(receipt, 8), expected)
+        self.assertEqual(
+            summarize_response_acoustic({**receipt, 'window_diagnostic': diagnostic}, 8),
+            {**expected, 'window_diagnostic': diagnostic},
+        )
+        rounded_edge = {'correlation': 0.84, 'competing_correlation': 0.72}
+        self.assertEqual(
+            summarize_response_acoustic({**receipt, 'window_diagnostic': rounded_edge}, 8),
+            {**expected, 'window_diagnostic': rounded_edge},
+        )
+        self.assertEqual(
+            summarize_response_acoustic({**receipt, 'window_diagnostic': diagnostic}, 9),
+            {'status': 'unconfirmed', 'reason': 'generation_mismatch'},
+        )
+        other = {'status': 'unconfirmed', 'reason': 'not_observed'}
+        self.assertEqual(
+            summarize_response_acoustic({**receipt, **other, 'window_diagnostic': diagnostic}, 8),
+            other,
+        )
+        for patch_values in (
+            {'correlation': True},
+            {'correlation': float('nan')},
+            {'correlation': 1.01},
+            {'correlation': 0.5, 'competing_correlation': 0.49},
+            {'competing_correlation': 0.85},
+            {'competing_correlation': 0.7199},
+            {'competing_correlation': '0.73'},
+            {'matched_window_delay_ms': 120},
+        ):
+            with self.subTest(patch_values=patch_values):
+                value = {**receipt, 'window_diagnostic': {**diagnostic, **patch_values}}
+                self.assertEqual(summarize_response_acoustic(value, 8), expected)
+
     def test_response_anchor_diagnostic_is_bounded_and_owned(self):
         diagnostic = {
             'prefix_minus_projected_ms': -60,
@@ -4271,6 +4308,25 @@ class DeviceAutomationTests(unittest.TestCase):
             (SCENARIO_QUESTIONS['tool'][-1], 'tool', '５＋６＝十一。', 'matched'),
             (SCENARIO_QUESTIONS['tool'][-1], 'tool', '1 1', 'unconfirmed'),
             (SCENARIO_QUESTIONS['tool'][-1], 'tool', '5 + 5 = 11', 'mismatch'),
+            (
+                SCENARIO_QUESTIONS['tool'][0],
+                'tool',
+                '1 + 1 = 2，已通过本机只读终端命令确认。',
+                'matched',
+            ),
+            (
+                SCENARIO_QUESTIONS['tool'][0],
+                'tool',
+                '1 + 1 = 3，已通过本机只读终端命令确认。',
+                'mismatch',
+            ),
+            (
+                SCENARIO_QUESTIONS['tool'][0],
+                'tool',
+                '1 + 1 = 2，或者等于三，已通过本机只读终端命令确认。',
+                'unconfirmed',
+            ),
+            (ACOUSTIC_QUESTION, 'qa', '1 + 1 = 2，已通过本机只读终端命令确认。', 'unconfirmed'),
             (
                 SCENARIO_QUESTIONS['tool'][0],
                 'tool',

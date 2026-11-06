@@ -40,6 +40,7 @@ WEB_TOPICS = (
 )
 TOOL_PREFIX = '请用本机只读终端命令计算'
 TOOL_ANSWER_LABEL = re.compile(r'^本机(?:只读终端(?:命令)?|终端)计算结果:\s*')
+TOOL_ANSWER_PROVENANCE = re.compile(r'[,。]\s*已通过本机只读终端命令确认\Z')
 MATH_SCENARIOS = ('qa', 'tool')
 TOOL_COMPARE_ENGINES = ('whisper', 'sensevoice')
 SCENARIO_QUESTIONS = {
@@ -151,6 +152,7 @@ def math_answer_status(question, result):
     answer = unicodedata.normalize('NFKC', result).strip().rstrip('。.!').rstrip()
     if question.startswith(TOOL_PREFIX):
         answer = TOOL_ANSWER_LABEL.sub('', answer, count=1)
+        answer = TOOL_ANSWER_PROVENANCE.sub('', answer, count=1).rstrip()
     value = ANSWER_VALUE.fullmatch(answer)
     if value is not None:
         return 'matched' if number(value[1]) == left + right else 'mismatch'

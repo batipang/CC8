@@ -165,6 +165,10 @@ class CapturePipeline:
                 if reason == 'observed':
                     reason = 'interval_out_of_bounds'
             receipt = {'status': 'unconfirmed', 'generation': probe.generation, 'reason': reason}
+            if reason == 'ambiguous':
+                receipt['window_diagnostic'] = {
+                    key: probe.result[key] for key in ('correlation', 'competing_correlation')
+                }
             if reason == 'response_prefix_alignment_mismatch':
                 receipt['anchor_diagnostic'] = leading['anchor_diagnostic']
             if reason == 'response_prefix_discontinuous' and 'room_fit_status' in leading:

@@ -355,6 +355,24 @@ def summarize_response_anchor(value):
     return dict(value)
 
 
+def summarize_ambiguous_window(value):
+    if not isinstance(value, dict) or set(value) != {'correlation', 'competing_correlation'}:
+        return None
+    peak, rival = value['correlation'], value['competing_correlation']
+    if (
+        type(peak) not in (int, float)
+        or type(rival) not in (int, float)
+        or not 0.55 <= peak <= 1
+        or not 0 <= rival <= peak
+    ):
+        return None
+    peak, rival = round(peak, 4), round(rival, 4)
+    # An ambiguous gap can round up to the detector's 0.12 acceptance margin.
+    if round(peak - rival, 4) > 0.12:
+        return None
+    return {'correlation': peak, 'competing_correlation': rival}
+
+
 def summarize_response_acoustic(value, generation):
     if not isinstance(value, dict):
         return {'status': 'unconfirmed', 'reason': 'invalid_receipt'}
@@ -374,6 +392,10 @@ def summarize_response_acoustic(value, generation):
             if type(reason) is str and reason in RESPONSE_PROBE_REASONS
             else 'unknown',
         }
+        if reason == 'ambiguous':
+            diagnostic = summarize_ambiguous_window(value.get('window_diagnostic'))
+            if diagnostic is not None:
+                timing['window_diagnostic'] = diagnostic
         if reason == 'response_prefix_alignment_mismatch':
             diagnostic = summarize_response_anchor(value.get('anchor_diagnostic'))
             if diagnostic is not None:
