@@ -39,7 +39,7 @@ WEB_TOPICS = (
     '深圳图书馆',
 )
 TOOL_PREFIX = '请用本机只读终端命令计算'
-TOOL_ANSWER_LABEL = re.compile(r'^(?:本机只读终端命令计算结果|本机终端计算结果):\s*')
+TOOL_ANSWER_LABEL = re.compile(r'^本机(?:只读终端(?:命令)?|终端)计算结果:\s*')
 MATH_SCENARIOS = ('qa', 'tool')
 TOOL_COMPARE_ENGINES = ('whisper', 'sensevoice')
 SCENARIO_QUESTIONS = {
