@@ -57,8 +57,8 @@ class VisionFailureTests(unittest.TestCase):
 
         b.event = event
 
-    def run_visual(self, b):
-        b.begin_visual('固定公开物品检查', 'button', 'a' * 32)
+    def run_visual(self, b, nonce='a' * 32):
+        b.begin_visual('固定公开物品检查', 'button', nonce)
         job = b.response.queue.get_nowait()
         with patch.object(b.response.queue, 'get', side_effect=[job, SystemExit]):
             with self.assertRaises(SystemExit):
@@ -165,6 +165,71 @@ class VisionFailureTests(unittest.TestCase):
         self.assertIsNone(job.image)
         self.assertIsNone(b.visual.snapshot_job)
         self.error(b, 'vision', 'credential_or_permission')
+
+    def test_camera_failures_give_device_guidance_and_require_an_explicit_new_request(self):
+        cases = (
+            ('permission_denied', 'credential_or_permission', 'CC8 的应用权限'),
+            ('camera_timeout', 'timeout', '等待画面超时'),
+            ('image_transfer_failed', 'transport_or_io', '画面传输中断'),
+            ('camera_unavailable', 'provider_or_runtime', '关闭占用摄像头的页面'),
+        )
+        for reason, kind, instruction in cases:
+            for repeat in range(3):
+                with self.subTest(reason=reason, repeat=repeat):
+                    dot = Brain(receipt=True)
+                    b = self.bridge(dot)
+                    output = b.event
+                    b.speak = lambda *args: True
+                    self.capture_events(b, reason)
+                    failed = self.run_visual(b)
+                    self.error(b, 'vision', kind)
+                    messages = [
+                        row['message']
+                        for name, row in b.events
+                        if name == 'status' and row.get('phase') == 'error'
+                    ]
+                    self.assertIn(instruction, messages[0])
+                    self.assertNotIn('凭证', messages[0])
+                    self.assertEqual(dot.calls, 0)
+                    self.assertEqual(b.workspace.tasks, [])
+                    self.assertTrue(b.response.queue.empty())
+                    old_capture = next(row for name, row in b.events if name == 'camera_capture')
+
+                    def next_capture(name, **fields):
+                        output(name, **fields)
+                        if name != 'camera_capture':
+                            return
+                        b.on_event(
+                            {
+                                'event': 'camera_error',
+                                'request_id': old_capture['request_id'],
+                                'vision_generation': failed.generation,
+                                'error': reason,
+                            }
+                        )
+                        for event in events(b.visual.inbox.pending):
+                            b.on_event(event)
+
+                    b.event = next_capture
+                    recovered = self.run_visual(b, 'b' * 32)
+                    self.assertGreater(recovered.generation, failed.generation)
+                    self.assertEqual(dot.calls, 1)
+                    self.assertEqual([task['status'] for task in b.workspace.tasks], ['completed'])
+                    done = [row['result'] for name, row in b.events if name == 'vision_done']
+                    self.assertEqual(done, ['failed', 'completed'])
+                    self.assertEqual(
+                        sum(
+                            name == 'status' and row.get('phase') == 'error'
+                            for name, row in b.events
+                        ),
+                        1,
+                    )
+                    reports = b.diagnostics.report()['requests']
+                    self.assertEqual([row['outcome'] for row in reports], ['failed', 'completed'])
+                    self.assertIsNone(reports[-1]['error'])
+                    self.assertIsNone(b.visual.inbox.pending)
+                    self.assertIsNone(b.visual.generation)
+                    self.assertTrue(b.response.queue.empty())
 
     def test_capture_timeout_is_distinct_from_owner_cancellation(self):
         for cancelled in (False, True):
