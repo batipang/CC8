@@ -1962,13 +1962,13 @@ class SmokeRun:
             ]
             groups = classify_voice_records(rows)
             admitted, rejected = groups['admitted'], groups['rejected']
+            tool_rejected = [row for row in rejected if row['gate'] == 'tool_sample_guard']
             tool_rejections = {}
-            for row in rejected:
-                if row['gate'] == 'tool_sample_guard':
-                    reason = row.get('tool_sample_rejection')
-                    if reason not in TOOL_SAMPLE_REJECTION_REASONS:
-                        reason = 'unreported'
-                    tool_rejections[reason] = tool_rejections.get(reason, 0) + 1
+            for row in tool_rejected:
+                reason = row.get('tool_sample_rejection')
+                if reason not in TOOL_SAMPLE_REJECTION_REASONS:
+                    reason = 'unreported'
+                tool_rejections[reason] = tool_rejections.get(reason, 0) + 1
             mic_now = health.get('mic_frames')
             wake_rejection = (
                 rejected[0]
@@ -2057,13 +2057,26 @@ class SmokeRun:
                     'post_playback_quiet_seconds', 0
                 ),
             }
-            if tool_latency and not self.tool_local_compare and len(rows) == 1 and rejected:
-                row = rejected[0]
+            if tool_latency and not self.tool_local_compare and len(tool_rejected) == 1:
+                row = tool_rejected[0]
+                reason = row.get('tool_sample_rejection')
+                field = None
+                if len(rows) == 1 and reason in TOOL_TRANSCRIPT_MISMATCHES:
+                    field = 'sole_tool_rejection_input'
+                elif (
+                    len(rows) == 2
+                    and reason == 'not_open'
+                    and recognized_stimulus_matches is True
+                    and completed is not None
+                    and completed['request_id'] == admitted_id
+                ):
+                    # Observed in the quiet window after the matched answer.
+                    # This does not establish the acoustic source or onset.
+                    field = 'post_answer_tool_rejection_input'
                 stages = row.get('stages', {})
                 started, ended = stages.get('asr_start'), stages.get('asr_end')
                 if (
-                    row['gate'] == 'tool_sample_guard'
-                    and row.get('tool_sample_rejection') in TOOL_TRANSCRIPT_MISMATCHES
+                    field is not None
                     and type(started) in (int, float)
                     and type(ended) in (int, float)
                     and 0 <= started <= ended <= 604800000
@@ -2073,7 +2086,7 @@ class SmokeRun:
                     and row.get('task_outcome') is None
                 ):
                     samples = row.get(ASR_INPUT_SAMPLES)
-                    self.acoustic_evidence['sole_tool_rejection_input'] = {
+                    self.acoustic_evidence[field] = {
                         ASR_INPUT_SAMPLES: samples if valid_asr_input_samples(samples) else None,
                         'capture': summarize_rejection_capture(row),
                     }
@@ -2128,11 +2141,11 @@ class SmokeRun:
                     comparison['local'] not in ('error', 'timeout'), 'tool_comparison_decode_failed'
                 )
                 return comparison
-            if tool_latency:
-                require(
-                    not any(row['gate'] == 'tool_sample_guard' for row in rejected),
-                    'tool_sample_transcript_not_confirmed',
-                )
+            if tool_latency and tool_rejections:
+                require(not admitted, 'tool_sample_extra_voice_candidate')
+                if all(reason in TOOL_TRANSCRIPT_MISMATCHES for reason in tool_rejections):
+                    raise CheckFailure('tool_sample_transcript_not_confirmed')
+                raise CheckFailure('tool_sample_guard_not_confirmed')
             require(len(admitted) <= 1, 'unexpected_extra_voice_request')
             if admitted:
                 current_id = admitted[0]['request_id']
