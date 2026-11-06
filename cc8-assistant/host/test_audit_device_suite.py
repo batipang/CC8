@@ -90,6 +90,8 @@ def saved_suite(
     missing_standby_quiet=None,
     fixture_bound=False,
     misplaced_fixture=None,
+    tool_coverage=False,
+    tool_misses=(),
 ):
     index = 0
 
@@ -199,6 +201,40 @@ def saved_suite(
                     'status': 'unconfirmed',
                     'reason': 'response_prefix_alignment_mismatch',
                 }
+            if tool_coverage or tool_misses:
+                report['acoustic_evidence'].update(
+                    tool_sample_guarded=True, rejected_voice_gates={'tool_sample_guard': 0}
+                )
+            if index in tool_misses:
+                report['state'] = 'failed'
+                awake = planned_checks(options).index(AWAKE_DIALOGUE_CHECK)
+                report['checks'] = report['checks'][: awake + 1]
+                report['checks'][-1].update(
+                    state='failed', reason='tool_sample_transcript_not_confirmed'
+                )
+                report['acoustic_evidence'] = {
+                    'tool_sample_guarded': True,
+                    'tool_sample_rejections': {'read_only_missing': 1},
+                    'rejected_voice_gates': {'tool_sample_guard': 1},
+                    'sole_tool_rejection_input': {'asr_input_samples': 98720},
+                    'new_voice_requests': 1,
+                    'admitted_voice_requests': 0,
+                    'rejected_voice_candidates': 1,
+                    'pending_voice_candidates': 0,
+                    'unclassified_terminal_candidates': 0,
+                    'rejected_pause_count': 0,
+                    'completed_requests': 0,
+                    'cancelled_requests': 0,
+                    'completed_tasks': 0,
+                    'stage_counts': {
+                        'wake_detected': 1,
+                        'asr_start': 1,
+                        'asr_end': 1,
+                        'brain_start': 0,
+                        'playout_ack': 0,
+                        'playback_done': 0,
+                    },
+                }
         return SimpleNamespace(
             source_sha256='a' * 64, speech_source_sha256='b' * 64, run=lambda: report
         )
@@ -208,6 +244,7 @@ def saved_suite(
         lambda _: None,
         qa_latency=qa,
         qa_fixture_bound=fixture_bound,
+        tool_rejection_coverage=tool_coverage,
         response_acoustic=qa,
         response_acoustic_coverage=acoustic_coverage,
         extended_voice=extended,
@@ -219,12 +256,62 @@ def saved_suite(
         standby_only=standby_only,
     )
     backend = '0.14.60' if scenario == 'qa' else '0.14.62'
+    if tool_coverage or tool_misses:
+        backend = '0.15.28'
     if echo_soak:
         backend = '0.14.63'
     return {**data, 'backend_version': backend, 'protocol_version': 2}
 
 
 class AuditDeviceSuiteTests(unittest.TestCase):
+    def test_tool_coverage_counts_guarded_misses_without_latency_or_success(self):
+        options = dict(qa=True, scenario='tool', fixture_bound=True, tool_misses=(2, 9))
+        strict = saved_suite(**options)
+        self.assertEqual(strict['state'], 'failed')
+        self.assertEqual(strict['phases'][2]['state'], 'not_run')
+        self.assertEqual(audit(strict)['recorded_failure'], 'tool_sample_transcript_not_confirmed')
+
+        observed = saved_suite(**options, tool_coverage=True)
+        self.assertEqual(observed['state'], 'tool_transcript_incomplete')
+        self.assertEqual(observed['tool_transcript_misses'], 2)
+        self.assertEqual(observed['phases'][1]['state'], 'guard_rejected')
+        self.assertEqual(observed['phases'][-1]['state'], 'passed')
+        checked = audit(observed, expect_apk_code=71)
+        self.assertFalse(checked['verified'])
+        self.assertEqual(checked['reason'], 'suite_tool_transcript_coverage_incomplete')
+        self.assertEqual(checked['completed_phases'], 28)
+        self.assertEqual(checked['tool_transcript_misses'], 2)
+        self.assertEqual(checked['latencies_ms'][QA_PLAYOUT_METRIC]['samples'], 28)
+
+    def test_tool_coverage_stops_auditing_at_unconfirmed_guard_rejection(self):
+        original = saved_suite(
+            qa=True, scenario='tool', fixture_bound=True, tool_misses=(2, 9), tool_coverage=True
+        )
+        for variant in ('cleanup', 'admitted', 'dispatch', 'pending', 'gates', 'old_source', 'apk'):
+            with self.subTest(variant=variant):
+                data = deepcopy(original)
+                report = data['phases'][8]['report']
+                evidence = report['acoustic_evidence']
+                if variant == 'cleanup':
+                    report['cleanup_microphone_off_verified'] = False
+                elif variant == 'admitted':
+                    evidence['admitted_voice_requests'] = 1
+                elif variant == 'dispatch':
+                    evidence['stage_counts']['brain_start'] = 1
+                elif variant == 'pending':
+                    evidence['pending_voice_candidates'] = 1
+                elif variant == 'gates':
+                    evidence['rejected_voice_gates']['wake_closed'] = 1
+                elif variant == 'old_source':
+                    report['automation_source_sha256'] = 'c' * 64
+                else:
+                    report['expected_apk_code'] += 1
+                result = audit(data, expect_apk_code=71)
+                self.assertFalse(result['verified'])
+                self.assertEqual(result['phase'], 'qa_09')
+                self.assertEqual(result['completed_phases'], 7)
+                self.assertEqual(result['tool_transcript_misses'], 1)
+
     def test_bound_qa_report_rejects_a_reused_or_misplaced_fixture(self):
         original = saved_suite(qa=True, fixture_bound=True)
         self.assertTrue(audit(original, require_qa_fixture_binding=True)['verified'])
