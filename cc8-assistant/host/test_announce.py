@@ -213,6 +213,32 @@ class AnnouncementTests(unittest.TestCase):
         bridge.transport_hub.suppress_all_for_test.assert_called_once_with()
         bridge.announce.assert_not_called()
 
+    def test_fixed_tool_comparison_ipc_defaults_to_whisper_and_bounds_engine(self):
+        bridge = Mock()
+        bridge.session.arm_tool_sample.return_value = {'status': 'armed'}
+        server = AnnouncementServer(bridge, Path('/unused'))
+        request = {'operation': 'tool_sample_compare_arm', 'case': 5}
+        for payload, engine in (
+            (request, 'whisper'),
+            ({**request, 'engine': 'sensevoice'}, 'sensevoice'),
+            ({**request, 'engine': 'owner/path'}, None),
+        ):
+            with self.subTest(engine=engine):
+                bridge.session.arm_tool_sample.reset_mock()
+                reader, writer = socket.socketpair()
+                with writer:
+                    self.assertTrue(server.slots.acquire(blocking=False))
+                    writer.sendall((json.dumps(payload) + '\n').encode())
+                    server.handle(reader)
+                    result = json.loads(writer.recv(4096))
+                if engine is None:
+                    self.assertEqual(result, {'status': 'invalid_request'})
+                    bridge.session.arm_tool_sample.assert_not_called()
+                else:
+                    self.assertEqual(result, {'status': 'armed'})
+                    bridge.session.arm_tool_sample.assert_called_once_with(5, compare_engine=engine)
+        bridge.announce.assert_not_called()
+
     def test_live_device_status_is_not_blocked_by_a_running_announcement(self):
         job = Announcement(1, 'test')
         job.result = 'completed'

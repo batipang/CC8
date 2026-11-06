@@ -4177,6 +4177,14 @@ class DeviceAutomationTests(unittest.TestCase):
         run.request.assert_called_once_with(original.call_args.args[0])
         device.open.assert_called_once_with(True, capture_limit_ms=run.capture_limit_ms)
 
+        run.tool_local_compare = True
+        run.tool_compare_engine = 'sensevoice'
+        run.request.reset_mock()
+        run.start_capture()
+        run.request.assert_called_once_with(
+            {'operation': 'tool_sample_compare_arm', 'case': 1, 'engine': 'sensevoice'}
+        )
+
     def test_acoustic_cancelled_narration_is_not_a_completed_answer(self):
         row = self.acoustic_row(outcome='cancelled')
         row['stages'].pop('playback_done')

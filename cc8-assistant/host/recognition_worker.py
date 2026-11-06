@@ -69,7 +69,7 @@ class RecognitionHooks:
     resume_rejected: Callable[[int | None, int], None]
     bind_response_probe: Callable[[str, int, int | None], None] = lambda *_: None
     tool_sample_rejection: Callable[[str, bool, float | None], str | None] = lambda *_: None
-    tool_sample_compare_case: Callable[[], int | None] = lambda: None
+    tool_sample_comparison: Callable[[], tuple[int, str] | None] = lambda: None
 
 
 MIN_ECHO_RISK_CREDIBLE_FRAMES = 5
@@ -165,7 +165,7 @@ class RecognitionWorker:
             rejected = False
             decision = 'stale'
             tool_sample_rejection = None
-            compare_case = None
+            compare_target = None
             try:
                 # The dequeued job can lose ownership before announcing ASR.
                 with self.hooks.lock:
@@ -204,7 +204,7 @@ class RecognitionWorker:
                             and evidence.get('echo_risk') is False
                             and not self.hooks.playing()
                             and not (self.hooks.echo_running() or self.hooks.echo_failed())
-                            and (case := self.hooks.tool_sample_compare_case()) is not None
+                            and (target := self.hooks.tool_sample_comparison()) is not None
                         ):
                             tool_sample_rejection = self.hooks.tool_sample_rejection(
                                 text, True, evidence.get('captured_at')
@@ -213,11 +213,11 @@ class RecognitionWorker:
                                 decision = 'tool_sample_guard'
                                 rejected = True
                                 if tool_sample_rejection == 'comparison_only':
-                                    compare_case = case
+                                    compare_target = target
                                 self.hooks.status(
                                     'listening',
                                     '识别对照采样完成'
-                                    if compare_case is not None
+                                    if compare_target is not None
                                     else '工具测试语音未通过核对',
                                 )
                                 continue
@@ -378,12 +378,12 @@ class RecognitionWorker:
                         decision = 'tool_sample_guard'
                         rejected = True
                         if tool_sample_rejection == 'comparison_only':
-                            compare_case = self.hooks.tool_sample_compare_case()
+                            compare_target = self.hooks.tool_sample_comparison()
                         if not self.hooks.playing():
                             self.hooks.status(
                                 'listening',
                                 '识别对照采样完成'
-                                if compare_case is not None
+                                if compare_target is not None
                                 else '工具测试语音未通过核对',
                             )
                         continue
@@ -439,12 +439,13 @@ class RecognitionWorker:
                         self.hooks.failure('这次识别没有完成，请再说一次', e, trace_key=trace_id)
             finally:
                 reason = tool_sample_rejection if decision == 'tool_sample_guard' else None
-                if reason == 'comparison_only' and compare_case is not None:
-                    expected = normalize_question(SCENARIO_QUESTIONS['tool'][compare_case - 1])
+                if reason == 'comparison_only' and compare_target is not None:
+                    case, engine = compare_target
+                    expected = normalize_question(SCENARIO_QUESTIONS['tool'][case - 1])
                     primary = tool_asr_result(text, expected)
                     try:
                         local = compare_local(
-                            compare_case, audio, lambda: self.hooks.valid(generation)
+                            case, audio, lambda: self.hooks.valid(generation), engine=engine
                         )
                     except Exception:
                         # An optional local diagnostic cannot stop the recognition worker.
@@ -455,6 +456,8 @@ class RecognitionWorker:
                             if local is not None and self.hooks.valid(generation)
                             else None
                         )
+                        if comparison is not None and engine != 'whisper':
+                            comparison['local_engine'] = engine
                         self.hooks.diagnostics().gate(trace_id, decision, reason, comparison)
                 else:
                     self.hooks.diagnostics().gate(trace_id, decision, reason)

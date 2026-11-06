@@ -41,6 +41,7 @@ WEB_TOPICS = (
 TOOL_PREFIX = '请用本机只读终端命令计算'
 TOOL_ANSWER_LABEL = re.compile(r'^(?:本机只读终端命令计算结果|本机终端计算结果):\s*')
 MATH_SCENARIOS = ('qa', 'tool')
+TOOL_COMPARE_ENGINES = ('whisper', 'sensevoice')
 SCENARIO_QUESTIONS = {
     'qa': QUESTIONS,
     'web': tuple(f'联网查找{topic}的官方网站。' for topic in WEB_TOPICS),
@@ -54,7 +55,14 @@ def tool_sample_request(value):
     operation = value.get('operation')
     if operation in ('tool_sample_arm', 'tool_sample_compare_arm'):
         return (
-            set(value) == {'operation', 'case'}
+            (
+                set(value) == {'operation', 'case'}
+                or (
+                    operation == 'tool_sample_compare_arm'
+                    and set(value) == {'operation', 'case', 'engine'}
+                    and value['engine'] in TOOL_COMPARE_ENGINES
+                )
+            )
             and type(value['case']) is int
             and 1 <= value['case'] <= len(SCENARIO_QUESTIONS['tool'])
         )

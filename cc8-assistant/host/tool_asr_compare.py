@@ -15,6 +15,7 @@ import numpy as np
 from capture_evidence import TOOL_ASR_MATCH_RESULTS
 from qa_speech import (
     SCENARIO_QUESTIONS,
+    TOOL_COMPARE_ENGINES,
     normalize_question,
     tool_asr_result,
     tool_sample_request,
@@ -24,6 +25,10 @@ from qa_speech import (
 MAX_SAMPLES = 16000 * 13
 TIMEOUT_SECONDS = 20
 MODEL_MANIFEST = Path(__file__).with_name('resources') / 'tool-whisper-model.json'
+
+
+def file_identity(info):
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
 
 
 def verified_whisper_snapshot(cache, manifest, *, verify_hashes=True):
@@ -48,26 +53,24 @@ def verified_whisper_snapshot(cache, manifest, *, verify_hashes=True):
                 and hashlib.file_digest(artifact, 'sha256').hexdigest() != expected['sha256']
             ):
                 raise ValueError('Local Whisper artifact checksum mismatch')
-            identities[filename] = (
-                info.st_dev,
-                info.st_ino,
-                info.st_size,
-                info.st_mtime_ns,
-                info.st_ctime_ns,
-            )
+            identities[filename] = file_identity(info)
     return snapshot, identities
 
 
-def compare_local(case, audio, is_current):
+def compare_local(case, audio, is_current, *, engine='whisper'):
     if not is_current():
         return None
     samples = np.asarray(audio, dtype='<f4')
-    if samples.ndim != 1 or not 0 < len(samples) <= MAX_SAMPLES:
+    if (
+        engine not in TOOL_COMPARE_ENGINES
+        or samples.ndim != 1
+        or not 0 < len(samples) <= MAX_SAMPLES
+    ):
         return 'error'
     deadline = time.monotonic() + TIMEOUT_SECONDS
     try:
         process = subprocess.Popen(
-            [sys.executable, str(Path(__file__).resolve()), str(case)],
+            [sys.executable, str(Path(__file__).resolve()), str(case), engine],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -102,35 +105,57 @@ def compare_local(case, audio, is_current):
         process.stdout.close()
 
 
+def sensevoice_identity(folder, manifest):
+    identities = {}
+    for filename in manifest['sha256']:
+        info = (folder / filename).lstat()
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError('Local SenseVoice artifact must be a regular file')
+        identities[filename] = file_identity(info)
+    return identities
+
+
+def decode(samples, engine):
+    from recognition import MANIFEST, MODEL, MandarinRecognizer
+
+    if engine == 'sensevoice':
+        manifest = json.loads(MANIFEST.read_text())
+        identities = sensevoice_identity(MODEL, manifest)
+        # Construction verifies both file digests against the pinned manifest.
+        result = MandarinRecognizer(engine=engine).recognize(samples)
+        if sensevoice_identity(MODEL, manifest) != identities:
+            raise ValueError('Local SenseVoice model changed during comparison')
+        return result
+
+    manifest = json.loads(MODEL_MANIFEST.read_text())
+    cache_name = 'models--' + manifest['repo'].replace('/', '--')
+    cache = Path.home() / '.cache/huggingface/hub' / cache_name
+    snapshot, identities = verified_whisper_snapshot(cache, manifest)
+    result = MandarinRecognizer(engine=engine, whisper_model=snapshot).recognize(samples)
+    if verified_whisper_snapshot(cache, manifest, verify_hashes=False) != (snapshot, identities):
+        raise ValueError('Local Whisper snapshot changed during comparison')
+    return result
+
+
 def main():
     if (
-        len(sys.argv) != 2
+        len(sys.argv) not in (2, 3)
         or not 1 <= len(sys.argv[1]) <= 2
         or not sys.argv[1].isascii()
         or not sys.argv[1].isdigit()
     ):
         return 2
     case = int(sys.argv[1])
-    if not tool_sample_request({'operation': 'tool_sample_compare_arm', 'case': case}):
+    engine = sys.argv[2] if len(sys.argv) == 3 else 'whisper'
+    if not tool_sample_request(
+        {'operation': 'tool_sample_compare_arm', 'case': case, 'engine': engine}
+    ):
         return 2
     pcm = sys.stdin.buffer.read(MAX_SAMPLES * 4 + 1)
     if not 0 < len(pcm) <= MAX_SAMPLES * 4 or len(pcm) % 4:
         return 2
     with redirect_stdout(sys.stderr):
-        from recognition import MandarinRecognizer
-
-        manifest = json.loads(MODEL_MANIFEST.read_text())
-        cache_name = 'models--' + manifest['repo'].replace('/', '--')
-        cache = Path.home() / '.cache/huggingface/hub' / cache_name
-        snapshot, identities = verified_whisper_snapshot(cache, manifest)
-        result = MandarinRecognizer(engine='whisper', whisper_model=snapshot).recognize(
-            np.frombuffer(pcm, dtype='<f4')
-        )
-        if verified_whisper_snapshot(cache, manifest, verify_hashes=False) != (
-            snapshot,
-            identities,
-        ):
-            raise ValueError('Local Whisper snapshot changed during comparison')
+        result = decode(np.frombuffer(pcm, dtype='<f4'), engine)
     expected = normalize_question(SCENARIO_QUESTIONS['tool'][case - 1])
     print(tool_asr_result(result, expected))
     return 0

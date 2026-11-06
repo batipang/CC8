@@ -427,12 +427,12 @@ class WakePipelineTests(unittest.TestCase):
                 self.assertTrue(b.session.awake)
                 self.assertEqual(len(audio), 1)
 
-    def arm_tool_capture(self, b, before_start=lambda _: None, *, compare=False):
+    def arm_tool_capture(self, b, before_start=lambda _: None, *, engine=None):
         s = b.session
         s.active = False
         s.transport_kind = 'usb'
         s.capture_start_ack = True
-        token = s.arm_tool_sample(1, compare=compare)['token']
+        token = s.arm_tool_sample(1, compare_engine=engine)['token']
         self.assertIsNone(s.capture_id)
         self.assertEqual(s.begin_tool_sample(token), {'status': 'unavailable'})
         before_start(s)
@@ -512,21 +512,22 @@ class WakePipelineTests(unittest.TestCase):
 
     def test_tool_comparison_uses_same_audio_and_never_dispatches(self):
         question = SCENARIO_QUESTIONS['tool'][0]
-        for transcript, primary, cancel in (
-            ('大黄蜂，' + question, 'matched', False),
-            ('大黄蜂，' + question.replace('只读', ''), 'read_only_missing', False),
-            ('大黄蜂，' + question.replace('只读', ''), 'read_only_missing', True),
-            ('。', 'empty', False),
-            ('', 'empty', True),
+        for transcript, primary, cancel, selected in (
+            ('大黄蜂，' + question, 'matched', False, 'whisper'),
+            ('大黄蜂，' + question.replace('只读', ''), 'read_only_missing', False, 'sensevoice'),
+            ('大黄蜂，' + question.replace('只读', ''), 'read_only_missing', True, 'whisper'),
+            ('。', 'empty', False, 'sensevoice'),
+            ('', 'empty', True, 'sensevoice'),
         ):
             with self.subTest(primary=primary, cancel=cancel):
                 b, _, primary_audio, requests, events, _, _ = self.session('大黄蜂', transcript)
                 s = b.session
-                token = self.arm_tool_capture(b, compare=True)
+                token = self.arm_tool_capture(b, engine=selected)
                 self.assertEqual(s.begin_tool_sample(token), {'status': 'ready'})
 
-                def compare(case, audio, is_current):
+                def compare(case, audio, is_current, *, engine):
                     self.assertEqual(case, 1)
+                    self.assertEqual(engine, selected)
                     np.testing.assert_array_equal(audio, primary_audio[0])
                     self.assertTrue(is_current())
                     if cancel:
@@ -550,10 +551,10 @@ class WakePipelineTests(unittest.TestCase):
                 if cancel:
                     self.assertNotIn('tool_asr_comparison', rows[0])
                 else:
-                    self.assertEqual(
-                        rows[0]['tool_asr_comparison'],
-                        {'primary': primary, 'local': 'matched'},
-                    )
+                    expected = {'primary': primary, 'local': 'matched'}
+                    if selected == 'sensevoice':
+                        expected['local_engine'] = selected
+                    self.assertEqual(rows[0]['tool_asr_comparison'], expected)
                 s.stop()
 
     def test_empty_tool_comparison_requires_the_explicit_open_guard(self):
@@ -566,7 +567,9 @@ class WakePipelineTests(unittest.TestCase):
             with self.subTest(mode=mode):
                 b, _, _, requests, _, _, _ = self.session('大黄蜂', '')
                 if mode != 'ordinary':
-                    token = self.arm_tool_capture(b, compare=mode != 'dispatch')
+                    token = self.arm_tool_capture(
+                        b, engine='whisper' if mode != 'dispatch' else None
+                    )
                     if mode != 'not_open':
                         self.assertEqual(b.session.begin_tool_sample(token), {'status': 'ready'})
                 if mode == 'echo_failed':
@@ -687,6 +690,13 @@ class WakePipelineTests(unittest.TestCase):
         self.assertFalse(tool_sample_request({'operation': 'tool_sample_begin', 'token': 'x' * 32}))
         self.assertFalse(
             tool_sample_request({'operation': 'tool_sample_arm', 'case': 1, 'text': 'private'})
+        )
+        request = {'operation': 'tool_sample_compare_arm', 'case': 1}
+        self.assertTrue(tool_sample_request(request))
+        self.assertTrue(tool_sample_request({**request, 'engine': 'sensevoice'}))
+        self.assertFalse(tool_sample_request({**request, 'engine': 'private/path'}))
+        self.assertFalse(
+            tool_sample_request({'operation': 'tool_sample_arm', 'case': 1, 'engine': 'sensevoice'})
         )
 
     def test_wake_prefix_preserves_numbers_and_quotes_in_a_real_question(self):
