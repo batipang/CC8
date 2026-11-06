@@ -16,6 +16,7 @@ import sys
 import threading
 from vision import jpeg_dimensions
 from known_speech_receipt import valid_request as known_speech_request
+from wake_input_receipt import valid_request as wake_input_request
 
 SOCKET = Path(__file__).resolve().parents[2] / 'device-access/private/voice-runtime/announce.sock'
 
@@ -139,6 +140,17 @@ class AnnouncementServer:
                         if not known_speech_request(request):
                             raise ValueError('Known speech probe requires its token')
                         result = self.bridge.read_known_speech(request['token'])
+                    elif request.get('operation') in ('wake_input_arm', 'wake_input_result'):
+                        if not wake_input_request(request):
+                            raise ValueError('Invalid wake input probe request')
+                        if request['operation'] == 'wake_input_arm':
+                            result = self.bridge.probes.arm_wake_input_probe(
+                                self.path.parent / 'public-speech-fixtures',
+                                request['directory'],
+                                request['metadata'],
+                            )
+                        else:
+                            result = self.bridge.wake.read_input_probe(request['token'])
                     elif request.get('operation') == 'device_control':
                         from voice_tools import VoiceTools
 

@@ -58,6 +58,7 @@ class WakeController:
         self.pending_prefix = False
         self.serial = 0
         self.deadline = None
+        self.input_probe = None
 
     @property
     def ready(self):
@@ -85,12 +86,43 @@ class WakeController:
             and (not self.hooks.wake_mode() or self.ready)
         )
 
+    def arm_input_probe(self, pcm):
+        from wake_input_probe import WakeInputProbe
+
+        with self.hooks.lock:
+            counts = self.english_input_samples()
+            if counts is None or counts['alternate'] is None:
+                raise RuntimeError('English wake input accounting unavailable')
+            if self.input_probe is not None and not self.input_probe.closed:
+                raise RuntimeError('Wake input probe already armed')
+            self.input_probe = WakeInputProbe(pcm)
+            return {'status': 'armed', 'token': self.input_probe.token}
+
+    def read_input_probe(self, token):
+        with self.hooks.lock:
+            probe = self.input_probe
+            if probe is None or token != probe.token:
+                return {'status': 'unavailable'}
+            self.input_probe = None
+            serial = self.serial
+        receipt = probe.read()
+        with self.hooks.lock:
+            if serial != self.serial or not self.hooks.active() or self.hooks.awake():
+                return {'status': 'unavailable'}
+        return receipt
+
+    def _cancel_input_probe(self):
+        probe, self.input_probe = self.input_probe, None
+        if probe is not None:
+            probe.cancel()
+
     def reset(self, reason):
         if reason not in ('start', 'stop', 'mode', 'cancel', 'transport', 'capture_gap'):
             raise ValueError('Invalid local wake reset reason')
         with self.hooks.lock:
             self.serial += 1
             self.pending_prefix = False
+            self._cancel_input_probe()
             if self.detector is not None:
                 with self.native_lock:
                     self.detector.reset(clear_metrics=reason == 'start')
@@ -105,6 +137,7 @@ class WakeController:
 
     def awake_changed(self, awake):
         with self.hooks.lock:
+            self._cancel_input_probe()
             self.deadline = (
                 self.clock() + self.window_seconds
                 if awake and self.hooks.active() and self.hooks.wake_mode()
@@ -141,25 +174,33 @@ class WakeController:
             ):
                 return False
             serial = self.serial
+            probe = self.input_probe
         # No session callbacks inside this native call or its lock.
         with self.native_lock:
             # A reset between admission and native entry must not inject an old
             # frame into a fresh stream, even though its result would be rejected.
             if serial != self.serial:
                 return False
-            if alternate_pcm is not None and not echo_risk:
+            if echo_risk:
+                alternate_pcm = None
+            if alternate_pcm is not None:
                 keyword = self.detector.feed(pcm, alternate_pcm=alternate_pcm)
             else:
                 keyword = self.detector.feed(pcm)
         with self.hooks.lock:
+            recognized = isinstance(keyword, str) and keyword in KEYWORDS
+            if not recognized and probe is None:
+                return False
             if (
-                not isinstance(keyword, str)
-                or keyword not in KEYWORDS
-                or serial != self.serial
+                serial != self.serial
                 or not self.hooks.active()
                 or self.hooks.awake()
                 or generation != self.hooks.generation()
             ):
+                return False
+            if probe is not None and probe is self.input_probe:
+                probe.observe(pcm, alternate_pcm)
+            if not recognized:
                 return False
             if echo_risk and WAKE_PATTERN.search(render_text):
                 self.hooks.metric('wake_render_rejections', increment=True)

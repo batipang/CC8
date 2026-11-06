@@ -6,6 +6,7 @@ class AcousticProbes:
         self,
         *,
         session,
+        wake,
         capture,
         playback,
         calibration,
@@ -15,6 +16,7 @@ class AcousticProbes:
         cancel,
     ):
         self.session = session
+        self.wake = wake
         self.capture = capture
         self.playback = playback
         self.calibration = calibration
@@ -77,6 +79,32 @@ class AcousticProbes:
     def read_response_probe(self, token):
         with self.session.guard:
             return self.capture.read_response_probe(token)
+
+    def arm_wake_input_probe(self, root, directory, metadata):
+        from known_speech_evidence import load_fixture
+
+        def ready():
+            return (
+                self.session.active
+                and self.session.wake
+                and not self.session.awake
+                and self.wake.ready
+                and not self.calibration.active
+                and not self.playback.playing
+                and not self.recognition.busy
+                and not self.response.busy
+                and not self.capture.endpoint.vad.talking
+            )
+
+        with self.session.guard:
+            if not ready():
+                raise RuntimeError('Wake input probe requires idle capture waiting for wake')
+            binding = self.wake.serial
+        pcm = load_fixture(root, directory, metadata)
+        with self.session.guard:
+            if self.wake.serial != binding or not ready():
+                raise RuntimeError('Wake input probe owner changed')
+            return self.wake.arm_input_probe(pcm)
 
     def arm_known_speech(self, root, directory, metadata, generation, *, near_only=False):
         from known_speech_evidence import load_fixture
