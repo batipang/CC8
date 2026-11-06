@@ -40,7 +40,16 @@ CASES = tuple(
     for repeat in range(1, 4)
 )
 SEARCH_CASES = tuple(Case('search', kind, repeat) for kind in KINDS for repeat in range(1, 4))
-CASE_SETS = {'standard': CASES, 'search': SEARCH_CASES}
+PLAYBACK_CASES = tuple(
+    Case(stage, kind, repeat)
+    for stage, kind in (
+        ('playback', 'provider_or_runtime'),
+        ('playback', 'timeout'),
+        ('transport', 'transport_or_io'),
+    )
+    for repeat in range(1, 4)
+)
+CASE_SETS = {'standard': CASES, 'search': SEARCH_CASES, 'playback': PLAYBACK_CASES}
 
 
 def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
@@ -49,7 +58,8 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
     if dot_fixture not in DOT_FIXTURES:
         raise ValueError('Unknown QA Dot fixture')
     search = isinstance(cases, tuple) and bool(cases) and cases[0] in SEARCH_CASES
-    allowed = SEARCH_CASES if search else CASES
+    playback = isinstance(cases, tuple) and bool(cases) and cases[0] in PLAYBACK_CASES
+    allowed = PLAYBACK_CASES if playback else SEARCH_CASES if search else CASES
     if (
         not isinstance(cases, tuple)
         or not 1 <= len(cases) <= len(allowed)
@@ -62,6 +72,8 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
         raise ValueError('Unknown QA case selection')
     if search and (http_fixture == 'fake' or dot_fixture != 'fake'):
         raise ValueError('Search QA requires loopback TLS and no Dot subprocess')
+    if playback and (http_fixture != 'fake' or dot_fixture != 'fake'):
+        raise ValueError('Playback QA requires offline fixtures')
     import numpy as np
     import requests
 
@@ -72,7 +84,7 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
     from dot_client import DotError, DotApprovalRequired
     from failure_feedback import feedback
     from minimax_client import Transport, MiniMaxBrain, MiniMaxVoice
-    from protocol import receive, EVENT, decode_event
+    from protocol import receive, EVENT, SPEAKER, decode_event
     from recognition import MandarinRecognizer
 
     class StopFixture(BaseException):
@@ -90,6 +102,7 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
         recovery = False
         http_calls = 0
         brain_calls = 0
+        pcm_attempts = 0
 
     state = State()
 
@@ -175,6 +188,8 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
                 return recognizer.recognize(pcm)
 
             def stream(self, text, current, on_subtitle=None):
+                if playback:
+                    return iter((np.zeros(320, dtype=np.int16),))
                 return voice.pcm(text, current, on_subtitle)
 
             def cancel(self):
@@ -215,6 +230,29 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
                 ),
             )
         b.session.connection = Recorder()
+        if playback:
+            b.playback.set_completion_capability(True)
+            send_event = b.send
+
+            def fault_output(packet):
+                if packet.kind != SPEAKER:
+                    return send_event(packet)
+                state.pcm_attempts += 1
+                if state.case.stage == 'transport':
+                    raise BrokenPipeError('qa-injected-sensitive-body')
+                if state.case.kind == 'provider_or_runtime':
+                    b.on_event(
+                        {
+                            'event': 'playback_error',
+                            'generation': packet.generation,
+                            'playback_id': b.playback.playback_serial,
+                            'error_type': 'IOException',
+                        }
+                    )
+                # Withhold PCM and completion in the timeout case. No speaker
+                # packet is retained or replayed to the QA device.
+
+            b.send = fault_output
         b.log = lambda *args, **kwargs: None
         b.save_status = lambda: None
         b.session.wake = False
@@ -232,6 +270,7 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
             state.case = case
             state.recovery = False
             state.http_calls = state.brain_calls = 0
+            state.pcm_attempts = 0
             packets.clear()
             dot_start_timeout = (
                 local_dot is not None and case.stage == 'brain' and case.kind == 'timeout'
@@ -275,25 +314,31 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
                 'kind': case.kind,
             }:
                 raise AssertionError('Fixture diagnostic mismatch')
-            expected_http = 2 if search else 0 if case.stage == 'brain' else 1
-            expected_brain = int(case.stage in ('brain', 'tts'))
+            expected_http = 2 if search else 0 if playback or case.stage == 'brain' else 1
+            expected_brain = int(playback or case.stage in ('brain', 'tts'))
             fault_turns = (
                 local_dot.counts()[case.ident + ':fault'] if local_dot else state.brain_calls
             )
-            if (state.http_calls, fault_turns) != (expected_http, expected_brain):
+            if (state.http_calls, fault_turns, state.pcm_attempts) != (
+                expected_http,
+                expected_brain,
+                int(playback),
+            ):
                 raise AssertionError('Unexpected provider request/retry')
             wire_requests = tls.count(case.ident) if tls is not None else 0
             if tls is not None and wire_requests != expected_http:
                 raise AssertionError('QA TLS request did not reach its fixed local endpoint')
             expected_task = (
                 'completed'
-                if case.stage == 'tts'
+                if playback or case.stage == 'tts'
                 else 'failed'
                 if case.stage in ('brain', 'search')
                 else None
             )
             if expected_task and b.workspace.tasks[-1]['status'] != expected_task:
                 raise AssertionError('Failure changed task completion incorrectly')
+            if playback and (b.playback.playing or b.session.text_generation is not None):
+                raise AssertionError('Output fault left playback or text ownership active')
             if unknown_start and b.workspace.tasks[-1]['stage'] != '执行结果待核对':
                 raise AssertionError('Fixture task lost the unconfirmed start')
             if dot_start_timeout:
@@ -346,6 +391,8 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
                 or state.http_calls != expected_http + recovery_wire_requests
             ):
                 raise AssertionError('Recovery did not complete')
+            if playback and (state.pcm_attempts != 1 or state.brain_calls != 2):
+                raise AssertionError('Output recovery repeated a request or emitted PCM')
             if dot_start_timeout and local_dot.processes[-1] is expired_peer:
                 raise AssertionError('Recovery did not start a fresh Dot peer')
             dot_counts = {}

@@ -345,6 +345,10 @@ def run(
         case_set != 'search' or http_fixture != 'fake' and dot_fixture == 'fake',
         'search_qa_requires_loopback_without_dot',
     )
+    require(
+        case_set != 'playback' or http_fixture == dot_fixture == 'fake',
+        'playback_qa_requires_offline_fixtures',
+    )
     cases = CASE_SETS[case_set]
     from service_smoke import LiveService
     from protocol import decode_event
@@ -629,6 +633,11 @@ def main(argv=None):
         args.dot_fixture = args.dot_fixture or 'fake'
         if args.http_fixture == 'fake' or args.dot_fixture != 'fake':
             parser.error('Search QA requires loopback TLS and no Dot subprocess')
+    if args.case_set == 'playback':
+        args.http_fixture = args.http_fixture or 'fake'
+        args.dot_fixture = args.dot_fixture or 'fake'
+        if args.http_fixture != 'fake' or args.dot_fixture != 'fake':
+            parser.error('Playback QA requires offline fixtures')
     if args.host_only:
         if args.runtime_root is not None or args.qa_receipt is not None or args.shared_staging:
             parser.error('--host-only cannot be combined with device or installer options')
