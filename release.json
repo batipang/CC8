@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-status-cache-isolation-20261107.1",
+  "release_id": "p0-minimax-cleanup-outcome-20261107.1",
   "backend": {
-    "version": "0.15.24"
+    "version": "0.15.25"
   },
   "assistant": {
     "version": "0.9.42",

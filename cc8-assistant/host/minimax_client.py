@@ -1,6 +1,7 @@
 """Direct MiniMax HTTPS clients for bounded utterance ASR, dialogue, search and TTS."""
 
 from __future__ import annotations
+from contextlib import suppress
 from dataclasses import dataclass, field
 import hashlib
 import json
@@ -232,16 +233,14 @@ class RequestSlot:
 
         # Closing a network response may wait for another thread's read lock;
         # never let that delay the USB playback-cancel command.
-        def close():
-            try:
-                if self.response is not None:
-                    self.response.close()
-                if self.session is not None:
-                    self.session.close()
-            except (OSError, RuntimeError):
-                pass
+        threading.Thread(target=self.close, daemon=True).start()
 
-        threading.Thread(target=close, daemon=True).start()
+    def close(self):
+        # Release both resources independently without masking the request outcome.
+        for resource in (self.response, self.session):
+            if resource is not None:
+                with suppress(OSError, RuntimeError):
+                    resource.close()
 
 
 class Transport:
@@ -281,6 +280,11 @@ class Transport:
         with self.lock:
             self.slots.add(slot)
         return slot
+
+    def release_slot(self, slot):
+        with self.lock:
+            self.slots.discard(slot)
+        slot.close()
 
     @staticmethod
     def network_kind(error, slot):
@@ -331,7 +335,7 @@ class Transport:
             if not isinstance(text, str) or len(text) > 10000:
                 raise MiniMaxError('Invalid MiniMax ASR transcript')
             return text.strip()
-        except (requests.RequestException, TimeoutError) as error:
+        except OSError as error:
             if slot.stopped.is_set() or not is_current():
                 raise Cancelled('Turn cancelled') from None
             raise MiniMaxError(
@@ -341,11 +345,7 @@ class Transport:
         except (ValueError, TypeError, AttributeError):
             raise MiniMaxError('Invalid MiniMax ASR response') from None
         finally:
-            with self.lock:
-                self.slots.discard(slot)
-            if slot.response is not None:
-                slot.response.close()
-            slot.session.close()
+            self.release_slot(slot)
 
     def post_json(self, route, payload, is_current=lambda: True):
         slot = self.request_slot()
@@ -381,7 +381,7 @@ class Transport:
             data = response_json(response, is_current, slot, 2 * 1024 * 1024)
             check_api_result(data)
             return data
-        except (requests.RequestException, TimeoutError) as error:
+        except OSError as error:
             if slot.stopped.is_set() or not is_current():
                 raise Cancelled('Turn cancelled') from None
             raise MiniMaxError(
@@ -391,11 +391,7 @@ class Transport:
         except (ValueError, TypeError):
             raise MiniMaxError('Invalid MiniMax JSON response') from None
         finally:
-            with self.lock:
-                self.slots.discard(slot)
-            if slot.response is not None:
-                slot.response.close()
-            slot.session.close()
+            self.release_slot(slot)
 
     def events(self, route, payload, is_current=lambda: True):
         slot = self.request_slot()
@@ -427,7 +423,7 @@ class Transport:
                 slot.check(is_current)
                 check_api_result(event)
                 yield event
-        except (requests.RequestException, TimeoutError) as error:
+        except OSError as error:
             if slot.stopped.is_set() or not is_current():
                 raise Cancelled('Turn cancelled') from None
             raise MiniMaxError(
@@ -437,11 +433,7 @@ class Transport:
         except (ValueError, TypeError, AttributeError):
             raise MiniMaxError('Invalid MiniMax streaming response') from None
         finally:
-            with self.lock:
-                self.slots.discard(slot)
-            if slot.response is not None:
-                slot.response.close()
-            slot.session.close()
+            self.release_slot(slot)
 
 
 class MiniMaxBrain:
