@@ -1,6 +1,6 @@
 # 大黄蜂统一待办：功能与工程质量
 
-更新：2026-11-06。原排期基线为 Android 0.8.6 / 后台 0.11.0；当前部署为后台 0.15.3 / 原签名 APK 0.9.41（code78），源码 3c96c6f；签名、数据和配置保留，部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)；P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)；复选框仍按完整验收标准关闭。
+更新于 2026-11-06。原排期基线为 Android 0.8.6 / 后台 0.11.0。当前部署为后台 0.15.8 / 原签名 APK 0.9.41（code78），源码 `6bba697`。部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)。P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)。复选框按完整验收标准关闭。
 
 依据：[竞品复盘](COMPETITOR_REVIEW_2026-11-01.md)、[当前架构](ARCHITECTURE.md)、[实机与回归记录](VALIDATION.md)。本次已合并 [ToFix](ToFix.md) 的 20 个工程条目；这是功能与工程质量的唯一详细清单；[ROADMAP](ROADMAP.md)保留完成情况和阶段概览。
 
@@ -29,6 +29,7 @@
 ## P0：稳定地听、说、运行
 
 - [ ] **P0-01 — 建立语音与运行基线、诊断报告**
+  - 同源合成验收 60 条逐条核对 PCM 摘要，0.15.8 MiniMax 55/60、本地 Whisper 37/60 完整匹配。保留 MiniMax 默认，真人及工具题限定词仍单独验收。 [识别器对照](ASR_EVALUATION.md#minimax-与本地-whisper-同源对照)
   - 0.15.8 已部署。第 1 题慢速和第 5 题原速的实机同段对照中，MiniMax 与本地 Whisper 均匹配，零 Dot 派发并确认停采。0.15.9 候选在子进程内固定及校验本地模型版本。当前样本不足以选择新的默认识别器，旧工具题批次仍保持 4/30。 [实机对照](CURRENT_DEPLOYMENT.md#0158-实机同段识别对照)
   - 0.15.7 实机已定位第 5 题漏掉“只读”。同源复播通过，慢速独立批次仍在第 1 题漏词并停采。0.15.8 候选增加单题同段本地 Whisper 对照，两个结果均只作诊断，实机待验证。 [只读限定词复测](CURRENT_DEPLOYMENT.md#0157-只读限定词复测)
   - 0.15.5／code78 工具批次通过 4/30 轮，答案全部正确，三轮取得声学区间。第 5 轮被门控拦截。0.15.6 已部署，同一合成源直送识别匹配，设备路径记录一次题句不匹配，Dot 未启动，结束停采。0.15.7 候选细分不匹配原因，仍按原题库严格准入，待实机核对。 [工具题采样](MEASUREMENT_RUNS.md#联网与工具任务分别采样)
@@ -64,6 +65,7 @@
   - 依赖：无。范围：Mac 诊断与 CC8 必要时间戳。先完成下文语音 / 时延的基线轮次，再调整阈值；72 小时长期观察留到 P0-05，不要求在每次调参前重跑。
 
 - [ ] **P0-02 — Mac 登录启动、崩溃恢复和健康状态**
+  - 0.15.8／code78 单轮监督恢复通过。独立后台故障计划通过前五轮，第六轮因无法唯一确认监督而停止，随后确认恢复；保留原失败。 [空闲故障复测](AUTOMATED_SERVICE_CHECKS.md#0158-空闲故障复测)
   - 睡眠恢复观察：`verify-service --observe-sleep` 用 Mac 双时钟区分系统睡眠和轮询暂停。等待只计清醒时间，分开的短暂停不累加，就绪查询横跨 USB 重新枚举时丢弃结果。真实系统睡眠单独验收。见 [Mac 睡眠与恢复观察](AUTOMATED_SERVICE_CHECKS.md#mac-睡眠与恢复观察)。
   - 执行中崩溃自动回归：真实监督器、Bridge 和本地 Dot RPC 在工具写入后触发后台 SIGKILL，核对旧进程退出、原写入仅一次，以及新实例能完成另一条明确请求。实体设备、真实工具与登录恢复仍分别验收。见 [执行中崩溃后的新请求](AUTOMATED_SERVICE_CHECKS.md#执行中崩溃后的新请求)。
   - 共享启动锁（后台 0.14.32 候选）：登录监督与手动启动串行检查、拉起及发布 PID，加载期间可复用原进程。双向进程回归与独立 LaunchAgent 验证通过，现场登录、睡眠和运行版本保持独立验收。见 [共享启动锁](AUTOMATED_SERVICE_CHECKS.md#手动启动与登录监督共用启动锁)。
