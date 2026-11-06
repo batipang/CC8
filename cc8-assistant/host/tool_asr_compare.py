@@ -12,7 +12,7 @@ import time
 
 import numpy as np
 
-from capture_evidence import TOOL_ASR_MATCH_RESULTS
+from capture_evidence import TOOL_ASR_MATCH_RESULTS, TOOL_PRIMARY_OMISSION_ONLY
 from qa_speech import (
     SCENARIO_QUESTIONS,
     TOOL_COMPARE_ENGINES,
@@ -117,6 +117,10 @@ def comparison_evidence(target, text, audio, is_current):
     if local is None:
         return None
     evidence = {'primary': primary, 'local': local}
+    if primary == 'read_only_missing':
+        evidence[TOOL_PRIMARY_OMISSION_ONLY] = normalize_question(text) == expected.replace(
+            '只读', '', 1
+        )
     if engine != 'whisper':
         evidence['local_engine'] = engine
     return evidence

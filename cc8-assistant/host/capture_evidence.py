@@ -73,6 +73,7 @@ TOOL_SAMPLE_REJECTION_REASONS = (
 ) + TOOL_TRANSCRIPT_MISMATCHES
 TOOL_ASR_MATCH_RESULTS = ('matched',) + TOOL_TRANSCRIPT_MISMATCHES
 TOOL_ASR_LOCAL_RESULTS = TOOL_ASR_MATCH_RESULTS + ('error', 'timeout')
+TOOL_PRIMARY_OMISSION_ONLY = 'primary_read_only_omission_only'
 
 
 def valid_tool_asr_comparison(value, reason='comparison_only'):

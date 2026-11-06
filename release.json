@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-acoustic-window-diagnostic-20261107.1",
+  "release_id": "p0-tool-qualifier-diagnostic-20261107.1",
   "backend": {
-    "version": "0.15.30"
+    "version": "0.15.31"
   },
   "assistant": {
     "version": "0.9.42",

@@ -1,5 +1,11 @@
 # Changelog
 
+## Backend 0.15.31 — classify the fixed tool qualifier omission
+
+- On an explicitly enabled same-input comparison, report whether the normalized
+  primary transcript differs only by the omitted read-only qualifier. Preserve
+  the legacy comparison object and keep the admission rules unchanged.
+
 ## Backend 0.15.30 — diagnose competing playback windows
 
 - Keep the two rounded correlation scores when a fixed response probe finds

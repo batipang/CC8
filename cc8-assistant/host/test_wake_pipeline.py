@@ -553,12 +553,17 @@ class WakePipelineTests(unittest.TestCase):
                                     'local_engine': 'sensevoice',
                                 },
                             )
+                            if mode == 'rejected':
+                                self.assertIs(row.get('primary_read_only_omission_only'), True)
+                            else:
+                                self.assertNotIn('primary_read_only_omission_only', row)
                             self.assertEqual(
                                 s.tool_sample_rejection(question, True, time.monotonic()),
                                 'not_open',
                             )
                         else:
                             self.assertNotIn('tool_asr_comparison', row)
+                            self.assertNotIn('primary_read_only_omission_only', row)
                 s.stop()
 
     def test_tool_sample_classifies_mismatches_without_relaxing_admission(self):
@@ -584,12 +589,15 @@ class WakePipelineTests(unittest.TestCase):
 
     def test_tool_comparison_uses_same_audio_and_never_dispatches(self):
         question = SCENARIO_QUESTIONS['tool'][0]
-        for transcript, primary, cancel, selected in (
-            ('大黄蜂，' + question, 'matched', False, 'whisper'),
-            ('大黄蜂，' + question.replace('只读', ''), 'read_only_missing', False, 'sensevoice'),
-            ('大黄蜂，' + question.replace('只读', ''), 'read_only_missing', True, 'whisper'),
-            ('。', 'empty', False, 'sensevoice'),
-            ('', 'empty', True, 'sensevoice'),
+        omitted = '大黄蜂，' + question.replace('只读', '')
+        changed = '大黄蜂，' + question.replace('只读终端', '电脑')
+        for transcript, primary, cancel, selected, omission_only in (
+            ('大黄蜂，' + question, 'matched', False, 'whisper', None),
+            (omitted, 'read_only_missing', False, 'sensevoice', True),
+            (omitted, 'read_only_missing', True, 'whisper', None),
+            (changed, 'read_only_missing', False, 'sensevoice', False),
+            ('。', 'empty', False, 'sensevoice', None),
+            ('', 'empty', True, 'sensevoice', None),
         ):
             with self.subTest(primary=primary, cancel=cancel):
                 b, _, primary_audio, requests, events, _, _ = self.session('大黄蜂', transcript)
@@ -622,11 +630,16 @@ class WakePipelineTests(unittest.TestCase):
                 self.assertFalse(any(name == 'transcript' for name, _ in events))
                 if cancel:
                     self.assertNotIn('tool_asr_comparison', rows[0])
+                    self.assertNotIn('primary_read_only_omission_only', rows[0])
                 else:
                     expected = {'primary': primary, 'local': 'matched'}
                     if selected == 'sensevoice':
                         expected['local_engine'] = selected
                     self.assertEqual(rows[0]['tool_asr_comparison'], expected)
+                    if primary == 'read_only_missing':
+                        self.assertIs(rows[0].get('primary_read_only_omission_only'), omission_only)
+                    else:
+                        self.assertNotIn('primary_read_only_omission_only', rows[0])
                 s.stop()
 
     def test_empty_tool_comparison_requires_the_explicit_open_guard(self):

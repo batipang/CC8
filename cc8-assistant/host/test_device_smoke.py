@@ -4482,20 +4482,23 @@ class DeviceAutomationTests(unittest.TestCase):
             'local': 'matched',
             'local_engine': 'sensevoice',
         }
-        for engine, value, retained in (
-            ('sensevoice', comparison, True),
-            (None, comparison, False),
-            ('whisper', comparison, False),
-            ('sensevoice', {**comparison, 'primary': 'arithmetic_mismatch'}, False),
-            ('sensevoice', {**comparison, 'local': 'PRIVATE_TEXT'}, False),
+        for engine, value, retained, omission in (
+            ('sensevoice', comparison, True, False),
+            ('sensevoice', comparison, True, 1),
+            ('sensevoice', comparison, True, 'PRIVATE_OMISSION'),
+            (None, comparison, False, True),
+            ('whisper', comparison, False, True),
+            ('sensevoice', {**comparison, 'primary': 'arithmetic_mismatch'}, False, True),
+            ('sensevoice', {**comparison, 'local': 'PRIVATE_TEXT'}, False, True),
         ):
-            with self.subTest(engine=engine, value=value):
+            with self.subTest(engine=engine, value=value, omission=omission):
                 row = self.rejected_candidate(
                     gate='tool_sample_guard',
                     tool_sample_rejection='read_only_missing',
                     stages={'wake_detected': 1, 'asr_start': 2, 'asr_end': 3},
                     asr_input_samples=98720,
                     tool_asr_comparison=value,
+                    primary_read_only_omission_only=omission,
                 )
                 run, device, _, _ = self.acoustic_fixture(lambda _: [row], awake=True)
                 run.latency_sample = True
@@ -4510,6 +4513,10 @@ class DeviceAutomationTests(unittest.TestCase):
                 self.assertEqual(
                     evidence['sole_tool_rejection_input'].get('tool_asr_comparison'),
                     comparison if retained else None,
+                )
+                self.assertIs(
+                    evidence['sole_tool_rejection_input'].get('primary_read_only_omission_only'),
+                    omission if retained and type(omission) is bool else None,
                 )
                 self.assertNotIn('PRIVATE', json.dumps(evidence))
                 device.speak_probe.assert_called_once_with(question=run.qa_question)
