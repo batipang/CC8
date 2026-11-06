@@ -190,6 +190,31 @@ class AsrEvaluationTests(unittest.TestCase):
         raw['samples'][0]['fields'] = {'place': '徐州', 'time': '三点'}
         self.assertFalse(evaluate(corpus(), raw)['candidate']['cases'][0]['critical_sample_exact'])
 
+    def test_shipped_wifi_prompt_scores_typographic_word_hyphens_equally(self):
+        reference = read_json(CORPUS)
+        sample = corpus_samples(reference)['mixed-07']
+        for hyphen in ('\u2010', '\u2011'):
+            with self.subTest(hyphen=hyphen):
+                raw = data()
+                raw['samples'] = [
+                    {
+                        'id': sample['id'],
+                        'condition': 'quiet',
+                        'distance': '1m',
+                        'outcome': 'recognized',
+                        'transcript': sample['reference'].replace('-', hyphen),
+                        'fields': {'term': 'Bluetooth和Wi' + hyphen + 'Fi'},
+                    }
+                ]
+                row = evaluate(reference, raw)['candidate']['cases'][0]
+                self.assertEqual(row['english_wer']['reference_units'], 2)
+                self.assertEqual(row['english_wer']['errors'], 0)
+                self.assertTrue(row['transcript_exact'])
+                self.assertTrue(row['critical_sample_exact'])
+
+        self.assertNotEqual(normalized('Wi-Fi'), normalized('Wi Fi'))
+        self.assertNotEqual(normalized('-5.0'), normalized('5.0'))
+
     def test_failed_capture_counts_full_deletions_not_missing_or_success(self):
         raw = data()
         raw['samples'][0].update(
