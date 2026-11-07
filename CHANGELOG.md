@@ -1,5 +1,12 @@
 # Changelog
 
+## Backend 0.15.50 — raw English wake-input diagnosis
+
+- Add bounded, opt-in pre-AEC input statistics to the fixed English wake probe, alongside its existing processed inputs.
+- Replay a matched raw window through an independent local detector even when processed inputs fail to match. Keep the existing processed-pair replay separate.
+- Mark missing or playback-risk raw frames as a gap; never compact them into a complete window. Clear buffers on completion, failure, cancellation and wake.
+- Validate the new receipt without audio content while retaining older two-stream reports. Live wake models, thresholds and ASR/TTS providers are unchanged.
+
 ## Backend 0.15.49 / APK 0.9.47 — bind host output to activation
 
 - Negotiate host-to-device envelopes in addition to the existing microphone/control envelope, preserving legacy protocol-2 fallback explicitly.

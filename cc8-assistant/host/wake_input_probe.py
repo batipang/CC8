@@ -117,7 +117,7 @@ class WakeInputProbe:
         self.lock = threading.Lock()
         self.reference = np.frombuffer(pcm, dtype='<i2').astype(float) / 32768
         self.primary, self.alternate = np.empty(self.limit), np.empty(self.limit)
-        self.raw = np.empty(self.limit) if chinese else np.empty(0)
+        self.raw = np.empty(self.limit)
         self.frames = self.alternate_frames = 0
         self.raw_frames = 0
         self.stream_samples = None
@@ -166,7 +166,7 @@ class WakeInputProbe:
             if alternate is not None:
                 self.alternate[start : start + FRAME] = alternate
                 self.alternate_frames += FRAME
-            if self.chinese and raw is not None:
+            if raw is not None:
                 self.raw[start : start + FRAME] = raw
                 self.raw_frames += FRAME
             self.frames += FRAME
@@ -211,6 +211,17 @@ class WakeInputProbe:
                     else {'status': 'input_gap'},
                 )
                 streams['raw'] = raw_view
+            else:
+                # Missing or playback-risk raw frames are never compacted or
+                # compared as if they covered the complete processed window.
+                result.update(
+                    language='en',
+                    raw_frames=self.raw_frames,
+                    raw=compare_stream(raw[: self.frames], reference)
+                    if self.raw_frames == self.frames
+                    else {'status': 'input_gap'},
+                    raw_fresh_replay={'status': 'not_run'},
+                )
             result['fresh_replay'] = {'status': 'not_run'}
             if all(result[key]['status'] == 'matched' for key in streams):
                 from local_wake import replay_chinese_inputs, replay_english_inputs
@@ -223,6 +234,15 @@ class WakeInputProbe:
                     )
                 except (ImportError, OSError, RuntimeError, ValueError):
                     result['fresh_replay'] = {'status': 'unavailable'}
+            if not self.chinese and result['raw']['status'] == 'matched':
+                from local_wake import replay_english_raw
+
+                try:
+                    result['raw_fresh_replay'] = replay_english_raw(
+                        raw[: self.frames], self.cancelled.is_set
+                    )
+                except (ImportError, OSError, RuntimeError, ValueError):
+                    result['raw_fresh_replay'] = {'status': 'unavailable'}
             return result
         finally:
             for audio in arrays:

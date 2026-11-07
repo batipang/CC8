@@ -106,19 +106,35 @@ def _valid_live_decoder(value, primary_frames, alternate_frames):
     )
 
 
+def _valid_raw_replay(value, minimum):
+    frames = value['raw_frames']
+    complete = frames == value['primary_frames']
+    return (complete or value['raw'] == {'status': 'input_gap'}) and _valid_replay(
+        value['raw_fresh_replay'],
+        complete and minimum <= frames and value['raw']['status'] == 'matched',
+        {'raw_hit'},
+    )
+
+
 def summarize(value):
     if value == {'status': 'unavailable'}:
         return value
     if not isinstance(value, dict):
         return {'status': 'invalid'}
     chinese = value.get('language') == 'zh'
-    streams = ('primary', 'alternate', 'raw') if chinese else ('primary', 'alternate')
+    english_raw = value.get('language') == 'en'
+    streams = (
+        ('primary', 'alternate', 'raw') if chinese or english_raw else ('primary', 'alternate')
+    )
+    replay_streams = streams if chinese else ('primary', 'alternate')
     frame_counts = tuple(stream + '_frames' for stream in streams)
     limit = CHINESE_MAX_FRAMES if chinese else MAX_FRAMES
     minimum = CHINESE_FIXTURE_FRAMES + 1280 if chinese else MIN_MATCH_FRAMES
     fields = {'status', 'raw_audio_saved', *streams, *frame_counts}
-    if chinese:
+    if chinese or english_raw:
         fields.add('language')
+    if english_raw:
+        fields.add('raw_fresh_replay')
     if (
         set(value) - {'fresh_replay', 'live_decoder'} != fields
         or chinese
@@ -129,6 +145,8 @@ def summarize(value):
         or not 0 <= value['primary_frames'] <= limit
         or any(not 0 <= value[key] <= value['primary_frames'] for key in frame_counts)
         or not all(_valid_stream(value[key]) for key in streams)
+        or english_raw
+        and not _valid_raw_replay(value, minimum)
         or (
             'live_decoder' in value
             and (
@@ -142,10 +160,12 @@ def summarize(value):
             'fresh_replay' in value
             and not _valid_replay(
                 value['fresh_replay'],
-                all(value[key]['status'] == 'matched' for key in streams)
+                all(value[key]['status'] == 'matched' for key in replay_streams)
                 and minimum <= value['primary_frames']
-                and all(value[key] == value['primary_frames'] for key in frame_counts),
-                {stream + '_hit' for stream in streams},
+                and all(
+                    value[key + '_frames'] == value['primary_frames'] for key in replay_streams
+                ),
+                {stream + '_hit' for stream in replay_streams},
             )
         )
     ):

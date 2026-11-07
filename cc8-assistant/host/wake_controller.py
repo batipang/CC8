@@ -253,7 +253,7 @@ class WakeController:
                     probe.observe(
                         pcm,
                         alternate_pcm,
-                        raw_pcm if probe.chinese else None,
+                        raw_pcm if not echo_risk else None,
                         stream_samples=stream_samples,
                         english_render_rejected=render_rejected and keyword == 'Bumblebee',
                     )
