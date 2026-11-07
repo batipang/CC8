@@ -289,9 +289,17 @@ class ResponseWorker:
         finally:
             close = getattr(clauses, 'close', None)
             if close:
-                close()
-            # Closing unsubscribes/waits for a receipt already being admitted.
-            # Only then may a speech failure make an unfinished task terminal.
+                try:
+                    close()
+                except Exception as cleanup_error:
+                    # The task result/primary speech error already has an owner.
+                    # Optional iterator cleanup cannot skip its terminal receipt.
+                    self.hooks.log(
+                        'response_iterator_close_failed',
+                        error_type=type(cleanup_error).__name__,
+                    )
+            # Successful close waits for receipt admission. On cleanup failure,
+            # still finish the trace and preserve any result already committed.
             with self.hooks.lock:
                 if failure:
                     stage, error = failure

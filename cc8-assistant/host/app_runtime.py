@@ -18,6 +18,7 @@ import threading
 from typing import Callable
 from config_schema import ConfigError
 from process_lock import atomic_private_bytes
+from lifecycle_cleanup import cleanup_all
 
 
 @dataclass(frozen=True)
@@ -149,28 +150,52 @@ def run_backend(dependencies: BackendDependencies):
 
     def shutdown(*unused):
         stop.set()
-        bridge.session.deactivate()
-        bridge.playback.stop_output()
-        bridge.announcements.invalidate()
-        try:
-            bridge.cancel('shutdown')
-        except (OSError, EOFError):
-            pass
-        announcements.close()
-        hub.close()
-        if bridge.brain:
-            close = getattr(bridge.brain, 'close', bridge.brain.cancel)
-            close()
-        cancel_speech = getattr(bridge.speech, 'cancel', None)
-        if cancel_speech:
-            cancel_speech()
-        c = bridge.session.connection
-        if c:
+
+        def cancel_turn():
             try:
-                c.shutdown(socket.SHUT_RDWR)
-                c.close()
-            except OSError:
+                bridge.cancel('shutdown')
+            except (OSError, EOFError):
                 pass
+
+        def close_channel():
+            c = bridge.session.connection
+            if not c:
+                return
+
+            def shutdown_channel():
+                try:
+                    c.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+            def close_stream():
+                try:
+                    c.close()
+                except OSError:
+                    pass
+
+            cleanup_all(shutdown_channel, close_stream)
+
+        def close_brain():
+            if bridge.brain:
+                getattr(bridge.brain, 'close', bridge.brain.cancel)()
+
+        def cancel_speech():
+            cancel = getattr(bridge.speech, 'cancel', None)
+            if cancel:
+                cancel()
+
+        cleanup_all(
+            bridge.session.deactivate,
+            bridge.playback.stop_output,
+            bridge.announcements.invalidate,
+            cancel_turn,
+            announcements.close,
+            hub.close,
+            close_brain,
+            cancel_speech,
+            close_channel,
+        )
 
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)

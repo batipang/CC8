@@ -21,6 +21,7 @@ from runtime_env import command_path, runtime_environment
 from rpc_pipe import RpcPipeWriter, deadline_after
 from rpc_process import close_guardian, start_guardian
 from dot_errors import GENERIC, error_notice, turn_completion
+from lifecycle_cleanup import cleanup_all
 from dot_receipt import (
     DotError as DotError,
     DotApprovalRequired as DotApprovalRequired,
@@ -464,8 +465,7 @@ class DotBrain:
             threading.Thread(target=self._interrupt, args=(turn,), daemon=True).start()
 
     def close(self):
-        self.cancel()
-        self.rpc.close()
+        cleanup_all(self.cancel, self.rpc.close)
 
     def prepare(self, is_current=lambda: True):
         """Create only an initial connection/context, never a model turn.
