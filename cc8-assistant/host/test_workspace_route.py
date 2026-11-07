@@ -31,6 +31,7 @@ SESSION_INTERFACES = r"""
   final Context context=new Context();final Lan lan=new Lan();
   final Auth desktopCameraAuth=new Auth();final StatusFeedback statusFeedback=new StatusFeedback();
   final HostActivation hostActivation=new HostActivation();
+  final ConnectionAvailability availability=new ConnectionAvailability();
   final java.util.concurrent.atomic.AtomicInteger nativeOpens=new java.util.concurrent.atomic.AtomicInteger();
   final SpeakerOwner speakerOwner=new SpeakerOwner(()->{
    nativeOpens.incrementAndGet();return new SpeakerSession.Device(){
@@ -42,7 +43,8 @@ SESSION_INTERFACES = r"""
   boolean stopMicrophone(CaptureWindow expected){
    if(captureWindow!=expected)return false;stopMicrophone();return true;
   }
-  void cancelPlayback(){}
+  int cleanupDelayMs;
+  void cancelPlayback(){SystemClock.now+=cleanupDelayMs;}
   boolean receiveHello(Link link,JSONObject hello)throws IOException{return captureHello(link,hello);}
   void receiveCaptureStart(JSONObject receipt,long route){confirmCaptureStart(receipt,route);}
   void microphonePairFrame(int captureEpoch)throws IOException{sendPacket(Wire.MIC_PAIRED,captureEpoch,0,0,10,new byte[640]);}
@@ -130,6 +132,31 @@ SCENARIOS = r"""
   Link old=new Link("usb");activate(c,old);c.drain();
   c.snapshot(1,task("running"));c.drain();
   try{switch(args[0]){
+   case "availability_handover":{
+    s.availability.begin(0);s.select(old);Link wifi=new Link("wifi");wifi.ready=true;s.wifiLink=wifi;
+    SystemClock.now=1000;s.lost(old);
+    yes(s.activeLink==wifi&&"connected".equals(s.availability.snapshot(2000).state),"Ready fallback invented unavailability");
+    s.lost(old);yes(s.availability.snapshot(3000).recoveredCount==0,"Inactive loss created an outage receipt");break;
+   }
+   case "availability_loss":{
+    s.availability.begin(0);s.select(old);s.cleanupDelayMs=2500;SystemClock.now=1000;s.lost(old);
+    s.cleanupDelayMs=0;SystemClock.now=4000;s.lost(old);
+    yes(s.availability.snapshot(4500).unavailableMs==3500,"Cleanup/repeated loss shifted the first observed outage boundary");
+    SystemClock.now=5000;Link next=new Link("usb");activate(c,next);s.select(next);
+    yes(s.availability.snapshot(6000).lastRecoveredMs==4000&&s.availability.snapshot(6000).recoveredCount==1,"Activation did not finish exactly one observed gap");break;
+   }
+   case "availability_failed_activation":{
+    s.availability.begin(0);s.activeLink=null;s.usbLink=null;
+    Link next=new Link("wifi");next.failOffer=()->{};
+    try{s.select(next);throw new AssertionError("Fixture activation did not fail");}catch(IOException expected){}
+    yes("waiting".equals(s.availability.snapshot(1000).state)&&s.availability.snapshot(1000).recoveredCount==0,"Unconfirmed activation was counted as available");break;
+   }
+   case "availability_pause":{
+    s.availability.begin(0);s.select(old);SystemClock.now=1000;s.lost(old);SystemClock.now=2000;s.pause();
+    s.select(new Link("usb"));
+    yes("not_observing".equals(s.availability.snapshot(1000000).state),"Background route callback resumed observation");
+    yes(s.availability.snapshot(1000000).interruptedCount==1&&s.availability.snapshot(1000000).recoveredCount==0,"Home converted an unknown interval into confirmed recovery");break;
+   }
    case "old_activation_control":{
     duplex(c,old,"a".repeat(32),1);Link wifi=new Link("wifi");duplex(c,wifi,"b".repeat(32),2);
     long route=s.routeEpoch;duplex(c,old,"a".repeat(32),1);
@@ -435,6 +462,18 @@ SCENARIOS = r"""
 
 
 class WorkspaceRouteTests(unittest.TestCase):
+    def test_availability_preserves_continuous_ready_fallback(self):
+        self.scenario('availability_handover')
+
+    def test_availability_finishes_one_confirmed_gap(self):
+        self.scenario('availability_loss')
+
+    def test_availability_rejects_failed_activation(self):
+        self.scenario('availability_failed_activation')
+
+    def test_availability_stops_at_actual_pause_boundary(self):
+        self.scenario('availability_pause')
+
     @classmethod
     def setUpClass(cls):
         activity, session = ACTIVITY.read_text(), SESSION.read_text()
@@ -568,6 +607,7 @@ class WorkspaceRouteTests(unittest.TestCase):
                 str(JAVA / 'CaptureClockStats.java'),
                 str(JAVA / 'StatusFeedback.java'),
                 str(JAVA / 'HostActivation.java'),
+                str(JAVA / 'ConnectionAvailability.java'),
                 str(JAVA / 'SpeakerOwner.java'),
                 str(JAVA / 'SpeakerSession.java'),
                 str(test),

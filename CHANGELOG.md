@@ -1,5 +1,11 @@
 # Changelog
 
+## APK 0.9.49 — observed connection availability
+
+- Show first-connection waiting, the current observed outage and the last recovered gap in the existing connection dialog, refreshing only while it is visible in the foreground.
+- Keep availability observations under route ownership: a ready fallback is continuous, failed/stale activations cannot create recovery, and background time is not counted. Export only bounded device-side durations and fixed labels.
+- Preserve backend 0.15.55, providers, layout and capture rules. Include its deployed four-case cancellation evidence in this functional batch; actual sleep/login and physical switching remain separate.
+
 ## Backend 0.15.55 — scoped background terminal cancellation
 
 - Keep asynchronous turn interruption bound to its original RPC and thread, then terminate only background terminal handles matched to command items observed in that turn. Never clean the whole thread or replay an unconfirmed operation.

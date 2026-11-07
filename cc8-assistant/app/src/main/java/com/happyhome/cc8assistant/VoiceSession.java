@@ -97,6 +97,7 @@ final class VoiceSession {
   private volatile String phase = "idle";
   private final StatusFeedback statusFeedback = new StatusFeedback();
   private final HostActivation hostActivation = new HostActivation();
+  private final ConnectionAvailability availability = new ConnectionAvailability();
   private volatile boolean dotChatSupported, savedTasksSupported;
 
   boolean supportsDotChatHandoff() {
@@ -173,6 +174,7 @@ final class VoiceSession {
     synchronized (routeLock) {
       if (foreground) return;
       foreground = true;
+      availability.begin(SystemClock.elapsedRealtime());
       ticket = ++lifecycle;
     }
     if (!receiverRegistered) {
@@ -190,6 +192,7 @@ final class VoiceSession {
     // 先使生命周期票据失效，再停音频和关闭连接；旧异步任务不能在后台重建资源。
     ServerSocket listener;
     synchronized (routeLock) {
+      availability.end(SystemClock.elapsedRealtime());
       cancelVision();
       textSession = false;
       foreground = false;
@@ -225,6 +228,7 @@ final class VoiceSession {
       dotChatSupported = savedTasksSupported = false;
       output = null;
       socket = null;
+      availability.offline(SystemClock.elapsedRealtime());
     }
     if (usb != null) usb.close();
     if (wifi != null) wifi.close();
@@ -374,6 +378,7 @@ final class VoiceSession {
       Wire.put(hello, "paired_capture_version", 1);
       Wire.put(hello, "wake_mode", wakeMode);
       next.event(hello);
+      availability.online(SystemClock.elapsedRealtime());
       // The hello receipt registers any current capture on the new route.
       if (changed) listener.link(true, routeEpoch);
     }
@@ -472,6 +477,8 @@ final class VoiceSession {
           return;
         } catch (IOException ignored) {
         }
+      // Timestamp the observed loss before bounded audio/camera cleanup.
+      availability.offline(SystemClock.elapsedRealtime());
       cancelVision();
       stopMicrophone();
       cancelPlayback();
@@ -1662,10 +1669,14 @@ final class VoiceSession {
 
   JSONObject snapshot() {
     JSONObject j = Wire.event("snapshot");
-    Wire.put(j, "foreground", foreground);
-    Wire.put(j, "connected", isConnected());
-    Wire.put(j, "transport", transportName());
     synchronized (routeLock) {
+      Wire.put(j, "foreground", foreground);
+      Wire.put(j, "connected", isConnected());
+      Wire.put(j, "transport", transportName());
+      Wire.put(
+          j,
+          "connection_availability",
+          new JSONObject(availability.snapshot(SystemClock.elapsedRealtime()).values()));
       Link current = activeLink;
       boolean bound =
           foreground

@@ -80,6 +80,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
       pending = false;
   private String phase = "idle", mood = "friendly";
   private final Handler handler = new Handler(Looper.getMainLooper());
+  private AlertDialog connectionInfoDialog;
 
   private int dp(float value) {
     return Math.round(value * getResources().getDisplayMetrics().density);
@@ -1045,28 +1046,55 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
         });
   }
 
-  private void showConnectionInfo() {
+  private String connectionInfoMessage() {
     JSONObject info = session.snapshot();
-    String current =
-        "usb".equals(session.transportName())
-            ? "USB"
-            : "wifi".equals(session.transportName()) ? "Wi-Fi" : "等待连接";
-    String message =
-        "当前通道："
-            + current
-            + "\n连接策略：USB 优先，断线自动改用 Wi-Fi\n\n"
-            + (info.optBoolean("wifi_ready")
-                ? "Wi-Fi 备用连接已就绪"
-                : info.optBoolean("wifi_paired")
-                    ? "Wi-Fi 已配对，正在等待局域网连接"
-                    : "首次 Wi-Fi 配对请先通过 USB 连接 Mac")
-            + "\n\nWi-Fi 需要两台设备处于同一局域网，且 Mac 语音服务正在运行。";
-    new AlertDialog.Builder(this)
-        .setTitle("连接状态")
-        .setMessage(message)
-        .setNeutralButton("桌面入口", (dialog, which) -> DesktopEntryService.settings(this))
-        .setPositiveButton("知道了", null)
-        .show();
+    JSONObject availability = info.optJSONObject("connection_availability");
+    String transport = info.optString("transport");
+    String current = "usb".equals(transport) ? "USB" : "wifi".equals(transport) ? "Wi-Fi" : "等待连接";
+    return "当前通道："
+        + current
+        + "\n连接策略：USB 优先，断线自动改用 Wi-Fi\n\n"
+        + (info.optBoolean("wifi_ready")
+            ? "Wi-Fi 备用连接已就绪"
+            : info.optBoolean("wifi_paired") ? "Wi-Fi 已配对，正在等待局域网连接" : "首次 Wi-Fi 配对请先通过 USB 连接 Mac")
+        + "\n\n"
+        + (availability == null ? "连接观测尚未就绪" : availability.optString("summary"))
+        + "\n\n仅统计本次界面会话的前台观测，退回桌面期间不计时。断线时间从设备确认连接丢失时开始，不代表故障实际发生时刻。"
+        + "\nMac 休眠、服务退出或网络中断时助手均可能不可用；仅凭断线不能确定原因。"
+        + "\n\nWi-Fi 需要两台设备处于同一局域网，且 Mac 语音服务正在运行。";
+  }
+
+  private void showConnectionInfo() {
+    if (!foreground) return;
+    if (connectionInfoDialog != null) connectionInfoDialog.dismiss();
+    final String[] displayed = {connectionInfoMessage()};
+    final AlertDialog dialog =
+        new AlertDialog.Builder(this)
+            .setTitle("连接状态")
+            .setMessage(displayed[0])
+            .setNeutralButton("桌面入口", (d, which) -> DesktopEntryService.settings(this))
+            .setPositiveButton("知道了", null)
+            .create();
+    connectionInfoDialog = dialog;
+    final Runnable update =
+        new Runnable() {
+          public void run() {
+            if (!foreground || connectionInfoDialog != dialog || !dialog.isShowing()) return;
+            String next = connectionInfoMessage();
+            if (!next.equals(displayed[0])) {
+              displayed[0] = next;
+              dialog.setMessage(next);
+            }
+            handler.postDelayed(this, 1000);
+          }
+        };
+    dialog.setOnDismissListener(
+        d -> {
+          handler.removeCallbacks(update);
+          if (connectionInfoDialog == dialog) connectionInfoDialog = null;
+        });
+    dialog.show();
+    handler.postDelayed(update, 1000);
   }
 
   private void showBrainSelector() {
@@ -1532,6 +1560,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   protected void onPause() {
+    if (connectionInfoDialog != null) connectionInfoDialog.dismiss();
     if (dotChats != null) dotChats.close();
     if (savedTasks != null) savedTasks.close();
     screen(false);
