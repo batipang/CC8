@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Pattern, Callable
 from pathlib import Path
+import time
 from brain_router import BrainRouter
 from composition_audio import build_audio_pipeline
 from vision import desktop_signature
@@ -233,6 +234,12 @@ def build_components(
             wake_mode=lambda: host.session.wake,
             capture_current=lambda nanos: host.capture.endpoint_audio_current(nanos),
             busy=lambda: voice_busy(host),
+            render_risk=lambda: (
+                host.playback.playing
+                or time.monotonic() - host.playback.last_audio_end < 3
+                or host.calibration.active
+                or host.calibration.failed
+            ),
             set_awake=lambda value: host.session.set_awake(value),
             touch_activity=lambda: host.touch_activity(),
             cancel=lambda reason: host.cancel(reason),

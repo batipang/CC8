@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-english-raw-probe-20261108.1",
+  "release_id": "p0-utterance-local-wake-20261108.1",
   "backend": {
-    "version": "0.15.50"
+    "version": "0.15.51"
   },
   "assistant": {
     "version": "0.9.47",

@@ -1,5 +1,12 @@
 # Changelog
 
+## Backend 0.15.51 — complete-utterance local wake verification
+
+- Supplement the existing real-time wake paths with a fresh, bounded English keyword stream on completed speech while waiting. Keep the current model, eight decoder paths, competitor, thresholds and providers.
+- Authorize the same utterance for ASR only after a local keyword hit; ordinary non-keyword speech remains local and does not invoke Dot.
+- Bind candidates to capture start, session generation and wake serial. Stop, gaps, handover, a newer wake and playback risk revoke pending checks.
+- Keep recheck counts, hits, errors and duration in health without retaining audio or text. Offline/native evidence and field limitations are recorded in docs/UTTERANCE_LOCAL_WAKE.md.
+
 ## Backend 0.15.50 — raw English wake-input diagnosis
 
 - Add bounded, opt-in pre-AEC input statistics to the fixed English wake probe, alongside its existing processed inputs.

@@ -129,6 +129,12 @@ class StatusReporter:
             'render_frames': metrics.get('render_frames', 0),
             'local_wake_count': metrics.get('local_wake_count', 0),
             'local_wake_english_count': metrics.get('local_wake_english_count', 0),
+            'local_wake_recheck_ready': getattr(self.hooks.wake(), 'utterance_recheck_ready', False)
+            is True,
+            'local_wake_rechecks': metrics.get('local_wake_rechecks', 0),
+            'local_wake_recheck_hits': metrics.get('local_wake_recheck_hits', 0),
+            'local_wake_recheck_errors': metrics.get('local_wake_recheck_errors', 0),
+            'local_wake_recheck_ms': metrics.get('local_wake_recheck_ms'),
             'english_wake_input_samples': self.hooks.wake().english_input_samples(),
             'voice_asr_attempts': metrics.get('voice_asr_attempts', 0),
             'fast_stop_ready': endpoint.fast_stop is not None,

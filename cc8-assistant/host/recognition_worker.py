@@ -85,6 +85,7 @@ class RecognitionWorker:
             references = job[3] if len(job) > 3 else []
             evidence = job[4] if len(job) > 4 else None
             render_audio = job[5] if len(job) > 5 else None
+            waiting = job[7] if len(job) > 7 else None
             if not self.hooks.valid(generation):
                 if len(job) > 6:
                     self.hooks.diagnostics().gate(job[6], 'stale')
@@ -100,15 +101,33 @@ class RecognitionWorker:
                 return self.hooks.valid(generation) and self.hooks.wake_allowed()
 
             try:
+                confirmed = None
+                if (
+                    waiting is not None
+                    and evidence
+                    and not during_playback
+                    and not evidence['echo_risk']
+                ):
+                    confirmed = self.hooks.recheck_wake(waiting, audio, generation)
                 # The dequeued job can lose ownership before announcing ASR.
                 with self.hooks.lock:
                     if not self.hooks.valid(generation):
                         continue
-                    if not self.hooks.wake_allowed():
+                    allowed = self.hooks.wake_allowed()
+                    if waiting is not None and (
+                        type(confirmed) is not bool or confirmed != allowed
+                    ):
+                        continue
+                    if not allowed:
                         outcome.decision = 'wake_closed'
                         outcome.rejected = True
+                        if waiting is not None:
+                            self.hooks.metric('local_wake_utterances_withheld', increment=True)
                         self.hooks.status('listening', WAITING)
                         continue
+                    if waiting is not None:
+                        evidence = {**evidence, 'local_wake': True}
+                        self.hooks.diagnostics().mark(trace_id, 'wake_detected')
                     if not self.hooks.playing():
                         self.hooks.status('thinking', '正在识别语音…')
                     self.hooks.diagnostics().asr_start(trace_id, len(audio))

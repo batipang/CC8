@@ -1,5 +1,13 @@
 # 当前 CC8 部署与验收范围
 
+## 0.15.50／code84 英文原始输入诊断
+
+2026-11-08，Mac 后台从 0.15.49 更新到 **0.15.50／原签名 APK 0.9.47（code84）／协议 2**，运行源码 `7e9dbfa`。五项维护检查在 21.530 秒内通过，仅更新后台。原 APK、检测器 1.0.6／code7、原配置和 LaunchAgent 保持；独立只读复核确认助手前台、USB 优先、配对 Wi-Fi 就绪、麦克风和摄像头关闭。 [功能合入](https://github.com/batipang/CC8/pull/413)、[主分支八项 CI](https://github.com/batipang/CC8/actions/runs/42394647743)。维护报告 SHA-256 为 `62b47d573326e4f46eee3ec015e93809347dddddfa5143f2b3b115efa9db65cc`，独立复核报告为 `7ef947f0239a37bd214a39ac2eefbca54e2ccbefee673646ec14bc197e20d3fa`。
+
+同版固定英文声学检查完成前五项准备检查，但问答阶段未唤醒，整轮以失败结束并保留原回执。完整同窗为 56,960 个采样：原始、AEC3+NS 和 AEC3 无 NS 输入均独立匹配固定名字与问句，实时英文命中为零、播放拒绝为零；新流重放两路处理后输入均命中，原始输入新流未命中。唯一语音候选被 `wake_closed` 拒绝，零语音 ASR 和 Dot 调用。它支持继续调查连续解码历史与语句边界，不证明唯一根因，也不支持直接关闭 AEC。
+
+原声学报告 SHA-256 `0af1b2434fd7d60e418576dda3df4e578cec0dc2288d6cce3e25b8fa3b15a03d`。固定试音文件已清理，独立收尾确认双端停采、原生测试期限清零、版本 / 安装包 / 配置保持。未开始最终 72 小时验收；后续整句复核改进的范围见 [UTTERANCE_LOCAL_WAKE](UTTERANCE_LOCAL_WAKE.md)。
+
 ## 0.15.49／code84 双向线路隔离与自动检查
 
 2026-11-08，正常 Android 安装路径更新为 **后台 0.15.49／原签名 APK 0.9.47（code84）／协议 2**，运行源码 `f65eb80`。九项维护检查和独立只读复核全部通过；已装 APK SHA-256 为 `e591b709ba98ac634914d487f3c0e412e301a1fe934d52ea45b0a02e8e817cd0`。双端报告逐激活输入、输出封套版本均为 1，默认 mono、前台 USB 优先和配对 Wi-Fi 就绪。原配置、LaunchAgent、检测器及关麦规则保持。[功能合入](https://github.com/batipang/CC8/pull/412)、[主分支八项 CI](https://github.com/batipang/CC8/actions/runs/42389443738)。维护和独立复核报告摘要分别为 `9e8bac52116fdf3ee0a50499ca9b15db7df46bc8392a0d73890b8fa2c19ff5e6`、`22ae35d0f7b379f5c9ea23e7d89754d0ce7df0e067cee4746e0920dadc480855`。

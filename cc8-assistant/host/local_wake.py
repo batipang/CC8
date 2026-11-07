@@ -109,6 +109,7 @@ def replay_chinese_inputs(streams, cancelled):
 
 class WakeDetector:
     KEYWORDS = ChineseWake.KEYWORDS | EnglishWake.KEYWORDS
+    utterance_recheck_supported = True
 
     def __init__(self, chinese, english, english_alternate=None, *, chinese_verifier=None):
         self.chinese = chinese
@@ -146,6 +147,11 @@ class WakeDetector:
     def stop_capture(self):
         if self.chinese_verifier is not None:
             self.chinese_verifier.worker.close()
+
+    def recheck_utterance(self, pcm, current):
+        from wake_utterance import recheck_utterance
+
+        return recheck_utterance(pcm, self.english.alternate, current)
 
     def reset(self, *, clear_metrics=True):
         self.chinese.reset(clear_metrics=clear_metrics)
