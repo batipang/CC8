@@ -15,8 +15,8 @@ import test_failure_feedback as support
 
 
 PEER = r"""
-import json, pathlib, sys
-mode, audit = sys.argv[1:]
+import json, pathlib, sys, time
+mode, audit, delay = sys.argv[1:]
 for line in sys.stdin:
     req = json.loads(line)
     method = req.get('method')
@@ -37,6 +37,7 @@ for line in sys.stdin:
             print(json.dumps({'id': ident, 'error': {'message': 'PRIVATE_PEER_ERROR'}}), flush=True)
             continue
         if mode == 'success':
+            time.sleep(float(delay))
             result = {'turn': {'id': 'fixed-turn'}}
             print(json.dumps({'id': ident, 'result': result}), flush=True)
             for event in (
@@ -56,20 +57,32 @@ for line in sys.stdin:
 
 
 class ShortStartRpc(CodexRpc):
+    start_budget = None
+
     def request(self, method, params, timeout=15):
-        return super().request(method, params, timeout=0.2 if method == 'turn/start' else timeout)
+        return super().request(
+            method,
+            params,
+            timeout=self.start_budget
+            if method == 'turn/start' and self.start_budget is not None
+            else timeout,
+        )
 
 
 class StartReceiptTests(unittest.TestCase):
-    def peer(self, folder, mode, audit):
+    def peer(self, folder, mode, audit, *, delay=0):
         path = folder / 'peer.py'
         path.write_text(PEER)
-        return ShortStartRpc(
-            command=[sys.executable, '-I', '-S', str(path), mode, str(audit)],
+        rpc = ShortStartRpc(
+            command=[sys.executable, '-I', '-S', str(path), mode, str(audit), str(delay)],
             popen=lambda args, **kwargs: subprocess.Popen(
                 args, **{**kwargs, 'env': {'PATH': '/usr/bin:/bin'}, 'cwd': folder}
             ),
         )
+        # Only the deliberately silent peer gets a shortened failure budget.
+        # Successful recovery must use the production caller's normal budget.
+        rpc.start_budget = 0.2 if mode == 'silent' else None
+        return rpc
 
     def close(self, rpc):
         rpc.close()
@@ -84,7 +97,7 @@ class StartReceiptTests(unittest.TestCase):
                 audit = folder / 'audit'
                 old = self.peer(folder, mode, audit)
                 dot = DotBrain(old)
-                new = self.peer(folder, 'success', audit)
+                new = self.peer(folder, 'success', audit, delay=0.35)
                 dot.rpc_factory = Mock(return_value=new)
                 worker = support.FailureFeedbackTests()
                 b = worker.session(brain=BrainRouter(support.Brain(), dot))
