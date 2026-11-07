@@ -116,7 +116,19 @@ public final class DeviceReport {
             "name",
             "CC8 能力检测",
             "version",
-            "1.0.1",
+            safe(
+                () ->
+                    activity
+                        .getPackageManager()
+                        .getPackageInfo(activity.getPackageName(), 0)
+                        .versionName),
+            "version_code",
+            safe(
+                () ->
+                    activity
+                        .getPackageManager()
+                        .getPackageInfo(activity.getPackageName(), 0)
+                        .versionCode),
             "package",
             activity.getPackageName(),
             "uid",

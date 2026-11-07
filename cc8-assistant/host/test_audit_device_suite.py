@@ -15,6 +15,7 @@ from device_smoke import (
     AWAKE_DIALOGUE_CHECK,
     BARGE_DEVICE_METRIC,
     ENGLISH_WAKE_PHASES,
+    ECHO_SOAK_CHECK,
     FAST_STOP_DEVICE_METRIC,
     QA_PLAYOUT_METRIC,
     QA_STAGE_METRICS,
@@ -1064,6 +1065,61 @@ class AuditDeviceSuiteTests(unittest.TestCase):
         evidence['background_observed_seconds'] = evidence['elapsed_seconds']
         evidence['background'] = {**background, 'kind': 'low-noise'}
         self.assertEqual(audit(data)['reason'], 'suite_echo_soak_evidence_incomplete')
+
+    def test_tv_failure_exports_only_a_confirmed_partial_observation(self):
+        background = {'kind': 'tv', 'sha256': 'c' * 64}
+        data = saved_suite(echo_soak=True, background=background)
+        data['state'] = data['phases'][0]['state'] = 'failed'
+        report = data['phases'][0]['report']
+        report['state'] = 'failed'
+        stop = next(i for i, row in enumerate(report['checks']) if row['name'] == ECHO_SOAK_CHECK)
+        report['checks'] = report['checks'][: stop + 1]
+        report['checks'][-1].update(state='failed', reason='tv_background_voice_blocked')
+        report['echo_soak_evidence'].update(
+            elapsed_seconds=64.83,
+            background_observed_seconds=64.83,
+            background_guard_rejections=2,
+        )
+        for phase in data['phases'][1:]:
+            phase['state'] = 'not_run'
+            phase.pop('report')
+        result = audit(data)
+        self.assertFalse(result['verified'])
+        self.assertEqual(result['completed_phases'], 0)
+        self.assertEqual(result['recorded_failure'], 'tv_background_voice_blocked')
+        self.assertEqual(
+            result['partial_background_observation'],
+            {
+                'elapsed_seconds': 64.83,
+                'background_guard_rejections': 2,
+                'admitted_voice_requests': 0,
+            },
+        )
+        for field, value in (
+            ('cleanup_microphone_off_verified', False),
+            ('raw_audio_saved', True),
+            ('automation_source_sha256', 'invalid'),
+        ):
+            changed = deepcopy(data)
+            changed['phases'][0]['report'][field] = value
+            with self.subTest(field=field):
+                self.assertNotIn('recorded_failure', audit(changed))
+        for field, value in (
+            ('background', {'kind': 'low-noise', 'sha256': 'c' * 64}),
+            ('background_dispatch_guarded', False),
+            ('background_guard_rejections', True),
+            ('background_guard_rejections', 0),
+            ('admitted_voice_requests', 1),
+            ('elapsed_seconds', float('nan')),
+            ('background_observed_seconds', 1),
+        ):
+            changed = deepcopy(data)
+            changed['phases'][0]['report']['echo_soak_evidence'][field] = value
+            with self.subTest(field=field, value=value):
+                self.assertNotIn('recorded_failure', audit(changed))
+        changed = deepcopy(data)
+        changed['phases'][0]['report']['checks'][0]['state'] = 'failed'
+        self.assertNotIn('recorded_failure', audit(changed))
 
     def test_interruption_audit_recomputes_separate_metrics_and_rejects_incomplete_pair(self):
         data = saved_suite(interruption=True)
