@@ -143,6 +143,7 @@ EXTENDED_VOICE_MIN_BACKEND = '0.14.60'
 ASR_STOP_MIN_BACKEND = '0.14.66'
 ROUTED_LATENCY_MIN_BACKEND = '0.14.62'
 TOOL_SAMPLE_MIN_BACKEND = '0.15.4'
+TV_PRIME_TOOL_CASE = 4
 TOOL_COMPARE_MIN_BACKEND = '0.15.11'
 TOOL_REJECTION_MIN_BACKEND = '0.15.20'
 TOOL_COMPARISON_CHECK = 'fixed_tool_asr_comparison'
@@ -1021,7 +1022,14 @@ class SmokeRun:
         self.tool_compare_engine = tool_compare_engine
         self.tool_diagnose_engine = tool_diagnose_engine
         self.tool_sample_token = None
+        self.background = background
+        self.tv_capture_epoch = None
+        self.tv_prime_confirmed = False
         self.qa_question = ENGLISH_QUESTION if english_wake else qa_question
+        if self.tv_background:
+            if not (capture and awake_dialogue and echo_soak) or english_wake:
+                raise ValueError('TV playback requires the guarded awake soak')
+            self.qa_question = SCENARIO_QUESTIONS['tool'][TV_PRIME_TOOL_CASE - 1]
         questions = SCENARIO_QUESTIONS.get(latency_scenario, ())
         self.qa_fixture = (
             {'scenario': latency_scenario, 'case': questions.index(self.qa_question) + 1}
@@ -1042,7 +1050,6 @@ class SmokeRun:
         self.interruption_enabled = synthetic_barge or synthetic_stop
         self.wake_self_playback = wake_self_playback
         self.echo_soak = echo_soak
-        self.background = background
         self.echo_soak_evidence = None
         self.active_handover = active_handover
         self.active_handover_evidence = None
@@ -1760,6 +1767,10 @@ class SmokeRun:
             evidence['connection_ui']['usb_restored'] = True
 
     @property
+    def tv_background(self):
+        return self.background is not None and self.background.kind == 'tv'
+
+    @property
     def capture_limit_ms(self):
         if self.echo_soak:
             return ECHO_SOAK_CAPTURE_MS
@@ -1769,7 +1780,7 @@ class SmokeRun:
 
     def start_capture(self):
         limit = self.capture_limit_ms
-        if self.latency_sample and self.latency_scenario == 'tool':
+        if self.tv_background or (self.latency_sample and self.latency_scenario == 'tool'):
             case = SCENARIO_QUESTIONS['tool'].index(self.qa_question) + 1
             request = {'operation': 'tool_sample_arm', 'case': case}
             if self.tool_diagnose_engine is not None:
@@ -1801,7 +1812,12 @@ class SmokeRun:
                 h.get('microphone_active') is True and h.get('local_wake_ready') is True,
                 'wake_capture_not_ready',
             )
-            return self.capture_status()
+            device = self.capture_status()
+            if self.tv_background:
+                epoch = device.get('test_capture_epoch')
+                require(type(epoch) is int and epoch > 0, 'tv_background_capture_epoch_missing')
+                self.tv_capture_epoch = epoch
+            return device
         except RuntimeChanged:
             raise
         except (CheckFailure, OSError, ValueError, subprocess.SubprocessError):
@@ -2019,6 +2035,7 @@ class SmokeRun:
         d, ui = self.device.status()
         require(ui.get('screen_sleeping') is (not awake), 'acoustic_probe_screen_state_invalid')
         d = self.capture_status((d, ui))
+        self.require_tv_capture(d)
         # Reserve space for the speech command and post-playback observation.
         reserve = quiet_seconds + 5
         available = d['test_capture_remaining_ms'] / 1000
@@ -2056,7 +2073,7 @@ class SmokeRun:
                 and re.fullmatch('[a-f0-9]{32}', input_token) is not None,
                 'wake_input_probe_not_armed',
             )
-        if self.latency_sample and self.latency_scenario == 'tool':
+        if self.tv_background or (self.latency_sample and self.latency_scenario == 'tool'):
             require(
                 self.tool_sample_token is not None
                 and self.request(
@@ -2166,7 +2183,7 @@ class SmokeRun:
                 'cancelled_requests': sum(r.get('outcome') == 'cancelled' for r in rows),
                 'completed_tasks': sum(r.get('task_outcome') == 'completed' for r in rows),
                 'recognized_stimulus_matches': recognized_stimulus_matches,
-                **({'tool_sample_guarded': True} if tool_latency else {}),
+                **({'tool_sample_guarded': True} if tool_latency or self.tv_background else {}),
                 **({'math_answer_status': math_answer} if math_answer is not None else {}),
                 'response_playout_timing': response_playout_timing(completed),
                 **(
@@ -2296,7 +2313,7 @@ class SmokeRun:
                     comparison['local'] not in ('error', 'timeout'), 'tool_comparison_decode_failed'
                 )
                 return comparison
-            if tool_latency and tool_rejections:
+            if (tool_latency or self.tv_background) and tool_rejections:
                 require(not admitted, 'tool_sample_extra_voice_candidate')
                 if all(reason in TOOL_TRANSCRIPT_MISMATCHES for reason in tool_rejections):
                     raise CheckFailure('tool_sample_transcript_not_confirmed')
@@ -2335,10 +2352,8 @@ class SmokeRun:
         self.health()
         recognized_stimulus_matches = matched_task is not None
         self.acoustic_evidence['recognized_stimulus_matches'] = recognized_stimulus_matches
-        if (
-            matched_task is not None
-            and self.latency_sample
-            and self.latency_scenario in MATH_SCENARIOS
+        if matched_task is not None and (
+            self.tv_background or (self.latency_sample and self.latency_scenario in MATH_SCENARIOS)
         ):
             math_answer = math_answer_status(self.qa_question, matched_task.get('result'))
             self.acoustic_evidence['math_answer_status'] = math_answer
@@ -2372,6 +2387,14 @@ class SmokeRun:
                 and acoustic_coverage_reason(timing) is not None,
                 'response_acoustic_timing_unconfirmed',
             )
+        if self.tv_background:
+            require(
+                completed.get('scenario') == 'tool'
+                and ROUTE_COMPLETION_STAGES['tool'] in completed['stages']
+                and math_answer == 'matched',
+                'tv_background_guarded_prime_unconfirmed',
+            )
+            self.acoustic_evidence['background_prime_tool_case'] = TV_PRIME_TOOL_CASE
         if self.fixed_tool_case:
             evidence = self.acoustic_evidence
             require(
@@ -2390,7 +2413,9 @@ class SmokeRun:
             ui.get('screen_sleeping') is False and d.get('foreground') is True,
             'awake_dialogue_left_foreground' if awake else 'acoustic_probe_did_not_wake_foreground',
         )
-        self.capture_status((d, ui))
+        self.require_tv_capture(self.capture_status((d, ui)))
+        if self.tv_background:
+            self.tv_prime_confirmed = True
 
     @staticmethod
     def audio_counters(health):
@@ -2496,7 +2521,20 @@ class SmokeRun:
         )
         return {key: health[key] for key in ECHO_SOAK_COUNTERS}
 
+    def require_tv_capture(self, device):
+        if self.tv_background:
+            require(
+                self.tool_sample_token is not None
+                and self.tv_capture_epoch is not None
+                and type(device.get('test_capture_epoch')) is int
+                and device['test_capture_epoch'] == self.tv_capture_epoch,
+                'tv_background_guarded_capture_unconfirmed',
+            )
+
     def self_playback_soak(self):
+        if self.tv_background:
+            require(self.tv_prime_confirmed, 'tv_background_guarded_prime_unconfirmed')
+            self.require_tv_capture(self.capture_status())
         context = self.background.play() if self.background else nullcontext(lambda: True)
         with context as background_active:
             self.observe_self_playback(background_active)
@@ -2540,9 +2578,12 @@ class SmokeRun:
         if self.background:
             evidence['background'] = self.background.receipt
             evidence['background_observed_seconds'] = 0
+        if self.tv_background:
+            evidence.update(background_dispatch_guarded=True, background_guard_rejections=0)
         while self.clock() - began < ECHO_SOAK_SECONDS:
             require(background_active(), 'echo_soak_background_ended')
             device = self.capture_status()
+            self.require_tv_capture(device)
             require(
                 device['test_capture_remaining_ms'] >= 135000,
                 'echo_soak_capture_budget_insufficient',
@@ -2574,7 +2615,16 @@ class SmokeRun:
             )
             if self.background:
                 evidence['background_observed_seconds'] = evidence['elapsed_seconds']
+            if self.tv_background:
+                # These candidates reached the final voice gate and must count
+                # as failures even though the consumed prime blocked dispatch.
+                evidence['background_guard_rejections'] += sum(
+                    row.get('gate') == 'tool_sample_guard' for row in voices
+                )
             self.checkpoint(self.report('running'))
+            if self.tv_background:
+                require(not evidence['background_guard_rejections'], 'tv_background_voice_blocked')
+                self.require_tv_capture(self.capture_status())
             require(
                 len(new) == len(announcements) + len(voices)
                 and len(groups['rejected']) == len(voices)
@@ -3513,6 +3563,22 @@ def safe_tool_transcript_miss(report, expected_checks):
     )
 
 
+def valid_tv_prime(evidence):
+    return (
+        isinstance(evidence, dict)
+        and type(evidence.get('background_prime_tool_case')) is int
+        and evidence['background_prime_tool_case'] == TV_PRIME_TOOL_CASE
+        and evidence.get('recognized_stimulus_matches') is True
+        and evidence.get('tool_sample_guarded') is True
+        and evidence.get('math_answer_status') == 'matched'
+        and type(evidence.get('admitted_voice_requests')) is int
+        and evidence['admitted_voice_requests'] == 1
+        and type(evidence.get('completed_tasks')) is int
+        and evidence['completed_tasks'] == 1
+        and not evidence.get('tool_sample_rejections')
+    )
+
+
 def run_device_suite(
     make_run,
     save,
@@ -3878,6 +3944,16 @@ def run_device_suite(
                     background is None
                     or evidence.get('background_observed_seconds') == evidence['elapsed_seconds']
                 )
+                and (
+                    background is None
+                    or background['kind'] != 'tv'
+                    or (
+                        evidence.get('background_dispatch_guarded') is True
+                        and type(evidence.get('background_guard_rejections')) is int
+                        and evidence['background_guard_rejections'] == 0
+                        and valid_tv_prime(result.get('acoustic_evidence'))
+                    )
+                )
             ):
                 phase.update(state='failed', reason='suite_echo_soak_evidence_incomplete')
             else:
@@ -4164,6 +4240,7 @@ def main(argv=None):
             parser.error(
                 'Background playback requires --self-playback-soak and all background flags'
             )
+    tv_background = args.background_scenario == 'tv'
     if args.extended_voice_evidence and not args.p0_device_suite:
         parser.error('--extended-voice-evidence requires --p0-device-suite')
     if args.latency_scenario != 'qa' and not (args.qa_latency_suite or fixed_tool_case):
@@ -4224,7 +4301,7 @@ def main(argv=None):
     if args.require_render_overlap:
         minimum_batch_backend = RENDER_OVERLAP_MIN_BACKEND
     elif args.self_playback_soak:
-        minimum_batch_backend = ECHO_SOAK_MIN_BACKEND
+        minimum_batch_backend = TOOL_SAMPLE_MIN_BACKEND if tv_background else ECHO_SOAK_MIN_BACKEND
     elif args.latency_scenario == 'tool':
         minimum_batch_backend = (
             TOOL_REJECTION_MIN_BACKEND
@@ -4284,6 +4361,8 @@ def main(argv=None):
                 plan['self_playback_seconds_per_phase'] = ECHO_SOAK_SECONDS
                 if background_receipt is not None:
                     plan['background'] = background_receipt
+                if tv_background:
+                    plan['background_prime_tool_case'] = TV_PRIME_TOOL_CASE
             if args.interruption_suite:
                 plan['minimum_apk_code'] = STOP_VISUAL_MIN_APK_CODE
             if args.extended_voice_evidence:
@@ -4390,7 +4469,7 @@ def main(argv=None):
                 'runtime_english_wake_evidence_unsupported',
             )
             english_wake_counts(health)
-        if tool_comparison or args.latency_scenario == 'tool':
+        if tv_background or tool_comparison or args.latency_scenario == 'tool':
             require(
                 health.get('tool_sample_guard_supported') is True,
                 'backend_tool_sample_guard_unsupported',

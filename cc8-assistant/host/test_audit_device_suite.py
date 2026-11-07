@@ -400,6 +400,10 @@ def saved_suite(
                 background=background,
                 background_observed_seconds=report['echo_soak_evidence']['elapsed_seconds'],
             )
+            if background['kind'] == 'tv':
+                report['echo_soak_evidence'].update(
+                    background_dispatch_guarded=True, background_guard_rejections=0
+                )
         if 'synthetic_barge' in options:
             report['barge_evidence'] = {
                 'device_stop_applied': True,
@@ -428,6 +432,13 @@ def saved_suite(
                     ACOUSTIC_RESPONSE_METRIC: response,
                 },
             }
+            if background and background['kind'] == 'tv':
+                report['acoustic_evidence'].update(
+                    background_prime_tool_case=4,
+                    tool_sample_guarded=True,
+                    math_answer_status='matched',
+                    completed_tasks=1,
+                )
             if index in missing_acoustic:
                 report['acoustic_evidence']['response_acoustic_timing'] = {
                     'status': 'unconfirmed',
@@ -491,7 +502,7 @@ def saved_suite(
     if tool_coverage or tool_misses:
         backend = '0.15.28'
     if echo_soak:
-        backend = '0.14.63'
+        backend = '0.15.4' if background and background['kind'] == 'tv' else '0.14.63'
     return {**data, 'backend_version': backend, 'protocol_version': 2}
 
 
@@ -1035,7 +1046,19 @@ class AuditDeviceSuiteTests(unittest.TestCase):
         reviewed = audit(data)
         self.assertTrue(reviewed['verified'])
         self.assertEqual(reviewed['background'], background)
+        self.assertIs(reviewed['background_dispatch_guarded'], True)
         evidence = data['phases'][0]['report']['echo_soak_evidence']
+        del evidence['background_dispatch_guarded']
+        self.assertEqual(audit(data)['reason'], 'suite_echo_soak_evidence_incomplete')
+        evidence['background_dispatch_guarded'] = True
+        for count in (1, False, None):
+            evidence['background_guard_rejections'] = count
+            self.assertEqual(audit(data)['reason'], 'suite_echo_soak_evidence_incomplete')
+        evidence['background_guard_rejections'] = 0
+        prime = data['phases'][0]['report']['acoustic_evidence']
+        prime['background_prime_tool_case'] = 3
+        self.assertEqual(audit(data)['reason'], 'suite_echo_soak_evidence_incomplete')
+        prime['background_prime_tool_case'] = 4
         evidence['background_observed_seconds'] = 1
         self.assertEqual(audit(data)['reason'], 'suite_echo_soak_evidence_incomplete')
         evidence['background_observed_seconds'] = evidence['elapsed_seconds']

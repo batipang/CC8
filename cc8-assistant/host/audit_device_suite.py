@@ -345,6 +345,12 @@ def audit(
         )
         or (background is not None and (not echo_soak or not valid_background(background)))
         or (
+            background is not None
+            and background['kind'] == 'tv'
+            and tuple(map(int, backend.split('.')))
+            < tuple(map(int, TOOL_SAMPLE_MIN_BACKEND.split('.')))
+        )
+        or (
             has_soak_duration
             and (
                 not echo_soak
@@ -614,6 +620,8 @@ def audit(
         result['echo_soak_totals'] = reviewed['echo_soak_totals']
         if background is not None:
             result['background'] = background
+            if background['kind'] == 'tv':
+                result['background_dispatch_guarded'] = True
     return {**result, 'verified': True}
 
 

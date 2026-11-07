@@ -28,6 +28,7 @@ from device_smoke import (
     FAST_STOP_DEVICE_METRIC,
     STOP_CHECK,
     STOP_VISUAL_METRIC,
+    TV_PRIME_TOOL_CASE,
     WAKE_SELF_CHECK,
     WAKE_SELF_TEXT,
     CheckFailure,
@@ -654,9 +655,10 @@ class DeviceAutomationTests(unittest.TestCase):
         device.assert_not_called()
         request.assert_not_called()
         self.assertNotIn('private-fixture.wav', output.getvalue())
-        self.assertEqual(
-            json.loads(output.getvalue())['background'], {'kind': 'tv', 'sha256': 'c' * 64}
-        )
+        plan = json.loads(output.getvalue())
+        self.assertEqual(plan['background'], {'kind': 'tv', 'sha256': 'c' * 64})
+        self.assertEqual(plan['background_prime_tool_case'], TV_PRIME_TOOL_CASE)
+        self.assertEqual(plan['minimum_backend_version'], '0.15.4')
 
     def test_self_playback_soak_checks_new_receipts_and_never_retries(self):
         for case, expected in (
@@ -669,9 +671,22 @@ class DeviceAutomationTests(unittest.TestCase):
             ('lost_window', 'echo_soak_receipt_window_lost'),
             ('background_ended', 'echo_soak_background_ended'),
             ('background_played', None),
+            ('tv_played', None),
+            ('tv_voice_blocked', 'tv_background_voice_blocked'),
         ):
             with self.subTest(case=case), patch('device_smoke.ECHO_SOAK_SECONDS', 8):
-                run, device, health, now = self.fixture(capture=True, echo_soak=True)
+                tv = case.startswith('tv_')
+                background = (
+                    Mock(kind='tv', receipt={'kind': 'tv', 'sha256': 'a' * 64}) if tv else None
+                )
+                run, device, health, now = self.fixture(
+                    capture=True, echo_soak=True, awake_dialogue=True, background=background
+                )
+                if tv:
+                    run.tool_sample_token = 'a' * 32
+                    run.tv_capture_epoch = 7
+                    run.tv_prime_confirmed = True
+                    background.play.return_value = nullcontext(lambda: True)
                 health.update(
                     microphone_active=True,
                     waiting_for_wake=False,
@@ -687,6 +702,7 @@ class DeviceAutomationTests(unittest.TestCase):
                     microphone_active=True,
                     test_capture_limit_ms=run.capture_limit_ms,
                     test_capture_remaining_ms=run.capture_limit_ms,
+                    test_capture_epoch=7,
                 )
                 rows = [self.acoustic_row(request_id='old')]
                 cycles = []
@@ -712,6 +728,10 @@ class DeviceAutomationTests(unittest.TestCase):
                             rows.append(self.rejected_candidate(stages=stages))
                         if case == 'extra_voice':
                             rows.append(self.acoustic_row(request_id='external'))
+                        if case == 'tv_voice_blocked':
+                            rows.append(
+                                self.rejected_candidate(gate='tool_sample_guard', stages={})
+                            )
                         if case == 'fast_stop':
                             health['fast_stop_count'] += 1
                         if case == 'lost_window':
@@ -743,6 +763,9 @@ class DeviceAutomationTests(unittest.TestCase):
                     with self.assertRaisesRegex(CheckFailure, expected):
                         run.self_playback_soak()
                     self.assertEqual(cycles, [0])
+                    if tv:
+                        self.assertEqual(run.echo_soak_evidence['background_guard_rejections'], 1)
+                        self.assertEqual(run.echo_soak_evidence['admitted_voice_requests'], 0)
                 else:
                     run.self_playback_soak()
                     self.assertEqual(cycles, [0, 1])
@@ -756,7 +779,74 @@ class DeviceAutomationTests(unittest.TestCase):
                         self.assertEqual(
                             run.echo_soak_evidence['background'], run.background.receipt
                         )
+                    if tv:
+                        self.assertIs(run.echo_soak_evidence['background_dispatch_guarded'], True)
                 device.speak_probe.assert_not_called()
+
+    def test_tv_player_requires_a_confirmed_prime_on_the_same_capture(self):
+        background = Mock(kind='tv')
+        run, _, _, _ = self.fixture(
+            capture=True, awake_dialogue=True, echo_soak=True, background=background
+        )
+        with self.assertRaisesRegex(CheckFailure, 'tv_background_guarded_prime_unconfirmed'):
+            run.self_playback_soak()
+        run.tv_prime_confirmed = True
+        run.tool_sample_token = 'a' * 32
+        run.tv_capture_epoch = 1
+        run.capture_status = Mock(return_value={'test_capture_epoch': True})
+        with self.assertRaisesRegex(CheckFailure, 'tv_background_guarded_capture_unconfirmed'):
+            run.self_playback_soak()
+        background.play.assert_not_called()
+
+    def test_tv_primes_under_the_read_only_guard_before_opening_the_player(self):
+        question = SCENARIO_QUESTIONS['tool'][TV_PRIME_TOOL_CASE - 1]
+        for route in ('tool', 'qa'):
+            with self.subTest(route=route):
+                background = Mock(kind='tv')
+                row = self.acoustic_row(scenario=route)
+                row['stages']['tool_route_completed'] = 1
+                run, device, _, _ = self.acoustic_fixture(
+                    lambda _: [row],
+                    awake=True,
+                    echo_soak=True,
+                    background=background,
+                    tasks=[
+                        {
+                            'generation': 8,
+                            'status': 'completed',
+                            'title': question,
+                            'result': '本机只读终端计算结果：5，已通过本机只读终端命令确认',
+                        }
+                    ],
+                )
+                device_status = device.status()
+                device_status[0]['test_capture_epoch'] = 7
+                device.status.side_effect = lambda: device_status
+                original_request = run.request
+
+                def request(payload):
+                    if payload.get('operation') == 'tool_sample_arm':
+                        self.assertEqual(payload, {'operation': 'tool_sample_arm', 'case': 4})
+                        device.open.assert_not_called()
+                        return {'status': 'armed', 'token': 'a' * 32}
+                    if payload.get('operation') == 'tool_sample_begin':
+                        device.speak_probe.assert_not_called()
+                    return original_request(payload)
+
+                run.request = Mock(side_effect=request)
+                run.start_capture()
+                if route == 'tool':
+                    run.acoustic_probe(awake=True, quiet_seconds=0)
+                    self.assertTrue(run.tv_prime_confirmed)
+                else:
+                    with self.assertRaisesRegex(
+                        CheckFailure, 'tv_background_guarded_prime_unconfirmed'
+                    ):
+                        run.acoustic_probe(awake=True, quiet_seconds=0)
+                    self.assertFalse(run.tv_prime_confirmed)
+                run.request.assert_any_call({'operation': 'tool_sample_begin', 'token': 'a' * 32})
+                device.speak_probe.assert_called_once_with(question=question)
+                background.play.assert_not_called()
 
     def test_interruption_batch_dry_plan_never_contacts_device_or_backend(self):
         with (
@@ -2431,13 +2521,16 @@ class DeviceAutomationTests(unittest.TestCase):
             run.acoustic_probe()
         device.speak_probe.assert_not_called()
 
-    def acoustic_fixture(self, rows, *, awake=False, before=(), tasks=None, english_wake=False):
+    def acoustic_fixture(
+        self, rows, *, awake=False, before=(), tasks=None, english_wake=False, **options
+    ):
         run, device, health, now = self.fixture(
             capture=True,
             standby=not awake,
             acoustic=not awake,
             awake_dialogue=awake,
             english_wake=english_wake,
+            **options,
         )
         health['microphone_active'] = True
         health['waiting_for_wake'] = True
