@@ -10,6 +10,8 @@ from device_smoke import (
     AWAKE_DIALOGUE_CHECK,
     ENGLISH_WAKE_PHASES,
     ECHO_SOAK_MIN_BACKEND,
+    ECHO_SOAK_CHECK,
+    ECHO_SOAK_CAPTURE_MS,
     CheckFailure,
     ECHO_SOAK_SCOPE,
     ECHO_SOAK_SECONDS,
@@ -31,6 +33,7 @@ from device_smoke import (
     safe_tool_transcript_miss,
     standby_failure,
     tool_dialogue_failure_reason,
+    valid_tv_prime,
 )
 from mac_voice import validate_prepared_speech
 from private_output import read_private_json
@@ -92,6 +95,46 @@ def recorded_tool_failure(report, expected, previous):
         return None
     reason = tool_dialogue_failure_reason(report, expected)
     return reason if reason in TOOL_DIALOGUE_FAILURES else None
+
+
+def recorded_tv_failure(report, expected, background):
+    if not (
+        isinstance(report, dict)
+        and content_free_phase(report)
+        and report.get('state') == 'failed'
+        and report.get('cleanup_microphone_off_verified') is True
+        and valid_tv_prime(report.get('acoustic_evidence'))
+    ):
+        return None
+    checks = report.get('checks')
+    stop = expected.index(ECHO_SOAK_CHECK)
+    if not (
+        isinstance(checks, list)
+        and len(checks) == stop + 1
+        and all(isinstance(row, dict) for row in checks)
+        and [(row.get('name'), row.get('state')) for row in checks]
+        == [(name, 'passed') for name in expected[:stop]] + [(ECHO_SOAK_CHECK, 'failed')]
+        and checks[-1].get('reason') == 'tv_background_voice_blocked'
+    ):
+        return None
+    evidence = report.get('echo_soak_evidence')
+    if not (
+        isinstance(evidence, dict)
+        and evidence.get('background') == background
+        and evidence.get('background_dispatch_guarded') is True
+        and type(evidence.get('background_guard_rejections')) is int
+        and evidence['background_guard_rejections'] > 0
+        and counters_equal(evidence, ('admitted_voice_requests',), 0)
+        and bounded_number(evidence.get('elapsed_seconds'), 0, ECHO_SOAK_CAPTURE_MS / 1000)
+        and bounded_number(report.get('elapsed_seconds'), evidence['elapsed_seconds'], 86400)
+        and evidence.get('background_observed_seconds') == evidence['elapsed_seconds']
+    ):
+        return None
+    return {
+        'elapsed_seconds': evidence['elapsed_seconds'],
+        'background_guard_rejections': evidence['background_guard_rejections'],
+        'admitted_voice_requests': 0,
+    }
 
 
 ENGLISH_WAKE_SCOPES = ('english_wake_awake', 'english_wake_pair')
@@ -471,6 +514,22 @@ def audit(
             ):
                 # The batch rejected this phase before collecting evidence.
                 failure['recorded_failure'] = 'suite_source_changed'
+            elif (
+                background is not None
+                and background['kind'] == 'tv'
+                and identity is not None
+                and data.get('state') == phase.get('state') == 'failed'
+                and (
+                    not reports
+                    or all(report.get(key) == reports[-1].get(key) for key in SOURCE_FIELDS)
+                )
+            ):
+                observed = recorded_tv_failure(report, phase['expected_checks'], background)
+                if observed is not None:
+                    failure.update(
+                        recorded_failure='tv_background_voice_blocked',
+                        partial_background_observation=observed,
+                    )
             elif (
                 tool_guard_required
                 and identity is not None
