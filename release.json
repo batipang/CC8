@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "p0-task-stop-outcomes-20261108.1",
+  "release_id": "availability-recovery-20261108.1",
   "backend": {
     "version": "0.15.55"
   },
   "assistant": {
-    "version": "0.9.47",
-    "version_code": 84,
+    "version": "0.9.50",
+    "version_code": 87,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {
