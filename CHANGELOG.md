@@ -1,5 +1,10 @@
 # Changelog
 
+## Diagnostics 1.0.4 — compare inputs with a known reference
+
+- Add bounded RAM-only block-mean comparison with known reference audio, including silent controls and competing peaks.
+- Report per-channel DC and AC levels separately; keep missing and cancelled comparisons explicit.
+
 ## Diagnostics 1.0.3 — compare input channels during reference playback
 
 - Add optional device reference playback to bounded channel statistics.

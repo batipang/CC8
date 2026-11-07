@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "release_id": "p0-channel-reference-20261107.1",
+  "release_id": "p0-channel-reference-match-20261107.1",
   "backend": {
     "version": "0.15.44"
   },
@@ -10,8 +10,8 @@
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {
-    "version": "1.0.3",
-    "version_code": 4,
+    "version": "1.0.4",
+    "version_code": 5,
     "package": "com.happyhome.cc8diagnostics"
   },
   "protocol": {
