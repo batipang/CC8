@@ -4,6 +4,7 @@ import java.io.*;
 import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.Random;
+import java.util.concurrent.CountDownLatch;
 
 public final class HostTests {
   private static int count;
@@ -118,6 +119,7 @@ public final class HostTests {
         Math.abs(quad.acDbfs(3) - 10 * Math.log10(125.0 / (32768.0 * 32768.0))) < 1e-10,
         "DC is excluded from AC power");
     referenceChecks();
+    ramChecks();
     System.out.println("Host audio tests passed: " + count + " checks");
   }
 
@@ -219,5 +221,191 @@ public final class HostTests {
     } finally {
       Thread.interrupted();
     }
+  }
+
+  private static boolean allZero(byte[] bytes) {
+    for (byte value : bytes) if (value != 0) return false;
+    return true;
+  }
+
+  private static byte[] fixtureBytes(int size) {
+    byte[] bytes = new byte[size];
+    for (int i = 0; i < size; i++) bytes[i] = (byte) (i * 17 + 11);
+    return bytes;
+  }
+
+  private static void ramChecks() throws Exception {
+    String a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    int minimum = RamPcmLease.RATE * RamPcmLease.FRAME_BYTES;
+    RamPcmLease lease = new RamPcmLease();
+    check(
+        !RamPcmLease.validToken(null)
+            && !RamPcmLease.validToken(a.toUpperCase())
+            && RamPcmLease.validToken(a),
+        "Only bounded lowercase request tokens can arm analysis");
+    check(
+        lease.status(0).remainingBytes == 0 && lease.read(a, 0, 0) == null,
+        "No PCM before an explicit analysis");
+    long owner = lease.begin(a, 7, 100);
+    check(lease.read(a, 0, 101) == null, "Pending capture cannot be read");
+    byte[] data = fixtureBytes(minimum + 8), expected = data.clone();
+    check(lease.publish(owner, data, data.length, 200), "Completed owner can publish");
+    check(
+        lease.read(b, 0, 201) == null && Arrays.equals(data, expected),
+        "Wrong token cannot consume or clear valid PCM");
+    ByteArrayOutputStream assembled = new ByteArrayOutputStream();
+    int offset = 0, chunks = 0;
+    while (offset < expected.length) {
+      RamPcmLease.Chunk chunk = lease.read(a, offset, 202);
+      check(
+          chunk != null
+              && chunk.offset == offset
+              && chunk.totalBytes == expected.length
+              && chunk.source == 7
+              && chunk.bytes.length <= RamPcmLease.CHUNK_BYTES,
+          "Ordered bounded chunk metadata");
+      assembled.write(chunk.bytes);
+      if (offset == 0)
+        check(
+            "b7084ae7348d7a63cc6dac248330f6fb18ca815966f25d1c09b4e5b6b01079e1"
+                .equals(chunk.sha256()),
+            "Chunk digest agrees with an independent SHA-256 fixture");
+      offset += chunk.bytes.length;
+      chunks++;
+      Arrays.fill(chunk.bytes, (byte) 0);
+    }
+    check(
+        chunks == 3 && Arrays.equals(assembled.toByteArray(), expected),
+        "Partial final frame-aligned chunk reconstructs exactly");
+    check(
+        allZero(data)
+            && "consumed".equals(lease.status(203).state)
+            && lease.read(a, 0, 204) == null,
+        "Full consumption clears owner memory and cannot replay");
+
+    owner = lease.begin(a, 6, 1000);
+    data = fixtureBytes(minimum);
+    lease.publish(owner, data, data.length, 1001);
+    lease.read(a, 0, 1002);
+    check(
+        lease.read(a, 0, 1003) == null
+            && allZero(data)
+            && "invalid_cursor".equals(lease.status(1004).state),
+        "Unconfirmed earlier chunks invalidate the remaining lease");
+
+    owner = lease.begin(a, 1, 2000);
+    data = fixtureBytes(minimum);
+    lease.publish(owner, data, data.length, 2001);
+    lease.clear();
+    check(allZero(data) && lease.read(a, 0, 2002) == null, "Stop or background clears ready PCM");
+    byte[] stale = fixtureBytes(minimum);
+    long newer = lease.begin(b, 6, 3000);
+    check(
+        !lease.publish(owner, stale, stale.length, 3001)
+            && allZero(stale)
+            && "pending".equals(lease.status(3002).state),
+        "Late producer cannot overwrite a newer generation");
+    data = fixtureBytes(minimum);
+    check(lease.publish(newer, data, data.length, 3003), "New capture survives a stale producer");
+    check(
+        !lease.discardToken(a) && "ready".equals(lease.status(3004).state),
+        "Old client cleanup cannot discard a new token");
+    lease.discard(owner);
+    check("ready".equals(lease.status(3004).state), "Stale cleanup cannot clear a newer capture");
+    check(
+        lease.read(b, 0, 3000 + RamPcmLease.LIFETIME_MS) == null
+            && allZero(data)
+            && "expired".equals(lease.status(3000 + RamPcmLease.LIFETIME_MS).state),
+        "Exact deadline expires and wipes PCM");
+
+    owner = lease.begin(a, 1, 4000);
+    data = fixtureBytes(minimum);
+    check(
+        !lease.publish(owner, data, data.length, 4000 + RamPcmLease.LIFETIME_MS) && allZero(data),
+        "Expired producer cannot publish");
+    owner = lease.begin(a, 1, 5000);
+    data = fixtureBytes(minimum);
+    lease.publish(owner, data, data.length, 5001);
+    check(lease.read(a, 0, 4999) == null && allZero(data), "Clock rollback fails closed");
+
+    owner = lease.begin(a, 7, 6000);
+    data = fixtureBytes(minimum);
+    lease.publish(owner, data, data.length, 6001);
+    check(
+        !lease.publish(owner, data, data.length, 6002)
+            && allZero(data)
+            && "invalid_publish".equals(lease.status(6003).state),
+        "Duplicate producer cannot leave a false ready result");
+    boolean rejected = false;
+    data = fixtureBytes(RamPcmLease.MAX_BYTES + 8);
+    owner = lease.begin(a, 7, 7000);
+    try {
+      lease.publish(owner, data, minimum, 7001);
+    } catch (IllegalArgumentException e) {
+      rejected = true;
+    }
+    check(
+        rejected && allZero(data) && "invalid_extent".equals(lease.status(7002).state),
+        "Oversized backing storage is rejected and wiped");
+    rejected = false;
+    try {
+      lease.begin(a, 9, 8000);
+    } catch (IllegalArgumentException e) {
+      rejected = true;
+    }
+    check(rejected, "Unverified input source cannot arm RAM capture");
+
+    long monoOwner = lease.begin(a, 7, RamPcmLease.Profile.MONO, 8100);
+    byte[] mono = fixtureBytes(32008);
+    check(
+        lease.publish(monoOwner, mono, mono.length, 8101),
+        "Mono baseline has its own valid PCM extent");
+    RamPcmLease.Chunk monoChunk = lease.read(a, 0, 8102);
+    check(
+        monoChunk.sampleRate == 16000
+            && monoChunk.channels == 1
+            && monoChunk.totalBytes == 32008
+            && monoChunk.bytes.length == 32008
+            && allZero(mono),
+        "Mono baseline metadata and one-shot cleanup");
+    monoOwner = lease.begin(a, 7, RamPcmLease.Profile.MONO, 8200);
+    mono = fixtureBytes(32008);
+    lease.begin(b, 7, RamPcmLease.Profile.QUAD, 8201);
+    check(
+        !lease.publish(monoOwner, mono, mono.length, 8202)
+            && allZero(mono)
+            && "pending".equals(lease.status(8203).state),
+        "Stale mono producer cannot fail or alter a new quad capture");
+
+    owner = lease.begin(a, 7, 9000);
+    data = fixtureBytes(minimum);
+    lease.publish(owner, data, data.length, 9001);
+    RamPcmLease.Chunk[] results = new RamPcmLease.Chunk[2];
+    CountDownLatch gate = new CountDownLatch(1);
+    Thread[] readers = new Thread[2];
+    for (int i = 0; i < readers.length; i++) {
+      final int index = i;
+      readers[i] =
+          new Thread(
+              () -> {
+                try {
+                  gate.await();
+                  results[index] = lease.read(a, 0, 9002);
+                } catch (InterruptedException error) {
+                  Thread.currentThread().interrupt();
+                }
+              });
+      readers[i].setDaemon(true);
+      readers[i].start();
+    }
+    gate.countDown();
+    for (Thread reader : readers) reader.join(2000);
+    check(
+        !readers[0].isAlive() && !readers[1].isAlive(),
+        "Concurrent read completes within the test budget");
+    check(
+        (results[0] == null ? 0 : 1) + (results[1] == null ? 0 : 1) == 1 && allZero(data),
+        "Concurrent readers cannot receive the same chunk twice");
+    lease.clear();
   }
 }

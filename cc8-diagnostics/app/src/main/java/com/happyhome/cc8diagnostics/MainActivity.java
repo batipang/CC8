@@ -11,6 +11,7 @@ import android.graphics.drawable.GradientDrawable;
 import android.media.MediaRecorder;
 import android.net.Uri;
 import android.os.*;
+import android.util.Base64;
 import android.view.*;
 import android.widget.*;
 import org.json.*;
@@ -36,7 +37,33 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
   private LinearLayout pageHost;
   private TextView globalStatus, levelText, resultText;
   private ProgressBar levelBar, timeBar;
-  private Button stopButton, replayButton;
+  private Button stopButton, replayButton, analysisButton;
+  private String analysisToken;
+  private int analysisSourceIndex;
+  private boolean analysisPlayback;
+  private RamPcmLease.Profile analysisProfile;
+  private boolean analysisUsbConnected, analysisUsbConfigured, usbReceiverRegistered;
+  private int analysisUsbLosses;
+  private final BroadcastReceiver usbReceiver =
+      new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+          if (destroyed) return;
+          boolean wasReady = analysisUsbReady();
+          analysisUsbConnected = intent.getBooleanExtra("connected", false);
+          analysisUsbConfigured = intent.getBooleanExtra("configured", false);
+          if (wasReady && !analysisUsbReady() && analysisUsbLosses < Integer.MAX_VALUE)
+            analysisUsbLosses++;
+          String state = probe.analysisStatus().optString("state");
+          if (!analysisUsbReady()
+              && (analysisToken != null || "pending".equals(state) || "ready".equals(state))) {
+            analysisToken = null;
+            probe.cancel();
+            status = "USB 已断开，临时分析已清除";
+          }
+          updateStatus();
+        }
+      };
   private int page = 0, sourceIndex = 2, rateIndex = 0;
   private boolean requestAec = true,
       communicationMode = false,
@@ -78,7 +105,25 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
     super.onCreate(saved);
     probe = new AudioProbe(this, this);
     buildShell();
+    try {
+      IntentFilter filter = new IntentFilter("android.hardware.usb.action.USB_STATE");
+      Intent sticky =
+          Build.VERSION.SDK_INT >= 33
+              ? registerReceiver(usbReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+              : registerReceiver(usbReceiver, filter);
+      usbReceiverRegistered = true;
+      analysisUsbConnected = sticky != null && sticky.getBooleanExtra("connected", false);
+      analysisUsbConfigured = sticky != null && sticky.getBooleanExtra("configured", false);
+    } catch (RuntimeException unavailable) {
+      // Offline diagnostics still work; USB-bound analysis stays unavailable.
+      analysisUsbConnected = analysisUsbConfigured = false;
+    }
     scan();
+  }
+
+  // A cable can remain connected while the host drops the configured USB data link.
+  private boolean analysisUsbReady() {
+    return analysisUsbConnected && analysisUsbConfigured;
   }
 
   private int dp(float value) {
@@ -158,8 +203,10 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
         button(
             "停止测试",
             () -> {
+              analysisToken = null;
+              boolean wasRunning = probe.isRunning();
               probe.cancel();
-              status = "正在停止并释放音频设备…";
+              status = wasRunning ? "正在停止并释放音频设备…" : "测试已停止，临时分析已清除";
               updateStatus();
             });
     stopButton.setEnabled(false);
@@ -206,6 +253,7 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
     timeBar = null;
     resultText = null;
     replayButton = null;
+    analysisButton = null;
     if (page == 0) renderDevice();
     else if (page == 1) renderAudio();
     else renderExport();
@@ -352,7 +400,7 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
     spinner(pageHost, "录音输入源", SOURCE_NAMES, sourceIndex, index -> sourceIndex = index);
     spinner(
         pageHost,
-        "请求采样率 / 单声道 / PCM16",
+        "请求采样率 / PCM16（录音回放为单声道）",
         new String[] {"16000 Hz（建议先测）", "48000 Hz", "44100 Hz"},
         rateIndex,
         index -> rateIndex = index);
@@ -368,6 +416,9 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
         button("双声道统计 6 秒", () -> ensureMicrophone(() -> startChannels(2))),
         button("四声道统计 6 秒", () -> ensureMicrophone(() -> startChannels(4))));
     note(pageHost, "多声道检测沿用上方输入源和采样率，仅保存各通道电平、相关性与重复比例。");
+    analysisButton = button("参考通道分析 6 秒", () -> ensureMicrophone(this::startAnalysis));
+    fullButton(pageHost, analysisButton);
+    note(pageHost, "Mac 发起分析后可用：16 kHz 单声道或 48 kHz 四路，采样仅临时保留在内存中，停止或离开前台即清除。");
     CheckBox aec = new CheckBox(this);
     aec.setText(R.string.aec_option);
     aec.setTextColor(INK);
@@ -392,6 +443,7 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
         button(
             "回放最近录音",
             () -> {
+              analysisToken = null;
               if (probe.replay()) {
                 status = "准备回放最近录音…";
                 updateStatus();
@@ -418,6 +470,7 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
   }
 
   private void startTest(String mode) {
+    analysisToken = null;
     if (!foreground) {
       toast("请在应用前台开始测试");
       return;
@@ -431,6 +484,7 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
   }
 
   private void startChannels(int channels) {
+    analysisToken = null;
     if (!foreground) {
       toast("请在应用前台开始测试");
       return;
@@ -439,6 +493,37 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
       status = "正在准备多声道检测…";
       elapsed = 0;
       lastLevel = -120;
+      updateStatus();
+    } else toast("请先停止当前测试");
+  }
+
+  private void startAnalysis() {
+    String token = analysisToken;
+    analysisToken = null;
+    if (!foreground
+        || !analysisUsbReady()
+        || token == null
+        || sourceIndex > 2
+        || analysisProfile == null
+        || RATES[rateIndex] != analysisProfile.rate
+        || sourceIndex != analysisSourceIndex
+        || channelReference != analysisPlayback) {
+      toast("请先在 Mac 准备参考通道分析");
+      updateStatus();
+      return;
+    }
+    if (probe.startReferenceAnalysis(
+        SOURCES[sourceIndex], channelReference, token, analysisProfile)) {
+      status = "正在准备参考通道分析，采样不写文件…";
+      elapsed = 0;
+      lastLevel = -120;
+      ui.postDelayed(
+          () -> {
+            probe.expireAnalysis();
+            if ("expired".equals(probe.analysisStatus().optString("state"))) status = "临时分析已过期并清除";
+            updateStatus();
+          },
+          RamPcmLease.LIFETIME_MS);
       updateStatus();
     } else toast("请先停止当前测试");
   }
@@ -512,14 +597,21 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
           tests.add(result);
           while (tests.size() > 20) tests.remove(0);
           String outcome = result.optString("status");
-          status =
-              "completed".equals(outcome)
-                  ? ("channel_capture".equals(result.optString("type"))
-                      ? "多声道统计完成，可导出数字报告"
-                      : "测试完成，请回放并导出报告")
-                  : "cancelled".equals(outcome)
-                      ? "测试已停止，音频设备已释放"
-                      : "测试失败：" + result.optString("error", "未知错误");
+          // Keep the current test's UI if this completion was delivered after a new start.
+          if (!probe.isRunning())
+            status =
+                "completed".equals(outcome)
+                    ? (result.optBoolean("ram_analysis_requested")
+                        ? (result.optBoolean("ram_analysis_available")
+                                && "ready".equals(probe.analysisStatus().optString("state"))
+                            ? "采样已关闭，临时分析就绪，等待 Mac 读取"
+                            : "采样已关闭，临时分析已清除或过期")
+                        : "channel_capture".equals(result.optString("type"))
+                            ? "多声道统计完成，可导出数字报告"
+                            : "测试完成，请回放并导出报告")
+                    : "cancelled".equals(outcome)
+                        ? "测试已停止，音频设备已释放"
+                        : "测试失败：" + result.optString("error", "未知错误");
           updatePermission();
           saveSessionSnapshot();
           if (resultText != null) resultText.setText(testSummary());
@@ -531,11 +623,14 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
     if (globalStatus == null) return;
     boolean busy = probe != null && probe.isRunning();
     globalStatus.setText(status);
-    stopButton.setEnabled(busy);
+    stopButton.setEnabled(
+        busy || analysisToken != null || "ready".equals(probe.analysisStatus().optString("state")));
     if (foreground && (busy || page == 1 || page == 2))
       getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
     else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
     for (Button button : audioButtons) button.setEnabled(!busy);
+    if (analysisButton != null)
+      analysisButton.setEnabled(!busy && foreground && analysisUsbReady() && analysisToken != null);
     for (View view : audioSettings) view.setEnabled(!busy);
     if (replayButton != null) replayButton.setEnabled(!busy && probe.getLastCapture() != null);
     if (levelText != null)
@@ -592,6 +687,12 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
     JSONArray results = new JSONArray();
     for (JSONObject result : tests) results.put(result);
     DeviceReport.put(copy, "audio_tests", results);
+    if (probe != null) DeviceReport.put(copy, "ram_analysis", probe.analysisStatus());
+    if (probe != null) DeviceReport.put(copy, "audio_probe_running", probe.isRunning());
+    DeviceReport.put(copy, "ram_analysis_usb_connected", analysisUsbConnected);
+    DeviceReport.put(copy, "ram_analysis_usb_configured", analysisUsbConfigured);
+    DeviceReport.put(copy, "ram_analysis_usb_ready", analysisUsbReady());
+    DeviceReport.put(copy, "ram_analysis_usb_losses", analysisUsbLosses);
     return copy;
   }
 
@@ -650,7 +751,7 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
   @Override
   public void dump(String prefix, FileDescriptor descriptor, PrintWriter writer, String[] args) {
     // Activity dumps are gated by Android's DUMP permission. Expose existing
-    // diagnostics and reference playback only; never a recording command.
+    // Prepare visible controls or read bounded results; never a recording command.
     String operation = args != null && args.length > 0 ? args[0] : "snapshot";
     try {
       if ("snapshot".equals(operation)) {
@@ -691,9 +792,112 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
         requestAec = Boolean.parseBoolean(args[3]);
         communicationMode = Boolean.parseBoolean(args[4]);
         channelReference = args.length == 6 && Boolean.parseBoolean(args[5]);
+        analysisToken = null;
+        probe.clearAnalysis();
         page = 1;
         renderPage();
         writer.println("CC8_AUDIO_PAGE_READY; no recording started");
+      } else if ("prepare-reference-analysis".equals(operation)) {
+        if (!foreground || !analysisUsbReady() || probe.isRunning()) {
+          writer.println("ERROR: foreground idle activity with USB required");
+          return;
+        }
+        if (args.length != 4
+            || (!"mono".equals(args[3]) && !"quad".equals(args[3]))
+            || (!"true".equals(args[2]) && !"false".equals(args[2])))
+          throw new IllegalArgumentException(
+              "Expected source index, playback flag and mono/quad profile");
+        int source = Integer.parseInt(args[1]);
+        if (source < 0 || source > 2)
+          throw new IllegalArgumentException("Unsupported analysis source");
+        sourceIndex = source;
+        analysisProfile =
+            "mono".equals(args[3]) ? RamPcmLease.Profile.MONO : RamPcmLease.Profile.QUAD;
+        rateIndex = analysisProfile == RamPcmLease.Profile.MONO ? 0 : 1;
+        requestAec = communicationMode = false;
+        channelReference = Boolean.parseBoolean(args[2]);
+        probe.clearAnalysis();
+        analysisToken = UUID.randomUUID().toString().replace("-", "");
+        analysisSourceIndex = source;
+        analysisPlayback = channelReference;
+        final String prepared = analysisToken;
+        ui.postDelayed(
+            () -> {
+              if (prepared.equals(analysisToken)) {
+                analysisToken = null;
+                status = "分析准备已过期，请在 Mac 重新发起";
+                updateStatus();
+              }
+            },
+            30000);
+        page = 1;
+        renderPage();
+        status = "分析已准备，请点“参考通道分析 6 秒”";
+        updateStatus();
+        writer.println("CC8_ANALYSIS_PAGE_READY " + prepared + "; no recording started");
+      } else if ("clear-reference-analysis".equals(operation)) {
+        if (args.length != 2 || !RamPcmLease.validToken(args[1]))
+          throw new IllegalArgumentException("Expected analysis token");
+        boolean discarded = probe.discardAnalysis(args[1]);
+        if (args[1].equals(analysisToken)) {
+          analysisToken = null;
+          discarded = true;
+        }
+        if (discarded) status = "临时分析已清除";
+        updateStatus();
+        writer.println("CC8_ANALYSIS_CLEARED");
+      } else if ("read-reference-analysis".equals(operation)) {
+        if (!foreground
+            || !analysisUsbReady()
+            || probe.isRunning()
+            || args.length != 3
+            || !RamPcmLease.validToken(args[1])
+            || !args[2].matches("[0-9]{1,7}")) {
+          writer.println("ERROR: foreground completed analysis required");
+          return;
+        }
+        RamPcmLease.Chunk chunk = probe.readAnalysis(args[1], Integer.parseInt(args[2]));
+        if (chunk == null) {
+          String state = probe.analysisStatus().optString("state");
+          if ("invalid_cursor".equals(state)
+              || "expired".equals(state)
+              || "consumed".equals(state)) {
+            status = "临时分析不可读取，采样已清除";
+            updateStatus();
+          }
+          writer.println("CC8_ANALYSIS_UNAVAILABLE");
+          return;
+        }
+        try {
+          writer.println(
+              "CC8_ANALYSIS_CHUNK "
+                  + DeviceReport.object(
+                      "offset_bytes",
+                      chunk.offset,
+                      "total_bytes",
+                      chunk.totalBytes,
+                      "chunk_bytes",
+                      chunk.bytes.length,
+                      "sample_rate",
+                      chunk.sampleRate,
+                      "channels",
+                      chunk.channels,
+                      "source",
+                      chunk.source,
+                      "sha256",
+                      chunk.sha256()));
+          writer.println("CC8_ANALYSIS_PCM " + Base64.encodeToString(chunk.bytes, Base64.NO_WRAP));
+          if (writer.checkError()) {
+            probe.clearAnalysis();
+            status = "分析传输未确认，临时采样已清除";
+          } else if (chunk.offset + chunk.bytes.length == chunk.totalBytes) status = "临时采样已读出并清除";
+          updateStatus();
+        } catch (Exception error) {
+          probe.clearAnalysis();
+          throw error;
+        } finally {
+          Arrays.fill(chunk.bytes, (byte) 0);
+        }
       } else writer.println("ERROR: unknown diagnostic operation");
     } catch (Exception error) {
       writer.println("ERROR: " + error.getClass().getSimpleName() + ": " + error.getMessage());
@@ -715,6 +919,8 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
                 toast("请先停止音频测试");
                 return;
               }
+              analysisToken = null;
+              probe.clearAnalysis();
               File[] files =
                   getCacheDir()
                       .listFiles(
@@ -841,6 +1047,8 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
   @Override
   protected void onPause() {
     foreground = false;
+    analysisToken = null;
+    if (probe != null) probe.clearAnalysis();
     getWindow()
         .clearFlags(
             WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
@@ -863,6 +1071,14 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
     destroyed = true;
     ++scanGeneration;
     if (probe != null) probe.close();
+    if (usbReceiverRegistered) {
+      try {
+        unregisterReceiver(usbReceiver);
+      } catch (IllegalArgumentException ignored) {
+        // A failed registration never leaves recording or a readable lease behind.
+      }
+      usbReceiverRegistered = false;
+    }
     reader.shutdownNow();
     ui.removeCallbacksAndMessages(null);
     super.onDestroy();

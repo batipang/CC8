@@ -11,6 +11,7 @@ import android.os.SystemClock;
 import org.json.*;
 import java.io.*;
 import java.util.Locale;
+import java.util.Arrays;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -25,6 +26,7 @@ public final class AudioProbe {
   private final Listener listener;
   private final ExecutorService executor = Executors.newSingleThreadExecutor();
   private final AtomicBoolean running = new AtomicBoolean(false);
+  private final RamPcmLease ramAnalysis = new RamPcmLease();
   private final Object lock = new Object();
   private volatile boolean cancelled;
   private AudioRecord currentRecorder;
@@ -59,6 +61,7 @@ public final class AudioProbe {
       String mode, int source, int sampleRate, boolean aec, boolean communicationMode) {
     if (!running.compareAndSet(false, true)) return false;
     cancelled = false;
+    ramAnalysis.clear();
     executor.execute(() -> run(mode, source, sampleRate, aec, communicationMode));
     return true;
   }
@@ -68,24 +71,77 @@ public final class AudioProbe {
   }
 
   public boolean startChannels(int source, int sampleRate, int channels, boolean playReference) {
-    if (channels != 2 && channels != 4)
+    return startChannels(source, sampleRate, channels, playReference, null);
+  }
+
+  public boolean startReferenceAnalysis(
+      int source, boolean playReference, String token, RamPcmLease.Profile profile) {
+    if (profile == null
+        || !RamPcmLease.validToken(token)
+        || (source != 1 && source != 6 && source != 7))
+      throw new IllegalArgumentException("Invalid RAM analysis request");
+    return startChannels(source, profile.rate, profile.channels, playReference, token);
+  }
+
+  private boolean startChannels(
+      int source, int sampleRate, int channels, boolean playReference, String token) {
+    if (channels != 2 && channels != 4 && !(token != null && channels == 1))
       throw new IllegalArgumentException("Expected two or four channels");
+    RamPcmLease.Profile profile =
+        token == null ? null : RamPcmLease.Profile.forLayout(sampleRate, channels);
     if (!running.compareAndSet(false, true)) return false;
     cancelled = false;
-    executor.execute(() -> runChannels(source, sampleRate, channels, playReference));
+    ramAnalysis.clear();
+    long analysisOwner =
+        token == null
+            ? -1
+            : ramAnalysis.begin(token, source, profile, SystemClock.elapsedRealtime());
+    try {
+      executor.execute(
+          () -> runChannels(source, sampleRate, channels, playReference, analysisOwner));
+    } catch (RejectedExecutionException closed) {
+      ramAnalysis.discard(analysisOwner);
+      running.set(false);
+      return false;
+    }
     return true;
+  }
+
+  public JSONObject analysisStatus() {
+    RamPcmLease.Status state = ramAnalysis.status(SystemClock.elapsedRealtime());
+    return DeviceReport.object("state", state.state, "remaining_bytes", state.remainingBytes);
+  }
+
+  public RamPcmLease.Chunk readAnalysis(String token, int offset) {
+    return running.get() ? null : ramAnalysis.read(token, offset, SystemClock.elapsedRealtime());
+  }
+
+  public void clearAnalysis() {
+    ramAnalysis.clear();
+  }
+
+  public boolean discardAnalysis(String token) {
+    boolean owned = ramAnalysis.discardToken(token);
+    if (owned) cancel();
+    return owned;
+  }
+
+  public void expireAnalysis() {
+    ramAnalysis.status(SystemClock.elapsedRealtime());
   }
 
   public boolean replay() {
     File file = lastCapture;
     if (file == null || !file.exists() || !running.compareAndSet(false, true)) return false;
     cancelled = false;
+    ramAnalysis.clear();
     executor.execute(() -> playCapture(file));
     return true;
   }
 
   public void cancel() {
     cancelled = true;
+    ramAnalysis.clear();
     synchronized (lock) {
       try {
         if (currentRecorder != null
@@ -439,7 +495,8 @@ public final class AudioProbe {
   }
 
   @SuppressLint("MissingPermission") // Rechecked before constructing the recorder.
-  private void runChannels(int source, int rate, int channels, boolean playReference) {
+  private void runChannels(
+      int source, int rate, int channels, boolean playReference, long analysisOwner) {
     JSONObject result =
         DeviceReport.object(
             "type",
@@ -460,6 +517,10 @@ public final class AudioProbe {
     AudioTrack track = null;
     ChannelMath math = new ChannelMath(channels);
     ReferenceMatch inputMatch = null, referenceMatch = null;
+    RamPcmLease.Profile analysisProfile =
+        analysisOwner < 0 ? null : RamPcmLease.Profile.forLayout(rate, channels);
+    byte[] analysisPcm = null;
+    int analysisBytes = 0;
     long started = SystemClock.elapsedRealtime(), lastUi = started;
     boolean aborted = false;
     String error = null;
@@ -476,7 +537,8 @@ public final class AudioProbe {
       if (minimum <= 0) throw new IOException("Unsupported recording buffer");
       AudioFormat.Builder format =
           new AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT).setSampleRate(rate);
-      if (channels == 2) format.setChannelMask(AudioFormat.CHANNEL_IN_STEREO);
+      if (channels == 1) format.setChannelMask(AudioFormat.CHANNEL_IN_MONO);
+      else if (channels == 2) format.setChannelMask(AudioFormat.CHANNEL_IN_STEREO);
       else format.setChannelIndexMask((1 << channels) - 1);
       record =
           new AudioRecord.Builder()
@@ -494,6 +556,11 @@ public final class AudioProbe {
       DeviceReport.put(result, "actual_channels", record.getChannelCount());
       DeviceReport.put(result, "channel_index_mask", record.getFormat().getChannelIndexMask());
       DeviceReport.put(result, "channel_mask", record.getFormat().getChannelMask());
+      if (analysisOwner >= 0) {
+        if (record.getSampleRate() != analysisProfile.rate || channels != analysisProfile.channels)
+          throw new IOException("RAM analysis layout changed");
+        analysisPcm = new byte[analysisProfile.maxBytes];
+      }
       inputMatch = new ReferenceMatch(record.getSampleRate(), channels);
       try {
         WavCodec.Pcm reference;
@@ -523,10 +590,23 @@ public final class AudioProbe {
       short[] buffer = new short[Math.max(160, rate / 100) * channels];
       while (SystemClock.elapsedRealtime() - started < 6000) {
         checkCancelled();
-        int count = record.read(buffer, 0, buffer.length, AudioRecord.READ_NON_BLOCKING);
-        if (count < 0) throw new IOException("Channel read failed: " + count);
+        int limit =
+            analysisPcm == null
+                ? buffer.length
+                : Math.min(buffer.length, (analysisPcm.length - analysisBytes) / 2);
+        if (limit == 0) break;
+        int count = record.read(buffer, 0, limit, AudioRecord.READ_NON_BLOCKING);
+        if (count < 0 || count > limit) throw new IOException("Channel read failed: " + count);
         math.add(buffer, 0, count);
         inputMatch.add(buffer, 0, count);
+        if (analysisPcm != null) {
+          if (count > (analysisPcm.length - analysisBytes) / 2)
+            throw new IOException("RAM analysis limit exceeded");
+          for (int i = 0; i < count; i++) {
+            analysisPcm[analysisBytes++] = (byte) buffer[i];
+            analysisPcm[analysisBytes++] = (byte) (buffer[i] >>> 8);
+          }
+        }
         if (count == 0) Thread.sleep(5);
         long now = SystemClock.elapsedRealtime();
         if (now - lastUi >= 180) {
@@ -535,6 +615,8 @@ public final class AudioProbe {
         }
       }
       if (math.frames < rate / 2) throw new IOException("Insufficient channel frames");
+      if (analysisPcm != null && (math.frames < rate || math.pendingSamples() != 0))
+        throw new IOException("Incomplete RAM analysis window");
     } catch (InterruptedException e) {
       aborted = true;
     } catch (Exception | LinkageError e) {
@@ -620,7 +702,29 @@ public final class AudioProbe {
       DeviceReport.put(result, "frames", math.frames);
       DeviceReport.put(result, "trailing_samples", math.pendingSamples());
       DeviceReport.put(result, "elapsed_ms", SystemClock.elapsedRealtime() - started);
+      boolean available = false;
+      if (analysisPcm != null) {
+        if (!aborted && error == null)
+          available =
+              ramAnalysis.publish(
+                  analysisOwner, analysisPcm, analysisBytes, SystemClock.elapsedRealtime());
+        else {
+          Arrays.fill(analysisPcm, (byte) 0);
+          ramAnalysis.discard(analysisOwner);
+        }
+      } else if (analysisOwner >= 0) ramAnalysis.discard(analysisOwner);
+      aborted |= cancelled || Thread.currentThread().isInterrupted();
+      if (aborted) {
+        ramAnalysis.discard(analysisOwner);
+        available = false;
+        DeviceReport.put(result, "reference_comparison_cancelled", true);
+        DeviceReport.put(result, "reference_comparison_status", "cancelled");
+        DeviceReport.put(result, "channel_reference_matches", new JSONArray());
+      }
       DeviceReport.put(result, "cancelled", aborted);
+      DeviceReport.put(result, "ram_analysis_requested", analysisOwner >= 0);
+      DeviceReport.put(result, "ram_analysis_available", available);
+      DeviceReport.put(result, "ram_analysis_bytes", available ? analysisBytes : 0);
       DeviceReport.put(
           result, "status", aborted ? "cancelled" : error == null ? "completed" : "error");
       if (error != null) DeviceReport.put(result, "error", error);

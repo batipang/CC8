@@ -25,6 +25,7 @@ def main():
                 str(source / 'AudioMath.java'),
                 str(source / 'ChannelMath.java'),
                 str(source / 'ReferenceMatch.java'),
+                str(source / 'RamPcmLease.java'),
                 str(source / 'WavCodec.java'),
                 str(project / 'tests/HostTests.java'),
             ],
