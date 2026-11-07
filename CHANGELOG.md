@@ -1,5 +1,10 @@
 # Changelog
 
+## Backend 0.15.42 — keep echo reference errors with their candidate
+
+- Record failures of reference recognition on the unadmitted utterance, even
+  between playback clauses, so they do not mark the current answer as failed.
+
 ## Backend 0.15.41 — resume playback after a failed echo reference check
 
 - When reference recognition fails before a tentative interruption is confirmed,

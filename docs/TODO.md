@@ -1,6 +1,6 @@
 # 大黄蜂统一待办：功能与工程质量
 
-更新于 2026-11-07。原排期基线为 Android 0.8.6 / 后台 0.11.0。当前部署为后台 0.15.40 / 原签名 APK 0.9.42（code79），源码 `f34f672`。部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)。P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)。复选框按完整验收标准关闭。
+更新于 2026-11-07。原排期基线为 Android 0.8.6 / 后台 0.11.0。当前部署为后台 0.15.41 / 原签名 APK 0.9.42（code79），源码 `82bc73c`。部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)。P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)。复选框按完整验收标准关闭。
 
 依据：[竞品复盘](COMPETITOR_REVIEW_2026-11-01.md)、[当前架构](ARCHITECTURE.md)、[实机与回归记录](VALIDATION.md)。本次已合并 [ToFix](ToFix.md) 的 20 个工程条目；这是功能与工程质量的唯一详细清单；[ROADMAP](ROADMAP.md)保留完成情况和阶段概览。
 
@@ -158,7 +158,9 @@
   - 依赖：P0-01；常驻体验依赖 P0-02。范围：Mac 首版，CC8 端部署只做可行性评估，不承诺硬件低功耗唤醒。MiniMax ASR / TTS 和 Dot 分工不变。
 
 - [ ] **P0-04 — 降低听错、截句和误打断，保持普通音量插话**
-  - 0.15.41 候选修复回声参考识别失败导致的误停播。保留失败回执、拦截未确认插话，仅恢复该候选拥有的临时暂停。协议回归还覆盖用户先停止和迟到失败。 [参考识别失败](PLAYBACK_CONFIRMATION.md#回声参考识别失败)
+  - 0.15.42 候选补齐分段间隙的错误归属。未准入的参考识别失败仅进入候选诊断，原答复的设备状态与完成回执仍按原代次管理。 [参考识别失败](PLAYBACK_CONFIRMATION.md#回声参考识别失败)
+  - 0.15.41 固定插话严格实机检查九项通过，11 帧可信输入与数字播放参考同帧，VAD 有声起点至设备应用暂停 273.2 毫秒，确认新问题和播完回执。播后 20.004 秒无额外准入，清理后双端停采。真人及受控故障分别验收。 [插话实测](CURRENT_DEPLOYMENT.md#01541-固定语音插话实测)
+  - 0.15.41 已部署，修复回声参考识别失败导致的误停播。保留失败回执、拦截未确认插话，仅恢复该候选拥有的临时暂停。协议回归还覆盖用户先停止和迟到失败。 [参考识别失败](PLAYBACK_CONFIRMATION.md#回声参考识别失败) [部署记录](CURRENT_DEPLOYMENT.md#01541code79-部署)
   - 0.15.39 已部署空识别重说提示，隔离实体 CC8 核对完整详情、新请求完成和旧状态隔离。真实用户空识别复现仍单列。 [隔离实机记录](CURRENT_DEPLOYMENT.md#01539-空识别重说提示隔离实机检查)
   - 0.15.37 固定超长插话实测确认设备暂停、整段零 ASR、恢复原播报及同会话接续。插话超时原因通过隔离 CC8 界面重放确认可见。 [实机记录](CURRENT_DEPLOYMENT.md#01537-播报中的超长插话) [超时界面检查](AUTOMATED_FAILURE_UI.md#插话识别超时专项)
   - 0.15.36 的固定合成试音实机检查确认超长语句整段拒绝、零 ASR、提示可见和同一会话接续短句并播完。离线回归覆盖输入上限处正常停顿、尾段丢弃及播报暂缓归属。 [超长语句与断句恢复](VOICE_GATE_OBSERVATIONS.md#超长语句与断句恢复) [实机检查](CURRENT_DEPLOYMENT.md#01536-超长语句实机检查)
