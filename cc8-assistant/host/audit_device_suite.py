@@ -39,6 +39,11 @@ from mac_voice import validate_prepared_speech
 from private_output import read_private_json
 from qa_speech import SCENARIO_DIGESTS
 from soak_background import valid_background
+from capture_frontend_evidence import (
+    FRONTENDS,
+    matches_expected as matches_capture_frontend,
+    valid_report as valid_capture_frontend_report,
+)
 from wake_input_receipt import FIXTURE_FRAMES, FIXTURE_PCM_SHA256, FIXTURE_WAV_SHA256
 from wake_input_receipt import summarize as summarize_wake_input
 
@@ -63,6 +68,7 @@ def content_free_phase(report):
         and report.get('capture_tests_enabled') is True
         and report.get('raw_audio_saved') is False
         and report.get('contains_conversation_content') is False
+        and valid_capture_frontend_report(report)
         and all(
             isinstance(report.get(key), str) and re.fullmatch(SOURCE_DIGEST, report[key])
             for key in SOURCE_FIELDS
@@ -161,7 +167,7 @@ def counters_equal(row, keys, count):
     )
 
 
-def audit_english_wake(data, expect_backend, expect_apk_code):
+def audit_english_wake(data, expect_backend, expect_apk_code, expect_capture_frontend=None):
     scope, backend = data['scope'], data.get('backend_version')
     plan = ENGLISH_WAKE_PHASES if scope == 'english_wake_pair' else ENGLISH_WAKE_PHASES[:1]
     phases = data.get('phases')
@@ -204,6 +210,8 @@ def audit_english_wake(data, expect_backend, expect_apk_code):
         row = {'name': name}
         result['phases'].append(row)
         report = phase.get('report')
+        if not matches_capture_frontend(report, expect_capture_frontend):
+            return {**result, 'reason': 'capture_frontend_expectation_mismatch'}
         state = phase.get('state')
         identity = phase_apk_identity(report, expect_apk_code, identity)
         if not (
@@ -305,9 +313,12 @@ def audit(
     *,
     expect_backend=None,
     expect_apk_code=None,
+    expect_capture_frontend=None,
     require_standby_quiet=False,
     require_qa_fixture_binding=False,
 ):
+    if expect_capture_frontend not in (None, *FRONTENDS):
+        raise ValueError('Invalid expected capture frontend')
     if not isinstance(data, dict) or type(data.get('schema')) is not int or data['schema'] != 1:
         raise ValueError('Unknown report schema')
     scope = data.get('scope')
@@ -316,7 +327,7 @@ def audit(
             raise ValueError('QA fixture binding requires a QA latency suite')
         if require_standby_quiet and scope == 'english_wake_awake':
             raise ValueError('Standby quiet evidence requires a standby suite')
-        return audit_english_wake(data, expect_backend, expect_apk_code)
+        return audit_english_wake(data, expect_backend, expect_apk_code, expect_capture_frontend)
     backend = data.get('backend_version')
     if (
         scope
@@ -485,6 +496,9 @@ def audit(
             failure = {'phase': name, 'reason': 'phase_plan_mismatch'}
             break
         report = phase.get('report')
+        if not matches_capture_frontend(report, expect_capture_frontend):
+            failure = {'phase': name, 'reason': 'capture_frontend_expectation_mismatch'}
+            break
         if isinstance(report, dict) and (
             (qa_fixture_bound and not qa_fixture_matches(report, scenario, case))
             or (not qa_fixture_bound and 'qa_fixture' in report)
@@ -689,6 +703,7 @@ def main(argv=None):
     parser.add_argument('report', type=Path)
     parser.add_argument('--expect-backend')
     parser.add_argument('--expect-apk-code', type=int)
+    parser.add_argument('--expect-capture-frontend', choices=FRONTENDS)
     parser.add_argument(
         '--require-qa-fixture-binding',
         action='store_true',
@@ -705,6 +720,7 @@ def main(argv=None):
             read_private_json(args.report, 4 * 1024**2),
             expect_backend=args.expect_backend,
             expect_apk_code=args.expect_apk_code,
+            expect_capture_frontend=args.expect_capture_frontend,
             require_standby_quiet=args.require_standby_quiet,
             require_qa_fixture_binding=args.require_qa_fixture_binding,
         )

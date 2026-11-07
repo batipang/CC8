@@ -1,5 +1,10 @@
 # Changelog
 
+## Tooling — active capture format evidence
+
+- Require optional explicit mono/paired expectations against both peers' actual capture metadata, including after handover.
+- Keep legacy reports unmeasured, reject fallback as paired acceptance, and recheck every phase during offline audit.
+
 ## Backend 0.15.45 / APK 0.9.43 — optional paired capture reference
 
 - Negotiate an opt-in same-grid microphone/reference stream, preserving mono for peers without the capability.
