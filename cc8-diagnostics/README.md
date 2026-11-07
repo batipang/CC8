@@ -1,6 +1,6 @@
 # CC8 离线能力检测器
 
-Android Java / 平台控件应用，包名 `com.happyhome.cc8diagnostics`，版本 1.0.4，与语音助手独立安装。不联网，不 Root，不读取设备序列号 / MAC / 账户标识，不自动录音。
+Android Java / 平台控件应用，包名 `com.happyhome.cc8diagnostics`，版本 1.0.5，与语音助手独立安装。不联网，不 Root，不读取设备序列号 / MAC / 账户标识，不自动录音。
 
 可查看 Android / CPU / 内存 / 屏幕 / 音频能力，测试参考音、麦克风录音、10 秒同时录放，导出 JSON 报告与最近录音 WAV。录音仅在前台点击并授予麦克风权限后开始；离开页面会取消并释放音频资源。参考音 `app/src/main/assets/reference.wav` 为测试播放素材，不是用户录音。
 
@@ -10,6 +10,8 @@ Android Java / 平台控件应用，包名 `com.happyhome.cc8diagnostics`，版�
 
 每次多声道测试都与同一固定参考音作一毫秒块均值相关性比对，因此不播放参考音时也可建立对照。报告按绝对值选峰并给出带符号的相关度、±500 毫秒内的数组偏移、至少一秒的重叠点数，以及相隔至少 20 毫秒的竞争峰。均值降采样不是完整频带的波形比对；偏移不是声学或跨设备时延，单次高相关也不能证明硬件回声参考。全静音、恒定直流及不足一秒的输入保留缺测。各通道额外给出直流均值和去直流的 AC 电平。
 
+“参考通道分析 6 秒”是独立的 Mac 分析入口：仅在 Mac 以一次性请求准备页面后、由前台按钮开始。支持 16 kHz 单声道基线及 48 kHz 四路两种固定 PCM16 布局，采样只保留在内存，通过有 DUMP 权限的 USB shell 按顺序分块读取；每块最多 192,000 字节并附 SHA-256，整段最多 2,304,000 字节，自开始起 45 秒内可读。采样受六秒挂钟和六秒样本数的双重上限约束，报告保留实际帧数与耗时。读取过的块不能重放；停止、USB 断开、退后台、过期、新测试、重复游标和服务端发现的写入失败均清除未读数据。Mac 的 `tools/ram_audio.py` 仅将已完成采样读入调用者提供的内存，校验顺序、布局和摘要；传输失败时清零该内存并尝试撤销对应请求，不重试采样。JSON 和原有 WAV 导出不包含这段采样，不会覆盖已有单声道录音。
+
 AEC 显示可用或创建成功不代表实际消回声有效；应分别录制安静时纯播放和有人讲话的双讲对照，确认残余回声与人声保留情况。
 
 在仓库根目录构建、检查并安装：
@@ -17,7 +19,7 @@ AEC 显示可用或创建成功不代表实际消回声有效；应分别录制�
 ```sh
 python3 cc8-diagnostics/tools/build.py
 python3 cc8-diagnostics/tools/test-audio.py
-python3 device-access/cc8_install.py --install artifacts/cc8-diagnostics-1.0.4.apk --launch --shared-staging
+python3 device-access/cc8_install.py --install artifacts/cc8-diagnostics-1.0.5.apk --launch --shared-staging
 ```
 
 `--shared-staging` 的共享存储替换风险及工具链、开发签名和设备工程通道见[开发说明](../docs/DEVELOPMENT.md)及[APK 安装步骤](../docs/APK_INSTALL.md)。报告和 WAV 保存在设备本地，可能包含个人内容；仓库不包含用户实机报告与录音。

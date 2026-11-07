@@ -1,5 +1,10 @@
 # Changelog
 
+## Diagnostics 1.0.5 — bounded RAM-only reference analysis
+
+- Add a separately armed foreground reference-analysis button and ordered USB-shell reads of transient mono or four-channel PCM.
+- Expire or clear unread audio on Stop, background, replacement and failed transfer, without writing capture files.
+
 ## Diagnostics 1.0.4 — compare inputs with a known reference
 
 - Add bounded RAM-only block-mean comparison with known reference audio, including silent controls and competing peaks.

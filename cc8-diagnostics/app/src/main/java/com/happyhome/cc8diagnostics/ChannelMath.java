@@ -11,8 +11,8 @@ public final class ChannelMath {
   public long frames;
 
   public ChannelMath(int count) {
-    if (count != 2 && count != 4)
-      throw new IllegalArgumentException("Expected two or four channels");
+    if (count != 1 && count != 2 && count != 4)
+      throw new IllegalArgumentException("Expected one, two or four channels");
     channels = new AudioMath[count];
     for (int i = 0; i < count; i++) channels[i] = new AudioMath();
     frame = new short[count];
