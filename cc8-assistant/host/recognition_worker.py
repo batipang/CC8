@@ -163,9 +163,10 @@ class RecognitionWorker:
                                 and self.hooks.awake()
                                 and not (self.hooks.echo_running() or self.hooks.echo_failed())
                             )
-                            self.hooks.status(
-                                'listening', '刚才没听清，请再说一遍' if ask_again else '我在听'
-                            )
+                            if ask_again:
+                                self.hooks.status('error', '刚才没听清，请再说一遍')
+                            else:
+                                self.hooks.status('listening', '我在听')
                     continue
                 command = stop_command(text, self.hooks.wake_pattern)
                 risky = (

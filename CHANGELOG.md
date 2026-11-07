@@ -1,5 +1,10 @@
 # Changelog
 
+## Backend 0.15.38 — show when confirmed speech was not understood
+
+- Use visible retry guidance when a confirmed near-end utterance yields no
+  transcript. Leave capture and the current conversation active.
+
 ## Backend 0.15.37 — expose interruption timeout feedback
 
 - Show the reason when an interruption timeout stops the original playback.

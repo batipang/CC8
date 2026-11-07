@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-barge-timeout-visible-20261107.1",
+  "release_id": "p0-empty-asr-visible-20261107.1",
   "backend": {
-    "version": "0.15.37"
+    "version": "0.15.38"
   },
   "assistant": {
     "version": "0.9.42",
