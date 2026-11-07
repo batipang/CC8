@@ -6,6 +6,7 @@ import threading
 import time
 from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock, patch
 
 from dot_client import CodexRpc, DotError
 from dot_receipt import UnconfirmedTurnStart
@@ -93,6 +94,33 @@ class DotRpcIoTests(unittest.TestCase):
         self.assertTrue(reader['done'].wait(0.5))
         self.assertEqual(reader['value'][0]['method'], 'turn/start')
         self.assertEqual(self.pipe.rpc.pending, {})
+
+    def test_received_reply_still_obeys_the_shared_deadline(self):
+        for method in ('turn/start', 'thread/read'):
+            for observed in (9.999, 10.0, 10.1):
+                with self.subTest(method=method, observed=observed):
+                    waiter = Mock()
+                    waiter.get.return_value = {'result': {'received': True}}
+                    rpc = CodexRpc(command=[])
+                    rpc._send = Mock()
+                    clock = SimpleNamespace(monotonic=Mock(side_effect=[9.0, observed]))
+                    with (
+                        patch('dot_client.deadline_after', return_value=10.0),
+                        patch('dot_client.time', clock),
+                        patch('dot_client.queue.Queue', return_value=waiter),
+                    ):
+                        if observed < 10:
+                            self.assertEqual(rpc.request(method, {}), {'received': True})
+                        else:
+                            with self.assertRaises(DotError) as caught:
+                                rpc.request(method, {})
+                            self.assertEqual(caught.exception.kind, 'timeout')
+                            self.assertEqual(
+                                isinstance(caught.exception, UnconfirmedTurnStart),
+                                method == 'turn/start',
+                            )
+                    self.assertEqual(rpc.pending, {})
+                    waiter.get.assert_called_once_with(timeout=1.0)
 
     def test_turn_start_timeout_waiting_to_write_is_not_an_unknown_dispatch(self):
         with self.pipe.rpc.writer.lock:

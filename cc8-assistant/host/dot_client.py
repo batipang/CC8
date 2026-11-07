@@ -242,6 +242,10 @@ class CodexRpc:
                 if remaining <= 0:
                     raise queue.Empty
                 result = waiter.get(timeout=remaining)
+                # A scheduler delay can make Queue.get return a newly queued
+                # reply after its timeout elapsed. Keep the original RPC budget.
+                if time.monotonic() >= deadline:
+                    raise queue.Empty
             except queue.Empty:
                 if method == 'turn/start':
                     raise UnconfirmedTurnStart(kind='timeout') from None
