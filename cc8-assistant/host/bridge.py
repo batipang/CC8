@@ -235,8 +235,12 @@ class Bridge:
     def read_announcement(self, job):
         return self.announcements.read_announcement(job)
 
-    def cancel(self, reason='speech'):
-        return self.session.cancel(reason)
+    def cancel(self, reason='speech', *, expected_generation=None, expected_epoch=None):
+        if expected_generation is None and expected_epoch is None:
+            return self.session.cancel(reason)
+        return self.session.cancel(
+            reason, expected_generation=expected_generation, expected_epoch=expected_epoch
+        )
 
     def stop(self):
         return self.session.stop()

@@ -13,12 +13,14 @@ from pathlib import Path
 import queue
 import signal
 import socket
+import sys
 import subprocess
 import threading
 from typing import Callable
 from config_schema import ConfigError
 from process_lock import atomic_private_bytes
 from lifecycle_cleanup import cleanup_all
+from backend_signals import BackendSignals
 
 
 @dataclass(frozen=True)
@@ -142,13 +144,11 @@ def run_backend(dependencies: BackendDependencies):
         tls_port=config.tls_port,
     )
     bridge.transport_hub = hub
-    hub.start()
-    bridge.save_status()
-    announcements = dependencies.announcement_server(bridge)
-    announcements.start()
+    announcements = None
     stop = threading.Event()
+    controls = BackendSignals()
 
-    def shutdown(*unused):
+    def shutdown_resources():
         stop.set()
 
         def cancel_turn():
@@ -190,61 +190,118 @@ def run_backend(dependencies: BackendDependencies):
             bridge.playback.stop_output,
             bridge.announcements.invalidate,
             cancel_turn,
-            announcements.close,
+            lambda: announcements.close() if announcements is not None else None,
             hub.close,
             close_brain,
             cancel_speech,
             close_channel,
         )
 
-    signal.signal(signal.SIGTERM, shutdown)
-    signal.signal(signal.SIGINT, shutdown)
+    signal.signal(signal.SIGTERM, controls.request_stop)
+    signal.signal(signal.SIGINT, controls.request_stop)
 
-    def retry_echo_check(*unused):
+    def retry_echo_check(scope):
         # This signal can rerun the diagnostic on an already active session;
         # it deliberately cannot open the microphone or resume a stopped one.
         if (
-            not bridge.session.active
+            controls.stopping
+            or not bridge.session.active
             or bridge.calibration.active
             or bridge.calibration.running
             or bridge.playback.playing
         ):
             bridge.log('echo_self_check_retry_ignored')
             return
-        generation = bridge.cancel('echo_check_retry')
+        generation = bridge.cancel(
+            'echo_check_retry', expected_generation=scope[0], expected_epoch=scope[1]
+        )
+        if generation is None or controls.stopping:
+            return
         bridge.calibration.prepare_retry()
         threading.Thread(target=bridge.calibrate, args=(generation,), daemon=True).start()
 
-    signal.signal(signal.SIGUSR1, retry_echo_check)
+    def request_echo_retry(*unused):
+        # These are plain owner fields; validation is atomic in Session.cancel.
+        controls.request_retry(
+            bridge.session.generation, bridge.session.epoch, bridge.session.active
+        )
+
+    signal.signal(signal.SIGUSR1, request_echo_retry)
 
     def heartbeat():
         while not stop.wait(5):
+            if controls.stopping:
+                return
             bridge.heartbeat_tick()
 
-    threading.Thread(target=heartbeat, daemon=True).start()
-    print(
-        'Waiting for CC8: USB priority, paired TLS Wi-Fi standby. Capture requires foreground Start.',
-        flush=True,
-    )
-    while not stop.is_set():
-        try:
+    try:
+        if controls.stopping:
+            return
+        hub.start()
+        if controls.stopping:
+            return
+        bridge.save_status()
+        announcements = dependencies.announcement_server(bridge)
+        if controls.stopping:
+            return
+        announcements.start()
+        if controls.stopping:
+            return
+        threading.Thread(target=heartbeat, daemon=True).start()
+        print(
+            'Waiting for CC8: USB priority, paired TLS Wi-Fi standby. Capture requires foreground Start.',
+            flush=True,
+        )
+        while not controls.stopping:
+            if (scope := controls.take_retry()) is not None:
+                retry_echo_check(scope)
+            if controls.stopping:
+                break
+            channel = None
             try:
-                kind, channel, packet = hub.events.get(timeout=0.25)
-            except queue.Empty:
-                kind = channel = packet = None
-            if not reconcile_transport(bridge, hub) and kind == 'up' and channel is not hub.active:
-                channel.event('transport_standby')
-            if kind in ('up', 'down'):
-                bridge.save_status()
-            if kind == 'packet' and channel is hub.active and not channel.closed:
-                bridge.on_packet(packet)
-        except (OSError, EOFError, ValueError, RuntimeError, subprocess.SubprocessError):
-            if channel is not None:
-                channel.close()
-        if stop.is_set():
-            break
-    hub.close()
-    bridge.session.unbind()
-    if bridge.session.active:
-        bridge.stop()
-    bridge.save_status()
+                try:
+                    kind, channel, packet = hub.events.get(timeout=0.25)
+                except queue.Empty:
+                    kind = packet = None
+                # A signal may have arrived inside a completed transport write.
+                # Do not bind/dispatch another packet after that stop request.
+                if controls.stopping:
+                    break
+                if (
+                    not reconcile_transport(bridge, hub)
+                    and kind == 'up'
+                    and channel is not hub.active
+                ):
+                    channel.event('transport_standby')
+                if controls.stopping:
+                    break
+                if kind in ('up', 'down'):
+                    bridge.save_status()
+                if (
+                    not controls.stopping
+                    and kind == 'packet'
+                    and channel is hub.active
+                    and not channel.closed
+                ):
+                    bridge.on_packet(packet)
+            except (OSError, EOFError, ValueError, RuntimeError, subprocess.SubprocessError):
+                if channel is not None:
+                    channel.close()
+    finally:
+        # Run after transport frames have unwound, including startup/loop errors.
+        # A secondary cleanup failure must not replace the initiating exception.
+        primary = sys.exc_info()[1]
+        try:
+            cleanup_all(
+                shutdown_resources,
+                bridge.session.unbind,
+                lambda: bridge.stop() if bridge.session.active else None,
+                bridge.save_status,
+            )
+        except Exception as error:
+            if primary is None:
+                raise
+            try:
+                bridge.log('backend_cleanup_failed', error_type=type(error).__name__)
+            except Exception:
+                pass

@@ -48,6 +48,7 @@ class AnnouncementServer:
         self.path = path
         self.stop = threading.Event()
         self.socket = None
+        self.bound_identity = None
         self.slots = threading.BoundedSemaphore(4)
 
     def start(self):
@@ -60,15 +61,18 @@ class AnnouncementServer:
             self.path.unlink()
         self.socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.socket.bind(str(self.path))
+        info = self.path.lstat()
+        self.bound_identity = (info.st_dev, info.st_ino)
         os.chmod(self.path, 0o600)
         self.socket.listen(2)
         self.socket.settimeout(0.5)
         threading.Thread(target=self.run, daemon=True).start()
 
     def run(self):
+        stream = self.socket
         while not self.stop.is_set():
             try:
-                connection, _ = self.socket.accept()
+                connection, _ = stream.accept()
             except socket.timeout:
                 continue
             except OSError:
@@ -290,12 +294,23 @@ class AnnouncementServer:
 
     def close(self):
         self.stop.set()
-        if self.socket:
-            self.socket.close()
         try:
-            self.path.unlink()
-        except FileNotFoundError:
-            pass
+            if self.socket:
+                self.socket.close()
+        finally:
+            self.socket = None
+            identity, self.bound_identity = self.bound_identity, None
+            if identity is not None:
+                try:
+                    info = self.path.lstat()
+                    if (
+                        stat.S_ISSOCK(info.st_mode)
+                        and info.st_uid == os.getuid()
+                        and (info.st_dev, info.st_ino) == identity
+                    ):
+                        self.path.unlink()
+                except FileNotFoundError:
+                    pass
 
 
 def main():

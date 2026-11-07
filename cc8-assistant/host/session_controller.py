@@ -220,9 +220,17 @@ class SessionController:
             self.hooks.enqueue_response(TextReply(generation, text.strip()))
             return {'ok': True, 'generation': generation}
 
-    def cancel(self, reason='speech'):
+    def cancel(self, reason='speech', *, expected_generation=None, expected_epoch=None):
         # 推进代次使旧模型、音频、字幕和看图结果失效，但不能撤销已执行的工具动作。
         with self.guard:
+            if expected_generation is not None or expected_epoch is not None:
+                if (
+                    type(expected_generation) is not int
+                    or type(expected_epoch) is not int
+                    or expected_generation != self.generation
+                    or expected_epoch != self.epoch
+                ):
+                    return None
             # A failed calibration output has no successor worker; unlike a
             # transport handover, it must not leave capture stuck calibrating.
             if reason in ('audio_stream_error', 'completion_timeout', 'playback_error'):
