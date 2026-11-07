@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import queue
 from typing import Callable, ContextManager
 from session_ports import EventSink
+from connection_observation import availability
 
 
 @dataclass(frozen=True)
@@ -22,7 +23,9 @@ class DeviceController:
         self.serial = 0
         self.waiters = {}
 
-    def control(self, action, percent=None):
+    def control(self, action, percent=None, *, timeout=5):
+        if type(timeout) not in (int, float) or not 0 < timeout <= 5:
+            raise ValueError('Invalid device control timeout')
         if action not in ('status', 'volume', 'stop', 'wake_screen'):
             raise ValueError('Unsupported device action')
         if not self.hooks.connected():
@@ -40,7 +43,7 @@ class DeviceController:
                 fields['percent'] = percent
             self.hooks.event('device_control', **fields)
             try:
-                result = waiter.get(timeout=5)
+                result = waiter.get(timeout=timeout)
                 if result.get('ok') and action == 'wake_screen':
                     self.hooks.touch()
                 return result
@@ -55,21 +58,23 @@ class DeviceController:
             waiter = self.waiters.get(str(j.get('request_id')))
         if waiter:
             try:
-                waiter.put_nowait(
-                    {
-                        k: v
-                        for k, v in j.items()
-                        if k
-                        in (
-                            'ok',
-                            'volume_percent',
-                            'microphone_active',
-                            'foreground',
-                            'error',
-                            'transport',
-                            'wifi_ready',
-                        )
-                    }
-                )
+                result = {
+                    k: v
+                    for k, v in j.items()
+                    if k
+                    in (
+                        'ok',
+                        'volume_percent',
+                        'microphone_active',
+                        'foreground',
+                        'error',
+                        'transport',
+                        'wifi_ready',
+                    )
+                }
+                sample = availability(j.get('connection_availability'))
+                if sample is not None:
+                    result['connection_availability'] = sample
+                waiter.put_nowait(result)
             except queue.Full:
                 pass

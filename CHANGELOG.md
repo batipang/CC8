@@ -1,5 +1,11 @@
 # Changelog
 
+## Backend 0.15.56 / APK 0.9.51 — fresh connection diagnostic receipts
+
+- Add explicit owner-local `diagnose.py --connection` export over the existing authenticated USB or Wi-Fi route. Query status once with a bounded wait; old peers, missing replies and disconnected devices remain unknown. Copy only validated device-local states and counters, excluding text and extensions.
+- Expose visible connection-dialog observations in the existing native UI status dump, checking the actual TextView against its associated rendered snapshot. Do not substitute a newly computed tick for the displayed state, retain dismissed presentation or start capture for inspection.
+- Include APK86 deployment and partial field results. Preserve the failed live UI read separately from confirmed recovery and lifecycle checks; actual sleep/login and full P0 acceptance remain open.
+
 ## APK 0.9.49 — observed connection availability
 
 - Show first-connection waiting, the current observed outage and the last recovered gap in the existing connection dialog, refreshing only while it is visible in the foreground.

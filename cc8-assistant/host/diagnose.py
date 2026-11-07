@@ -50,10 +50,22 @@ def query(path=PRIVATE / 'announce.sock', operation='diagnostics', *, timeout=5)
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--health', action='store_true')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--health', action='store_true')
+    mode.add_argument(
+        '--connection',
+        action='store_true',
+        help='Export a fresh, content-free CC8 connection receipt; never starts capture',
+    )
     args = parser.parse_args()
     try:
-        result = query(operation='health' if args.health else 'diagnostics')
+        result = query(
+            operation='connection_diagnostics'
+            if args.connection
+            else 'health'
+            if args.health
+            else 'diagnostics'
+        )
     except (OSError, ValueError):
         raise SystemExit('后台不可用，未打开设备、麦克风或摄像头。')
     if args.health:

@@ -81,6 +81,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   private String phase = "idle", mood = "friendly";
   private final Handler handler = new Handler(Looper.getMainLooper());
   private AlertDialog connectionInfoDialog;
+  private JSONObject connectionInfoAvailability;
+  private String connectionInfoRenderedMessage = "";
 
   private int dp(float value) {
     return Math.round(value * getResources().getDisplayMetrics().density);
@@ -1046,8 +1048,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
         });
   }
 
-  private String connectionInfoMessage() {
-    JSONObject info = session.snapshot();
+  private String connectionInfoMessage(JSONObject info) {
     JSONObject availability = info.optJSONObject("connection_availability");
     String transport = info.optString("transport");
     String current = "usb".equals(transport) ? "USB" : "wifi".equals(transport) ? "Wi-Fi" : "等待连接";
@@ -1067,7 +1068,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   private void showConnectionInfo() {
     if (!foreground) return;
     if (connectionInfoDialog != null) connectionInfoDialog.dismiss();
-    final String[] displayed = {connectionInfoMessage()};
+    JSONObject initial = session.snapshot();
+    final String[] displayed = {connectionInfoMessage(initial)};
     final AlertDialog dialog =
         new AlertDialog.Builder(this)
             .setTitle("连接状态")
@@ -1076,14 +1078,19 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
             .setPositiveButton("知道了", null)
             .create();
     connectionInfoDialog = dialog;
+    connectionInfoAvailability = initial.optJSONObject("connection_availability");
+    connectionInfoRenderedMessage = displayed[0];
     final Runnable update =
         new Runnable() {
           public void run() {
             if (!foreground || connectionInfoDialog != dialog || !dialog.isShowing()) return;
-            String next = connectionInfoMessage();
+            JSONObject info = session.snapshot();
+            String next = connectionInfoMessage(info);
             if (!next.equals(displayed[0])) {
               displayed[0] = next;
               dialog.setMessage(next);
+              connectionInfoAvailability = info.optJSONObject("connection_availability");
+              connectionInfoRenderedMessage = next;
             }
             handler.postDelayed(this, 1000);
           }
@@ -1091,10 +1098,31 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     dialog.setOnDismissListener(
         d -> {
           handler.removeCallbacks(update);
-          if (connectionInfoDialog == dialog) connectionInfoDialog = null;
+          if (connectionInfoDialog == dialog) {
+            connectionInfoDialog = null;
+            connectionInfoAvailability = null;
+            connectionInfoRenderedMessage = "";
+          }
         });
     dialog.show();
     handler.postDelayed(update, 1000);
+  }
+
+  private JSONObject connectionDialogObservation() {
+    JSONObject result = new JSONObject();
+    AlertDialog dialog = connectionInfoDialog;
+    boolean visible = foreground && dialog != null && dialog.isShowing();
+    Wire.put(result, "visible", visible);
+    if (!visible) return result;
+    TextView message = (TextView) dialog.findViewById(android.R.id.message);
+    boolean matched =
+        message != null && connectionInfoRenderedMessage.contentEquals(message.getText());
+    Wire.put(result, "rendered_message_matches", matched);
+    // Read the actual TextView, but export only the associated fixed state and
+    // counters. Never dump arbitrary dialog/user text or a newly computed tick.
+    if (matched && connectionInfoAvailability != null)
+      Wire.put(result, "connection_availability", connectionInfoAvailability);
+    return result;
   }
 
   private void showBrainSelector() {
@@ -1608,6 +1636,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   public void dump(String prefix, FileDescriptor fd, PrintWriter writer, String[] args) {
     writer.println("CC8_ASSISTANT_STATUS " + session.snapshot());
     JSONObject ui = new JSONObject();
+    Wire.put(ui, "connection_dialog", connectionDialogObservation());
     Wire.put(
         ui,
         "ui_phase",

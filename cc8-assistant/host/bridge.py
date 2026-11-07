@@ -26,6 +26,7 @@ from app_runtime import BackendDependencies, run_backend as run_app
 from minimax_client import MiniMaxBrain
 from workspace import Workspace
 from diagnostics import TraceBook
+from connection_observation import connection_report
 from runtime_guard import RuntimeLease, RuntimeConflict
 from configuration import load_config
 from speech_providers import (
@@ -178,6 +179,9 @@ class Bridge:
 
     def diagnostics_report(self):
         return {'ok': True, 'health': self.health(), **self.diagnostics.report()}
+
+    def connection_diagnostics(self):
+        return connection_report(self.device.control)
 
     def reminder_action(self, args, is_current=lambda: True):
         return self.reminders.action(args, is_current)

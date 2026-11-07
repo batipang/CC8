@@ -17,13 +17,20 @@ public class AvailabilityCheck {
  static void yes(boolean b,String m){if(!b)throw new AssertionError(m);}
  static class JSONObject {
   final Map<String,Object> values;
+  JSONObject(){this(new HashMap<>());}
   JSONObject(Map<String,Object> values){this.values=values;}
   boolean optBoolean(String key){return Boolean.TRUE.equals(values.get(key));}
   String optString(String key){Object v=values.get(key);return v instanceof String?(String)v:"";}
+  int optInt(String key,int fallback){Object v=values.get(key);return v instanceof Number?((Number)v).intValue():fallback;}
   JSONObject optJSONObject(String key){return (JSONObject)values.get(key);}
  }
  static class Session {
   final ConnectionAvailability availability=new ConnectionAvailability();
+  final Object routeLock=new Object();final Context context=new Context();
+  final SpeakerOwner speakerOwner=new SpeakerOwner();final Listener listener=new Listener();
+  boolean recording,foreground=true;Link wifiLink;JSONObject sent;
+  void cancelPlayback(){}String transportName(){return "usb";}void send(JSONObject j){sent=j;}
+  CONTROL_METHOD
   long now;int reads;
   JSONObject snapshot(){reads++;Map<String,Object> v=new HashMap<>();v.put("wifi_paired",true);v.put("transport","usb");v.put("connection_availability",new JSONObject(availability.snapshot(now).values()));return new JSONObject(v);}
  }
@@ -32,6 +39,8 @@ public class AvailabilityCheck {
  interface Dismiss {void dismiss(AlertDialog d);}
  static class AlertDialog {
   String message;boolean showing;Dismiss dismiss;int writes;
+  TextView view=new TextView();
+  TextView findViewById(int id){view.text=message;return view;}
   void setMessage(String value){message=value;writes++;}
   void setOnDismissListener(Dismiss d){dismiss=d;}
   void show(){showing=true;}boolean isShowing(){return showing;}
@@ -45,6 +54,15 @@ public class AvailabilityCheck {
    AlertDialog create(){return value;}
   }
  }
+ static class TextView {String text;CharSequence getText(){return text;}}
+ static class android {static class R {static class id {static final int message=1;}}}
+ static class Wire {static void put(JSONObject j,String k,Object v){j.values.put(k,v);}static JSONObject event(String e){JSONObject j=new JSONObject();put(j,"event",e);return j;}}
+ static class SystemClock {static long now;static long elapsedRealtime(){return now;}}
+ static class Link {boolean ready,closed;}
+ static class SpeakerOwner {void endTasksThrough(int generation){}}
+ static class Listener {void playback(boolean b){}void screen(boolean b){}}
+ static class Context {static final String AUDIO_SERVICE="audio";Object getSystemService(String key){return new AudioManager();}}
+ static class AudioManager {static final int STREAM_MUSIC=3;int getStreamMaxVolume(int stream){return 10;}int getStreamVolume(int stream){return 5;}void setStreamVolume(int stream,int n,int flags){}}
  static class Handler {
   final ArrayDeque<Runnable> queued=new ArrayDeque<>();
   void postDelayed(Runnable r,long ms){yes(ms==1000,"Unexpected UI refresh cadence");queued.add(r);}
@@ -54,6 +72,7 @@ public class AvailabilityCheck {
  boolean foreground=true;
  final Handler handler=new Handler();final Session session=new Session();
  AlertDialog connectionInfoDialog;
+ JSONObject connectionInfoAvailability;String connectionInfoRenderedMessage="";
  METHODS
  public static void main(String[] args) {
   ConnectionAvailability a=new ConnectionAvailability();
@@ -118,6 +137,27 @@ public class AvailabilityCheck {
     AvailabilityCheck c=new AvailabilityCheck();c.showConnectionInfo();c.foreground=false;int reads=c.session.reads;c.handler.tick();
     yes(c.session.reads==reads&&c.handler.queued.isEmpty(),"Background retained periodic snapshot reads");break;
    }
+   case "visible_observation": {
+    AvailabilityCheck c=new AvailabilityCheck();c.session.availability.begin(0);c.showConnectionInfo();
+    c.session.availability.online(1);c.session.availability.offline(2);c.session.now=5002;
+    JSONObject before=c.connectionDialogObservation();
+    yes("waiting".equals(before.optJSONObject("connection_availability").optString("state")),"Observation fabricated a tick before the actual UI changed");
+    c.handler.tick();JSONObject shown=c.connectionDialogObservation();
+    yes(shown.optBoolean("visible")&&shown.optBoolean("rendered_message_matches"),"Visible actual TextView was not verified");
+    yes(shown.optJSONObject("connection_availability").values.get("unavailable_ms").equals(5000L),"Displayed interval not bound to the rendered message");
+    c.connectionInfoDialog.message="Different actual view text";
+    yes(c.connectionDialogObservation().optJSONObject("connection_availability")==null,"Mismatched view exported a fictional rendered state");
+    c.connectionInfoDialog.dismiss();yes(c.connectionInfoAvailability==null&&c.connectionInfoRenderedMessage.isEmpty(),"Dismiss retained presentation");
+    yes(!c.connectionDialogObservation().optBoolean("visible"),"Dismissed dialog pretended visible");break;
+   }
+   case "native_status_receipt": {
+    Session s=new Session();s.availability.begin(0);s.availability.online(1);s.availability.offline(2);SystemClock.now=7002;
+    JSONObject request=new JSONObject();Wire.put(request,"request_id","1");Wire.put(request,"action","status");s.deviceControl(request);
+    yes(s.sent.optBoolean("ok")&&!s.sent.optBoolean("microphone_active"),"Status query changed capture or failed");
+    yes(s.sent.optJSONObject("connection_availability").values.get("unavailable_ms").equals(7000L),"Status omitted actual device-local interval");
+    Wire.put(request,"action","wake_screen");s.deviceControl(request);
+    yes(s.sent.optJSONObject("connection_availability")==null,"Unrelated control claimed fresh connection diagnostic");break;
+   }
    default:throw new AssertionError("Unknown test");
   }
  }
@@ -137,10 +177,12 @@ class AvailabilityTests(unittest.TestCase):
             for s in (
                 'private String connectionInfoMessage(',
                 'private void showConnectionInfo(',
+                'private JSONObject connectionDialogObservation(',
             )
         )
         file = cls.folder / 'AvailabilityCheck.java'
-        file.write_text(HARNESS.replace('METHODS', methods))
+        control = method((JAVA / 'VoiceSession.java').read_text(), 'private void deviceControl(')
+        file.write_text(HARNESS.replace('METHODS', methods).replace('CONTROL_METHOD', control))
         cls.java = java_bin()
         result = subprocess.run(
             [
@@ -186,5 +228,7 @@ for _name in (
     'dialog_updates',
     'dialog_lifetime',
     'background_tick',
+    'visible_observation',
+    'native_status_receipt',
 ):
     setattr(AvailabilityTests, 'test_' + _name, lambda self, name=_name: self.scenario(name))
