@@ -11,6 +11,7 @@ from diagnostics import TraceBook
 from dsp import RATE, FRAME, level
 from protocol import MIC, RENDER, MIC_PAIRED
 from paired_capture import decode_pairs
+from input_quality import InputQuality
 from session_ports import EventSink, MetricSink
 from echo_pipeline import EchoPipeline
 from endpoint_pipeline import EndpointPipeline
@@ -61,6 +62,7 @@ class CapturePipeline:
         self.measuring = False
         self.last_received_mic_end = 0
         self.discard_endpoint_before_ns = 0
+        self.input_quality = InputQuality()
 
     def arm_known_speech(self, pcm, metadata, generation, epoch, *, near_only=False):
         if (
@@ -232,6 +234,7 @@ class CapturePipeline:
             probe.render_clock.accept(generation, playback_id, value, expected_frames)
 
     def reset_transport(self, kind):
+        self.input_quality.reset(enabled=self.hooks.active())
         self.paired_peer_ready = False
         self.clear_known_speech('transport_changed')
         self.clear_response_probe()
@@ -246,6 +249,7 @@ class CapturePipeline:
         self.next_read_gap = None
 
     def reset_session(self):
+        self.input_quality.reset()
         self.paired_reference = False
         self.clear_known_speech('session_changed')
         self.clear_response_probe()
@@ -259,6 +263,7 @@ class CapturePipeline:
         self.pending_mic.clear()
 
     def close(self):
+        self.input_quality.close()
         self.paired_reference = False
         self.clear_known_speech('capture_closed')
         self.clear_response_probe()
@@ -280,6 +285,7 @@ class CapturePipeline:
             self.next_read_gap = sequence
 
     def process_microphone(self, packet, *, read_gap=False):
+        quality_owner = self.input_quality.token()
         # Reference/capture use device timestamps, never network arrival time.
         exclude_from_endpoint = not self.endpoint_audio_current(packet.nanos)
         sequence_gap = self.last_sequence is not None and packet.sequence != self.last_sequence + 1
@@ -298,6 +304,7 @@ class CapturePipeline:
         else:
             mic = np.frombuffer(packet.data, dtype='<i2').astype(float) / 32768
         if len(mic) % FRAME:
+            self.input_quality.break_run(quality_owner)
             self.evidence.cancel('invalid_capture')
             if not (sequence_gap or read_gap):
                 self.endpoint.discard_capture_gap()
@@ -305,6 +312,14 @@ class CapturePipeline:
             if owner := self.known_speech:
                 owner.cancel('invalid_audio')
             return
+        if len(mic) and self.hooks.active() and packet.generation == self.hooks.epoch():
+            self.input_quality.observe(
+                packet.data,
+                quality_owner,
+                paired=packet.kind == MIC_PAIRED,
+                nanos=packet.nanos,
+                discontinuous=sequence_gap or read_gap,
+            )
         self.evidence.microphone(packet.generation, packet.nanos, mic)
         if owner := self.known_speech:
             owner.microphone(packet.generation, packet.nanos, mic)

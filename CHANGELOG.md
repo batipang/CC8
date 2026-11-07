@@ -1,5 +1,12 @@
 # Changelog
 
+## Backend 0.15.46 — received microphone signal quality
+
+- Count accepted 16 kHz microphone PCM before host DSP, including near-full-scale samples, zero samples, peak, RMS, DC offset and longest clipped run.
+- Exclude the paired reference, stale captures and invalid frames; split runs at read, sequence and device-clock discontinuities.
+- Keep only scalar evidence, revoke late updates on Stop/reset, and expose copies through health and private status reports.
+- These counters do not measure device ADC saturation, acoustic SPL or recognition accuracy; input gain and voice admission stay unchanged.
+
 ## Tooling — active capture format evidence
 
 - Require optional explicit mono/paired expectations against both peers' actual capture metadata, including after handover.

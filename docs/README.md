@@ -7,7 +7,7 @@
 | 安装与兼容 | [适用范围/反馈](COMPATIBILITY.md)、[完整 APK 步骤](APK_INSTALL.md)、[路线图/排障](INSTALL_TROUBLESHOOTING.md)、[原签名](SIGNING.md) |
 | 使用助手 | [助手说明](../cc8-assistant/README.md)、[桌面入口](DESKTOP_ENTRY.md)、[打开即开始语音](AUTO_VOICE.md)、[看图](VISION.md)、[Dot 播报/拍照](DOT_CONTROL.md) |
 | 配置与服务 | [命令](COMMANDS.md)、[配置](CONFIGURATION.md)、[后台基础](P0_FOUNDATION.md)、[本地双唤醒词](LOCAL_WAKE.md)、[分类故障](FAILURE_FEEDBACK.md) |
-| 测试与诊断 | [分轮追踪](MEASUREMENT_RUNS.md)、[固定识别语料评分](ASR_EVALUATION.md)、[运行资源观察](RUNTIME_OBSERVATION.md)、[录音时钟核对](CAPTURE_CLOCK_FORENSICS.md)、[实际验证边界](VALIDATION.md) |
+| 测试与诊断 | [分轮追踪](MEASUREMENT_RUNS.md)、[输入采样质量](INPUT_QUALITY.md)、[固定识别语料评分](ASR_EVALUATION.md)、[运行资源观察](RUNTIME_OBSERVATION.md)、[录音时钟核对](CAPTURE_CLOCK_FORENSICS.md)、[实际验证边界](VALIDATION.md) |
 | 开发与发布 | [环境/检查](DEVELOPMENT.md)、[架构](ARCHITECTURE.md)、[职责拆分](BRIDGE_REFACTOR.md)、[协议边界](PROTOCOL_BOUNDARIES.md)、[CI/扫描](CI_SECURITY.md)、[版本/清单](RELEASES.md) |
 | 设计与计划 | [界面/任务/提醒](WORKSPACE.md)、[竞品复盘](COMPETITOR_REVIEW_2026-11-01.md)、[统一 TODO](TODO.md) |
 | 贡献与安全 | [贡献约定](../CONTRIBUTING.md)、[私密安全报告](../SECURITY.md)、[许可范围](../NOTICE.md) |

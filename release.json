@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-paired-capture-20261107.1",
+  "release_id": "p0-input-quality-20261107.1",
   "backend": {
-    "version": "0.15.45"
+    "version": "0.15.46"
   },
   "assistant": {
     "version": "0.9.43",
