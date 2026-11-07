@@ -364,20 +364,21 @@ def summarize_response_anchor(value):
     return dict(value)
 
 
-def summarize_ambiguous_window(value):
+def summarize_failed_response_window(value, reason):
     if not isinstance(value, dict) or set(value) != {'correlation', 'competing_correlation'}:
         return None
     peak, rival = value['correlation'], value['competing_correlation']
+    lower, upper = (0, 0.55) if reason == 'not_observed' else (0.55, 1)
     if (
         type(peak) not in (int, float)
         or type(rival) not in (int, float)
-        or not 0.55 <= peak <= 1
+        or not lower <= peak <= upper
         or not 0 <= rival <= peak
     ):
         return None
     peak, rival = round(peak, 4), round(rival, 4)
-    # An ambiguous gap can round up to the detector's 0.12 acceptance margin.
-    if round(peak - rival, 4) > 0.12:
+    # Rounded misses can land exactly on the detector's threshold or margin.
+    if reason == 'ambiguous' and round(peak - rival, 4) > 0.12:
         return None
     return {'correlation': peak, 'competing_correlation': rival}
 
@@ -401,10 +402,19 @@ def summarize_response_acoustic(value, generation):
             if type(reason) is str and reason in RESPONSE_PROBE_REASONS
             else 'unknown',
         }
-        if reason == 'ambiguous':
-            diagnostic = summarize_ambiguous_window(value.get('window_diagnostic'))
+        if reason in ('ambiguous', 'not_observed'):
+            diagnostic = summarize_failed_response_window(value.get('window_diagnostic'), reason)
             if diagnostic is not None:
                 timing['window_diagnostic'] = diagnostic
+        if reason == 'leading_match_unconfirmed':
+            scores = value.get('leading_block_correlations')
+            if (
+                isinstance(scores, list)
+                and len(scores) == 2
+                and all(type(score) in (int, float) and 0 <= score <= 1 for score in scores)
+                and min(scores) <= 0.55
+            ):
+                timing['leading_block_correlations'] = [round(score, 4) for score in scores]
         if reason == 'response_prefix_alignment_mismatch':
             diagnostic = summarize_response_anchor(value.get('anchor_diagnostic'))
             if diagnostic is not None:

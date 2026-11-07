@@ -1,5 +1,10 @@
 # Changelog
 
+## Backend 0.15.39 — report correlation scores for acoustic timing misses
+
+- Include bounded correlation scores for unmatched windows and failed leading
+  blocks without changing the acoustic timing acceptance criteria.
+
 ## Backend 0.15.38 — show when confirmed speech was not understood
 
 - Use visible retry guidance when a confirmed near-end utterance yields no
