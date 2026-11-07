@@ -2,7 +2,7 @@
   "schema_version": 1,
   "release_id": "p0-channel-statistics-20261107.1",
   "backend": {
-    "version": "0.15.43"
+    "version": "0.15.44"
   },
   "assistant": {
     "version": "0.9.42",
