@@ -64,11 +64,15 @@ public final class AudioProbe {
   }
 
   public boolean startChannels(int source, int sampleRate, int channels) {
+    return startChannels(source, sampleRate, channels, false);
+  }
+
+  public boolean startChannels(int source, int sampleRate, int channels, boolean playReference) {
     if (channels != 2 && channels != 4)
       throw new IllegalArgumentException("Expected two or four channels");
     if (!running.compareAndSet(false, true)) return false;
     cancelled = false;
-    executor.execute(() -> runChannels(source, sampleRate, channels));
+    executor.execute(() -> runChannels(source, sampleRate, channels, playReference));
     return true;
   }
 
@@ -435,7 +439,7 @@ public final class AudioProbe {
   }
 
   @SuppressLint("MissingPermission") // Rechecked before constructing the recorder.
-  private void runChannels(int source, int rate, int channels) {
+  private void runChannels(int source, int rate, int channels, boolean playReference) {
     JSONObject result =
         DeviceReport.object(
             "type",
@@ -448,9 +452,12 @@ public final class AudioProbe {
             source,
             "requested_channels",
             channels,
+            "reference_playback_requested",
+            playReference,
             "raw_audio_saved",
             false);
     AudioRecord record = null;
+    AudioTrack track = null;
     ChannelMath math = new ChannelMath(channels);
     long started = SystemClock.elapsedRealtime(), lastUi = started;
     boolean aborted = false;
@@ -486,10 +493,23 @@ public final class AudioProbe {
       DeviceReport.put(result, "actual_channels", record.getChannelCount());
       DeviceReport.put(result, "channel_index_mask", record.getFormat().getChannelIndexMask());
       DeviceReport.put(result, "channel_mask", record.getFormat().getChannelMask());
+      if (playReference) {
+        WavCodec.Pcm reference;
+        try (InputStream input = context.getAssets().open("reference.wav")) {
+          reference = WavCodec.read(input);
+        }
+        track =
+            player(
+                AudioMath.repeat(reference.samples, reference.sampleRate * 6),
+                reference.sampleRate);
+        DeviceReport.put(result, "reference_sample_rate", reference.sampleRate);
+        DeviceReport.put(result, "reference_frames_written", reference.sampleRate * 6);
+      }
       checkCancelled();
       record.startRecording();
       if (record.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING)
         throw new IOException("Recording did not start");
+      if (track != null) track.play();
       started = SystemClock.elapsedRealtime();
       short[] buffer = new short[Math.max(160, rate / 100) * channels];
       while (SystemClock.elapsedRealtime() - started < 6000) {
@@ -511,7 +531,14 @@ public final class AudioProbe {
       error = e.getClass().getSimpleName() + ": " + e.getMessage();
     } finally {
       aborted |= cancelled;
-      release(record, null, null);
+      if (track != null) {
+        final AudioTrack reference = track;
+        DeviceReport.put(
+            result,
+            "reference_playback_head_frames",
+            DeviceReport.safe(() -> reference.getPlaybackHeadPosition() & 0xffffffffL));
+      }
+      release(record, track, null);
       JSONArray levels = new JSONArray(), pairs = new JSONArray();
       for (AudioMath channel : math.channels) levels.put(metrics(channel, rate));
       for (int i = 0; i < channels; i++)
