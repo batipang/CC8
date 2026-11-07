@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "release_id": "p0-reference-ram-20261107.1",
+  "release_id": "p0-reference-usb-state-20261107.1",
   "backend": {
     "version": "0.15.44"
   },
@@ -10,8 +10,8 @@
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {
-    "version": "1.0.5",
-    "version_code": 6,
+    "version": "1.0.6",
+    "version_code": 7,
     "package": "com.happyhome.cc8diagnostics"
   },
   "protocol": {

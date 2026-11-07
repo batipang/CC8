@@ -42,15 +42,20 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
   private int analysisSourceIndex;
   private boolean analysisPlayback;
   private RamPcmLease.Profile analysisProfile;
-  private boolean analysisUsbConnected, usbReceiverRegistered;
+  private boolean analysisUsbConnected, analysisUsbConfigured, usbReceiverRegistered;
+  private int analysisUsbLosses;
   private final BroadcastReceiver usbReceiver =
       new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
           if (destroyed) return;
+          boolean wasReady = analysisUsbReady();
           analysisUsbConnected = intent.getBooleanExtra("connected", false);
+          analysisUsbConfigured = intent.getBooleanExtra("configured", false);
+          if (wasReady && !analysisUsbReady() && analysisUsbLosses < Integer.MAX_VALUE)
+            analysisUsbLosses++;
           String state = probe.analysisStatus().optString("state");
-          if (!analysisUsbConnected
+          if (!analysisUsbReady()
               && (analysisToken != null || "pending".equals(state) || "ready".equals(state))) {
             analysisToken = null;
             probe.cancel();
@@ -108,11 +113,17 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
               : registerReceiver(usbReceiver, filter);
       usbReceiverRegistered = true;
       analysisUsbConnected = sticky != null && sticky.getBooleanExtra("connected", false);
+      analysisUsbConfigured = sticky != null && sticky.getBooleanExtra("configured", false);
     } catch (RuntimeException unavailable) {
       // Offline diagnostics still work; USB-bound analysis stays unavailable.
-      analysisUsbConnected = false;
+      analysisUsbConnected = analysisUsbConfigured = false;
     }
     scan();
+  }
+
+  // A cable can remain connected while the host drops the configured USB data link.
+  private boolean analysisUsbReady() {
+    return analysisUsbConnected && analysisUsbConfigured;
   }
 
   private int dp(float value) {
@@ -490,7 +501,7 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
     String token = analysisToken;
     analysisToken = null;
     if (!foreground
-        || !analysisUsbConnected
+        || !analysisUsbReady()
         || token == null
         || sourceIndex > 2
         || analysisProfile == null
@@ -619,8 +630,7 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
     else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
     for (Button button : audioButtons) button.setEnabled(!busy);
     if (analysisButton != null)
-      analysisButton.setEnabled(
-          !busy && foreground && analysisUsbConnected && analysisToken != null);
+      analysisButton.setEnabled(!busy && foreground && analysisUsbReady() && analysisToken != null);
     for (View view : audioSettings) view.setEnabled(!busy);
     if (replayButton != null) replayButton.setEnabled(!busy && probe.getLastCapture() != null);
     if (levelText != null)
@@ -680,6 +690,9 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
     if (probe != null) DeviceReport.put(copy, "ram_analysis", probe.analysisStatus());
     if (probe != null) DeviceReport.put(copy, "audio_probe_running", probe.isRunning());
     DeviceReport.put(copy, "ram_analysis_usb_connected", analysisUsbConnected);
+    DeviceReport.put(copy, "ram_analysis_usb_configured", analysisUsbConfigured);
+    DeviceReport.put(copy, "ram_analysis_usb_ready", analysisUsbReady());
+    DeviceReport.put(copy, "ram_analysis_usb_losses", analysisUsbLosses);
     return copy;
   }
 
@@ -785,7 +798,7 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
         renderPage();
         writer.println("CC8_AUDIO_PAGE_READY; no recording started");
       } else if ("prepare-reference-analysis".equals(operation)) {
-        if (!foreground || !analysisUsbConnected || probe.isRunning()) {
+        if (!foreground || !analysisUsbReady() || probe.isRunning()) {
           writer.println("ERROR: foreground idle activity with USB required");
           return;
         }
@@ -835,7 +848,7 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
         writer.println("CC8_ANALYSIS_CLEARED");
       } else if ("read-reference-analysis".equals(operation)) {
         if (!foreground
-            || !analysisUsbConnected
+            || !analysisUsbReady()
             || probe.isRunning()
             || args.length != 3
             || !RamPcmLease.validToken(args[1])

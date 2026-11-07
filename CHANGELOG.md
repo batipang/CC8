@@ -1,5 +1,10 @@
 # Changelog
 
+## Diagnostics 1.0.6 — require a configured USB data link
+
+- Clear the transient analysis when USB loses data configuration even if the cable remains connected.
+- Expose connected/configured readiness and observed link losses separately for physical validation.
+
 ## Diagnostics 1.0.5 — bounded RAM-only reference analysis
 
 - Add a separately armed foreground reference-analysis button and ordered USB-shell reads of transient mono or four-channel PCM.
