@@ -6,6 +6,7 @@ from typing import Callable, ContextManager, Mapping, Pattern, Protocol, TYPE_CH
 from protocol import JsonValue
 
 if TYPE_CHECKING:
+    from wake_utterance import WaitingUtterance, Samples
     from announcement_controller import AnnouncementController
     from calibration_controller import CalibrationController
     from capture_pipeline import CapturePipeline
@@ -124,3 +125,4 @@ class RecognitionHooks:
     bind_response_probe: Callable[[str, int, int | None], None] = lambda *_: None
     tool_sample_rejection: Callable[[str, bool, float | None], str | None] = lambda *_: None
     tool_sample_comparison: Callable[[str], tuple[int, str] | None] = lambda _: None
+    recheck_wake: Callable[[WaitingUtterance, Samples, int], bool | None] = lambda *_: None

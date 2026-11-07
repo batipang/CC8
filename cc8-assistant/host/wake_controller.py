@@ -12,6 +12,7 @@ from typing import Callable, ContextManager, Protocol
 import numpy as np
 from assistant_identity import WAKE_PATTERN
 from session_ports import EventSink, MetricSink
+from wake_utterance import WaitingUtterance
 
 KEYWORDS = frozenset(('大黄蜂', 'Bumblebee'))
 WAITING = '等待唤醒 · 请说“大黄蜂”或“Bumblebee”'
@@ -37,6 +38,7 @@ class WakeHooks:
     status: Callable[[str, str], None]
     metric: MetricSink
     log: EventSink
+    render_risk: Callable[[], bool] = lambda: False
 
 
 class WakeController:
@@ -102,6 +104,81 @@ class WakeController:
             and self.hooks.awake()
             and (not self.hooks.wake_mode() or self.ready)
         )
+
+    @property
+    def utterance_recheck_ready(self):
+        return getattr(self.detector, 'utterance_recheck_supported', False) is True and callable(
+            getattr(self.detector, 'recheck_utterance', None)
+        )
+
+    def waiting_utterance(self, first_sample_ns):
+        with self.hooks.lock:
+            if (
+                type(first_sample_ns) is not int
+                or first_sample_ns < 0
+                or not self.utterance_recheck_ready
+                or not self.hooks.active()
+                or self.hooks.awake()
+                or self.hooks.render_risk()
+                or not self.hooks.capture_current(first_sample_ns)
+            ):
+                return None
+            return WaitingUtterance(self.serial, self.hooks.generation(), first_sample_ns)
+
+    def recheck_utterance(self, ticket, pcm, generation):
+        detector = self.detector
+
+        def current_locked():
+            return (
+                isinstance(ticket, WaitingUtterance)
+                and detector is self.detector
+                and self.utterance_recheck_ready
+                and ticket.serial == self.serial
+                and ticket.generation == generation == self.hooks.generation()
+                and self.hooks.active()
+                and not self.hooks.awake()
+                and not self.hooks.render_risk()
+                and self.hooks.capture_current(ticket.first_sample_ns)
+            )
+
+        def current():
+            with self.hooks.lock:
+                return current_locked()
+
+        decode = getattr(detector, 'recheck_utterance', None)
+        if not callable(decode) or not current():
+            return None
+        self.hooks.metric('local_wake_rechecks', increment=True)
+        started = time.perf_counter()
+        try:
+            hit = decode(pcm, current)
+        except Exception as error:
+            # The optional local path fails closed; its failure must neither
+            # authorize cloud ASR nor report an ASR/provider error to the user.
+            self.hooks.metric('local_wake_recheck_errors', increment=True)
+            self.hooks.log('local_wake_recheck_failed', error_type=type(error).__name__)
+            return None
+        with self.hooks.lock:
+            self.hooks.metric(
+                'local_wake_recheck_ms', round((time.perf_counter() - started) * 1000, 2)
+            )
+            if not current_locked() or type(hit) is not bool:
+                return None
+            if hit:
+                # This completed job owns the prefix; the next utterance must
+                # not inherit it through the streaming prefix handoff.
+                self.hooks.set_awake(True)
+                self.pending_prefix = False
+                self.hooks.touch_activity()
+                self.deadline = (
+                    self.clock() + self.window_seconds if self.hooks.wake_mode() else None
+                )
+                self.hooks.metric('local_wake_count', increment=True)
+                self.hooks.metric('local_wake_english_count', increment=True)
+                self.hooks.metric('local_wake_recheck_hits', increment=True)
+                self.hooks.log('local_wake_recheck_accepted')
+                self.hooks.status('listening', '我在听，请继续说')
+            return hit
 
     def arm_input_probe(self, pcm, *, chinese=False):
         from wake_input_probe import WakeInputProbe

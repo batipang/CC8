@@ -20,6 +20,7 @@ strict = true
 files = [
     "cc8-assistant/host/protocol.py",
     "cc8-assistant/host/route_output.py",
+    "cc8-assistant/host/wake_utterance.py",
     "cc8-assistant/host/transport.py",
     "cc8-assistant/host/transport_channel.py",
     "cc8-assistant/host/transport_pairing.py",

@@ -4,6 +4,7 @@ from collections import deque
 import numpy as np
 
 from audio_signal import FRAME as FRAME, RATE as RATE, level as level
+from audio_signal import MAX_UTTERANCE_FRAMES as MAX_UTTERANCE_FRAMES
 from echo_processors import (
     EchoCanceller as EchoCanceller,
     WebRtcEchoCanceller as WebRtcEchoCanceller,
@@ -12,7 +13,6 @@ from recognition_commands import STOP_COMMANDS as STOP_COMMANDS
 from recognition_echo import resembles_playback as resembles_playback
 
 
-MAX_UTTERANCE_FRAMES = 1200
 UTTERANCE_TOO_LONG = object()
 
 
@@ -168,9 +168,10 @@ class VoiceDetector:
 
     ONSET_FRAMES = 14
     END_SILENCE_FRAMES = 80
+    PRE_ROLL_FRAMES = 50
 
     def __init__(self):
-        self.pre = deque(maxlen=50)
+        self.pre = deque(maxlen=self.PRE_ROLL_FRAMES)
         self.audio = []
         self.hot = self.quiet = 0
         self.talking = False

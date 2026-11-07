@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 from dataclasses import dataclass
+from collections import deque
 import time
 from typing import Callable, Protocol
 import numpy as np
@@ -11,6 +12,7 @@ from dsp import UTTERANCE_TOO_LONG, VoiceDetector, ReferenceCapture, NearSpeechD
 from fast_stop import can_fast_stop
 from protocol import JsonValue
 from session_ports import EventSink, MetricSink
+from wake_utterance import WaitingUtterance
 
 
 class WakeFrame(Protocol):
@@ -57,6 +59,7 @@ class EndpointHooks:
     wake_allowed: Callable[[], bool]
     claim_wake: Callable[[], bool]
     reset_wake_gap: Callable[[], None]
+    wake_ticket: Callable[[int | None], WaitingUtterance | None] = lambda _: None
 
 
 class EndpointPipeline:
@@ -64,6 +67,8 @@ class EndpointPipeline:
         self.hooks = hooks
         self.fast_stop = fast_stop
         self.vad = VoiceDetector()
+        self.vad_stamps = deque(maxlen=VoiceDetector.PRE_ROLL_FRAMES)
+        self.waiting_turn = None
         self.reference_capture = ReferenceCapture()
         self.near_speech = NearSpeechDetector()
         self.voice_trace = None
@@ -107,6 +112,8 @@ class EndpointPipeline:
             self.voice_trace = None
 
     def reset_transport(self):
+        self.waiting_turn = None
+        self.vad_stamps.clear()
         self.cancel_partial_trace()
         self.reset_voice_onset()
         self.fast_stop_observation = None
@@ -121,6 +128,8 @@ class EndpointPipeline:
         self.capture_evidence = None
 
     def reset_session(self):
+        self.waiting_turn = None
+        self.vad_stamps.clear()
         self.cancel_partial_trace()
         self.reset_voice_onset()
         self.fast_stop_observation = None
@@ -140,6 +149,8 @@ class EndpointPipeline:
             self.fast_stop.reset()
 
     def reset_voice_activity(self):
+        self.waiting_turn = None
+        self.vad_stamps.clear()
         self.cancel_partial_trace()
         self.reset_voice_onset()
         self.fast_stop_observation = None
@@ -235,6 +246,7 @@ class EndpointPipeline:
         self.observe_voice_onset(stamp, voiced)
         self.vad.external_voice = voiced
         was_talking = self.vad.talking
+        self.vad_stamps.append((stamp, capture_echo_risk))
         began, utterance, _ = self.vad.feed(cleaned)
         if utterance is UTTERANCE_TOO_LONG:
             self.discard_overlong_utterance()
@@ -244,6 +256,14 @@ class EndpointPipeline:
             self.hooks.claim_wake() if began or self.vad.talking or utterance is not None else False
         )
         if began:
+            prefix_frames = len(getattr(self.vad, 'audio', ()))
+            first_stamp = (
+                self.vad_stamps[-prefix_frames][0]
+                if 0 < prefix_frames <= len(self.vad_stamps)
+                and not any(risk for _, risk in list(self.vad_stamps)[-prefix_frames:])
+                else None
+            )
+            self.waiting_turn = self.hooks.wake_ticket(first_stamp)
             self.cancel_partial_trace()
             self.capture_evidence = CaptureEvidence(
                 onset_prefix=self.onset_prefix.before(stamp, voiced=voiced)
@@ -328,12 +348,16 @@ class EndpointPipeline:
                 render_audio,
                 self.voice_trace,
             )
-            if not self.hooks.wake_allowed():
+            if not self.hooks.wake_allowed() and (
+                self.waiting_turn is None or self.turn_echo_risk or self.turn_during_playback
+            ):
                 self.hooks.diagnostics().gate(self.voice_trace, 'wake_closed')
                 self.hooks.diagnostics().finish(self.voice_trace, 'rejected')
                 self.hooks.metric('local_wake_utterances_withheld', increment=True)
                 self.voice_trace = None
                 return
+            if not self.hooks.wake_allowed():
+                job += (self.waiting_turn,)
             self.hooks.enqueue(job)
             self.voice_trace = None
 
