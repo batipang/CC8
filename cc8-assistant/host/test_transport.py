@@ -549,7 +549,10 @@ class HandoverTests(unittest.TestCase):
                 receipt = snapshot['tasks'][0]
                 self.assertEqual(receipt['id'], task)
                 self.assertEqual(receipt['status'], 'cancelled')
-                self.assertEqual(receipt['stage'], '连接已切换，执行结果待核对。请确认后再试。')
+                self.assertEqual(
+                    receipt['stage'],
+                    '已停止等待，执行结果待核对；工具可能仍在运行。请先在电脑核对，勿重复交办。',
+                )
                 self.assertEqual(receipt['result'], '')
                 self.assertTrue(b.response.queue.empty())
                 b.workspace.task_finish(task, 'completed', '迟到结果')

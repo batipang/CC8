@@ -22,6 +22,7 @@ from rpc_pipe import RpcPipeWriter, deadline_after
 from rpc_process import close_guardian, start_guardian
 from dot_errors import GENERIC, error_notice, turn_completion
 from lifecycle_cleanup import cleanup_all
+from dot_terminals import CommandScope, stop_owned_terminals
 from dot_receipt import (
     DotError as DotError,
     DotApprovalRequired as DotApprovalRequired,
@@ -454,6 +455,8 @@ class CodexRpc:
 
 @dataclass
 class Turn:
+    rpc: object = None
+    terminals: object = None
     thread_id: str | None = None
     stopped: threading.Event = field(default_factory=threading.Event)
     ident: str | None = None
@@ -479,6 +482,8 @@ class DotBrain:
         self.handoff_injected = False
         self.clock = time.monotonic
         self.preparing = False
+        self.turn_admission = threading.RLock()
+        self.latest_rpc_turn = None
 
     def set_handoff(self, handoff):
         if self.current is not None or self.preparing:
@@ -491,18 +496,32 @@ class DotBrain:
             if not turn.ident or turn.interrupt_sent or turn.receipt_completed.is_set():
                 return
             turn.interrupt_sent = True
+            rpc = turn.rpc or self.rpc
         try:
-            self.rpc.request(
-                'turn/interrupt',
-                {'threadId': turn.thread_id or self.thread_id, 'turnId': turn.ident},
-                timeout=4,
-            )
+            with self.turn_admission:
+                rpc.request(
+                    'turn/interrupt',
+                    {'threadId': turn.thread_id or self.thread_id, 'turnId': turn.ident},
+                    timeout=4,
+                )
+                # A server handle is not an atomic (item ID, process ID) pair.
+                # Don't race handle cleanup with a later turn creating sessions.
+                # A callback already overtaken by admission may only interrupt
+                # its exact old turn; its terminal outcome stays unconfirmed.
+                if turn.terminals is not None and self.latest_rpc_turn is turn:
+                    stop_owned_terminals(rpc, turn.terminals, turn.ident)
         except DotError:
             pass
 
     def cancel(self):
         turn = self.current
         if turn:
+            with turn.lock:
+                # Freeze the RPC owner before the asynchronous callback runs.
+                if turn.rpc is None:
+                    turn.rpc = self.rpc
+                if turn.thread_id is None:
+                    turn.thread_id = self.thread_id
             turn.stopped.set()
             threading.Thread(target=self._interrupt, args=(turn,), daemon=True).start()
 
@@ -633,6 +652,7 @@ class DotBrain:
         completed = False
         unconfirmed_start = False
         watch = None
+        remove_commands = None
         speech = SpeechClauses()
         said = 0
         limited = False
@@ -704,6 +724,7 @@ class DotBrain:
                 on_web('progress', {'message': '正在连接 Dot / Codex…'})
             self._thread(mark_stage)
             turn.thread_id = self.thread_id
+            turn.rpc = self.rpc
             if self.last_metrics.get('context_reset') and on_web:
                 on_web('progress', {'message': 'Dot 已重新连接 · 开始新的语音上下文'})
             if turn.stopped.is_set() or not is_current():
@@ -727,6 +748,8 @@ class DotBrain:
                 )
                 self.last_metrics['image_input'] = True
             if callable(getattr(self.rpc, 'listen', None)):
+                turn.terminals = CommandScope(turn.thread_id)
+                remove_commands = self.rpc.listen(turn.terminals.observe)
                 watch = ReceiptWatch(
                     self.rpc,
                     turn.thread_id,
@@ -736,20 +759,26 @@ class DotBrain:
                     clock=self.clock,
                 )
             mark_stage('dot_turn_start')
-            result = self.rpc.request(
-                'turn/start',
-                {
-                    'threadId': self.thread_id,
-                    'input': inputs,
-                    'cwd': handoff.cwd if handoff and handoff.cwd else str(ROOT),
-                },
-                timeout=20,
-            )
+            with self.turn_admission:
+                if turn.stopped.is_set() or not is_current():
+                    raise Cancelled('Turn cancelled')
+                self.latest_rpc_turn = turn
+                result = self.rpc.request(
+                    'turn/start',
+                    {
+                        'threadId': self.thread_id,
+                        'input': inputs,
+                        'cwd': handoff.cwd if handoff and handoff.cwd else str(ROOT),
+                    },
+                    timeout=20,
+                )
             ack_at = self.clock()
             info = result.get('turn') if isinstance(result, dict) else None
             ident = info.get('id') if isinstance(info, dict) else None
             if not isinstance(ident, str) or not 0 < len(ident) <= 4096:
                 raise UnconfirmedTurnStart(kind='provider_or_runtime')
+            if turn.terminals is not None:
+                turn.terminals.bind(ident)
             turn.ident = ident
             self.handoff_injected = True
             self.last_metrics['turn_id'] = ident
@@ -920,6 +949,8 @@ class DotBrain:
             turn.stopped.set()
             raise
         finally:
+            if remove_commands:
+                remove_commands()
             if watch:
                 watch.close()
             turn.ident_ready.set()

@@ -1,5 +1,11 @@
 # Changelog
 
+## Backend 0.15.55 — scoped background terminal cancellation
+
+- Keep asynchronous turn interruption bound to its original RPC and thread, then terminate only background terminal handles matched to command items observed in that turn. Never clean the whole thread or replay an unconfirmed operation.
+- Serialize handle cleanup with new-turn admission; an overtaken callback cannot terminate a later turn's reused server handle. Completed work and intentionally retained background services remain separate.
+- Make cancelled task receipts state that waiting stopped and tools may still be running. Include backend54 deployment and the failed live cancellation checks without claiming full acceptance.
+
 ## Backend 0.15.54 — cancellation belongs to its request
 
 - Match task and vision cancel buttons while holding the session guard through cancellation and status publication, preventing an older button from cancelling a newer owner request.
