@@ -28,4 +28,6 @@ Development checks: install requirements-dev.txt in a separate dev venv; run pyt
 
 Before each commit, review the exact staged diff and its affected callers for regressions, state ownership, failure paths and private data handling. Fix actionable findings and rerun the relevant checks before committing. Tests and formatters supplement this review.
 
+Acceptance ordering (user request 2026-11-07): the final 72-hour frozen-version acceptance has the lowest priority in the entire backlog, after other scheduled features, fixes and routine verification. Keep it pending and preserve its criteria; do not start it automatically, count short development observations as acceptance, or make it block functional work.
+
 CI checks: main requires the GitHub Actions Required checks gate, including for admins; merge through a passing, up-to-date PR. Do not bypass a failing check. Pin Actions to full commit SHAs and retain read-only default permissions, redacted secret scanning, narrow reviewed exceptions and separate dependency inventories. Runtime dependency lock changes do not authorize silently upgrading or restarting the deployed assistant; validate deployment separately.
