@@ -42,9 +42,10 @@ class BackendDependencies:
 
 def reconcile_transport(bridge, hub):
     preferred = hub.preferred()
-    if preferred is hub.active and preferred is bridge.session.connection:
+    uncertain = getattr(hub, 'role_uncertain', False)
+    if preferred is hub.active and preferred is bridge.session.connection and not uncertain:
         return False
-    if preferred is not hub.active and not hub.selected(preferred):
+    if (preferred is not hub.active or uncertain) and not hub.selected(preferred):
         # Keep the working route and its session if the new route failed.
         return True
     try:

@@ -37,7 +37,9 @@ class Channel:
         self.io_closed = False
         self.closed = False
         self.ready = False
+        self.application_ready = False
         self.route_envelope = False
+        self.route_duplex = False
         self.route_token: str | None = None
         self.last_rx = time.monotonic()
 
@@ -65,7 +67,12 @@ class Channel:
                 raise
 
     def event(self, name: str, generation: int = 0, **fields: JsonValue) -> None:
-        self.sendall(Packet.event(name, generation, **fields).encode())
+        packet = Packet.event(name, generation, **fields)
+        # Configuration is application state too. Transport role controls stay
+        # unwrapped so a new activation can establish its own token first.
+        if name == 'lan_config' and self.route_duplex and self.route_token is not None:
+            packet = packet.bind_route(self.route_token)
+        self.sendall(packet.encode())
 
     def read(self) -> None:
         with self.state_lock:
@@ -84,6 +91,11 @@ class Channel:
             self.route_envelope = (
                 type(hello.get('route_envelope_version')) is int
                 and hello['route_envelope_version'] == 1
+            )
+            self.route_duplex = (
+                self.route_envelope
+                and type(hello.get('route_output_version')) is int
+                and hello['route_output_version'] == 1
             )
             # preferred() can see readiness before the queued Up is consumed.
             # Publish only after every negotiated field has been established.
@@ -121,6 +133,7 @@ class Channel:
                 return
             self.closed = True
             self.ready = False
+            self.application_ready = False
             finish = not self.reader_running
         try:
             self.stream.shutdown(socket.SHUT_RDWR)

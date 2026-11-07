@@ -1,5 +1,13 @@
 # Changelog
 
+## Backend 0.15.49 / APK 0.9.47 — bind host output to activation
+
+- Negotiate host-to-device envelopes in addition to the existing microphone/control envelope, preserving legacy protocol-2 fallback explicitly.
+- Freeze output ownership before waiting for the writer; reject old bound or unwrapped application packets on the device, including LAN configuration.
+- Order role changes across sockets with a process identity and monotonic serial, rejecting late/duplicate activations while allowing a fresh host generation.
+- Reconfirm a surviving route after an uncertain activation write, retain unsent screen intent and discard microphone ingress until role confirmation. Explicit Stop still prevents rearming.
+- Expose only negotiated version flags; keep identifiers and content out of status exports. Physical/acoustic acceptance remains separate.
+
 ## Backend 0.15.48 / APK 0.9.45 — microphone route admission
 
 - Negotiate per-activation device-to-host envelopes for controls and audio, fencing old queued packets even when reusing the same socket.

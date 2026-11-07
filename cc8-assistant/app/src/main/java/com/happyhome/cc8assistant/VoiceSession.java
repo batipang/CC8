@@ -96,6 +96,7 @@ final class VoiceSession {
   private volatile long micFrames = 0, renderFrames = 0;
   private volatile String phase = "idle";
   private final StatusFeedback statusFeedback = new StatusFeedback();
+  private final HostActivation hostActivation = new HostActivation();
   private volatile boolean dotChatSupported, savedTasksSupported;
 
   boolean supportsDotChatHandoff() {
@@ -313,16 +314,18 @@ final class VoiceSession {
   private void select(Link next) throws IOException {
     // Local fallback may preserve an already open recorder, but cannot invent
     // the host's activation token. Its provisional Ready is ignored by a new host.
-    activateRoute(next, null);
+    activateRoute(next, null, next.outputBound);
   }
 
-  private void activateRoute(Link next, String routeToken) throws IOException {
+  private void activateRoute(Link next, String routeToken, boolean outputBound) throws IOException {
     // routeLock 保证只选一路；切换可以保留已开启的收音，但必须丢弃旧回答和看图。
     synchronized (routeLock) {
       if (!foreground || next.closed || next.ticket != lifecycle) return;
       next.ready = true;
       boolean changed =
-          activeLink != next || !java.util.Objects.equals(next.routeToken, routeToken);
+          activeLink != next
+              || !java.util.Objects.equals(next.routeToken, routeToken)
+              || next.outputBound != outputBound;
       final CaptureWindow currentCapture;
       synchronized (this) {
         currentCapture = recording ? captureWindow : null;
@@ -347,6 +350,7 @@ final class VoiceSession {
         statusFeedback.reset();
         activeLink = next;
         next.routeToken = routeToken;
+        next.outputBound = outputBound;
         next.captureStartToken = null;
         next.pairedCaptureRequested = false;
         dotChatSupported = savedTasksSupported = false;
@@ -484,6 +488,7 @@ final class VoiceSession {
     volatile boolean closed, ready;
     String captureStartToken;
     String routeToken;
+    boolean outputBound;
     volatile boolean pairedCaptureRequested;
     DataOutputStream out;
 
@@ -548,6 +553,7 @@ final class VoiceSession {
         JSONObject hello = Wire.event("transport_hello");
         Wire.put(hello, "protocol", BuildConfig.CC8_PROTOCOL);
         Wire.put(hello, "route_envelope_version", 1);
+        Wire.put(hello, "route_output_version", 1);
         event(hello);
         DataInputStream in = new DataInputStream(connection.getInputStream());
         while (!closed && foreground && lifecycle == ticket) handle(Wire.read(in), this);
@@ -568,32 +574,62 @@ final class VoiceSession {
     }
   }
 
-  private void handle(Wire.Packet p, Link source) throws Exception {
-    final long route = routeFor(source);
+  private void handle(Wire.Packet received, Link source) throws Exception {
+    final long route;
+    final String receiveToken;
+    final boolean outputBound;
+    synchronized (routeLock) {
+      route = routeFor(source);
+      receiveToken = source.routeToken;
+      outputBound = source.outputBound;
+    }
+    final boolean wrapped = received.type == Wire.ROUTE_BOUND;
+    final Wire.Packet p;
+    if (wrapped) {
+      if (!outputBound || route < 0) return;
+      p = Wire.unbindRoute(received, receiveToken);
+      if (p == null) return;
+    } else p = received;
     if (p.type == Wire.EVENT) {
       JSONObject control = Wire.json(p);
       String name = control.optString("event");
-      if ("transport_ping".equals(name)) {
+      if (!wrapped && "transport_ping".equals(name)) {
         source.event(Wire.event("transport_pong"));
         return;
       }
-      if ("transport_activate".equals(name)) {
+      if (!wrapped && "transport_activate".equals(name)) {
         Object token = control.opt("route_token");
         if (token != null
             && (!(token instanceof String) || !((String) token).matches("[a-f0-9]{32}")))
           throw new IOException("Invalid route activation");
-        activateRoute(source, (String) token);
+        Object outputVersion = control.opt("route_output_version");
+        boolean duplex = Integer.valueOf(1).equals(outputVersion);
+        if (outputVersion != null && !duplex) throw new IOException("Invalid output capability");
+        synchronized (routeLock) {
+          if (!foreground || source.closed || source.ticket != lifecycle) return;
+          // A live socket cannot silently downgrade after negotiating duplex.
+          if (source.outputBound && !duplex) return;
+          if (duplex) {
+            Object owner = control.opt("route_owner"), serial = control.opt("route_serial");
+            if (!(owner instanceof String)
+                || !(serial instanceof Integer || serial instanceof Long)
+                || token == null) throw new IOException("Invalid host activation identity");
+            if (!hostActivation.accept((String) owner, ((Number) serial).longValue())) return;
+          }
+          activateRoute(source, (String) token, duplex);
+        }
         return;
       }
-      if ("transport_standby".equals(name)) {
+      if (!wrapped && "transport_standby".equals(name)) {
         source.ready = true;
         return;
       }
       if ("lan_config".equals(name)) {
+        if (outputBound && !wrapped) return;
         if (source == activeLink && "usb".equals(source.kind)) {
           try {
             synchronized (routeLock) {
-              if (foreground && source == activeLink) {
+              if (foreground && source == activeLink && currentRoute(route)) {
                 lan.configure(control.getJSONObject("config"));
                 lan.acquire();
               }
@@ -605,6 +641,7 @@ final class VoiceSession {
         return;
       }
     }
+    if (outputBound && !wrapped) return;
     if (route < 0 || !currentRoute(route)) return;
     if (p.type == Wire.EVENT) {
       JSONObject j = Wire.json(p);
@@ -1628,6 +1665,17 @@ final class VoiceSession {
     Wire.put(j, "foreground", foreground);
     Wire.put(j, "connected", isConnected());
     Wire.put(j, "transport", transportName());
+    synchronized (routeLock) {
+      Link current = activeLink;
+      boolean bound =
+          foreground
+              && current != null
+              && current.ready
+              && !current.closed
+              && current.routeToken != null;
+      Wire.put(j, "route_envelope_version", bound ? 1 : 0);
+      Wire.put(j, "route_output_version", bound && current.outputBound ? 1 : 0);
+    }
     Wire.put(j, "usb_connected", usbLink != null && !usbLink.closed);
     Wire.put(j, "usb_physical", usbPhysical);
     Wire.put(j, "wifi_ready", wifiLink != null && wifiLink.ready && !wifiLink.closed);

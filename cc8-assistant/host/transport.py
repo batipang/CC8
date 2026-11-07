@@ -57,11 +57,14 @@ class TransportHub:
         self.events: queue.Queue[TransportEvent] = queue.Queue(maxsize=512)
         self.channels: dict[TransportKind, Channel] = {}
         self.active: Channel | None = None
+        self.role_uncertain = False
         self.guard = threading.RLock()
         self.stop = threading.Event()
         self.usb_disabled_until = 0.0
         self.all_disabled_until = 0.0
         self.switches = 0
+        self.activation_owner = uuid.uuid4().hex
+        self.activation_serial = 0
         self.auth_failures = 0
         self.server: socket.socket | None = None
         self.discovery: socket.socket | None = None
@@ -225,6 +228,15 @@ class TransportHub:
             if channel is not None and time.monotonic() < self.all_disabled_until:
                 return False
             others = list(self.channels.values())
+            if self.activation_serial >= (1 << 63) - 1:
+                raise RuntimeError('Transport activation budget exhausted')
+            self.role_uncertain = True
+            for other in others:
+                other.application_ready = False
+            if channel is not None:
+                channel.application_ready = False
+            self.activation_serial += 1
+            serial = self.activation_serial
         for other in others:
             if other is not channel and other.ready and not other.closed:
                 try:
@@ -236,10 +248,20 @@ class TransportHub:
                 # Even a reused Channel needs a new wire-level activation fence.
                 channel.route_token = uuid.uuid4().hex if channel.route_envelope else None
                 if channel.route_token:
+                    fields: JsonObject = {
+                        'transport': channel.kind,
+                        'route_token': channel.route_token,
+                    }
+                    if channel.route_duplex:
+                        fields.update(
+                            route_output_version=1,
+                            route_owner=self.activation_owner,
+                            route_serial=serial,
+                        )
                     channel.event(
                         'transport_activate',
-                        transport=channel.kind,
-                        route_token=channel.route_token,
+                        0,
+                        **fields,
                     )
                 else:
                     channel.event('transport_activate', transport=channel.kind)
@@ -250,8 +272,14 @@ class TransportHub:
                 # which channel's queued event triggered the reevaluation.
                 channel.close()
                 return False
-        self.active = channel
-        self.switches += 1
+        with self.guard:
+            if channel is not None and channel.closed:
+                return False
+            self.active = channel
+            if channel is not None:
+                channel.application_ready = True
+            self.role_uncertain = False
+            self.switches += 1
         self.log(
             'transport_selected',
             transport=channel.kind if channel else 'none',
@@ -264,6 +292,23 @@ class TransportHub:
             now = time.monotonic()
             return {
                 'transport': self.active.kind if self.active and not self.active.closed else 'none',
+                'route_envelope_version': int(
+                    bool(
+                        self.active
+                        and self.active.application_ready
+                        and not self.active.closed
+                        and self.active.route_token
+                    )
+                ),
+                'route_output_version': int(
+                    bool(
+                        self.active
+                        and self.active.application_ready
+                        and not self.active.closed
+                        and self.active.route_token
+                        and self.active.route_duplex
+                    )
+                ),
                 'usb_ready': bool(
                     self.channels.get('usb')
                     and self.channels['usb'].ready

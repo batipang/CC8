@@ -254,7 +254,10 @@ class Bridge:
             return
         # A preserved native recorder is not registered on a freshly selected
         # route until its current Start/Rebind is accepted. Never buffer early PCM.
-        if p.kind in (MIC, MIC_PAIRED) and self.session.capture_route_pending:
+        if p.kind in (MIC, MIC_PAIRED) and (
+            self.session.capture_route_pending
+            or getattr(self.session.connection, 'application_ready', True) is not True
+        ):
             return
         if p.kind == EVENT:
             try:

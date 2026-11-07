@@ -93,6 +93,23 @@ final class Wire {
     packet.data = bound;
   }
 
+  static Packet unbindRoute(Packet packet, String token) throws IOException {
+    validate(packet.type, packet.data);
+    if (packet.type != ROUTE_BOUND || token == null) return null;
+    if (!token.matches("[a-f0-9]{32}")) throw new IOException("Invalid route token");
+    for (int i = 0; i < 16; i++)
+      if (packet.data[i] != (byte) Integer.parseInt(token.substring(i * 2, i * 2 + 2), 16))
+        return null;
+    Packet inner = new Packet();
+    inner.type = packet.data[16] & 255;
+    inner.generation = packet.generation;
+    inner.sequence = packet.sequence;
+    inner.frame = packet.frame;
+    inner.nanos = packet.nanos;
+    inner.data = java.util.Arrays.copyOfRange(packet.data, 17, packet.data.length);
+    return inner;
+  }
+
   static JSONObject json(Packet p) throws Exception {
     return new JSONObject(new String(p.data, StandardCharsets.UTF_8));
   }

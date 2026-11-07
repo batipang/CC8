@@ -19,7 +19,7 @@ SESSION_INTERFACES = r"""
   final Object routeLock=new Object();
   boolean foreground=true,recording,visual,announcement,textSession,receiverRegistered;
   boolean dotChatSupported,savedTasksSupported;
-  int epoch,minimumGeneration,lifecycle,requests,announcementGeneration,outputStarts;
+  int epoch,minimumGeneration,lifecycle,requests,announcementGeneration,textGeneration;
   CaptureWindow captureWindow;
   int visualGeneration;String visionRequestId="",pendingVisionNonce="",desktopVisionNonce="";
   volatile long routeEpoch;
@@ -29,8 +29,15 @@ SESSION_INTERFACES = r"""
   ActivityCheck listener;
   final Object usbState=new Object();
   final Context context=new Context();final Lan lan=new Lan();
-  final Auth desktopCameraAuth=new Auth();final Feedback statusFeedback=new Feedback();
-  final Output speakerOwner=new Output();
+  final Auth desktopCameraAuth=new Auth();final StatusFeedback statusFeedback=new StatusFeedback();
+  final HostActivation hostActivation=new HostActivation();
+  final java.util.concurrent.atomic.AtomicInteger nativeOpens=new java.util.concurrent.atomic.AtomicInteger();
+  final SpeakerOwner speakerOwner=new SpeakerOwner(()->{
+   nativeOpens.incrementAndGet();return new SpeakerSession.Device(){
+    public void play(){}public void pause(){}public void flush(){}public void release(){}
+    public int write(short[] data,int offset,int count){try{Thread.sleep(1);}catch(InterruptedException e){Thread.currentThread().interrupt();return 0;}return count;}
+   };
+  },()->foreground);
   void cancelVision(){visual=false;}void stopMicrophone(){recording=false;captureWindow=null;}
   boolean stopMicrophone(CaptureWindow expected){
    if(captureWindow!=expected)return false;stopMicrophone();return true;
@@ -43,20 +50,17 @@ SESSION_INTERFACES = r"""
    sendPacket(Wire.MIC,captureEpoch,0,0,10,new byte[320]);
   }
   void send(JSONObject j){try{sendPacket(Wire.EVENT,epoch,0,0,10,Wire.jsonBytes(j));}catch(IOException ignored){}}
-  void beginTaskOutput(String role,int generation){outputStarts++;}
   String transportName(){return activeLink==null?"none":activeLink.kind;}
   void workspaceGet(){requests++;}
   ROUTE_METHODS
  }
  static class Context{void unregisterReceiver(Object receiver){}}
- static class Lan{void cancelPending(){}void release(){}void acquire(){}void configure(JSONObject data){}}
+ static class Lan{int configurations;void cancelPending(){}void release(){}void acquire(){}void configure(JSONObject data){configurations++;}}
  static class Auth{void reset(){}String challenge(){return "public-test-challenge";}}
- static class Feedback{void reset(){}boolean begin(int generation){return true;}}
- static class Output{void endTasksThrough(int generation){}}
  static class BuildConfig{static final int CC8_PROTOCOL=2;}
  static class SystemClock{static long now;static long elapsedRealtime(){return now;}}
  static class Link{
-  boolean closed,ready,pairedCaptureRequested;int ticket;String kind,captureStartToken,routeToken;
+  boolean closed,ready,pairedCaptureRequested,outputBound;int ticket;String kind,captureStartToken,routeToken;
   Socket connection;DataOutputStream out;
   Link(String name){kind=name;}
   final List<JSONObject> events=new ArrayList<>();
@@ -74,18 +78,23 @@ SESSION_INTERFACES = r"""
   void offer(Wire.Packet packet)throws IOException{failIfRequested();packets.add(packet);}
  }
  static class Wire{
-  static final int EVENT=1,MIC=2,MIC_PAIRED=5;
+  static final int EVENT=1,MIC=2,MIC_PAIRED=5,ROUTE_BOUND=6;
   static boolean block,blockWrite;static int parses,blockAt=2,writes;
   static void write(DataOutputStream out,int type,int generation,long sequence,long frame,long nanos,Object data)throws IOException{
    writes++;if(blockWrite){entered.countDown();try{if(!release.await(2,java.util.concurrent.TimeUnit.SECONDS))throw new AssertionError("write barrier timeout");}catch(InterruptedException e){throw new IOException(e);}}
   }
   static final java.util.concurrent.CountDownLatch entered=new java.util.concurrent.CountDownLatch(1),release=new java.util.concurrent.CountDownLatch(1);
   static class Packet{
-   int type=EVENT,generation=7,cameraGeneration;Object data;long sequence,frame,nanos,cameraRoute,outgoingRoute=-1;
+   int type=EVENT,generation=7,cameraGeneration,innerType;Object data;long sequence,frame,nanos,cameraRoute,outgoingRoute=-1;
    String cameraRequestId,routeToken;
    Packet(){}Packet(JSONObject value){data=value;}
   }
-  static void bindRoute(Packet packet,String token){packet.routeToken=token;}
+  static void bindRoute(Packet packet,String token){packet.routeToken=token;packet.innerType=packet.type;packet.type=ROUTE_BOUND;}
+  static Packet unbindRoute(Packet packet,String token){
+   if(packet.type!=ROUTE_BOUND||token==null||!token.equals(packet.routeToken))return null;
+   Packet result=new Packet();result.type=packet.innerType;result.generation=packet.generation;result.data=packet.data;
+   result.sequence=packet.sequence;result.frame=packet.frame;result.nanos=packet.nanos;return result;
+  }
   static JSONObject json(Packet p)throws Exception{
    parses++;
    if(block&&parses==blockAt){entered.countDown();if(!release.await(2,java.util.concurrent.TimeUnit.SECONDS))throw new AssertionError("fixture barrier timeout");}
@@ -104,6 +113,11 @@ SESSION_INTERFACES = r"""
  final Queue<Runnable> ui=new java.util.concurrent.ConcurrentLinkedQueue<>();
  void drain(){Runnable r;while((r=ui.poll())!=null)r.run();}
  static Wire.Packet oldWorkspace(){return new Wire.Packet(new JSONObject("event","workspace","revision",99,"tasks",new JSONArray(task("completed")),"reminders",new JSONArray()));}
+ static void duplex(ActivityCheck c,Link link,String token,long serial)throws Exception{
+  if("usb".equals(link.kind))c.session.usbLink=link;else c.session.wifiLink=link;
+  c.session.deliver(new Wire.Packet(new JSONObject("event","transport_activate","route_token",token,
+   "route_output_version",1,"route_owner","e".repeat(32),"route_serial",serial)),link);
+ }
  static void activate(ActivityCheck c,Link link)throws Exception{
   if("usb".equals(link.kind))c.session.usbLink=link;else c.session.wifiLink=link;
   c.session.select(link);
@@ -115,31 +129,98 @@ SCENARIOS = r"""
   ActivityCheck c=new ActivityCheck();Session s=c.session;s.listener=c;
   Link old=new Link("usb");activate(c,old);c.drain();
   c.snapshot(1,task("running"));c.drain();
-  switch(args[0]){
+  try{switch(args[0]){
+   case "old_activation_control":{
+    duplex(c,old,"a".repeat(32),1);Link wifi=new Link("wifi");duplex(c,wifi,"b".repeat(32),2);
+    long route=s.routeEpoch;duplex(c,old,"a".repeat(32),1);
+    yes(s.activeLink==wifi&&s.routeEpoch==route&&"b".repeat(32).equals(wifi.routeToken),"late activation replaced newer route");
+    duplex(c,wifi,"c".repeat(32),2);
+    yes(s.routeEpoch==route&&"b".repeat(32).equals(wifi.routeToken),"duplicate activation changed live token");
+    s.deliver(new Wire.Packet(new JSONObject("event","transport_activate","route_token","d".repeat(32))),wifi);
+    yes(s.routeEpoch==route&&wifi.outputBound,"unversioned activation downgraded duplex socket");break;
+   }
+   case "host_parse_race":{
+    duplex(c,old,"a".repeat(32),1);
+    Wire.Packet stale=new Wire.Packet(new JSONObject("event","announcement_begin"));Wire.bindRoute(stale,"a".repeat(32));
+    Wire.blockAt=Wire.parses+1;Wire.block=true;List<Throwable> errors=Collections.synchronizedList(new ArrayList<>());
+    Thread reader=new Thread(()->{try{s.deliver(stale,old);}catch(Throwable e){errors.add(e);}});reader.start();
+    try{
+     yes(Wire.entered.await(2,java.util.concurrent.TimeUnit.SECONDS),"bound control did not reach parse barrier");
+     duplex(c,new Link("wifi"),"b".repeat(32),2);duplex(c,old,"c".repeat(32),3);
+    }finally{Wire.release.countDown();reader.join(3000);}
+    yes(!reader.isAlive()&&errors.isEmpty(),"bound control reader failed");
+    yes(!s.announcement&&s.speakerOwner.forPlayback(7)==null&&s.nativeOpens.get()==0,"bound control was retagged during parse");break;
+   }
+   case "host_restart":{
+    duplex(c,old,"a".repeat(32),10);Link next=new Link("wifi");
+    s.deliver(new Wire.Packet(new JSONObject("event","transport_activate","route_token","d".repeat(32),"route_output_version",1,"route_owner","f".repeat(32),"route_serial",1)),next);
+    long route=s.routeEpoch;yes(s.activeLink==next&&!s.recording,"new host did not activate without enabling microphone");
+    duplex(c,old,"b".repeat(32),11);
+    yes(s.activeLink==next&&s.routeEpoch==route,"retired host reactivated old socket");
+    Wire.Packet fresh=new Wire.Packet(new JSONObject("event","announcement_begin"));fresh.generation=1;Wire.bindRoute(fresh,"d".repeat(32));s.deliver(fresh,next);
+    yes(s.announcement&&s.speakerOwner.forPlayback(1)!=null,"new host's reset generation was rejected");break;
+   }
+   case "invalid_activation":{
+    duplex(c,old,"a".repeat(32),1);long route=s.routeEpoch;
+    for(Object serial:new Object[]{true,0,-1,1.5,"2"}){
+     boolean rejected=false;
+     try{s.deliver(new Wire.Packet(new JSONObject("event","transport_activate","route_token","b".repeat(32),"route_output_version",1,"route_owner","e".repeat(32),"route_serial",serial)),old);}
+     catch(IOException|IllegalArgumentException expected){rejected=true;}
+     yes(rejected&&s.routeEpoch==route&&"a".repeat(32).equals(old.routeToken),"invalid activation changed route before validation");
+    }
+    duplex(c,old,"c".repeat(32),2);yes(s.routeEpoch>route&&old.outputBound,"invalid control consumed valid successor");break;
+   }
+   case "bound_lan_config":{
+    duplex(c,old,"a".repeat(32),1);
+    Wire.Packet config=new Wire.Packet(new JSONObject("event","lan_config","config",new JSONObject()));
+    s.deliver(config,old);yes(s.lan.configurations==0,"unwrapped stale config was accepted");
+    Wire.bindRoute(config,"b".repeat(32));s.deliver(config,old);yes(s.lan.configurations==0,"old token config was accepted");
+    Wire.Packet fresh=new Wire.Packet(new JSONObject("event","lan_config","config",new JSONObject()));Wire.bindRoute(fresh,"a".repeat(32));
+    s.deliver(fresh,old);yes(s.lan.configurations==1,"fresh bound config did not apply");
+    Wire.Packet spoof=new Wire.Packet(new JSONObject("event","transport_activate","route_token","b".repeat(32)));Wire.bindRoute(spoof,"a".repeat(32));
+    long route=s.routeEpoch;s.deliver(spoof,old);yes(s.routeEpoch==route&&old.outputBound,"application envelope changed transport role");break;
+   }
+   case "old_host_after_reuse":{
+    duplex(c,old,"a".repeat(32),1);
+    Wire.Packet stale=new Wire.Packet(new JSONObject("event","announcement_begin"));stale.generation=7;
+    duplex(c,new Link("wifi"),"b".repeat(32),2);duplex(c,old,"c".repeat(32),3);
+    s.deliver(stale,old);
+    yes(!s.announcement&&s.speakerOwner.forPlayback(7)==null&&s.nativeOpens.get()==0,"old unwrapped host begin armed actual output owner");
+    Wire.bindRoute(stale,"a".repeat(32));s.deliver(stale,old);
+    yes(!s.announcement&&s.speakerOwner.forPlayback(7)==null&&s.nativeOpens.get()==0,"old bound host begin armed actual output owner");
+    Wire.Packet fresh=new Wire.Packet(new JSONObject("event","announcement_begin"));fresh.generation=8;Wire.bindRoute(fresh,"c".repeat(32));
+    s.deliver(fresh,old);
+    SpeakerOwner.Ticket ticket=s.speakerOwner.forPlayback(8);
+    yes(s.announcement&&ticket!=null,"fresh bound begin did not reach actual output owner");
+    SpeakerSession.Lease lease=ticket.output().acquire(8,1,()->true);
+    yes(ticket.output().write(lease,new short[]{1000},0,1)==1,"fresh output lease could not write synthetic sample");
+    yes(s.nativeOpens.get()==1,"output owner acquired more than once");break;
+   }
+
    case "route_queue":{
-    s.activateRoute(old,"a".repeat(32));
+    s.activateRoute(old,"a".repeat(32),false);
     Wire.Packet mic=new Wire.Packet();mic.type=Wire.MIC;s.ownPacket(mic,old);
     Wire.Packet control=new Wire.Packet();s.ownPacket(control,old);
     yes(s.queuedPacketCurrent(mic,old)&&"a".repeat(32).equals(mic.routeToken),"fresh packet not bound");
-    Link wifi=new Link("wifi");s.activateRoute(wifi,"b".repeat(32));
+    Link wifi=new Link("wifi");s.activateRoute(wifi,"b".repeat(32),false);
     yes(!s.queuedPacketCurrent(mic,old)&&!s.queuedPacketCurrent(control,old),"old queued data survived switch");
-    s.activateRoute(old,"c".repeat(32));
+    s.activateRoute(old,"c".repeat(32),false);
     yes(!s.queuedPacketCurrent(mic,old)&&!s.queuedPacketCurrent(control,old),"same socket reused old queue");
     s.writeQueuedPacket(mic,old);yes(Wire.writes==0,"stale queue reached actual write helper");
     Wire.Packet fresh=new Wire.Packet();fresh.type=Wire.MIC;s.ownPacket(fresh,old);
     yes(s.queuedPacketCurrent(fresh,old)&&"c".repeat(32).equals(fresh.routeToken),"new data rejected");
     s.writeQueuedPacket(fresh,old);yes(Wire.writes==1,"fresh queue did not write once");
-    long route=s.routeEpoch;s.activateRoute(old,"d".repeat(32));
+    long route=s.routeEpoch;s.activateRoute(old,"d".repeat(32),false);
     yes(s.routeEpoch>route&&!s.queuedPacketCurrent(fresh,old),"new token on same socket did not fence queue");break;
    }
    case "write_after_admission":{
-    s.activateRoute(old,"a".repeat(32));
+    s.activateRoute(old,"a".repeat(32),false);
     Wire.Packet mic=new Wire.Packet();mic.type=Wire.MIC;s.ownPacket(mic,old);
     Wire.blockWrite=true;List<Throwable> errors=Collections.synchronizedList(new ArrayList<>());
     Thread writer=new Thread(()->{try{s.writeQueuedPacket(mic,old);}catch(Throwable e){errors.add(e);}});
     writer.start();try{
      yes(Wire.entered.await(2,java.util.concurrent.TimeUnit.SECONDS),"writer did not enter real write helper");
-     Thread handover=new Thread(()->{try{s.activateRoute(new Link("wifi"),"b".repeat(32));}catch(Throwable e){errors.add(e);}});
+     Thread handover=new Thread(()->{try{s.activateRoute(new Link("wifi"),"b".repeat(32),false);}catch(Throwable e){errors.add(e);}});
      handover.start();handover.join(1000);
      yes(!handover.isAlive(),"socket writer held route lock across blocking I/O");
      yes("a".repeat(32).equals(mic.routeToken),"already admitted packet was retagged");
@@ -157,7 +238,7 @@ SCENARIOS = r"""
      activate(c,new Link("wifi"));
     }finally{Wire.release.countDown();reader.join(3000);}
     yes(!reader.isAlive()&&errors.isEmpty(),"audio control reader failed");
-    yes(!s.announcement&&s.outputStarts==0,"old route enabled announcement after control parse");
+    yes(!s.announcement&&s.speakerOwner.forPlayback(7)==null,"old route enabled announcement after control parse");
     break;
    }
    case "late_loss":case "late_reconnect":case "same_link_reactivated":case "same_link_control_parse":{
@@ -347,7 +428,7 @@ SCENARIOS = r"""
     yes("completed".equals(c.tasksData.optJSONObject(0).optString("status"))&&!c.taskResultUnconfirmed,"Current terminal receipt stays authoritative");break;
    }
    default:throw new AssertionError("Unknown scenario");
-  }
+  }}finally{s.speakerOwner.close();}
  }
 }
 """
@@ -377,6 +458,7 @@ class WorkspaceRouteTests(unittest.TestCase):
                 'private boolean queuedPacketCurrent(',
                 'private void writeQueuedPacket(',
                 'private String recordingPhase(',
+                'private synchronized void beginTaskOutput(',
                 'private void registerCapture(',
                 'private boolean captureHello(',
                 'private void confirmCaptureStart(',
@@ -416,13 +498,17 @@ class WorkspaceRouteTests(unittest.TestCase):
             route_methods.append(
                 'boolean queuedCameraCurrent(Wire.Packet p,Link link){return true;}'
             )
-        bound = 'final long route = routeFor(source);' in session
+        bound = 'private long routeFor(' in session
         start = session.index('{', session.index('private void handle(')) + 1
         end = session.index('      if ("hello".equals(event)) {', start)
         # Keep the actual source/activation guard and workspace dispatch branch;
         # omit unrelated event branches and Android audio/camera dependencies.
         route_methods.append(
-            'void deliver(Wire.Packet p,Link source)throws Exception{'
+            (
+                'void deliver(Wire.Packet received,Link source)throws Exception{'
+                if 'handle(Wire.Packet received,' in session
+                else 'void deliver(Wire.Packet p,Link source)throws Exception{'
+            )
             + session[start:end]
             + 'if("workspace".equals(event)){'
             + branch(session, 'workspace')
@@ -480,6 +566,10 @@ class WorkspaceRouteTests(unittest.TestCase):
                 str(cls.folder),
                 str(JAVA / 'CaptureWindow.java'),
                 str(JAVA / 'CaptureClockStats.java'),
+                str(JAVA / 'StatusFeedback.java'),
+                str(JAVA / 'HostActivation.java'),
+                str(JAVA / 'SpeakerOwner.java'),
+                str(JAVA / 'SpeakerSession.java'),
                 str(test),
             ],
             capture_output=True,
@@ -520,6 +610,24 @@ class WorkspaceRouteTests(unittest.TestCase):
 
     def test_already_admitted_write_keeps_old_token_without_blocking_handover(self):
         self.scenario('write_after_admission')
+
+    def test_late_activation_or_downgrade_cannot_override_newer_route(self):
+        self.scenario('old_activation_control')
+
+    def test_bound_control_parsing_keeps_original_activation(self):
+        self.scenario('host_parse_race')
+
+    def test_host_restart_allows_new_generation_but_rejects_retired_host(self):
+        self.scenario('host_restart')
+
+    def test_malformed_management_fields_cannot_partially_activate_route(self):
+        self.scenario('invalid_activation')
+
+    def test_lan_configuration_uses_same_output_activation_boundary(self):
+        self.scenario('bound_lan_config')
+
+    def test_host_old_frames_cannot_arm_real_output_owner_after_link_reuse(self):
+        self.scenario('old_host_after_reuse')
 
     def test_camera_transfer_never_falls_back_after_enqueue_failure(self):
         self.scenario('camera_link_failure')
