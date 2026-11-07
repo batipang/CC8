@@ -1,6 +1,6 @@
 # 大黄蜂统一待办：功能与工程质量
 
-更新于 2026-11-07。原排期基线为 Android 0.8.6 / 后台 0.11.0。当前部署为后台 0.15.43 / 原签名 APK 0.9.42（code79），源码 `e76fa37`。部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)。P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)。复选框按完整验收标准关闭。
+更新于 2026-11-07。原排期基线为 Android 0.8.6 / 后台 0.11.0。当前部署为后台 0.15.44 / 原签名 APK 0.9.42（code79），源码 `98e7071`。部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)。P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)。复选框按完整验收标准关闭。
 
 依据：[竞品复盘](COMPETITOR_REVIEW_2026-11-01.md)、[当前架构](ARCHITECTURE.md)、[实机与回归记录](VALIDATION.md)。本次已合并 [ToFix](ToFix.md) 的 20 个工程条目；这是功能与工程质量的唯一详细清单；[ROADMAP](ROADMAP.md)保留完成情况和阶段概览。
 
@@ -29,7 +29,7 @@
 ## P0：稳定地听、说、运行
 
 - [ ] **P0-01 — 建立语音与运行基线、诊断报告**
-  - 检测器 1.0.3 候选增加多声道统计中的可选本机参考播放，记录请求模式、写入帧数和播放头，用于核对 48 kHz 后两路低电平近重复数据的用途。 [检测器入口](../cc8-diagnostics/README.md)
+  - 检测器 1.0.3／code4 已安装。默认无参考、本机参考、停止、退到桌面及恢复五项实机检查通过，原签名、播放头、取消结果及收尾停采经独立复核。后两路仍近乎重复，硬件参考用途待确认。 [参考音与取消](AUTOMATED_DEVICE_CHECKS.md#多声道统计中的本机参考音与取消)
   - 检测器 1.0.2／code3 已安装。八个实机条件中，MIC 双声道在 16／48 kHz 有效，MIC 四声道在 48 kHz 有效且后两路近乎重复，UNPROCESSED 均没有持续有效信号。独立复核和收尾停采通过，声源方向与回采用途继续核对。 [多声道结果](AUTOMATED_DEVICE_CHECKS.md#多声道输入统计)
   - 离线 `audit-measure` 从原请求阶段复算主识别、回声参考识别及限定词遗漏计数，忽略文件自带的汇总。参考识别只启动未结束时单列缺测，旧报告可继续复核。 [离线复核](MEASUREMENT_RUNS.md#离线复核既有报告)
   - 0.15.43 已部署，单列回声参考识别耗时，成功、失败和取消均绑定原插话候选。主识别指标继续单列，旧报告和未完成尝试保留缺测。诊断导出支持固定工具题同段对照的「只读」漏词标记。六次只读查询及离线复核均成功。 [诊断统计](MEASUREMENT_RUNS.md) [部署](CURRENT_DEPLOYMENT.md#01543code79-部署)
