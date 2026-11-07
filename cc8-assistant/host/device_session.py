@@ -5,6 +5,7 @@ import threading
 import time
 from typing import TYPE_CHECKING
 from wake_controller import WAITING
+from route_output import same_route
 
 if TYPE_CHECKING:
     from session_controller import SessionController
@@ -71,6 +72,18 @@ def complete_handshake(session: SessionController, j):
     session.playback_interrupted_by_transport = False
     with session.guard:
         # Resume the pending screen update without changing capture ownership.
+        # An old route may have accepted the write before its device-side
+        # handler was superseded. Reconcile once on the next authenticated activation.
+        if (
+            session.active
+            and session.pending_screen_event is None
+            and not same_route(
+                session.screen_synced_owner, session.connection, session.bound_route_token
+            )
+        ):
+            session.pending_screen_event = (
+                'screen_sleep' if session.screen_sleeping else 'screen_wake'
+            )
         session.flush_screen_event()
     hooks.log('device_handshake_verified', transport=session.transport_kind)
     hooks.event('brain_provider', provider=getattr(hooks.brain(), 'selected', 'minimax'))

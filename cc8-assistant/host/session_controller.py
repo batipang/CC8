@@ -10,7 +10,7 @@ from collections import deque
 import threading
 import time
 import uuid
-from protocol import Packet, SPEAKER
+from protocol import Packet
 from reply_types import TextReply
 from session_ports import SessionHooks, SessionView
 from device_session import (
@@ -22,6 +22,7 @@ from device_session import (
 )
 from tool_sample_gate import ToolSampleGate
 from capture_frontend import requested_frontend, accepts_frontend
+from route_output import bind_host_packet, host_packet_current, same_route, screen_route_current
 
 
 class SessionController:
@@ -33,8 +34,7 @@ class SessionController:
         self.capture_frontend = 'mono'
         self.hooks = hooks
         self.text_generation = None
-        self.connection = None
-        self.bound_route_token = None
+        self.connection, self.bound_route_token = None, None
         self.transport_kind = 'none'
         self.rebind_seen = False
         self.capture_route_pending = False
@@ -59,6 +59,7 @@ class SessionController:
         self.last_interaction = time.monotonic()
         self.screen_sleeping = False
         self.pending_screen_event = None
+        self.screen_synced_owner: tuple[object | None, str | None] = (None, None)
 
     def snapshot(self) -> SessionView:
         return SessionView(
@@ -79,24 +80,30 @@ class SessionController:
         self.connection = None
 
     def send(self, p):
+        owner = self.connection, self.bound_route_token
+        p = bind_host_packet(p, owner, self.generation)
         with self.write_lock:
-            conn = self.connection
+            conn = owner[0]
             if conn is None:
                 raise EOFError('No device connection')
-            if p.kind == SPEAKER and p.generation != self.generation:
+            if not same_route(
+                owner, self.connection, self.bound_route_token
+            ) or not host_packet_current(p, owner, self.generation):
                 return
             conn.sendall(p.encode())
 
     def event(self, event, generation=None, **fields):
+        owner = self.connection, self.bound_route_token
         if generation is not None and generation < self.generation:
             return
-        packet = Packet.event(
-            event, self.generation if generation is None else generation, **fields
-        )
+        event_generation = self.generation if generation is None else generation
+        packet = bind_host_packet(Packet.event(event, event_generation, **fields), owner)
         with self.write_lock:
             # Match the speaker send boundary. A route change or cancellation
             # may have advanced the generation while this event was queued.
-            if generation is None or generation >= self.generation:
+            if same_route(owner, self.connection, self.bound_route_token) and (
+                generation is None or generation >= self.generation
+            ):
                 self.hooks.send(packet)
 
     def change_transport(self, channel):
@@ -118,8 +125,8 @@ class SessionController:
             self.hooks.cancel('transport_switch')
         except (OSError, EOFError):
             pass
-        self.connection = channel
-        self.bound_route_token = route_token
+        with self.write_lock:
+            self.connection, self.bound_route_token = channel, route_token
         self.hooks.visual().clear_challenge()
         self.transport_kind = channel.kind if channel else 'none'
         self.hooks.capture().reset_transport(self.transport_kind)
@@ -164,13 +171,18 @@ class SessionController:
     def flush_screen_event(self):
         """Publish the latest screen update with the session guard held."""
         event = self.pending_screen_event
-        if event is not None and self.connection is not None:
+        owner = self.connection, self.bound_route_token
+        if event is not None and screen_route_current(
+            owner, self.connection, self.bound_route_token
+        ):
             # A failed write invalidates the route. Keep the latest screen
             # intent for the next ready route until this send succeeds.
             self.hooks.event(event)
-            self.pending_screen_event = None
-            if event == 'screen_sleep':
-                self.hooks.log('screen_idle_sleep')
+            if screen_route_current(owner, self.connection, self.bound_route_token):
+                self.pending_screen_event = None
+                self.screen_synced_owner = owner
+                if event == 'screen_sleep':
+                    self.hooks.log('screen_idle_sleep')
 
     def idle_tick(self):
         self.hooks.reminder_tick()

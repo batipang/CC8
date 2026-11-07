@@ -109,7 +109,7 @@ class USBPipeTests(unittest.TestCase):
         self.assertIs(hub.active, wifi)
         self.assertEqual(hub.switches, switches)
 
-    def test_failed_upgrade_keeps_live_session_until_another_usb_activates(self):
+    def test_failed_upgrade_refreshes_role_without_cancelling_legacy_session(self):
         hub = self.hub()
         wifi = self.wifi(hub)
         with patch('threading.Thread.start'):
@@ -130,7 +130,13 @@ class USBPipeTests(unittest.TestCase):
         self.assertEqual(bridge.generation, generation)
         self.assertTrue(bridge.playback.playing)
         self.assertEqual(bridge.workspace.tasks[-1]['status'], 'running')
+        # The failed write may have delivered a role change. Reconfirm the
+        # surviving legacy route; its unchanged identity preserves the task.
+        self.assertTrue(reconcile_transport(bridge, hub))
         self.assertFalse(reconcile_transport(bridge, hub))
+        self.assertEqual(bridge.generation, generation)
+        self.assertTrue(bridge.playback.playing)
+        self.assertEqual(bridge.workspace.tasks[-1]['status'], 'running')
         self.assertEqual(hub.events.get(timeout=2), ('down', broken, None))
 
         host, peer = socket.socketpair()

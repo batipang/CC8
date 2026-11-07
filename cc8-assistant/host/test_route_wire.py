@@ -18,7 +18,12 @@ public class RouteWireCheck {
    packet=new Wire.Packet();packet.type=Integer.parseInt(args[1]);packet.generation=7;
    packet.sequence=18;packet.frame=320;packet.nanos=1234567890L;
    packet.data=HexFormat.of().parseHex(args[2]);Wire.bindRoute(packet,args[3]);
-  }else packet=Wire.read(new DataInputStream(new ByteArrayInputStream(HexFormat.of().parseHex(args[1]))));
+  }else{
+   packet=Wire.read(new DataInputStream(new ByteArrayInputStream(HexFormat.of().parseHex(args[1]))));
+   if(args[0].equals("unbind")){
+    packet=Wire.unbindRoute(packet,args[2]);if(packet==null){System.out.println("rejected");return;}
+   }
+  }
   ByteArrayOutputStream buffer=new ByteArrayOutputStream();
   Wire.write(new DataOutputStream(buffer),packet.type,packet.generation,packet.sequence,packet.frame,packet.nanos,packet.data);
   System.out.println(HexFormat.of().formatHex(buffer.toByteArray()));
@@ -82,6 +87,15 @@ class RouteWireTests(unittest.TestCase):
                 echoed = self.run_java('echo', expected.hex())
                 self.assertEqual(echoed.returncode, 0, echoed.stderr)
                 self.assertEqual(bytes.fromhex(echoed.stdout.strip()), expected)
+                decoded = self.run_java('unbind', expected.hex(), 'a1' * 16)
+                self.assertEqual(decoded.returncode, 0, decoded.stderr)
+                self.assertEqual(
+                    bytes.fromhex(decoded.stdout.strip()),
+                    Packet(kind, 7, 18, 320, 1_234_567_890, data).encode(),
+                )
+                rejected = self.run_java('unbind', expected.hex(), 'b' * 32)
+                self.assertEqual(rejected.returncode, 0, rejected.stderr)
+                self.assertEqual(rejected.stdout.strip(), 'rejected')
 
     def test_java_rejects_bad_inner_frames_nested_tokens_and_oversized_payloads(self):
         for kind, data, token in (
