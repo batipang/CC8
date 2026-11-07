@@ -62,7 +62,7 @@ while True:
         if json.loads(data)['operation'] != 'health':
             raise SystemExit(97)
         peer.sendall((json.dumps({'ok': True, 'model_ready': mode != 'unhealthy', 'recognition_worker': True, 'response_worker': True}) + '\\n').encode())
-    if mode == 'disable':
+    if mode in ('disable', 'argv_unavailable'):
         atomic_private_json(private / 'enabled.json', {'enabled': False})
         while True:
             import time
@@ -142,7 +142,9 @@ def exercise(root):
             clock_offset[0] = 200
         return result
 
+    argv_probe = service.own_process if mode != 'argv_unavailable' else lambda _pid: False
     with (
+        patch.object(service, 'own_process', side_effect=argv_probe),
         patch.object(service, 'ROOT', root),
         patch.object(service, 'PRIVATE', private),
         patch.object(service, 'BRIDGE', root / 'bridge.py'),
@@ -458,6 +460,13 @@ class SupervisorProcessTests(unittest.TestCase):
         self.assertEqual(report['backoffs'], [1])
         self.assertGreaterEqual(report['unhealthy'], 2)
         self.assertGreaterEqual(report['ready'], 1)
+        self.assertFalse(report['enabled'])
+
+    def test_supervisor_keeps_and_reaps_its_real_child_when_argv_is_unavailable(self):
+        report = self.check_mode('argv_unavailable')
+        self.assertEqual(report['spawned'], 1)
+        self.assertGreaterEqual(report['ready'], 1)
+        self.assertEqual(report['backoffs'], [])
         self.assertFalse(report['enabled'])
 
     def test_disable_marker_terminates_real_child_without_restart(self):
