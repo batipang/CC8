@@ -311,11 +311,18 @@ final class VoiceSession {
   }
 
   private void select(Link next) throws IOException {
+    // Local fallback may preserve an already open recorder, but cannot invent
+    // the host's activation token. Its provisional Ready is ignored by a new host.
+    activateRoute(next, null);
+  }
+
+  private void activateRoute(Link next, String routeToken) throws IOException {
     // routeLock 保证只选一路；切换可以保留已开启的收音，但必须丢弃旧回答和看图。
     synchronized (routeLock) {
       if (!foreground || next.closed || next.ticket != lifecycle) return;
       next.ready = true;
-      boolean changed = activeLink != next;
+      boolean changed =
+          activeLink != next || !java.util.Objects.equals(next.routeToken, routeToken);
       final CaptureWindow currentCapture;
       synchronized (this) {
         currentCapture = recording ? captureWindow : null;
@@ -339,6 +346,7 @@ final class VoiceSession {
         minimumGeneration = 0;
         statusFeedback.reset();
         activeLink = next;
+        next.routeToken = routeToken;
         next.captureStartToken = null;
         next.pairedCaptureRequested = false;
         dotChatSupported = savedTasksSupported = false;
@@ -475,6 +483,7 @@ final class VoiceSession {
     final ArrayBlockingQueue<Wire.Packet> queue = new ArrayBlockingQueue<>(128);
     volatile boolean closed, ready;
     String captureStartToken;
+    String routeToken;
     volatile boolean pairedCaptureRequested;
     DataOutputStream out;
 
@@ -485,7 +494,11 @@ final class VoiceSession {
     }
 
     void event(JSONObject value) throws IOException {
-      offer(eventPacket(value));
+      synchronized (routeLock) {
+        Wire.Packet packet = eventPacket(value);
+        if (!value.optString("event").startsWith("transport_")) ownPacket(packet, this);
+        offer(packet);
+      }
     }
 
     void cameraEvent(JSONObject value, int gen, String ident, long route) throws IOException {
@@ -493,6 +506,7 @@ final class VoiceSession {
       packet.cameraGeneration = gen;
       packet.cameraRequestId = ident;
       packet.cameraRoute = route;
+      ownPacket(packet, this);
       offer(packet);
     }
 
@@ -523,15 +537,7 @@ final class VoiceSession {
                   try {
                     while (!closed && foreground && lifecycle == ticket) {
                       Wire.Packet packet = queue.poll(1, TimeUnit.SECONDS);
-                      if (packet != null && queuedCameraCurrent(packet, this))
-                        Wire.write(
-                            out,
-                            packet.type,
-                            packet.generation,
-                            packet.sequence,
-                            packet.frame,
-                            packet.nanos,
-                            packet.data);
+                      if (packet != null) writeQueuedPacket(packet, this);
                     }
                   } catch (Exception error) {
                     close();
@@ -541,6 +547,7 @@ final class VoiceSession {
             .start();
         JSONObject hello = Wire.event("transport_hello");
         Wire.put(hello, "protocol", BuildConfig.CC8_PROTOCOL);
+        Wire.put(hello, "route_envelope_version", 1);
         event(hello);
         DataInputStream in = new DataInputStream(connection.getInputStream());
         while (!closed && foreground && lifecycle == ticket) handle(Wire.read(in), this);
@@ -571,7 +578,11 @@ final class VoiceSession {
         return;
       }
       if ("transport_activate".equals(name)) {
-        select(source);
+        Object token = control.opt("route_token");
+        if (token != null
+            && (!(token instanceof String) || !((String) token).matches("[a-f0-9]{32}")))
+          throw new IOException("Invalid route activation");
+        activateRoute(source, (String) token);
         return;
       }
       if ("transport_standby".equals(name)) {
@@ -996,12 +1007,16 @@ final class VoiceSession {
       packet.frame = frame;
       packet.nanos = nanos;
       packet.data = bytes;
+      ownPacket(packet, destination);
       try {
         destination.offer(packet);
       } catch (IOException error) {
         Link fallback = activeLink;
         if (fallback == null || fallback == destination || fallback.closed) throw error;
-        if (!microphonePacket || captureRegistered(generation)) fallback.offer(packet);
+        // A route-owned packet cannot be forwarded to a different activation.
+        // The next native read/control must acquire that activation explicitly.
+        if (packet.outgoingRoute == routeEpoch
+            && (!microphonePacket || captureRegistered(generation))) fallback.offer(packet);
       }
     }
   }
@@ -1150,6 +1165,34 @@ final class VoiceSession {
     }
   }
 
+  private void ownPacket(Wire.Packet packet, Link link) throws IOException {
+    if (!foreground || activeLink != link || link.closed) throw new IOException("Stale route");
+    packet.outgoingRoute = routeEpoch;
+    if (link.routeToken != null) Wire.bindRoute(packet, link.routeToken);
+  }
+
+  private boolean queuedPacketCurrent(Wire.Packet packet, Link link) {
+    synchronized (routeLock) {
+      return (packet.outgoingRoute < 0
+              || activeLink == link && currentRoute(packet.outgoingRoute) && !link.closed)
+          && queuedCameraCurrent(packet, link);
+    }
+  }
+
+  private void writeQueuedPacket(Wire.Packet packet, Link link) throws IOException {
+    if (!queuedPacketCurrent(packet, link)) return;
+    // Do not hold routeLock over a socket write. A packet already admitted here
+    // remains stamped with its old token and is fenced again by the host.
+    Wire.write(
+        link.out,
+        packet.type,
+        packet.generation,
+        packet.sequence,
+        packet.frame,
+        packet.nanos,
+        packet.data);
+  }
+
   void settings(boolean wake) {
     wakeMode = wake;
     JSONObject e = Wire.event("settings");
@@ -1283,10 +1326,21 @@ final class VoiceSession {
                       clockStats != null && !window.paired && Build.VERSION.SDK_INT >= 24
                           ? new AudioTimestamp()
                           : null;
+                  long inputRoute = -1;
                   while (recording
                       && foreground
                       && epoch == mine
                       && window.allows(SystemClock.elapsedRealtime())) {
+                    final long readRoute;
+                    synchronized (routeLock) {
+                      readRoute = routeEpoch;
+                    }
+                    if (inputRoute != readRoute) {
+                      // Erase paired converter/partial-packet history on the worker,
+                      // never concurrently with AudioRecord.read from the UI thread.
+                      input.clear();
+                      inputRoute = readRoute;
+                    }
                     CaptureAudioInput.Chunk chunk = input.read();
                     if (chunk == null) continue;
                     try {
@@ -1296,23 +1350,31 @@ final class VoiceSession {
                           || !window.allows(SystemClock.elapsedRealtime())) break;
                       int count = chunk.frames;
                       long now = System.nanoTime();
-                      inputLevel = chunk.level();
                       if (origin == 0) origin = now - count * 1000000000L / 16000;
-                      if (now - last > 400000000L && micFrames > 0) {
-                        JSONObject gap = Wire.event("capture_gap");
-                        Wire.put(gap, "milliseconds", (now - last) / 1000000);
-                        Wire.put(gap, "epoch", mine);
-                        Wire.put(gap, "sequence", sequence);
-                        send(gap);
+                      synchronized (routeLock) {
+                        // A blocking native read may straddle activation (including
+                        // USB -> Wi-Fi -> the same USB object). Drop that whole block.
+                        if (!currentRoute(readRoute)) {
+                          micFrames += count;
+                          continue;
+                        }
+                        inputLevel = chunk.level();
+                        if (now - last > 400000000L && micFrames > 0) {
+                          JSONObject gap = Wire.event("capture_gap");
+                          Wire.put(gap, "milliseconds", (now - last) / 1000000);
+                          Wire.put(gap, "epoch", mine);
+                          Wire.put(gap, "sequence", sequence);
+                          send(gap);
+                        }
+                        last = now;
+                        sendPacket(
+                            chunk.paired ? Wire.MIC_PAIRED : Wire.MIC,
+                            mine,
+                            sequence++,
+                            micFrames,
+                            origin + micFrames * 1000000000L / 16000,
+                            Wire.pcm(chunk.samples, chunk.samples.length));
                       }
-                      last = now;
-                      sendPacket(
-                          chunk.paired ? Wire.MIC_PAIRED : Wire.MIC,
-                          mine,
-                          sequence++,
-                          micFrames,
-                          origin + micFrames * 1000000000L / 16000,
-                          Wire.pcm(chunk.samples, chunk.samples.length));
                       micFrames += count;
                       if (captureStamp != null
                           && Build.VERSION.SDK_INT >= 24

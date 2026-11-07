@@ -10,6 +10,7 @@ import ssl
 import subprocess
 import threading
 import time
+import uuid
 from typing import Callable, Protocol
 from protocol import Packet, receive, EVENT, decode_json_object, JsonValue, JsonObject
 from tls_stream import TLSStream
@@ -232,7 +233,16 @@ class TransportHub:
                     other.close()
         if channel:
             try:
-                channel.event('transport_activate', transport=channel.kind)
+                # Even a reused Channel needs a new wire-level activation fence.
+                channel.route_token = uuid.uuid4().hex if channel.route_envelope else None
+                if channel.route_token:
+                    channel.event(
+                        'transport_activate',
+                        transport=channel.kind,
+                        route_token=channel.route_token,
+                    )
+                else:
+                    channel.event('transport_activate', transport=channel.kind)
                 if channel.kind == 'usb':
                     channel.event('lan_config', config=self.pairing.device_config())
             except (OSError, EOFError):

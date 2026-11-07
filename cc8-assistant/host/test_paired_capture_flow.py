@@ -171,8 +171,11 @@ class PairNegotiationTests(unittest.TestCase):
             self.assertEqual(bridge.health()['capture_frontend'], 'paired')
             bridge.change_transport(wifi)
             self.assertFalse(bridge.capture.paired_peer_ready)
-            with self.assertRaises(ValueError):
-                bridge.on_packet(Packet(MIC_PAIRED, 7, data=bytes(1280)))
+            # A preserved recorder cannot submit any format before the new
+            # route is registered; discard early PCM without killing that route.
+            bridge.on_packet(Packet(MIC_PAIRED, 7, data=bytes(1280)))
+            self.assertTrue(bridge.session.capture_route_pending)
+            self.assertEqual(len(bridge.capture.pending_mic), 0)
             bridge.on_event({**ready, 'capture_active': True})
             rebound = {**claim, 'event': 'session_rebind', 'capture_active': True}
             bridge.on_event(rebound)

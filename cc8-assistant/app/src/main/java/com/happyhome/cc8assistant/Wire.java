@@ -10,6 +10,7 @@ final class Wire {
       EVENT = 3,
       SPEAKER = 4,
       MIC_PAIRED = 5,
+      ROUTE_BOUND = 6,
       HEADER = 29,
       MAX = 65536;
 
@@ -17,6 +18,8 @@ final class Wire {
     int type, generation;
     long sequence, frame, nanos;
     byte[] data;
+    // A queue may outlive activation of this same socket. Never retag old work.
+    long outgoingRoute = -1;
     // Queue-only ownership for camera events. These fields never cross the wire.
     String cameraRequestId;
     long cameraRoute;
@@ -34,11 +37,7 @@ final class Wire {
     p.nanos = in.readLong();
     p.data = new byte[size - HEADER];
     in.readFully(p.data);
-    if (p.type < 1 || p.type > MIC_PAIRED) throw new IOException("Invalid packet type");
-    if (p.type == MIC_PAIRED && (p.data.length == 0 || p.data.length % 4 != 0))
-      throw new IOException("Invalid paired PCM frame");
-    if (p.type != EVENT && (p.data.length % 2 != 0 || p.data.length > 6400))
-      throw new IOException("Invalid PCM frame");
+    validate(p.type, p.data);
     return p;
   }
 
@@ -51,13 +50,7 @@ final class Wire {
       long nanos,
       byte[] data)
       throws IOException {
-    if (data == null) throw new IOException("Missing packet payload");
-    if (type < 1 || type > MIC_PAIRED) throw new IOException("Invalid packet type");
-    if (type == MIC_PAIRED && (data.length == 0 || data.length % 4 != 0))
-      throw new IOException("Invalid paired PCM frame");
-    if (type != EVENT && (data.length % 2 != 0 || data.length > 6400))
-      throw new IOException("Invalid PCM frame");
-    if (data.length > MAX - HEADER) throw new IOException("Packet too large");
+    validate(type, data);
     out.writeInt(HEADER + data.length);
     out.writeByte(type);
     out.writeInt(generation);
@@ -66,6 +59,38 @@ final class Wire {
     out.writeLong(nanos);
     out.write(data);
     out.flush();
+  }
+
+  private static void validate(int type, byte[] data) throws IOException {
+    if (data == null) throw new IOException("Missing packet payload");
+    if (type < 1 || type > ROUTE_BOUND) throw new IOException("Invalid packet type");
+    if (data.length > MAX - HEADER) throw new IOException("Packet too large");
+    int offset = 0;
+    if (type == ROUTE_BOUND) {
+      if (data.length < 17) throw new IOException("Invalid route envelope");
+      type = data[16] & 255;
+      if (type < 1 || type > MIC_PAIRED) throw new IOException("Invalid inner packet type");
+      offset = 17;
+    }
+    int length = data.length - offset;
+    if (type == MIC_PAIRED && (length == 0 || length % 4 != 0))
+      throw new IOException("Invalid paired PCM frame");
+    if (type != EVENT && (length % 2 != 0 || length > 6400))
+      throw new IOException("Invalid PCM frame");
+  }
+
+  static void bindRoute(Packet packet, String token) throws IOException {
+    validate(packet.type, packet.data);
+    if (packet.type == ROUTE_BOUND || token == null || !token.matches("[a-f0-9]{32}"))
+      throw new IOException("Invalid route token");
+    byte[] bound = new byte[17 + packet.data.length];
+    for (int i = 0; i < 16; i++)
+      bound[i] = (byte) Integer.parseInt(token.substring(i * 2, i * 2 + 2), 16);
+    bound[16] = (byte) packet.type;
+    System.arraycopy(packet.data, 0, bound, 17, packet.data.length);
+    validate(ROUTE_BOUND, bound);
+    packet.type = ROUTE_BOUND;
+    packet.data = bound;
   }
 
   static JSONObject json(Packet p) throws Exception {

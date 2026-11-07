@@ -52,10 +52,17 @@ class AudioRecord {
  int getState(){return STATE_INITIALIZED;}
  void startRecording(){started=true;}
  int getRecordingState(){return started?RECORDSTATE_RECORDING:0;}
+ static final CountDownLatch freshEntered=new CountDownLatch(1),freshRelease=new CountDownLatch(1);
  int read(short[] buffer,int offset,int count){
   reads++;
   String test=CaptureCheck.test;
   try {
+   if("route_read".equals(test)||"route_read_pair".equals(test)){
+    if(reads==1){entered.countDown();if(!releaseOld.await(3,TimeUnit.SECONDS))throw new AssertionError("old read fixture timeout");}
+    if(reads==2){freshEntered.countDown();if(!freshRelease.await(3,TimeUnit.SECONDS))throw new AssertionError("new read fixture timeout");}
+    if(reads>=3)stopped.await(3,TimeUnit.SECONDS);
+    return count;
+   }
    if("read_gap".equals(test)){
     if(reads==2)Thread.sleep(450);
     if(reads==3){entered.countDown();stopped.await(3,TimeUnit.SECONDS);}
@@ -91,6 +98,7 @@ class AudioRecord {
  void release(){released.countDown();}
 }
 class CaptureAudioInput {
+ static int clears;
  final AudioRecord recorder;final boolean paired;final String fallbackReason=null;
  CaptureAudioInput(boolean paired){this.paired=paired;recorder=new AudioRecord(7,16000,1,2,6400);}
  static CaptureAudioInput open(boolean paired){
@@ -108,7 +116,7 @@ class CaptureAudioInput {
   if(count<0)throw new IOException("recording stopped");
   return count==0?null:new Chunk(count,paired);
  }
- void clear(){}
+ void clear(){clears++;}
 }
 class VoiceSession {
  final Context context=new Context();
@@ -191,6 +199,17 @@ public final class CaptureCheck {
  public static void main(String[] args)throws Exception {
   test=args[0];VoiceSession s=new VoiceSession();
   try {
+   if("route_read".equals(test)||"route_read_pair".equals(test)){
+    s.activeLink.pairedCaptureRequested="route_read_pair".equals(test);
+    s.startMicrophone();yes(AudioRecord.entered.await(3,TimeUnit.SECONDS),"native read not reached");
+    synchronized(s.routeLock){s.routeEpoch+=2;s.captureWindow.registeredRoute=s.routeEpoch;}
+    AudioRecord.releaseOld.countDown();
+    yes(AudioRecord.freshEntered.await(3,TimeUnit.SECONDS),"worker did not reach fresh read");
+    yes(s.packets.get()==0,"read straddling activation was retagged and sent");
+    yes(CaptureAudioInput.clears>=2,"old converter/partial packet was not erased on worker");
+    AudioRecord.freshRelease.countDown();waitFor(()->s.packets.get()==1,"fresh route read was not delivered");
+    yes(s.recording,"handover stopped the explicit recording");return;
+   }
    if("hello_no_capture".equals(test)){
     JSONObject hello=new JSONObject();hello.data.put("capture_frontend","paired");
     hello.data.put("capture_start_token","a".repeat(32));s.helloForTest(hello);
@@ -597,6 +616,11 @@ class CaptureWindowTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout
+
+    def test_inflight_native_read_cannot_be_retagged_after_route_reactivation(self):
+        for case in ('route_read', 'route_read_pair'):
+            with self.subTest(case=case):
+                self.check_worker(case)
 
     def test_format_capability_alone_never_starts_capture(self):
         self.check_worker('hello_no_capture')

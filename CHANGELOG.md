@@ -1,5 +1,13 @@
 # Changelog
 
+## Backend 0.15.48 / APK 0.9.45 — microphone route admission
+
+- Negotiate per-activation device-to-host envelopes for controls and audio, fencing old queued packets even when reusing the same socket.
+- Discard microphone packets until the current recording is registered on the selected route; preserve explicit Stop and the existing recording identity.
+- Recheck native queue ownership before writing, keep already admitted packets stamped with their original token, and avoid holding the route lock over socket I/O.
+- Discard reads that straddle activation and clear paired conversion/partial-packet history on the capture worker.
+- The envelope requires both updated peers. Legacy peers keep protocol-2 compatibility without the new wire freshness guarantee; physical handover and acoustic acceptance remain separate.
+
 ## Backend 0.15.47 — reset stop-keyword history on handover
 
 - Start a fresh local stop decoder stream when the capture route changes, preserving session-level counters.
