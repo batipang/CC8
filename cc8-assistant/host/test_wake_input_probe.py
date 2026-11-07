@@ -12,7 +12,7 @@ import numpy as np
 from bridge import Bridge
 from announce import AnnouncementServer
 from dsp import FRAME
-from local_wake import replay_english_inputs
+from local_wake import replay_english_inputs, replay_english_raw
 from wake_input_probe import NAME_END, WakeInputProbe, compare_stream
 from wake_input_receipt import (
     CHINESE_FIXTURE_FRAMES,
@@ -51,6 +51,152 @@ def fixture_probe(pcm):
 
 
 class WakeInputTests(unittest.TestCase):
+    def test_english_raw_replay_is_independent_of_processed_match_and_erases_buffers(self):
+        pcm, source = synthesize()
+        received = np.zeros(51200)
+        received[3200 : 3200 + len(source)] = source
+        for failure in (False, True):
+            with self.subTest(decoder_failure=failure):
+                probe = fixture_probe(pcm)
+                retained = probe.reference, probe.primary, probe.alternate, probe.raw
+                for raw in received.reshape(-1, FRAME):
+                    probe.observe(np.zeros(FRAME), np.zeros(FRAME), raw)
+
+                def replay(raw, cancelled):
+                    self.assertFalse(cancelled())
+                    np.testing.assert_array_equal(raw, received)
+                    if failure:
+                        raise RuntimeError('private native failure detail')
+                    return {'status': 'measured', 'raw_hit': True}
+
+                with (
+                    patch('local_wake.replay_english_raw', side_effect=replay) as raw_decode,
+                    patch('local_wake.replay_english_inputs') as processed_decode,
+                ):
+                    report = probe.read()
+                raw_decode.assert_called_once()
+                processed_decode.assert_not_called()
+                self.assertEqual(report['language'], 'en')
+                self.assertEqual(report['raw_frames'], len(received))
+                self.assertEqual(report['raw']['status'], 'matched')
+                self.assertEqual(report['primary']['status'], 'question_unconfirmed')
+                self.assertEqual(report['fresh_replay'], {'status': 'not_run'})
+                self.assertEqual(
+                    report['raw_fresh_replay'],
+                    {'status': 'unavailable'}
+                    if failure
+                    else {'status': 'measured', 'raw_hit': True},
+                )
+                self.assertEqual(summarize(report), report)
+                self.assertTrue(all(not np.any(array) for array in retained))
+                self.assertNotIn('private native', json.dumps(report))
+                self.assertEqual(probe.read(), {'status': 'unavailable'})
+
+    def test_english_raw_gap_cannot_be_replayed_or_claim_full_window(self):
+        pcm, source = synthesize()
+        probe = fixture_probe(pcm)
+        received = np.zeros(51200)
+        received[3200 : 3200 + len(source)] = source
+        for index, raw in enumerate(received.reshape(-1, FRAME)):
+            probe.observe(np.zeros(FRAME), np.zeros(FRAME), raw if index else None)
+        with patch('local_wake.replay_english_raw') as decode:
+            report = probe.read()
+        decode.assert_not_called()
+        self.assertEqual(report['raw_frames'], len(received) - FRAME)
+        self.assertEqual(report['raw'], {'status': 'input_gap'})
+        self.assertEqual(report['raw_fresh_replay'], {'status': 'not_run'})
+        self.assertEqual(summarize(report), report)
+        for invalid in (
+            {**report, 'raw_fresh_replay': {'status': 'measured', 'raw_hit': True}},
+            {**report, 'raw_frames': True},
+            {**report, 'raw_frames': report['primary_frames'] + FRAME},
+            {**report, 'raw_fresh_replay': {'status': 'measured', 'raw_hit': 1}},
+            {
+                **report,
+                'raw_fresh_replay': {'status': 'measured', 'raw_hit': True, 'pcm': 'private'},
+            },
+            {**report, 'raw_pcm': 'private'},
+        ):
+            with self.subTest(invalid_keys=sorted(invalid)):
+                self.assertEqual(summarize(invalid), {'status': 'invalid'})
+        # Previously exported two-stream English receipts remain readable.
+        legacy = {
+            k: v
+            for k, v in report.items()
+            if k not in ('language', 'raw', 'raw_frames', 'raw_fresh_replay')
+        }
+        self.assertEqual(summarize(legacy), legacy)
+
+    def test_english_processed_replay_does_not_require_raw_shape_match(self):
+        pcm, source = synthesize()
+        probe = fixture_probe(pcm)
+        received = np.zeros(51200)
+        received[3200 : 3200 + len(source)] = source
+        for frame in received.reshape(-1, FRAME):
+            probe.observe(frame, -frame / 2, np.zeros(FRAME))
+        processed = {'status': 'measured', 'primary_hit': True, 'alternate_hit': False}
+        with (
+            patch('local_wake.replay_english_inputs', return_value=processed) as decode,
+            patch('local_wake.replay_english_raw') as raw_decode,
+        ):
+            report = probe.read()
+        decode.assert_called_once()
+        raw_decode.assert_not_called()
+        self.assertEqual(report['raw_frames'], len(received))
+        self.assertEqual(report['raw']['status'], 'question_unconfirmed')
+        self.assertEqual(report['fresh_replay'], processed)
+        self.assertEqual(report['raw_fresh_replay'], {'status': 'not_run'})
+        self.assertEqual(summarize(report), report)
+
+    def test_raw_english_decoder_keeps_frame_order_and_cancellation_boundaries(self):
+        source = np.arange(3 * FRAME, dtype=float) / 10000
+        decoder = Mock()
+        decoder.feed.side_effect = ('', 'Bumblebee', '')
+        with patch('local_wake.EnglishWake.load', return_value=decoder) as load:
+            self.assertEqual(
+                replay_english_raw(source, lambda: False), {'status': 'measured', 'raw_hit': True}
+            )
+            load.assert_called_once_with()
+            for call, frame in zip(
+                decoder.feed.call_args_list, source.reshape(-1, FRAME), strict=True
+            ):
+                np.testing.assert_array_equal(call.args[0], frame)
+            load.reset_mock()
+            self.assertEqual(replay_english_raw(source, lambda: True), {'status': 'unavailable'})
+            load.assert_not_called()
+            decoder.feed.reset_mock(side_effect=True)
+            self.assertEqual(
+                replay_english_raw(source, Mock(side_effect=(False, False, True))),
+                {'status': 'unavailable'},
+            )
+            decoder.feed.assert_called_once()
+            decoder.feed.reset_mock()
+            self.assertEqual(
+                replay_english_raw(source, Mock(side_effect=(False, False, False, False, True))),
+                {'status': 'unavailable'},
+            )
+            self.assertEqual(decoder.feed.call_count, 3)
+
+    def test_english_controller_samples_raw_only_from_current_nonplayback_input(self):
+        bridge, detector = self.bridge()
+        pcm, _ = synthesize()
+        probe = fixture_probe(pcm)
+        bridge.wake.input_probe = probe
+        retained = probe.raw
+        frame = np.full(FRAME, 0.25)
+        bridge.wake.feed(frame, bridge.generation + 1, capture_nanos=0, raw_pcm=frame)
+        self.assertEqual(probe.raw_frames, 0)
+        bridge.wake.feed(frame, bridge.generation, capture_nanos=0, raw_pcm=frame * 2)
+        np.testing.assert_array_equal(retained[:FRAME], frame * 2)
+        bridge.wake.feed(frame, bridge.generation, capture_nanos=1, raw_pcm=frame, echo_risk=True)
+        self.assertFalse(probe.closed)
+        self.assertEqual(probe.frames, 2 * FRAME)
+        self.assertEqual(probe.raw_frames, FRAME)
+        detector.feed.return_value = 'Bumblebee'
+        self.assertTrue(bridge.wake.feed(frame, bridge.generation, capture_nanos=2, raw_pcm=frame))
+        self.assertTrue(probe.closed)
+        self.assertFalse(np.any(retained))
+
     def test_only_pinned_fixture_and_token_requests_allowed(self):
         arm = {
             'operation': 'wake_input_arm',

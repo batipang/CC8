@@ -76,6 +76,19 @@ def replay_english_inputs(primary, alternate, cancelled):
     return {'status': 'measured', 'primary_hit': primary_hit, 'alternate_hit': alternate_hit}
 
 
+def replay_english_raw(pcm, cancelled):
+    """Diagnose a matched raw window without admitting a live wake or cloud ASR."""
+    if cancelled():
+        return {'status': 'unavailable'}
+    stream = EnglishWake.load()
+    hit = False
+    for offset in range(0, len(pcm), FRAME):
+        if cancelled():
+            return {'status': 'unavailable'}
+        hit |= stream.feed(pcm[offset : offset + FRAME]) == 'Bumblebee'
+    return {'status': 'unavailable'} if cancelled() else {'status': 'measured', 'raw_hit': hit}
+
+
 def replay_chinese_inputs(streams, cancelled):
     if cancelled():
         return {'status': 'unavailable'}
