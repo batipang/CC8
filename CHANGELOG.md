@@ -1,5 +1,12 @@
 # Changelog
 
+## Backend 0.15.43 — report playback reference recognition separately
+
+- Record how long the playback reference ASR attempt takes on its own voice
+  candidate. Primary recognition timing and playback ownership stay separate.
+- Preserve the fixed read-only omission flag in diagnostic exports when it
+  accompanies a matching tool recognition comparison.
+
 ## Backend 0.15.42 — keep echo reference errors with their candidate
 
 - Record failures of reference recognition on the unadmitted utterance, even

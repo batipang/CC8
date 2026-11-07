@@ -199,7 +199,11 @@ class RecognitionWorker:
                     self.hooks.metric('render_asr_checks', increment=True)
                     self.hooks.metric('voice_asr_attempts', increment=True)
                     checking_render = True
-                    render_text = self._recognize_current(render_audio, is_current)
+                    self.hooks.diagnostics().mark(trace_id, 'render_asr_start')
+                    try:
+                        render_text = self._recognize_current(render_audio, is_current)
+                    finally:
+                        self.hooks.diagnostics().mark(trace_id, 'render_asr_end')
                     checking_render = False
                     if not self.hooks.valid(generation):
                         continue

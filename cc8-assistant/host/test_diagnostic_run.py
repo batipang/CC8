@@ -60,6 +60,40 @@ class DiagnosticRunTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'Invalid tool ASR comparison receipt'):
                     receipt({**row, **override})
 
+    def test_tool_omission_detail_survives_export_and_cannot_change(self):
+        field = 'primary_read_only_omission_only'
+        ident = self.request()
+        comparison = {'primary': 'read_only_missing', 'local': 'matched'}
+        self.book.gate(
+            ident, 'tool_sample_guard', 'read_only_missing', {**comparison, field: False}
+        )
+        self.book.finish(ident, 'rejected')
+        payload = self.book.report()
+        self.run.ingest(payload)
+        row = self.run.report()['requests'][0]
+        self.assertIs(row[field], False)
+        self.assertEqual(row['tool_asr_comparison'], comparison)
+        self.assertNotIn(field, receipt({key: val for key, val in row.items() if key != field}))
+        for changed in (
+            {**row, field: 0},
+            {**row, field: 'private text'},
+            {
+                **row,
+                'tool_asr_comparison': {'primary': 'matched', 'local': 'matched'},
+                'tool_sample_rejection': 'comparison_only',
+            },
+            {key: val for key, val in row.items() if key != 'tool_asr_comparison'},
+        ):
+            with (
+                self.subTest(changed=changed),
+                self.assertRaisesRegex(ValueError, 'Invalid tool ASR omission detail'),
+            ):
+                receipt(changed)
+        payload['requests'][0][field] = True
+        with self.assertRaisesRegex(ValueError, 'Conflicting diagnostic result'):
+            self.run.ingest(payload)
+        self.assertIs(self.run.report()['requests'][0][field], False)
+
     def test_repeated_progress_updates_are_one_sample_with_real_latency(self):
         ident = self.request()
         self.run.ingest(self.book.report())
@@ -73,6 +107,37 @@ class DiagnosticRunTests(unittest.TestCase):
             report['summary']['latencies']['asr_ms'], {'samples': 1, 'p50': 200, 'p95': 200}
         )
         self.assertFalse(report['render_ack_is_audible_onset'])
+
+    def test_reference_asr_is_counted_separately_after_the_attempt_ends(self):
+        ident = self.request()
+        self.book.mark(ident, 'render_asr_start')
+        self.run.ingest(self.book.report())
+        self.assertEqual(self.run.report()['summary']['latencies']['render_asr_ms']['samples'], 0)
+        self.now += 0.35
+        self.book.mark(ident, 'render_asr_end')
+        self.book.failure(ident, 'asr', TimeoutError('provider details'))
+        self.run.ingest(self.book.report())
+        report = self.run.report()
+        self.assertEqual(report['summary']['outcomes'], {'failed': 1})
+        self.assertEqual(
+            report['summary']['latencies']['render_asr_ms'],
+            {'samples': 1, 'p50': 350, 'p95': 350},
+        )
+        self.assertEqual(report['summary']['latencies']['asr_ms']['p50'], 200)
+        row = report['requests'][0]
+        self.assertNotIn('provider details', json.dumps(report))
+        for origin, stages in (
+            ('text', row['stages']),
+            ('voice', {'asr_end': 200, 'render_asr_end': 550}),
+            ('voice', {'render_asr_start': 200}),
+            ('voice', {'asr_end': 210, 'render_asr_start': 200}),
+            ('voice', {'asr_end': 100, 'render_asr_start': 200, 'render_asr_end': 199}),
+        ):
+            with (
+                self.subTest(origin=origin, stages=stages),
+                self.assertRaisesRegex(ValueError, 'reference ASR'),
+            ):
+                receipt({**row, 'origin': origin, 'stages': stages})
 
     def test_asr_input_count_is_optional_bounded_and_immutable(self):
         ident = self.book.begin('voice')
