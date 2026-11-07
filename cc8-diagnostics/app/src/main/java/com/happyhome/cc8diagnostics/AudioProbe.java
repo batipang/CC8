@@ -63,6 +63,15 @@ public final class AudioProbe {
     return true;
   }
 
+  public boolean startChannels(int source, int sampleRate, int channels) {
+    if (channels != 2 && channels != 4)
+      throw new IllegalArgumentException("Expected two or four channels");
+    if (!running.compareAndSet(false, true)) return false;
+    cancelled = false;
+    executor.execute(() -> runChannels(source, sampleRate, channels));
+    return true;
+  }
+
   public boolean replay() {
     File file = lastCapture;
     if (file == null || !file.exists() || !running.compareAndSet(false, true)) return false;
@@ -422,6 +431,113 @@ public final class AudioProbe {
       DeviceReport.put(result, "battery_after", DeviceReport.battery(context));
       running.set(false);
       listener.finished(result, completed);
+    }
+  }
+
+  @SuppressLint("MissingPermission") // Rechecked before constructing the recorder.
+  private void runChannels(int source, int rate, int channels) {
+    JSONObject result =
+        DeviceReport.object(
+            "type",
+            "channel_capture",
+            "started_at",
+            DeviceReport.timestamp(),
+            "requested_sample_rate",
+            rate,
+            "requested_source",
+            source,
+            "requested_channels",
+            channels,
+            "raw_audio_saved",
+            false);
+    AudioRecord record = null;
+    ChannelMath math = new ChannelMath(channels);
+    long started = SystemClock.elapsedRealtime(), lastUi = started;
+    boolean aborted = false;
+    String error = null;
+    try {
+      checkCancelled();
+      if (Build.VERSION.SDK_INT < 23)
+        throw new UnsupportedOperationException("Channel statistics require Android 6 or newer");
+      if (context.checkCallingOrSelfPermission(Manifest.permission.RECORD_AUDIO)
+          != PackageManager.PERMISSION_GRANTED)
+        throw new SecurityException("Microphone permission not granted");
+      int minimum =
+          AudioRecord.getMinBufferSize(
+              rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
+      if (minimum <= 0) throw new IOException("Unsupported recording buffer");
+      AudioFormat.Builder format =
+          new AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT).setSampleRate(rate);
+      if (channels == 2) format.setChannelMask(AudioFormat.CHANNEL_IN_STEREO);
+      else format.setChannelIndexMask((1 << channels) - 1);
+      record =
+          new AudioRecord.Builder()
+              .setAudioSource(source)
+              .setAudioFormat(format.build())
+              .setBufferSizeInBytes(Math.max(minimum * channels * 2, rate * channels * 2 / 5))
+              .build();
+      synchronized (lock) {
+        currentRecorder = record;
+      }
+      if (record.getState() != AudioRecord.STATE_INITIALIZED
+          || record.getChannelCount() != channels)
+        throw new IOException("Requested channel layout unavailable");
+      DeviceReport.put(result, "actual_sample_rate", record.getSampleRate());
+      DeviceReport.put(result, "actual_channels", record.getChannelCount());
+      DeviceReport.put(result, "channel_index_mask", record.getFormat().getChannelIndexMask());
+      DeviceReport.put(result, "channel_mask", record.getFormat().getChannelMask());
+      checkCancelled();
+      record.startRecording();
+      if (record.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING)
+        throw new IOException("Recording did not start");
+      started = SystemClock.elapsedRealtime();
+      short[] buffer = new short[Math.max(160, rate / 100) * channels];
+      while (SystemClock.elapsedRealtime() - started < 6000) {
+        checkCancelled();
+        int count = record.read(buffer, 0, buffer.length, AudioRecord.READ_NON_BLOCKING);
+        if (count < 0) throw new IOException("Channel read failed: " + count);
+        math.add(buffer, 0, count);
+        if (count == 0) Thread.sleep(5);
+        long now = SystemClock.elapsedRealtime();
+        if (now - lastUi >= 180) {
+          publish("多声道检测中，仅保存统计数字", math.channels[0].dbfs(), (int) (now - started), 6000);
+          lastUi = now;
+        }
+      }
+      if (math.frames < rate / 2) throw new IOException("Insufficient channel frames");
+    } catch (InterruptedException e) {
+      aborted = true;
+    } catch (Exception | LinkageError e) {
+      error = e.getClass().getSimpleName() + ": " + e.getMessage();
+    } finally {
+      aborted |= cancelled;
+      release(record, null, null);
+      JSONArray levels = new JSONArray(), pairs = new JSONArray();
+      for (AudioMath channel : math.channels) levels.put(metrics(channel, rate));
+      for (int i = 0; i < channels; i++)
+        for (int j = i + 1; j < channels; j++)
+          pairs.put(
+              DeviceReport.object(
+                  "first",
+                  i,
+                  "second",
+                  j,
+                  "correlation",
+                  math.correlation(i, j),
+                  "identical_sample_ratio",
+                  math.equalRatio(i, j)));
+      DeviceReport.put(result, "channel_metrics", levels);
+      DeviceReport.put(result, "channel_pairs", pairs);
+      DeviceReport.put(result, "frames", math.frames);
+      DeviceReport.put(result, "trailing_samples", math.pendingSamples());
+      DeviceReport.put(result, "elapsed_ms", SystemClock.elapsedRealtime() - started);
+      DeviceReport.put(result, "cancelled", aborted);
+      DeviceReport.put(
+          result, "status", aborted ? "cancelled" : error == null ? "completed" : "error");
+      if (error != null) DeviceReport.put(result, "error", error);
+      DeviceReport.put(result, "signal_note", "通道差异需结合声源对照，声道数量不能证明麦克风阵列可用于定位。");
+      running.set(false);
+      listener.finished(result, null);
     }
   }
 

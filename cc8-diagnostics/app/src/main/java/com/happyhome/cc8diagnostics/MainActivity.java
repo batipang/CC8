@@ -48,11 +48,28 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
   private String status = "正在扫描设备信息…";
   private double lastLevel = -120;
   private int elapsed = 0, total = 1, scanGeneration = 0;
-  private static final int[] SOURCES = {
-    MediaRecorder.AudioSource.MIC,
-    MediaRecorder.AudioSource.VOICE_RECOGNITION,
-    MediaRecorder.AudioSource.VOICE_COMMUNICATION
-  };
+  private static final int[] SOURCES =
+      Build.VERSION.SDK_INT >= 24
+          ? new int[] {
+            MediaRecorder.AudioSource.MIC,
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+            MediaRecorder.AudioSource.UNPROCESSED
+          }
+          : new int[] {
+            MediaRecorder.AudioSource.MIC,
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            MediaRecorder.AudioSource.VOICE_COMMUNICATION
+          };
+  private static final String[] SOURCE_NAMES =
+      Build.VERSION.SDK_INT >= 24
+          ? new String[] {
+            "MIC（普通麦克风）", "VOICE_RECOGNITION（语音识别输入）",
+            "VOICE_COMMUNICATION（通信输入，建议对比）", "UNPROCESSED（原始输入，需实测支持）"
+          }
+          : new String[] {
+            "MIC（普通麦克风）", "VOICE_RECOGNITION（语音识别输入）", "VOICE_COMMUNICATION（通信输入，建议对比）"
+          };
   private static final int[] RATES = {16000, 48000, 44100};
 
   @Override
@@ -328,18 +345,18 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
   private void renderAudio() {
     heading(pageHost, "先听，再录，再同时录放");
     note(pageHost, "测试仅在前台、由你点击后执行。播放使用当前媒体音量，应用内参考音增益为 35%。请先调低设备音量。录音保存在本应用本地缓存，未自动上传。");
-    spinner(
-        pageHost,
-        "录音输入源",
-        new String[] {"MIC（普通麦克风）", "VOICE_RECOGNITION（语音识别输入）", "VOICE_COMMUNICATION（通信输入，建议对比）"},
-        sourceIndex,
-        index -> sourceIndex = index);
+    spinner(pageHost, "录音输入源", SOURCE_NAMES, sourceIndex, index -> sourceIndex = index);
     spinner(
         pageHost,
         "请求采样率 / 单声道 / PCM16",
         new String[] {"16000 Hz（建议先测）", "48000 Hz", "44100 Hz"},
         rateIndex,
         index -> rateIndex = index);
+    pair(
+        pageHost,
+        button("双声道统计 6 秒", () -> ensureMicrophone(() -> startChannels(2))),
+        button("四声道统计 6 秒", () -> ensureMicrophone(() -> startChannels(4))));
+    note(pageHost, "多声道检测沿用上方输入源和采样率，仅保存各通道电平、相关性与重复比例。");
     CheckBox aec = new CheckBox(this);
     aec.setText(R.string.aec_option);
     aec.setTextColor(INK);
@@ -396,6 +413,19 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
     }
     if (probe.start(mode, SOURCES[sourceIndex], RATES[rateIndex], requestAec, communicationMode)) {
       status = "正在准备音频设备…";
+      elapsed = 0;
+      lastLevel = -120;
+      updateStatus();
+    } else toast("请先停止当前测试");
+  }
+
+  private void startChannels(int channels) {
+    if (!foreground) {
+      toast("请在应用前台开始测试");
+      return;
+    }
+    if (probe.startChannels(SOURCES[sourceIndex], RATES[rateIndex], channels)) {
+      status = "正在准备多声道检测…";
       elapsed = 0;
       lastLevel = -120;
       updateStatus();
@@ -473,7 +503,9 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
           String outcome = result.optString("status");
           status =
               "completed".equals(outcome)
-                  ? "测试完成，请回放并导出报告"
+                  ? ("channel_capture".equals(result.optString("type"))
+                      ? "多声道统计完成，可导出数字报告"
+                      : "测试完成，请回放并导出报告")
                   : "cancelled".equals(outcome)
                       ? "测试已停止，音频设备已释放"
                       : "测试失败：" + result.optString("error", "未知错误");

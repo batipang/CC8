@@ -23,6 +23,7 @@ def main():
                 '-d',
                 temporary,
                 str(source / 'AudioMath.java'),
+                str(source / 'ChannelMath.java'),
                 str(source / 'WavCodec.java'),
                 str(project / 'tests/HostTests.java'),
             ],
