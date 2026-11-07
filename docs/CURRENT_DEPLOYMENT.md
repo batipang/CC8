@@ -1,5 +1,11 @@
 # 当前 CC8 部署与验收范围
 
+## 0.15.54／code84 取消归属与执行中检查
+
+2026-11-08，Mac 后台更新到 **0.15.54／原签名 APK 0.9.47（code84）／协议 2**，源码 `95a233c`。五项维护检查在 21.722 秒通过，独立只读复核确认原配置、LaunchAgent、安装包及 owner Codex 配置保持，前台 USB 优先、配对 Wi-Fi 就绪、双端停采。部署及该次独立复核没有新请求。[功能合入](https://github.com/batipang/CC8/pull/417)、[主分支八项 CI](https://github.com/batipang/CC8/actions/runs/42412267761)。维护报告摘要 `9e327164ccc88a8710d57cdfea2a0d074e60ffb23def70041b2050dabc9aa22f`，独立复核摘要 `1daaf097d7d3b3f4307d11ab2e5a6b2e814735f3f7abcb97d2dcf88d46363ed0`。
+
+其后执行两个不同的有界文字工具任务，暴露 UI 自动读取失败和双线路断开后已知工具仍运行的缺口，均未重交。收尾确认两个已知命令自然退出、后台原实例就绪、双线路恢复、麦克风 / 摄像头关闭；整组未通过。详见 [任务取消的发现与候选改进](TASK_CANCELLATION.md)。0.15.55 是源码候选，尚未替换本节运行版本。真实登录 / 睡眠、物理拔插、任意工具树和最终 72 小时验收仍保留。
+
 ## 0.15.53／code84 信号与资源归属
 
 2026-11-08，Mac 后台更新到 **0.15.53／原签名 APK 0.9.47（code84）／协议 2**，源码 `93aefe6`。五项维护检查在 21.764 秒内通过，原配置、LaunchAgent、助手与检测器安装包保持。独立复核确认前台、USB 优先、配对 Wi-Fi 就绪、双端停采及零新请求。[功能合入](https://github.com/batipang/CC8/pull/416)、[主分支八项 CI](https://github.com/batipang/CC8/actions/runs/42407374192)。维护报告摘要 `ecdab8f8e789f49bf3f96b585988a0698f70701140c7d5b12283fe0f950f2e32`，独立复核摘要 `56e255c6f79bb1cb8030d3f9381f4c955d7b2c0f6b8905a1d2cc7c6782c81e4b`。

@@ -238,9 +238,9 @@ class Workspace:
                 'completed': '请求已完成',
                 'failed': '执行结果待核对' if unconfirmed else '请求未完成',
                 'cancelled': (
-                    '连接已切换，执行结果待核对。请确认后再试。'
+                    '已停止等待，执行结果待核对；工具可能仍在运行。请先在电脑核对，勿重复交办。'
                     if unconfirmed
-                    else '已停止等待；已执行的操作不会撤销'
+                    else '已停止等待；工具可能仍在运行，已执行的操作不会撤销。请先在电脑核对结果。'
                 ),
             }.get(status, status)
             for step in task['steps']:
