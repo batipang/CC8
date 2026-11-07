@@ -1874,6 +1874,14 @@ final class VoiceSession {
       Wire.put(result, "foreground", foreground);
       Wire.put(result, "transport", transportName());
       Wire.put(result, "wifi_ready", wifiLink != null && wifiLink.ready && !wifiLink.closed);
+      if ("status".equals(action)) {
+        synchronized (routeLock) {
+          Wire.put(
+              result,
+              "connection_availability",
+              new JSONObject(availability.snapshot(SystemClock.elapsedRealtime()).values()));
+        }
+      }
     } catch (RuntimeException e) {
       Wire.put(result, "ok", false);
       Wire.put(result, "error", e.getClass().getSimpleName());

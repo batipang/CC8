@@ -100,6 +100,10 @@ class AnnouncementServer:
                         result = self.bridge.health()
                     elif request.get('operation') == 'diagnostics':
                         result = self.bridge.diagnostics_report()
+                    elif request.get('operation') == 'connection_diagnostics':
+                        if request != {'operation': 'connection_diagnostics'}:
+                            raise ValueError('Connection diagnostics accepts no arguments')
+                        result = self.bridge.connection_diagnostics()
                     elif request.get('operation') == 'transport_status':
                         result = {'ok': True, **self.bridge.transport_hub.diagnostics()}
                     elif request.get('operation') == 'transport_test':
