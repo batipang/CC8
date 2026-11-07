@@ -106,6 +106,97 @@ class BargeInTests(unittest.TestCase):
         self.assertEqual(b.session.generation, generation)
         self.assertFalse(any(e['event'] == 'transcript' for e in self.events(b)))
 
+    def test_render_recognition_failure_resumes_original_playback(self):
+        for cancelled in (False, True):
+            with self.subTest(cancelled=cancelled):
+                entered_render_asr = threading.Event()
+                release_render_asr = threading.Event()
+                terminal = threading.Event()
+                resumed = threading.Event()
+                user_audio = np.ones(RATE)
+                render_audio = np.full(RATE, 0.2)
+
+                class Speech:
+                    def recognize(self, pcm):
+                        if pcm is user_audio:
+                            return '我要换一个问题'
+                        if pcm is render_audio:
+                            entered_render_asr.set()
+                            release_render_asr.wait(2)
+                            raise TimeoutError('reference ASR deadline')
+                        raise AssertionError('Unexpected ASR input')
+
+                b = self.bridge(Speech())
+                generation = b.session.generation
+                old = b.diagnostics.begin('text', generation)
+                token = b.pause_for_voice()
+                candidate = b.diagnostics.begin('voice')
+                finish = b.diagnostics.finish
+                resume = b.resume_after_rejection
+
+                def mark_finish(key, outcome):
+                    result = finish(key, outcome)
+                    if key == candidate and outcome in ('rejected', 'cancelled'):
+                        terminal.set()
+                    return result
+
+                def mark_resume(token, generation):
+                    resume(token, generation)
+                    resumed.set()
+
+                with (
+                    patch.object(b.diagnostics, 'finish', side_effect=mark_finish),
+                    patch.object(b, 'resume_after_rejection', side_effect=mark_resume),
+                ):
+                    b.recognition.queue.put(
+                        (
+                            generation,
+                            user_audio,
+                            True,
+                            ['今天讲一段故事'],
+                            {
+                                'echo_risk': True,
+                                'captured_at': time.monotonic(),
+                                'pause_token': token,
+                            },
+                            render_audio,
+                            candidate,
+                        )
+                    )
+                    try:
+                        self.assertTrue(entered_render_asr.wait(1))
+                        if cancelled:
+                            b.cancel('user_stop')
+                    finally:
+                        release_render_asr.set()
+                    self.assertTrue(terminal.wait(1))
+                    if not cancelled:
+                        self.assertEqual(b.session.generation, generation)
+                        self.assertTrue(resumed.wait(1))
+
+                rows = {row['request_id']: row for row in b.diagnostics.report()['requests']}
+                events = self.events(b)
+                self.assertFalse(any(event['event'] == 'transcript' for event in events))
+                self.assertFalse(any(event.get('phase') == 'error' for event in events))
+                resumes = [event for event in events if event['event'] == 'playback_resume']
+                if cancelled:
+                    self.assertFalse(resumes)
+                    self.assertGreater(b.session.generation, generation)
+                    self.assertEqual(rows[candidate]['outcome'], 'cancelled')
+                    self.assertIsNone(rows[candidate]['error'])
+                else:
+                    self.assertEqual(resumes, [{'event': 'playback_resume', 'token': token}])
+                    self.assertIsNone(rows[old]['outcome'])
+                    self.assertEqual(rows[candidate]['outcome'], 'failed')
+                    self.assertEqual(rows[candidate]['error']['stage'], 'asr')
+                    self.assertIsNone(b.playback.pause_state)
+                    b.playback.end_frames = 320
+                    b.on_event(
+                        {'event': 'play_done', 'generation': generation, 'played_frames': 320}
+                    )
+                    self.assertEqual(b.playback.completed, {generation})
+                    self.assertIn('playback_done', b.diagnostics.report()['requests'][0]['stages'])
+
     def test_empty_asr_resumes_and_new_question_cancels_old_turn(self):
         class Speech:
             def recognize(self, pcm):
