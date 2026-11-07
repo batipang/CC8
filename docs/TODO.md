@@ -1,6 +1,6 @@
 # 大黄蜂统一待办：功能与工程质量
 
-更新于 2026-11-07。原排期基线为 Android 0.8.6 / 后台 0.11.0。当前部署为后台 0.15.47 / 原签名 APK 0.9.43（code80），源码 `5164515`，默认单声道。部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)。P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)。复选框按完整验收标准关闭。
+更新于 2026-11-07。原排期基线为 Android 0.8.6 / 后台 0.11.0。当前部署为后台 0.15.48 / 原签名 APK 0.9.45（code82），源码 `ba72bfd`，默认单声道。部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)。P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)。复选框按完整验收标准关闭。
 
 依据：[竞品复盘](COMPETITOR_REVIEW_2026-11-01.md)、[当前架构](ARCHITECTURE.md)、[实机与回归记录](VALIDATION.md)。本次已合并 [ToFix](ToFix.md) 的 20 个工程条目；这是功能与工程质量的唯一详细清单；[ROADMAP](ROADMAP.md)保留完成情况和阶段概览。
 
@@ -236,7 +236,7 @@
   - 依赖：P0-01；唤醒相关部分接 P0-03。范围：Mac 音频 / 识别及 CC8 播放状态。保留当前可用版本做同样本 A/B 对照。
 
 - [ ] **P0-05 — USB / Wi-Fi、15 分钟待机与长时间运行验收**
-  - 录音准入候选：0.15.48／APK 0.9.45（code82）新增逐激活控制／音频封套、重绑前停收 MIC、设备写队列与阻塞读取隔离。双方更新后才具备新封套保证，尚未部署；旧版本缺口及物理切换仍保留。 [实现与验证范围](CAPTURE_ROUTE_ADMISSION.md)
+  - 录音准入已部署：0.15.48／APK 0.9.45（code82）新增逐激活控制／音频封套、重绑前停收 MIC、设备写队列与阻塞读取隔离。九项维护检查及独立复核通过。双方更新后才具备新封套保证；物理切换和实机语音验收仍保留。 [实现与验证范围](CAPTURE_ROUTE_ADMISSION.md)
   - 排期例外（2026-11-07）：本项中的最终 72 小时验收降至全清单最低优先级，按[最终验收阶段](#执行阶段与下一批工作)执行；物理切换、待机、故障修复和常规验证继续推进。保留 72 小时缺口，不据此将整项勾选完成。
   - 0.15.41／code79 固定 20 轮空闲集线器端口往返全部通过，300.244 秒。逐轮独立确认硬件断开、Wi-Fi 接管、同一设备以新传输恢复 USB 优先。终审复核原 APK 和双端停采。 [端口往返记录](AUTOMATED_DEVICE_CHECKS.md#集线器硬件端口往返)
   - 0.15.24 已部署，状态缓存写入故障及恢复均通过静默逻辑切换。故障轮保留旧缓存，Wi-Fi 接管后 USB 恢复优先，后台记录七条写入失败事件。恢复轮确认缓存重新刷新，两轮均关麦。 [部署与实测](CURRENT_DEPLOYMENT.md#01524code79-部署) [状态缓存故障](FAILURE_FEEDBACK.md#01524-状态缓存故障隔离)
