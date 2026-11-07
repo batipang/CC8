@@ -24,7 +24,12 @@ from tool_sample_gate import ToolSampleGate
 
 
 class SessionController:
-    def __init__(self, hooks: SessionHooks):
+    def __init__(self, hooks: SessionHooks, *, capture_frontend='mono'):
+        if capture_frontend not in ('mono', 'paired'):
+            raise ValueError('Unsupported capture frontend preference')
+        self.capture_frontend_preference = capture_frontend
+        self.capture_frontend_requested = 'mono'
+        self.capture_frontend = 'mono'
         self.hooks = hooks
         self.text_generation = None
         self.connection = None
@@ -61,6 +66,7 @@ class SessionController:
             self.wake,
             self.screen_sleeping,
             self.awake,
+            self.capture_frontend,
         )
 
     def deactivate(self):
@@ -102,6 +108,7 @@ class SessionController:
             self.rebind_seen = False
             self.capture_rejection_supported = False
             self.capture_start_ack = False
+            self.capture_frontend_requested = 'mono'
         try:
             self.hooks.cancel('transport_switch')
         except (OSError, EOFError):
@@ -247,6 +254,7 @@ class SessionController:
         with self.guard:
             self.capture_start_required = True
             self.active = False
+            self.capture_frontend = 'mono'
             self.capture_id = None
             pending_sample = self.tool_samples.stop_capture()
             self.screen_sleeping = False
@@ -263,6 +271,44 @@ class SessionController:
                 self.hooks.capture().close()
             finally:
                 self.hooks.save_status()
+
+    def negotiate_capture_frontend(self, peer):
+        paired = (
+            type(peer.get('paired_capture_version')) is int and peer['paired_capture_version'] == 1
+        )
+        self.capture_frontend_requested = (
+            'paired' if paired and self.capture_frontend_preference == 'paired' else 'mono'
+        )
+        return self.capture_frontend_requested
+
+    def accepts_capture_frontend(self, event):
+        actual = event.get('capture_frontend', 'mono')
+        if actual not in ('mono', 'paired'):
+            return False
+        fallback = event.get('capture_fallback_reason')
+        if actual == 'mono' and self.capture_frontend_requested == 'paired' and fallback is None:
+            return False
+        if fallback not in (None, 'platform_api', 'paired_format_unavailable') or (
+            fallback is not None
+            and (actual == 'paired' or self.capture_frontend_requested != 'paired')
+        ):
+            return False
+        if actual == 'paired' and (
+            self.capture_frontend_requested != 'paired'
+            or any(
+                type(event.get(key)) is not int or event[key] != expected
+                for key, expected in (
+                    ('sample_rate', 16000),
+                    ('capture_sample_rate', 48000),
+                    ('capture_channels', 4),
+                    ('source', 7),
+                )
+            )
+        ):
+            return False
+        return not (
+            self.active and event.get('epoch') == self.epoch and actual != self.capture_frontend
+        )
 
     def set_awake(self, value):
         with self.guard:

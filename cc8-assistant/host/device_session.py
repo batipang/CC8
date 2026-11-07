@@ -12,6 +12,9 @@ if TYPE_CHECKING:
 
 def complete_handshake(session: SessionController, j):
     hooks = session.hooks
+    hooks.visual().update_peer(j)
+    frontend = session.negotiate_capture_frontend(j)
+    hooks.capture().paired_peer_ready = frontend == 'paired'
     session.capture_rejection_supported = (
         type(j.get('capture_reject_version')) is int and j['capture_reject_version'] == 1
     )
@@ -20,7 +23,6 @@ def complete_handshake(session: SessionController, j):
         and type(j.get('capture_start_ack_version')) is int
         and j['capture_start_ack_version'] == 1
     )
-    hooks.visual().update_peer(j)
     hooks.playback().set_pause_capability(
         bool(j.get('supports_playback_pause')),
         applied_receipt=type(j.get('playback_pause_applied_version')) is int
@@ -54,6 +56,7 @@ def complete_handshake(session: SessionController, j):
         'hello',
         message=message,
         transport=session.transport_kind,
+        capture_frontend=frontend,
         playback_interrupted_by_transport=interrupted,
         supports_dot_chat_handoff=True,
         supports_saved_task_results=True,
@@ -77,6 +80,9 @@ def complete_handshake(session: SessionController, j):
 
 def rebind_capture(session: SessionController, j):
     hooks = session.hooks
+    if not session.accepts_capture_frontend(j):
+        session.reject_capture_start(j.get('capture_id'))
+        return
     if session.resend_capture_rejection(j.get('capture_id')):
         return
     if session.capture_start_ack or session.capture_id is not None or 'capture_start_token' in j:
@@ -102,6 +108,9 @@ def rebind_capture(session: SessionController, j):
 
 def start_capture(session: SessionController, j):
     capture_id = j.get('capture_id')
+    if not session.accepts_capture_frontend(j):
+        session.reject_capture_start(capture_id)
+        return
     negotiated = (
         session.capture_start_ack or session.capture_id is not None or 'capture_start_token' in j
     )
@@ -136,6 +145,10 @@ def start_capture(session: SessionController, j):
     session.capture_start_required = True
     session.generation += 1
     session.hooks.capture().reset_session()
+    session.capture_frontend = j.get('capture_frontend', 'mono')
+    session.hooks.capture().paired_reference = session.capture_frontend == 'paired'
+    session.hooks.metric('capture_frontend', session.capture_frontend)
+    session.hooks.metric('capture_fallback', j.get('capture_fallback_reason'))
     session.hooks.playback().reset_session()
     try:
         session.hooks.capture().echo.open()

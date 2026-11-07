@@ -2,5 +2,6 @@
   "schema_version": 1,
   "asr": "minimax",
   "brain": "dot",
-  "wake_window_seconds": 60
+  "wake_window_seconds": 60,
+  "capture_frontend": "mono"
 }

@@ -39,6 +39,20 @@
         "minimax"
       ]
     },
+    "capture_frontend": {
+      "default": "mono",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "not": {
+        "type": "string",
+        "pattern": "sk-(?:cp-|proj-|ant-)|^Bearer |[\\u0000-\\u001f]|^\\s|\\s$"
+      },
+      "enum": [
+        "mono",
+        "paired"
+      ]
+    },
     "minimax_base": {
       "default": "https://api.minimax.cn",
       "type": "string",
