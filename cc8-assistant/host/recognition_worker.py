@@ -93,6 +93,7 @@ class RecognitionWorker:
             decision = 'stale'
             tool_sample_rejection = None
             compare_target = None
+            checking_render = False
 
             def is_current():
                 return self.hooks.valid(generation) and self.hooks.wake_allowed()
@@ -197,7 +198,9 @@ class RecognitionWorker:
                     # using the selected ASR provider; never decode the full answer.
                     self.hooks.metric('render_asr_checks', increment=True)
                     self.hooks.metric('voice_asr_attempts', increment=True)
+                    checking_render = True
                     render_text = self._recognize_current(render_audio, is_current)
+                    checking_render = False
                     if not self.hooks.valid(generation):
                         continue
                     echo = bool(render_text) and resembles_playback(text, [render_text])
@@ -356,12 +359,24 @@ class RecognitionWorker:
                 decision = 'stale'
             except Exception as e:
                 decision = 'error'
-                self.hooks.diagnostics().failure(trace_id, 'asr', e)
                 with self.hooks.lock:
+                    if checking_render:
+                        if not is_current():
+                            decision = 'stale'
+                            continue
+                        # A failed reference check cannot confirm an interruption.
+                        # Release only this candidate's tentative pause.
+                        rejected = True
+                    self.hooks.diagnostics().failure(trace_id, 'asr', e)
+                    if checking_render and self.hooks.playing():
+                        # The device treats a status error as terminal for the
+                        # current playback generation, which the candidate does not own.
+                        continue
                     if self.hooks.valid(generation):
                         try:
                             if (
-                                self.hooks.pause_state()
+                                not checking_render
+                                and self.hooks.pause_state()
                                 and evidence
                                 and (
                                     evidence.get('pause_token') == self.hooks.pause_state()['token']

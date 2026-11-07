@@ -1,5 +1,11 @@
 # Changelog
 
+## Backend 0.15.41 — resume playback after a failed echo reference check
+
+- When reference recognition fails before a tentative interruption is confirmed,
+  withhold the new request and release only its own playback pause. Ignore a
+  late result after the user has stopped the session.
+
 ## Backend 0.15.40 — reap supervised children without an argv lookup
 
 - Use the supervisor’s own child handle for liveness and shutdown. Temporary
