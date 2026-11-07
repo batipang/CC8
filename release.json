@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "p0-connection-availability-20261108.1",
+  "release_id": "recovery-before-connection-diagnostics-20261108.1",
   "backend": {
     "version": "0.15.55"
   },
   "assistant": {
-    "version": "0.9.49",
-    "version_code": 86,
+    "version": "0.9.52",
+    "version_code": 89,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {
