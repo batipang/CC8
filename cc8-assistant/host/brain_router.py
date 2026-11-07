@@ -1,6 +1,7 @@
 """Explicit provider selection and voice delegation; no silent fallback."""
 
 import re
+from lifecycle_cleanup import cleanup_all
 from dot_client import DotBrain, DotError, DotApprovalRequired
 from diagnostics import error_kind
 from operation_failure import OperationFailure
@@ -28,12 +29,10 @@ class BrainRouter:
         self.selected = provider
 
     def cancel(self):
-        self.minimax.cancel()
-        self.dot.cancel()
+        cleanup_all(self.minimax.cancel, self.dot.cancel)
 
     def close(self):
-        self.cancel()
-        self.dot.close()
+        cleanup_all(self.cancel, self.dot.close)
 
     def prepare(self, is_current=lambda: True):
         if self.selected != 'dot':

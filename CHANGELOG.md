@@ -1,5 +1,12 @@
 # Changelog
 
+## Backend 0.15.52 — finish tasks and owned cleanup after failures
+
+- Preserve the original speech/task failure and finish its receipt even if closing the response iterator fails; keep already completed work completed.
+- Attempt both provider cancellations and close the owned Dot RPC even if an earlier cancellation raises. Propagate the first failure after all independent cleanup actions.
+- Apply the same rule to the registered backend stop handler so one failing stop does not skip IPC, transport, brain, speech or channel cleanup. A failed channel shutdown still attempts close.
+- Retain expected disconnected-I/O handling, provider selection and capture rules. Include the prior 0.15.51 deployment and successful fixed English field result in this functional batch.
+
 ## Backend 0.15.51 — complete-utterance local wake verification
 
 - Supplement the existing real-time wake paths with a fresh, bounded English keyword stream on completed speech while waiting. Keep the current model, eight decoder paths, competitor, thresholds and providers.
