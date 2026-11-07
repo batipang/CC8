@@ -238,7 +238,17 @@ class Supervisor:
         threading.Thread(target=self._drain, args=(self.child.stdout,), daemon=True).start()
 
     def terminate(self):
-        if self.pid and own_process(self.pid):
+        if self.child is not None:
+            # An unreaped child remains ours even if the OS cannot read argv.
+            # Reap it before the supervisor can start another worker.
+            if self.child.poll() is None:
+                self.child.terminate()
+            try:
+                self.child.wait(timeout=8)
+            except subprocess.TimeoutExpired:
+                self.child.kill()
+                self.child.wait(timeout=3)
+        elif self.pid and own_process(self.pid):
             try:
                 os.kill(self.pid, signal.SIGTERM)
             except ProcessLookupError:
@@ -251,11 +261,6 @@ class Supervisor:
                     os.kill(self.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
-        if self.child:
-            try:
-                self.child.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                pass
         self.pid = None
         self.child = None
 
@@ -291,9 +296,10 @@ class Supervisor:
                 started = time.monotonic()
                 bad_health = 0
                 while self.pid is not None and enabled() and not self.stop.wait(2):
-                    if self.child and self.child.poll() is not None:
-                        break
-                    if not own_process(self.pid):
+                    if self.child is not None:
+                        if self.child.poll() is not None:
+                            break
+                    elif not own_process(self.pid):
                         break
                     try:
                         health = query(operation='health')

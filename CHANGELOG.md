@@ -1,5 +1,10 @@
 # Changelog
 
+## Backend 0.15.40 — reap supervised children without an argv lookup
+
+- Use the supervisor’s own child handle for liveness and shutdown. Temporary
+  argv unavailability no longer abandons a live worker or triggers a restart.
+
 ## Backend 0.15.39 — report correlation scores for acoustic timing misses
 
 - Include bounded correlation scores for unmatched windows and failed leading
