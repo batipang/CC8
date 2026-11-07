@@ -165,7 +165,10 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
     stopButton.setEnabled(false);
     top.addView(stopButton, new LinearLayout.LayoutParams(dp(112), -2));
     root.addView(top);
-    note(root, "离线检测 · 不修改固件 · 1.0.1 · 兼容 Android 5.0 及以上");
+    Object version =
+        DeviceReport.safe(
+            () -> getPackageManager().getPackageInfo(getPackageName(), 0).versionName);
+    note(root, "离线检测 · 不修改固件 · " + version + " · 兼容 Android 5.0 及以上");
     LinearLayout navigation = new LinearLayout(this);
     String[] names = {"设备信息", "音频测试", "导出报告"};
     for (int i = 0; i < names.length; i++) {
