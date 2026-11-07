@@ -459,6 +459,7 @@ public final class AudioProbe {
     AudioRecord record = null;
     AudioTrack track = null;
     ChannelMath math = new ChannelMath(channels);
+    ReferenceMatch inputMatch = null, referenceMatch = null;
     long started = SystemClock.elapsedRealtime(), lastUi = started;
     boolean aborted = false;
     String error = null;
@@ -493,17 +494,25 @@ public final class AudioProbe {
       DeviceReport.put(result, "actual_channels", record.getChannelCount());
       DeviceReport.put(result, "channel_index_mask", record.getFormat().getChannelIndexMask());
       DeviceReport.put(result, "channel_mask", record.getFormat().getChannelMask());
-      if (playReference) {
+      inputMatch = new ReferenceMatch(record.getSampleRate(), channels);
+      try {
         WavCodec.Pcm reference;
         try (InputStream input = context.getAssets().open("reference.wav")) {
           reference = WavCodec.read(input);
         }
-        track =
-            player(
-                AudioMath.repeat(reference.samples, reference.sampleRate * 6),
-                reference.sampleRate);
-        DeviceReport.put(result, "reference_sample_rate", reference.sampleRate);
-        DeviceReport.put(result, "reference_frames_written", reference.sampleRate * 6);
+        short[] referencePcm = AudioMath.repeat(reference.samples, reference.sampleRate * 6);
+        referenceMatch = new ReferenceMatch(reference.sampleRate, 1);
+        referenceMatch.add(referencePcm, 0, referencePcm.length);
+        DeviceReport.put(result, "comparison_reference_sample_rate", reference.sampleRate);
+        if (playReference) {
+          track = player(referencePcm, reference.sampleRate);
+          DeviceReport.put(result, "reference_sample_rate", reference.sampleRate);
+          DeviceReport.put(result, "reference_frames_written", referencePcm.length);
+        }
+      } catch (IOException | RuntimeException e) {
+        // The legacy capture-only path remains usable if the optional reference cannot load.
+        referenceMatch = null;
+        if (playReference) throw e;
       }
       checkCancelled();
       record.startRecording();
@@ -517,6 +526,7 @@ public final class AudioProbe {
         int count = record.read(buffer, 0, buffer.length, AudioRecord.READ_NON_BLOCKING);
         if (count < 0) throw new IOException("Channel read failed: " + count);
         math.add(buffer, 0, count);
+        inputMatch.add(buffer, 0, count);
         if (count == 0) Thread.sleep(5);
         long now = SystemClock.elapsedRealtime();
         if (now - lastUi >= 180) {
@@ -540,7 +550,12 @@ public final class AudioProbe {
       }
       release(record, track, null);
       JSONArray levels = new JSONArray(), pairs = new JSONArray();
-      for (AudioMath channel : math.channels) levels.put(metrics(channel, rate));
+      for (int c = 0; c < channels; c++) {
+        JSONObject level = metrics(math.channels[c], rate);
+        DeviceReport.put(level, "mean_pcm", math.meanPcm(c));
+        DeviceReport.put(level, "ac_rms_dbfs", math.acDbfs(c));
+        levels.put(level);
+      }
       for (int i = 0; i < channels; i++)
         for (int j = i + 1; j < channels; j++)
           pairs.put(
@@ -555,6 +570,53 @@ public final class AudioProbe {
                   math.equalRatio(i, j)));
       DeviceReport.put(result, "channel_metrics", levels);
       DeviceReport.put(result, "channel_pairs", pairs);
+      JSONArray matches = new JSONArray();
+      long analysisStarted = SystemClock.elapsedRealtime();
+      if (!aborted && error == null && referenceMatch != null && inputMatch != null) {
+        for (int c = 0; c < channels && !cancelled; c++) {
+          ReferenceMatch.Match match = inputMatch.compare(c, referenceMatch);
+          JSONObject measured = DeviceReport.object("channel", c, "available", match != null);
+          if (match != null) {
+            DeviceReport.put(measured, "correlation", match.correlation);
+            DeviceReport.put(measured, "array_offset_ms", match.offset);
+            DeviceReport.put(measured, "overlap_points", match.overlap);
+            DeviceReport.put(measured, "competing_correlation", match.competingCorrelation);
+            DeviceReport.put(measured, "competing_array_offset_ms", match.competingOffset);
+          }
+          matches.put(measured);
+        }
+      }
+      aborted |= cancelled || Thread.currentThread().isInterrupted();
+      DeviceReport.put(result, "reference_comparison_cancelled", aborted);
+      DeviceReport.put(
+          result,
+          "reference_comparison_status",
+          aborted
+              ? "cancelled"
+              : error != null
+                  ? "capture_error"
+                  : referenceMatch == null ? "reference_unavailable" : "completed");
+      DeviceReport.put(result, "reference_comparison_rate", ReferenceMatch.ANALYSIS_RATE);
+      DeviceReport.put(result, "reference_comparison_max_points", ReferenceMatch.MAX_POINTS);
+      DeviceReport.put(result, "reference_comparison_method", "one_ms_block_means");
+      DeviceReport.put(
+          result, "reference_comparison_min_overlap_points", ReferenceMatch.MIN_OVERLAP);
+      DeviceReport.put(
+          result, "reference_comparison_peak_exclusion_ms", ReferenceMatch.PEAK_EXCLUSION);
+      DeviceReport.put(result, "reference_comparison_max_offset_ms", ReferenceMatch.MAX_OFFSET);
+      DeviceReport.put(
+          result,
+          "reference_comparison_input_points",
+          inputMatch == null ? 0 : inputMatch.points());
+      DeviceReport.put(
+          result,
+          "reference_comparison_reference_points",
+          referenceMatch == null ? 0 : referenceMatch.points());
+      DeviceReport.put(result, "channel_reference_matches", matches);
+      DeviceReport.put(
+          result,
+          "reference_comparison_elapsed_ms",
+          SystemClock.elapsedRealtime() - analysisStarted);
       DeviceReport.put(result, "frames", math.frames);
       DeviceReport.put(result, "trailing_samples", math.pendingSamples());
       DeviceReport.put(result, "elapsed_ms", SystemClock.elapsedRealtime() - started);

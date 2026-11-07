@@ -49,6 +49,24 @@ public final class ChannelMath {
     return pending;
   }
 
+  public Double meanPcm(int channel) {
+    requireChannel(channel);
+    return frames == 0 ? null : sums[channel] / frames;
+  }
+
+  public Double acDbfs(int channel) {
+    requireChannel(channel);
+    if (frames == 0) return null;
+    double variance =
+        Math.max(0, channels[channel].squares / frames - Math.pow(sums[channel] / frames, 2));
+    return variance == 0 ? -120 : Math.max(-120, 10 * Math.log10(variance / (32768.0 * 32768.0)));
+  }
+
+  private void requireChannel(int channel) {
+    if (channel < 0 || channel >= channels.length)
+      throw new IllegalArgumentException("Invalid input channel");
+  }
+
   public Double correlation(int first, int second) {
     requirePair(first, second);
     if (frames == 0) return null;
