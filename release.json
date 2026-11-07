@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "p0-stop-route-20261107.1",
+  "release_id": "p0-microphone-route-20261107.1",
   "backend": {
-    "version": "0.15.47"
+    "version": "0.15.48"
   },
   "assistant": {
-    "version": "0.9.43",
-    "version_code": 80,
+    "version": "0.9.45",
+    "version_code": 82,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {

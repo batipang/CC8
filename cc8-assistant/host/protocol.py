@@ -10,7 +10,7 @@ import struct
 HEADER = struct.Struct('!BIQQQ')
 # 长度与头字段为网络字节序，PCM 载荷为小端有符号 16 位。
 # frame 是采样位置，nanos 是设备时间，不能当作日历时间。
-MIC, RENDER, EVENT, SPEAKER, MIC_PAIRED = 1, 2, 3, 4, 5
+MIC, RENDER, EVENT, SPEAKER, MIC_PAIRED, ROUTE_BOUND = 1, 2, 3, 4, 5, 6
 MAX_PACKET = 65536
 MAX_JSON_DEPTH = 16
 MAX_JSON_NODES = 4096
@@ -207,7 +207,14 @@ class Packet:
     data: bytes = b''
 
     def encode(self) -> bytes:
-        if type(self.kind) is not int or self.kind not in (MIC, RENDER, EVENT, SPEAKER, MIC_PAIRED):
+        if type(self.kind) is not int or self.kind not in (
+            MIC,
+            RENDER,
+            EVENT,
+            SPEAKER,
+            MIC_PAIRED,
+            ROUTE_BOUND,
+        ):
             raise ValueError('Unknown packet type')
         for value, bits in (
             (self.generation, 32),
@@ -221,15 +228,50 @@ class Packet:
             raise ValueError('Packet payload must be bytes')
         if len(self.data) + HEADER.size > MAX_PACKET:
             raise ValueError('Packet too large')
+        if self.kind == ROUTE_BOUND:
+            if len(self.data) < 17 or self.data[16] not in (
+                MIC,
+                RENDER,
+                EVENT,
+                SPEAKER,
+                MIC_PAIRED,
+            ):
+                raise ValueError('Invalid route envelope')
+            Packet(self.data[16], data=self.data[17:]).encode()
         if self.kind == MIC_PAIRED and (not self.data or len(self.data) % 4):
             raise ValueError('Invalid paired PCM length')
-        if self.kind != EVENT and (len(self.data) % 2 or len(self.data) > 6400):
+        if self.kind not in (EVENT, ROUTE_BOUND) and (len(self.data) % 2 or len(self.data) > 6400):
             raise ValueError('Invalid PCM length')
         payload = (
             HEADER.pack(self.kind, self.generation, self.sequence, self.frame, self.nanos)
             + self.data
         )
         return struct.pack('!I', len(payload)) + payload
+
+    def bind_route(self, token: str) -> 'Packet':
+        if not isinstance(token, str) or not re.fullmatch('[a-f0-9]{32}', token):
+            raise ValueError('Invalid route token')
+        self.encode()
+        if self.kind == ROUTE_BOUND:
+            raise ValueError('Nested route envelope')
+        bound = Packet(
+            ROUTE_BOUND,
+            self.generation,
+            self.sequence,
+            self.frame,
+            self.nanos,
+            bytes.fromhex(token) + bytes([self.kind]) + self.data,
+        )
+        bound.encode()
+        return bound
+
+    def unbind_route(self, token: str) -> 'Packet | None':
+        self.encode()
+        if self.kind != ROUTE_BOUND or self.data[:16].hex() != token:
+            return None
+        return Packet(
+            self.data[16], self.generation, self.sequence, self.frame, self.nanos, self.data[17:]
+        )
 
     @classmethod
     def event(cls, event: str, generation: int = 0, **fields: JsonValue) -> 'Packet':

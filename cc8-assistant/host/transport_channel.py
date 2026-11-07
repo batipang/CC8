@@ -37,6 +37,8 @@ class Channel:
         self.io_closed = False
         self.closed = False
         self.ready = False
+        self.route_envelope = False
+        self.route_token: str | None = None
         self.last_rx = time.monotonic()
 
     def start(self) -> None:
@@ -79,6 +81,12 @@ class Channel:
                 or not RELEASE.compatible(hello.get('protocol'))
             ):
                 raise ValueError('Missing transport hello')
+            self.route_envelope = (
+                type(hello.get('route_envelope_version')) is int
+                and hello['route_envelope_version'] == 1
+            )
+            # preferred() can see readiness before the queued Up is consumed.
+            # Publish only after every negotiated field has been established.
             self.ready = True
             self.last_rx = time.monotonic()
             self.events.put(('up', self, None), timeout=0.2)

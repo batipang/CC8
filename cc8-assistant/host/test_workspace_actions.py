@@ -199,7 +199,7 @@ class VoiceSession {
  final List<JSONObject> sent=new ArrayList<>();
  boolean failNext;
  class Link {
-  final String name;boolean closed,ready=true;
+  final String name;String routeToken;boolean closed,ready=true;
   Link(String value){name=value;}
   void event(JSONObject j)throws IOException{Wire.Packet p=new Wire.Packet();p.data=Wire.jsonBytes(j);offer(p);}
   void offer(Wire.Packet p)throws IOException{
@@ -219,7 +219,8 @@ class VoiceSession {
 }
 class Wire {
  static final int MIC=1,EVENT=3,MIC_PAIRED=5;
- static class Packet{int type,generation;long sequence,frame,nanos;byte[] data;}
+ static class Packet{int type,generation;long sequence,frame,nanos,outgoingRoute=-1;byte[] data;}
+ static void bindRoute(Packet p,String token){throw new AssertionError("Unexpected negotiated route in legacy fixture");}
  static String pauseOn="";
  static final java.util.concurrent.CountDownLatch entered=new java.util.concurrent.CountDownLatch(1),release=new java.util.concurrent.CountDownLatch(1);
  static final java.util.concurrent.atomic.AtomicInteger sequence=new java.util.concurrent.atomic.AtomicInteger();
@@ -366,6 +367,7 @@ class WorkspaceActionTests(unittest.TestCase):
                 'boolean supportsSavedTaskResults(',
                 'private void send(',
                 'private void sendPacket(',
+                'private void ownPacket(',
             )
         ]
         bound = 'boolean cancelTask(String id, long route)' in session

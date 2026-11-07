@@ -11,7 +11,7 @@ import subprocess as subprocess
 import threading as threading
 import time
 
-from protocol import EVENT, decode_event
+from protocol import EVENT, MIC, MIC_PAIRED, ROUTE_BOUND, decode_event
 from transport import Pairing, TransportHub
 from echo_processors import WebRtcEchoCanceller
 from fast_stop import FastStopDetector
@@ -245,6 +245,17 @@ class Bridge:
         return self.device_events.on_event(j)
 
     def on_packet(self, p):
+        token = getattr(self.session.connection, 'route_token', None)
+        if token is not None:
+            p = p.unbind_route(token)
+            if p is None:
+                return
+        elif p.kind == ROUTE_BOUND:
+            return
+        # A preserved native recorder is not registered on a freshly selected
+        # route until its current Start/Rebind is accepted. Never buffer early PCM.
+        if p.kind in (MIC, MIC_PAIRED) and self.session.capture_route_pending:
+            return
         if p.kind == EVENT:
             try:
                 self.on_event(decode_event(p.data))

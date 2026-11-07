@@ -56,7 +56,7 @@ SESSION_INTERFACES = r"""
  static class BuildConfig{static final int CC8_PROTOCOL=2;}
  static class SystemClock{static long now;static long elapsedRealtime(){return now;}}
  static class Link{
-  boolean closed,ready,pairedCaptureRequested;int ticket;String kind,captureStartToken;
+  boolean closed,ready,pairedCaptureRequested;int ticket;String kind,captureStartToken,routeToken;
   Socket connection;DataOutputStream out;
   Link(String name){kind=name;}
   final List<JSONObject> events=new ArrayList<>();
@@ -75,13 +75,17 @@ SESSION_INTERFACES = r"""
  }
  static class Wire{
   static final int EVENT=1,MIC=2,MIC_PAIRED=5;
-  static boolean block;static int parses,blockAt=2;
+  static boolean block,blockWrite;static int parses,blockAt=2,writes;
+  static void write(DataOutputStream out,int type,int generation,long sequence,long frame,long nanos,Object data)throws IOException{
+   writes++;if(blockWrite){entered.countDown();try{if(!release.await(2,java.util.concurrent.TimeUnit.SECONDS))throw new AssertionError("write barrier timeout");}catch(InterruptedException e){throw new IOException(e);}}
+  }
   static final java.util.concurrent.CountDownLatch entered=new java.util.concurrent.CountDownLatch(1),release=new java.util.concurrent.CountDownLatch(1);
   static class Packet{
-   int type=EVENT,generation=7,cameraGeneration;Object data;long sequence,frame,nanos,cameraRoute;
-   String cameraRequestId;
+   int type=EVENT,generation=7,cameraGeneration;Object data;long sequence,frame,nanos,cameraRoute,outgoingRoute=-1;
+   String cameraRequestId,routeToken;
    Packet(){}Packet(JSONObject value){data=value;}
   }
+  static void bindRoute(Packet packet,String token){packet.routeToken=token;}
   static JSONObject json(Packet p)throws Exception{
    parses++;
    if(block&&parses==blockAt){entered.countDown();if(!release.await(2,java.util.concurrent.TimeUnit.SECONDS))throw new AssertionError("fixture barrier timeout");}
@@ -112,6 +116,37 @@ SCENARIOS = r"""
   Link old=new Link("usb");activate(c,old);c.drain();
   c.snapshot(1,task("running"));c.drain();
   switch(args[0]){
+   case "route_queue":{
+    s.activateRoute(old,"a".repeat(32));
+    Wire.Packet mic=new Wire.Packet();mic.type=Wire.MIC;s.ownPacket(mic,old);
+    Wire.Packet control=new Wire.Packet();s.ownPacket(control,old);
+    yes(s.queuedPacketCurrent(mic,old)&&"a".repeat(32).equals(mic.routeToken),"fresh packet not bound");
+    Link wifi=new Link("wifi");s.activateRoute(wifi,"b".repeat(32));
+    yes(!s.queuedPacketCurrent(mic,old)&&!s.queuedPacketCurrent(control,old),"old queued data survived switch");
+    s.activateRoute(old,"c".repeat(32));
+    yes(!s.queuedPacketCurrent(mic,old)&&!s.queuedPacketCurrent(control,old),"same socket reused old queue");
+    s.writeQueuedPacket(mic,old);yes(Wire.writes==0,"stale queue reached actual write helper");
+    Wire.Packet fresh=new Wire.Packet();fresh.type=Wire.MIC;s.ownPacket(fresh,old);
+    yes(s.queuedPacketCurrent(fresh,old)&&"c".repeat(32).equals(fresh.routeToken),"new data rejected");
+    s.writeQueuedPacket(fresh,old);yes(Wire.writes==1,"fresh queue did not write once");
+    long route=s.routeEpoch;s.activateRoute(old,"d".repeat(32));
+    yes(s.routeEpoch>route&&!s.queuedPacketCurrent(fresh,old),"new token on same socket did not fence queue");break;
+   }
+   case "write_after_admission":{
+    s.activateRoute(old,"a".repeat(32));
+    Wire.Packet mic=new Wire.Packet();mic.type=Wire.MIC;s.ownPacket(mic,old);
+    Wire.blockWrite=true;List<Throwable> errors=Collections.synchronizedList(new ArrayList<>());
+    Thread writer=new Thread(()->{try{s.writeQueuedPacket(mic,old);}catch(Throwable e){errors.add(e);}});
+    writer.start();try{
+     yes(Wire.entered.await(2,java.util.concurrent.TimeUnit.SECONDS),"writer did not enter real write helper");
+     Thread handover=new Thread(()->{try{s.activateRoute(new Link("wifi"),"b".repeat(32));}catch(Throwable e){errors.add(e);}});
+     handover.start();handover.join(1000);
+     yes(!handover.isAlive(),"socket writer held route lock across blocking I/O");
+     yes("a".repeat(32).equals(mic.routeToken),"already admitted packet was retagged");
+     yes(!s.queuedPacketCurrent(mic,old),"old packet remained current after handover");
+    }finally{Wire.release.countDown();writer.join(2000);}
+    yes(!writer.isAlive()&&errors.isEmpty(),"writer/route fixture failed");break;
+   }
    case "late_audio_begin_parse":{
     Wire.block=true;
     List<Throwable> errors=Collections.synchronizedList(new ArrayList<>());
@@ -337,6 +372,10 @@ class WorkspaceRouteTests(unittest.TestCase):
             method(session, signature)
             for signature in (
                 'private void select(',
+                'private void activateRoute(',
+                'private void ownPacket(',
+                'private boolean queuedPacketCurrent(',
+                'private void writeQueuedPacket(',
                 'private String recordingPhase(',
                 'private void registerCapture(',
                 'private boolean captureHello(',
@@ -475,6 +514,12 @@ class WorkspaceRouteTests(unittest.TestCase):
 
     def test_camera_dispatch_binds_preview_and_error_to_its_own_activation(self):
         self.scenario('camera_dispatch')
+
+    def test_all_queued_packets_keep_their_original_activation_on_link_reuse(self):
+        self.scenario('route_queue')
+
+    def test_already_admitted_write_keeps_old_token_without_blocking_handover(self):
+        self.scenario('write_after_admission')
 
     def test_camera_transfer_never_falls_back_after_enqueue_failure(self):
         self.scenario('camera_link_failure')

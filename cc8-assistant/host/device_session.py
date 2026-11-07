@@ -93,6 +93,7 @@ def rebind_capture(session: SessionController, j):
     if session.rebind_seen or session.capture_start_required:
         return
     session.rebind_seen = True
+    session.capture_route_pending = False
     if session.active and int(j.get('epoch', -1)) == session.epoch:
         hooks.wake_reset('rebind')
         if hooks.calibration().active:
@@ -133,6 +134,7 @@ def start_capture(session: SessionController, j):
     if session.resend_capture_rejection(capture_id):
         return
     session.rebind_seen = True
+    session.capture_route_pending = False
     # A route rebind can arrive before the capture worker's first start.
     # Both describe the same native recording epoch; never restart it.
     if session.active and int(j['epoch']) == session.epoch:

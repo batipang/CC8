@@ -34,8 +34,10 @@ class SessionController:
         self.hooks = hooks
         self.text_generation = None
         self.connection = None
+        self.bound_route_token = None
         self.transport_kind = 'none'
         self.rebind_seen = False
+        self.capture_route_pending = False
         self.capture_start_required = False
         self.capture_rejection_supported = False
         self.rejected_capture_id = None
@@ -100,13 +102,15 @@ class SessionController:
     def change_transport(self, channel):
         # 先作废旧回答并重置参考时钟；只可 rebind 已有录音，重连不能自行开麦。
         old = self.connection
-        if old is channel:
+        route_token = getattr(channel, 'route_token', None)
+        if old is channel and route_token == self.bound_route_token:
             return
         was_active = self.active
         # Admission must see the route unconfirmed before cancellation advances
         # the generation, including while cancellation notifies the old route.
         with self.guard:
             self.rebind_seen = False
+            self.capture_route_pending = True
             self.capture_rejection_supported = False
             self.capture_start_ack = False
             self.capture_frontend_requested = 'mono'
@@ -115,6 +119,7 @@ class SessionController:
         except (OSError, EOFError):
             pass
         self.connection = channel
+        self.bound_route_token = route_token
         self.hooks.visual().clear_challenge()
         self.transport_kind = channel.kind if channel else 'none'
         self.hooks.capture().reset_transport(self.transport_kind)
