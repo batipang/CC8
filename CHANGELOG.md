@@ -1,5 +1,11 @@
 # Changelog
 
+## Backend 0.15.47 — reset stop-keyword history on handover
+
+- Start a fresh local stop decoder stream when the capture route changes, preserving session-level counters.
+- Prevent a partial command from the previous route from cancelling a later answer; a complete command on the new route still works.
+- Keep same-channel continuity, voice thresholds, microphone ownership and the ASR/TTS providers unchanged. This does not establish a fix for TV-background pauses or all queued-audio handover cases.
+
 ## Backend 0.15.46 — received microphone signal quality
 
 - Count accepted 16 kHz microphone PCM before host DSP, including near-full-scale samples, zero samples, peak, RMS, DC offset and longest clipped run.

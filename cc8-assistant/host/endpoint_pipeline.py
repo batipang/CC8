@@ -110,6 +110,9 @@ class EndpointPipeline:
         self.cancel_partial_trace()
         self.reset_voice_onset()
         self.fast_stop_observation = None
+        if self.fast_stop:
+            # A new route cannot complete a keyword prefix from the old route.
+            self.fast_stop.reset(clear_metrics=False)
         self.vad.reset()
         self.reference_capture.reset()
         self.near_speech.reset()
