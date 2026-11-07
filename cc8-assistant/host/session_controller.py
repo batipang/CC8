@@ -254,13 +254,19 @@ class SessionController:
         # Wake local waiters independently of provider/transport cancellation.
         self.hooks.playback().notify()
         try:
-            try:
-                if brain := self.hooks.brain():
-                    brain.cancel()
-            finally:
-                cancel_speech = getattr(self.hooks.speech(), 'cancel', None)
-                if cancel_speech:
-                    cancel_speech()
+            # A later cancellation may already have admitted a newer request
+            # while notify ran outside the guard. It owns provider cleanup now.
+            # Serialize both providers with request admission so the old brain
+            # cancellation cannot be followed by cancelling a new speech slot.
+            with self.guard:
+                if self.generation == generation:
+                    try:
+                        if brain := self.hooks.brain():
+                            brain.cancel()
+                    finally:
+                        cancel_speech = getattr(self.hooks.speech(), 'cancel', None)
+                        if cancel_speech:
+                            cancel_speech()
         finally:
             # Only CC8 can discard PCM already queued on its side.
             try:

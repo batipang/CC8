@@ -1,5 +1,11 @@
 # Changelog
 
+## Backend 0.15.54 — cancellation belongs to its request
+
+- Match task and vision cancel buttons while holding the session guard through cancellation and status publication, preventing an older button from cancelling a newer owner request.
+- Recheck generation before provider cancellation and serialize brain/speech cancellation with request admission. A superseded cleanup cannot interrupt a newer Dot turn or MiniMax request.
+- Preserve current-owner cancellation, completed work receipts, original APK84, providers and capture rules. Include prior backend53 deployment evidence and rejected offline audio candidates in this functional batch.
+
 ## Backend 0.15.53 — deferred signals and startup resource ownership
 
 - Make stop/self-check signal callbacks record intent without acquiring resource locks. Process them at main-loop boundaries, give Stop priority and reject self-checks belonging to an old generation/capture epoch.

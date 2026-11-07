@@ -60,9 +60,10 @@ class DeviceEventRouter:
                     nonce,
                 )
         elif event == 'vision_cancel':
-            if self.visual.matches_cancel(j):
-                self.cancel('vision_cancel')
-                self.status('listening' if self.session.active else 'idle', '已停止看图')
+            with self.session.guard:
+                if self.visual.matches_cancel(j):
+                    self.cancel('vision_cancel')
+                    self.status('listening' if self.session.active else 'idle', '已停止看图')
         elif event == 'device_ready':
             self.session.ready(j)
             self.chats.publish(ok=True)
@@ -92,20 +93,24 @@ class DeviceEventRouter:
                     'workspace_result', ok=False, message='提醒未保存，请检查时间、内容及 Mac 存储'
                 )
         elif event == 'task_cancel':
-            task = next(
-                (
-                    t
-                    for t in self.workspace.snapshot()['tasks']
-                    if t['id'] == j.get('id') and t['status'] == 'running'
-                ),
-                None,
-            )
-            if task and task['generation'] == self.session.generation:
-                self.cancel('task_button')
-                self.status(
-                    'listening' if self.session.active else 'idle',
-                    '已停止任务等待；已执行的操作不会撤销',
+            # The owner-local text IPC can replace this generation while the
+            # device thread is handling an older button. Match and cancel in
+            # the same session transaction, as vision cancellation does.
+            with self.session.guard:
+                task = next(
+                    (
+                        t
+                        for t in self.workspace.snapshot()['tasks']
+                        if t['id'] == j.get('id') and t['status'] == 'running'
+                    ),
+                    None,
                 )
+                if task and task['generation'] == self.session.generation:
+                    self.cancel('task_button')
+                    self.status(
+                        'listening' if self.session.active else 'idle',
+                        '已停止任务等待；已执行的操作不会撤销',
+                    )
         elif event == 'session_rebind' and j.get('capture_active'):
             self.session.rebind(j)
         elif event == 'device_control_result':
