@@ -1,5 +1,10 @@
 # Changelog
 
+## Diagnostics 1.0.2 — inspect input channel signals
+
+- Add foreground six-second statistics for two- and four-channel input.
+- Report per-channel levels, correlations and duplicate samples without saving audio.
+
 ## Backend 0.15.44 — enforce the deadline after receiving a Dot reply
 
 - Recheck the shared request budget after the reply queue returns.

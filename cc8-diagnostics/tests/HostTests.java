@@ -75,6 +75,40 @@ public final class HostTests {
     } finally {
       file.delete();
     }
+    ChannelMath stereo = new ChannelMath(2);
+    short[] stereoPcm = {-32768, -32768, 32767, 32767, 0, 0, 100, 100};
+    stereo.add(stereoPcm, 0, 3);
+    check(stereo.frames == 1 && stereo.pendingSamples() == 1, "Incomplete frames must wait");
+    stereo.add(stereoPcm, 3, 5);
+    check(
+        stereo.frames == 4 && stereo.pendingSamples() == 0,
+        "Read boundaries must preserve channels");
+    check(
+        stereo.channels[0].samples == 4 && stereo.channels[1].peak == 32768,
+        "Full-scale channel metrics");
+    check(stereo.equalRatio(0, 1) == 1, "Duplicated channels must be reported");
+    check(
+        Math.abs(stereo.correlation(0, 1) - 1) < 1e-10,
+        "Identical nonconstant channel correlation");
+    ChannelMath quad = new ChannelMath(4);
+    short[] quadPcm = {100, -100, 0, 10, -100, 100, 0, 20, 200, -200, 0, 30, -200, 200, 0, 40};
+    for (int i = 0; i < quadPcm.length; i++) quad.add(quadPcm, i, 1);
+    check(quad.frames == 4 && quad.channels[3].peak == 40, "Four-channel single-sample reads");
+    check(
+        Math.abs(quad.correlation(0, 1) + 1) < 1e-10, "Opposite polarity must not look identical");
+    check(quad.equalRatio(0, 1) == 0, "Different channels must not look duplicated");
+    check(quad.correlation(0, 2) == null, "Silent channel correlation must be unknown");
+    check(quad.channels[2].zeroRatio() == 1, "Silent channel metrics");
+    boolean invalidRange = false;
+    try {
+      quad.add(quadPcm, 1, quadPcm.length);
+    } catch (IllegalArgumentException e) {
+      invalidRange = true;
+    }
+    check(invalidRange && quad.frames == 4, "Invalid reads cannot partially change statistics");
+    ChannelMath emptyChannels = new ChannelMath(2);
+    check(emptyChannels.correlation(0, 1) == null, "No-frame correlation must be unknown");
+    check(emptyChannels.equalRatio(0, 1) == 0, "No-frame counts cannot imply duplication");
     System.out.println("Host audio tests passed: " + count + " checks");
   }
 }

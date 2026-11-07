@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "release_id": "p0-dot-receipt-deadline-20261107.1",
+  "release_id": "p0-channel-statistics-20261107.1",
   "backend": {
     "version": "0.15.44"
   },
@@ -10,8 +10,8 @@
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {
-    "version": "1.0.1",
-    "version_code": 2,
+    "version": "1.0.2",
+    "version_code": 3,
     "package": "com.happyhome.cc8diagnostics"
   },
   "protocol": {
