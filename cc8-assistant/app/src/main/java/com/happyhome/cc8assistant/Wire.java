@@ -5,7 +5,13 @@ import java.nio.charset.StandardCharsets;
 import org.json.JSONObject;
 
 final class Wire {
-  static final int MIC = 1, RENDER = 2, EVENT = 3, SPEAKER = 4, HEADER = 29, MAX = 65536;
+  static final int MIC = 1,
+      RENDER = 2,
+      EVENT = 3,
+      SPEAKER = 4,
+      MIC_PAIRED = 5,
+      HEADER = 29,
+      MAX = 65536;
 
   static final class Packet {
     int type, generation;
@@ -28,7 +34,9 @@ final class Wire {
     p.nanos = in.readLong();
     p.data = new byte[size - HEADER];
     in.readFully(p.data);
-    if (p.type < 1 || p.type > 4) throw new IOException("Invalid packet type");
+    if (p.type < 1 || p.type > MIC_PAIRED) throw new IOException("Invalid packet type");
+    if (p.type == MIC_PAIRED && (p.data.length == 0 || p.data.length % 4 != 0))
+      throw new IOException("Invalid paired PCM frame");
     if (p.type != EVENT && (p.data.length % 2 != 0 || p.data.length > 6400))
       throw new IOException("Invalid PCM frame");
     return p;
@@ -43,7 +51,13 @@ final class Wire {
       long nanos,
       byte[] data)
       throws IOException {
-    if (data.length + HEADER > MAX) throw new IOException("Packet too large");
+    if (data == null) throw new IOException("Missing packet payload");
+    if (type < 1 || type > MIC_PAIRED) throw new IOException("Invalid packet type");
+    if (type == MIC_PAIRED && (data.length == 0 || data.length % 4 != 0))
+      throw new IOException("Invalid paired PCM frame");
+    if (type != EVENT && (data.length % 2 != 0 || data.length > 6400))
+      throw new IOException("Invalid PCM frame");
+    if (data.length > MAX - HEADER) throw new IOException("Packet too large");
     out.writeInt(HEADER + data.length);
     out.writeByte(type);
     out.writeInt(generation);

@@ -73,6 +73,21 @@ class ConfigurationTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             load_config(self.root, {'CC8_CHINESE_WAKE_VERIFIER': 'minimax'})
 
+    def test_paired_capture_is_explicit_and_preserves_config_priority_and_service_export(self):
+        self.assertEqual(load_config(self.root, {}).capture_frontend, 'mono')
+        self.save(capture_frontend='paired')
+        self.assertEqual(load_config(self.root, {}).capture_frontend, 'paired')
+        env = {'CC8_CAPTURE_FRONTEND': 'mono', 'CC8_MINIMAX_API_KEY': 'PRIVATE-SENTINEL'}
+        config = load_config(self.root, env)
+        self.assertEqual(config.capture_frontend, 'mono')
+        self.assertEqual(dict(config.sources)['capture_frontend'], 'environment')
+        self.assertEqual(config.public_summary()['capture_frontend'], 'mono')
+        self.assertEqual(config.service_environment(env), {'CC8_CAPTURE_FRONTEND': 'mono'})
+        for value in ('', 'auto', 'PRIVATE-SENTINEL'):
+            with self.subTest(value=value), self.assertRaises(ConfigError) as failure:
+                load_config(self.root, {'CC8_CAPTURE_FRONTEND': value})
+            self.assertNotIn('PRIVATE-SENTINEL', str(failure.exception))
+
     def test_invalid_fields_do_not_fallback_or_print_values(self):
         cases = (
             {'asr': 'PRIVATE-SENTINEL'},

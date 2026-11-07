@@ -51,12 +51,14 @@ class RuntimeConfig:
     profile: Path
     sources: tuple[tuple[str, str], ...]
     legacy_profile: bool
+    capture_frontend: str = 'mono'
 
     def public_summary(self) -> dict[str, object]:
         return {
             'schema_version': 1,
             'asr': self.asr,
             'brain': self.brain,
+            'capture_frontend': self.capture_frontend,
             'minimax_base': self.minimax_base,
             'minimax_model': self.minimax_model,
             'asr_model': self.asr_model,
@@ -173,6 +175,7 @@ def load_config(root: Path = ROOT, environ: Mapping[str, str] | None = None) -> 
     return RuntimeConfig(
         asr=cast(str, values['asr']),
         brain=cast(str, values['brain']),
+        capture_frontend=cast(str, values['capture_frontend']),
         minimax_base=cast(str, values['minimax_base']),
         minimax_model=cast(str, values['minimax_model']),
         asr_model=cast(str, values['asr_model']),

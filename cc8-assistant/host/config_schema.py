@@ -33,6 +33,7 @@ class Field:
 FIELDS = {
     'asr': Field('choice', 'minimax', ('minimax', 'sensevoice', 'whisper')),
     'brain': Field('choice', 'dot', ('dot', 'minimax')),
+    'capture_frontend': Field('choice', 'mono', ('mono', 'paired')),
     'minimax_base': Field(
         'endpoint',
         'https://api.minimax.cn',
@@ -60,6 +61,7 @@ FIELDS = {
 ENV_FIELDS = {
     'CC8_ASR_ENGINE': 'asr',
     'CC8_BRAIN_PROVIDER': 'brain',
+    'CC8_CAPTURE_FRONTEND': 'capture_frontend',
     'CC8_MINIMAX_BASE': 'minimax_base',
     'CC8_MINIMAX_MODEL': 'minimax_model',
     'CC8_ASR_MODEL': 'asr_model',

@@ -38,6 +38,7 @@ SESSION_INTERFACES = r"""
   void cancelPlayback(){}
   boolean receiveHello(Link link,JSONObject hello)throws IOException{return captureHello(link,hello);}
   void receiveCaptureStart(JSONObject receipt,long route){confirmCaptureStart(receipt,route);}
+  void microphonePairFrame(int captureEpoch)throws IOException{sendPacket(Wire.MIC_PAIRED,captureEpoch,0,0,10,new byte[640]);}
   void microphoneFrame(int captureEpoch)throws IOException{
    sendPacket(Wire.MIC,captureEpoch,0,0,10,new byte[320]);
   }
@@ -55,7 +56,7 @@ SESSION_INTERFACES = r"""
  static class BuildConfig{static final int CC8_PROTOCOL=2;}
  static class SystemClock{static long now;static long elapsedRealtime(){return now;}}
  static class Link{
-  boolean closed,ready;int ticket;String kind,captureStartToken;
+  boolean closed,ready,pairedCaptureRequested;int ticket;String kind,captureStartToken;
   Socket connection;DataOutputStream out;
   Link(String name){kind=name;}
   final List<JSONObject> events=new ArrayList<>();
@@ -73,7 +74,7 @@ SESSION_INTERFACES = r"""
   void offer(Wire.Packet packet)throws IOException{failIfRequested();packets.add(packet);}
  }
  static class Wire{
-  static final int EVENT=1,MIC=2;
+  static final int EVENT=1,MIC=2,MIC_PAIRED=5;
   static boolean block;static int parses,blockAt=2;
   static final java.util.concurrent.CountDownLatch entered=new java.util.concurrent.CountDownLatch(1),release=new java.util.concurrent.CountDownLatch(1);
   static class Packet{
@@ -162,11 +163,28 @@ SCENARIOS = r"""
     c.snapshot(0,task("completed"));c.drain();
     yes(c.workspaceRevision==0&&"completed".equals(c.tasksData.optJSONObject(0).optString("status")),"New route accepts its own low revision and true completion");break;
    }
+   case "paired_capture_registration":{
+    s.recording=true;s.epoch=7;s.captureWindow=new CaptureWindow(0,0);
+    s.captureWindow.nativeReady=true;s.captureWindow.paired=true;s.captureWindow.startConfirmed=true;
+    s.captureWindow.startToken="c".repeat(32);s.captureWindow.registeredRoute=s.routeEpoch;
+    old.captureStartToken="c".repeat(32);old.pairedCaptureRequested=true;
+    Link backup=new Link("wifi");
+    old.failOffer=()->{try{activate(c,backup);}catch(Exception e){throw new RuntimeException(e);}};
+    s.microphonePairFrame(7);
+    yes(backup.packets.isEmpty(),"paired fallback bypassed current route registration");
+    s.microphonePairFrame(7);
+    yes(backup.packets.isEmpty(),"paired input reached route before its format hello");
+    JSONObject hello=new JSONObject("capture_frontend","paired");hello.values.put("capture_start_token","c".repeat(32));
+    s.receiveHello(backup,hello);s.microphonePairFrame(7);
+    yes(backup.packets.size()==1&&backup.packets.get(0).type==Wire.MIC_PAIRED,"confirmed paired route did not resume same capture");
+    break;
+   }
    case "capture_rebind_id":{
     s.recording=true;s.epoch=7;s.captureWindow=new CaptureWindow(0,0);
     s.captureWindow.nativeReady=true;s.captureWindow.startConfirmed=true;s.captureWindow.startToken="";
-    Link backup=new Link("wifi");
+    Link backup=new Link("wifi");backup.pairedCaptureRequested=true;
     activate(c,backup);
+    yes(!backup.pairedCaptureRequested,"old format capability survived new activation");
     yes(backup.events.size()==1,"capture registered before its hello");
     s.receiveHello(backup,new JSONObject());
     yes(backup.events.size()==2,"new active link did not receive ready and rebind");
@@ -460,6 +478,9 @@ class WorkspaceRouteTests(unittest.TestCase):
 
     def test_camera_transfer_never_falls_back_after_enqueue_failure(self):
         self.scenario('camera_link_failure')
+
+    def test_paired_pcm_waits_for_registration_on_initial_and_failed_enqueue_routes(self):
+        self.scenario('paired_capture_registration')
 
     def test_backup_activation_rebinds_the_exact_current_capture_id(self):
         self.scenario('capture_rebind_id')

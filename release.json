@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "p0-reference-usb-state-20261107.1",
+  "release_id": "p0-paired-capture-20261107.1",
   "backend": {
-    "version": "0.15.44"
+    "version": "0.15.45"
   },
   "assistant": {
-    "version": "0.9.42",
-    "version_code": 79,
+    "version": "0.9.43",
+    "version_code": 80,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {

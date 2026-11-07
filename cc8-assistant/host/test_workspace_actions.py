@@ -218,7 +218,7 @@ class VoiceSession {
  LEGACY_ADAPTERS
 }
 class Wire {
- static final int MIC=1,EVENT=3;
+ static final int MIC=1,EVENT=3,MIC_PAIRED=5;
  static class Packet{int type,generation;long sequence,frame,nanos;byte[] data;}
  static String pauseOn="";
  static final java.util.concurrent.CountDownLatch entered=new java.util.concurrent.CountDownLatch(1),release=new java.util.concurrent.CountDownLatch(1);

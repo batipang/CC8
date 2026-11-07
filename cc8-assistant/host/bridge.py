@@ -66,6 +66,7 @@ class Bridge:
         workspace=None,
         wake_detector=None,
         wake_window_seconds=60,
+        capture_frontend='mono',
     ):
         self.diagnostics = TraceBook()
         started_at = time.monotonic()
@@ -82,7 +83,7 @@ class Bridge:
             'utterances': 0,
             'raw_audio_saved': False,
         }
-        self.session = build_session(self)
+        self.session = build_session(self, capture_frontend=capture_frontend)
         if isinstance(self.brain, BrainRouter):
             self.brain.dot.device_control = self.control_device
             self.brain.dot.reminders = self.reminder_action

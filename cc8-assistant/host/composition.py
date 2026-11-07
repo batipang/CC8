@@ -349,7 +349,7 @@ def build_device_events(host: Bridge) -> DeviceEventRouter:
     )
 
 
-def build_session(host: Bridge) -> SessionController:
+def build_session(host: Bridge, *, capture_frontend: str = 'mono') -> SessionController:
     return SessionController(
         SessionHooks(
             diagnostics=lambda: host.diagnostics,
@@ -384,5 +384,6 @@ def build_session(host: Bridge) -> SessionController:
             wake_tick=lambda: host.wake.tick(),
             prepare_brain=lambda generation: host.response.prepare(generation),
             cancel_observation=lambda: host.cancel_playback_observation(),
-        )
+        ),
+        capture_frontend=capture_frontend,
     )

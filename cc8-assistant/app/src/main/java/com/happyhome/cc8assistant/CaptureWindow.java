@@ -12,7 +12,9 @@ final class CaptureWindow {
   private final long deadline;
   private final long startDeadline;
   // Registration belongs to the route lock. The watchdog also reads confirmation.
-  boolean nativeReady;
+  volatile boolean nativeReady;
+  volatile boolean paired;
+  String captureFallbackReason;
   String startToken;
   long registeredRoute = -1;
   volatile boolean startConfirmed;

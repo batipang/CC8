@@ -31,7 +31,7 @@ class JSONObject {
  Object opt(String key){return data.get(key);}
 }
 class Wire {
- static final int MIC=2;
+ static final int MIC=2,MIC_PAIRED=5;
  static JSONObject event(String name){JSONObject j=new JSONObject();j.data.put("event",name);return j;}
  static void put(JSONObject j,String key,Object value){j.data.put(key,value);}
  static byte[] pcm(short[] samples,int count){return new byte[count*2];}
@@ -90,6 +90,26 @@ class AudioRecord {
  void stop(){stops++;stopped.countDown();}
  void release(){released.countDown();}
 }
+class CaptureAudioInput {
+ final AudioRecord recorder;final boolean paired;final String fallbackReason=null;
+ CaptureAudioInput(boolean paired){this.paired=paired;recorder=new AudioRecord(7,16000,1,2,6400);}
+ static CaptureAudioInput open(boolean paired){
+  CaptureAudioInput input=new CaptureAudioInput(paired);
+  if("slow_open".equals(CaptureCheck.test))CaptureCheck.clock.set(8100);
+  return input;
+ }
+ static class Chunk {
+  final short[] samples;final int frames;final boolean paired;
+  Chunk(int frames,boolean paired){this.frames=frames;this.paired=paired;samples=new short[frames*(paired?2:1)];}
+  float level(){return 0;}void clear(){Arrays.fill(samples,(short)0);}
+ }
+ Chunk read()throws IOException{
+  int count=recorder.read(new short[320],0,320);
+  if(count<0)throw new IOException("recording stopped");
+  return count==0?null:new Chunk(count,paired);
+ }
+ void clear(){}
+}
 class VoiceSession {
  final Context context=new Context();
  final SpeakerOwner speakerOwner=new SpeakerOwner(()->new SpeakerSession.Device(){
@@ -114,19 +134,23 @@ class VoiceSession {
  final Status statusFeedback=new Status();
  final List<JSONObject> events=new CopyOnWriteArrayList<>();
  final AtomicInteger packets=new AtomicInteger();
+ final List<Integer> packetKinds=new CopyOnWriteArrayList<>(),packetLengths=new CopyOnWriteArrayList<>();
  int visionCancels,playbackCancels;
  boolean isConnected(){return true;}
  boolean currentRoute(long route){return route==routeEpoch;}
  void rejectForTest(Object id,long route){rejectCapture(id,route);}
+ void registerForTest(CaptureWindow window,int epoch)throws IOException{registerCapture(window,epoch);}
+ boolean helloForTest(JSONObject hello)throws IOException{return captureHello(activeLink,hello);}
  void cancelVision(){visionCancels++;}
  void cancelPlayback(){playbackCancels++;player=null;}
  void cancelForTest(int generation,long route){cancelPlaybackForCommand(generation,route);}
  void send(JSONObject event){events.add(event);}
  class Link {
-  String captureStartToken="";
+  volatile String captureStartToken="";
+  boolean pairedCaptureRequested;
   void event(JSONObject event)throws IOException{send(event);}
  }
- void sendPacket(int kind,int epoch,long sequence,long frame,long stamp,byte[] data){packets.incrementAndGet();}
+ void sendPacket(int kind,int epoch,long sequence,long frame,long stamp,byte[] data){packets.incrementAndGet();packetKinds.add(kind);packetLengths.add(data.length);}
  static class Status{void reset(){}}
  static class Player {
   int generation=5,playbackId=7;
@@ -167,6 +191,64 @@ public final class CaptureCheck {
  public static void main(String[] args)throws Exception {
   test=args[0];VoiceSession s=new VoiceSession();
   try {
+   if("hello_no_capture".equals(test)){
+    JSONObject hello=new JSONObject();hello.data.put("capture_frontend","paired");
+    hello.data.put("capture_start_token","a".repeat(32));s.helloForTest(hello);
+    yes(s.activeLink.pairedCaptureRequested&&AudioRecord.created.isEmpty()&&!s.recording,"Hello started native capture");
+    return;
+   }
+   if("hello_invalid_frontend".equals(test)){
+    s.activeLink.captureStartToken="old";
+    for(Object mode:new Object[]{true,"unknown",List.of("paired")}){
+     JSONObject hello=new JSONObject();hello.data.put("capture_frontend",mode);
+     hello.data.put("capture_start_token","a".repeat(32));boolean failed=false;
+     try{s.helloForTest(hello);}catch(IOException e){failed=true;}
+     yes(failed&&!s.activeLink.pairedCaptureRequested&&"old".equals(s.activeLink.captureStartToken),"Bad format partially applied capability");
+    }yes(AudioRecord.created.isEmpty(),"Bad format acquired recorder");return;
+   }
+   if("expired_start".equals(test)){
+    synchronized(s.captureResourceLock){s.startMicrophone();clock.set(8100);}
+    waitFor(()->!s.recording,"Expired start stayed active");
+    yes(AudioRecord.created.isEmpty(),"Expired start acquired microphone hardware");return;
+   }
+   if("slow_open".equals(test)){
+    s.startMicrophone();waitFor(()->!s.recording,"Slow initialization stayed active");
+    yes(AudioRecord.created.size()==1,"Initialization fixture not reached");
+    AudioRecord record=AudioRecord.created.get(0);
+    yes(!record.started,"Initialization crossing the start deadline enabled microphone");
+    yes(record.released.await(1,TimeUnit.SECONDS),"Expired initialized recorder leaked");return;
+   }
+   if("wait_hello".equals(test)||"cancel_wait_hello".equals(test)){
+    s.activeLink.captureStartToken=null;s.startMicrophone();Thread.sleep(80);
+    yes(AudioRecord.created.isEmpty(),"Recorder opened before route format hello");
+    if("cancel_wait_hello".equals(test)){
+     s.stopMicrophone();s.activeLink.captureStartToken="";Thread.sleep(80);
+     yes(AudioRecord.created.isEmpty(),"Late hello restarted cancelled recording");
+    }else{
+     s.activeLink.captureStartToken="";
+     yes(AudioRecord.entered.await(3,TimeUnit.SECONDS),"Confirmed legacy hello did not allow capture");
+    }return;
+   }
+   if("paired_worker".equals(test)){
+    s.activeLink.pairedCaptureRequested=true;s.startMicrophone(1000);
+    waitFor(()->!s.recording,"Bounded paired worker did not stop");
+    yes(s.packets.get()>0&&s.packetKinds.stream().allMatch(k->k==Wire.MIC_PAIRED),"Wrong paired packet kind");
+    yes(s.packetLengths.stream().allMatch(n->n==1280),"Paired payload does not contain two logical channels");
+    yes(AudioRecord.created.get(0).timestamps==0,"48 kHz hardware positions passed to 16 kHz evidence");
+    yes(s.events.stream().anyMatch(j->"session_start".equals(j.data.get("event"))&&
+     "paired".equals(j.data.get("capture_frontend"))&&Integer.valueOf(48000).equals(j.data.get("capture_sample_rate"))),"Paired capture format missing from registration");
+    return;
+   }
+   if("paired_route_mismatch".equals(test)){
+    s.activeLink.pairedCaptureRequested=true;s.startMicrophone();
+    yes(AudioRecord.entered.await(3,TimeUnit.SECONDS),"Paired recording did not start");
+    CaptureWindow window=s.captureWindow;int epoch=s.epoch;
+    s.routeEpoch++;s.activeLink.pairedCaptureRequested=false;
+    s.registerForTest(window,epoch);
+    yes(!s.recording&&s.listener.rejected.get()==epoch+1,"Incompatible route kept paired capture running");
+    yes(AudioRecord.created.get(0).released.await(3,TimeUnit.SECONDS),"Incompatible route leaked recorder");
+    return;
+   }
    if("unconfirmed_timeout".equals(test)){
     s.activeLink.captureStartToken="a".repeat(32);
     s.startMicrophone();
@@ -451,6 +533,7 @@ class CaptureWindowTests(unittest.TestCase):
                 'void startMicrophone()',
                 'void startMicrophone(long testLimitMs)',
                 'private void registerCapture(CaptureWindow window, int captureEpoch)',
+                'private boolean captureHello(Link source, JSONObject hello)',
                 'private void watchCapture(CaptureWindow window, int mine, AudioRecord ownedRecord)',
                 'void stopMicrophone()',
                 'private boolean stopMicrophone(CaptureWindow expected)',
@@ -514,6 +597,30 @@ class CaptureWindowTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout
+
+    def test_format_capability_alone_never_starts_capture(self):
+        self.check_worker('hello_no_capture')
+
+    def test_bad_format_hello_cannot_partially_update_capture_capability(self):
+        self.check_worker('hello_invalid_frontend')
+
+    def test_hardware_waits_for_authenticated_format_hello(self):
+        self.check_worker('wait_hello')
+
+    def test_late_format_hello_cannot_undo_manual_stop(self):
+        self.check_worker('cancel_wait_hello')
+
+    def test_expired_start_cannot_acquire_hardware_after_worker_wait(self):
+        self.check_worker('expired_start')
+
+    def test_slow_initialization_cannot_start_after_confirmation_deadline(self):
+        self.check_worker('slow_open')
+
+    def test_paired_worker_emits_logical_pairs_without_wrong_clock_scale(self):
+        self.check_worker('paired_worker')
+
+    def test_rebind_cannot_silently_change_live_paired_format(self):
+        self.check_worker('paired_route_mismatch')
 
     def test_rejection_stops_only_the_owned_capture_and_releases_hardware(self):
         self.check_worker('rejected_capture')

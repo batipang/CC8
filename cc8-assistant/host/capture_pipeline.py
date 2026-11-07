@@ -9,7 +9,8 @@ from typing import Callable
 import numpy as np
 from diagnostics import TraceBook
 from dsp import RATE, FRAME, level
-from protocol import MIC, RENDER
+from protocol import MIC, RENDER, MIC_PAIRED
+from paired_capture import decode_pairs
 from session_ports import EventSink, MetricSink
 from echo_pipeline import EchoPipeline
 from endpoint_pipeline import EndpointPipeline
@@ -46,6 +47,8 @@ class CapturePipeline:
         self.hooks = hooks
         self.echo = echo
         self.endpoint = endpoint
+        self.paired_reference = False
+        self.paired_peer_ready = False
         self.capture_lookahead_ns = 80_000_000
         self.pending_mic = deque()
         self.last_sequence = None
@@ -229,6 +232,7 @@ class CapturePipeline:
             probe.render_clock.accept(generation, playback_id, value, expected_frames)
 
     def reset_transport(self, kind):
+        self.paired_peer_ready = False
         self.clear_known_speech('transport_changed')
         self.clear_response_probe()
         self.end_probe(status='transport_changed')
@@ -242,6 +246,7 @@ class CapturePipeline:
         self.next_read_gap = None
 
     def reset_session(self):
+        self.paired_reference = False
         self.clear_known_speech('session_changed')
         self.clear_response_probe()
         self.end_probe(status='session_changed')
@@ -254,6 +259,7 @@ class CapturePipeline:
         self.pending_mic.clear()
 
     def close(self):
+        self.paired_reference = False
         self.clear_known_speech('capture_closed')
         self.clear_response_probe()
         self.end_probe(status='capture_closed')
@@ -286,7 +292,11 @@ class CapturePipeline:
             self.endpoint.discard_capture_gap()
             if owner := self.known_speech:
                 owner.cancel('capture_gap')
-        mic = np.frombuffer(packet.data, dtype='<i2').astype(float) / 32768
+        device_reference = None
+        if packet.kind == MIC_PAIRED:
+            mic, device_reference = decode_pairs(packet.data)
+        else:
+            mic = np.frombuffer(packet.data, dtype='<i2').astype(float) / 32768
         if len(mic) % FRAME:
             self.evidence.cancel('invalid_capture')
             if not (sequence_gap or read_gap):
@@ -301,7 +311,12 @@ class CapturePipeline:
         self.hooks.add_metric('mic_frames', len(mic))
         for offset in range(0, len(mic), FRAME):
             stamp = packet.nanos + round(offset * 1e9 / RATE)
-            frame = self.echo.process(stamp, mic[offset : offset + FRAME])
+            if device_reference is None:
+                frame = self.echo.process(stamp, mic[offset : offset + FRAME])
+            else:
+                frame = self.echo.process(
+                    stamp, mic[offset : offset + FRAME], device_reference[offset : offset + FRAME]
+                )
             if frame is None:
                 return
             self.hooks.metric('input_dbfs', round(level(frame.raw), 1))
@@ -330,14 +345,25 @@ class CapturePipeline:
             self.hooks.add_metric('render_frames', len(pcm))
             self.hooks.metric('render_clock_discontinuities', self.echo.timeline.discontinuities)
             return
-        if p.kind != MIC or not self.hooks.active() or p.generation != self.hooks.epoch():
+        if (
+            p.kind not in (MIC, MIC_PAIRED)
+            or not self.hooks.active()
+            or p.generation != self.hooks.epoch()
+        ):
             return
+        if p.kind == MIC_PAIRED and not self.paired_peer_ready:
+            raise ValueError('Paired microphone capability not confirmed on this route')
+        if (p.kind == MIC_PAIRED) != self.paired_reference:
+            raise ValueError('Microphone payload does not match negotiated capture frontend')
+        if p.kind == MIC_PAIRED and (not p.data or len(p.data) > 6400 or len(p.data) % (4 * FRAME)):
+            raise ValueError('Invalid paired microphone payload')
         if self.pending_mic and p.nanos <= self.pending_mic[-1][0].nanos:
             raise ValueError('Non-monotonic microphone timestamp')
         if len(self.pending_mic) >= 64:
             raise ValueError('Microphone lookahead exceeded')
         self.last_received_mic_end = max(
-            self.last_received_mic_end, p.nanos + round(len(p.data) / 2 * 1e9 / RATE)
+            self.last_received_mic_end,
+            p.nanos + round(len(p.data) / (4 if p.kind == MIC_PAIRED else 2) * 1e9 / RATE),
         )
         read_gap = p.sequence == self.next_read_gap
         self.next_read_gap = None

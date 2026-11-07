@@ -340,6 +340,7 @@ final class VoiceSession {
         statusFeedback.reset();
         activeLink = next;
         next.captureStartToken = null;
+        next.pairedCaptureRequested = false;
         dotChatSupported = savedTasksSupported = false;
         socket = next.connection;
         output = next.out;
@@ -358,6 +359,7 @@ final class VoiceSession {
       Wire.put(hello, "capture_active", captureWasActive);
       Wire.put(hello, "capture_reject_version", 1);
       Wire.put(hello, "capture_start_ack_version", 1);
+      Wire.put(hello, "paired_capture_version", 1);
       Wire.put(hello, "wake_mode", wakeMode);
       next.event(hello);
       // The hello receipt registers any current capture on the new route.
@@ -383,6 +385,10 @@ final class VoiceSession {
         || window.watchdogRemaining(SystemClock.elapsedRealtime()) == 0
         || destination == null
         || destination.captureStartToken == null) return;
+    if (window.paired && !destination.pairedCaptureRequested) {
+      if (stopMicrophone(window)) listener.captureRejected(captureEpoch + 1);
+      return;
+    }
     String token = destination.captureStartToken;
     if (window.startToken == null) window.startToken = token;
     if (!window.startToken.equals(token)) {
@@ -397,6 +403,11 @@ final class VoiceSession {
     if (!token.isEmpty()) Wire.put(event, "capture_start_token", token);
     Wire.put(event, "source", 7);
     Wire.put(event, "sample_rate", 16000);
+    Wire.put(event, "capture_frontend", window.paired ? "paired" : "mono");
+    Wire.put(event, "capture_sample_rate", window.paired ? 48000 : 16000);
+    Wire.put(event, "capture_channels", window.paired ? 4 : 1);
+    if (window.captureFallbackReason != null)
+      Wire.put(event, "capture_fallback_reason", window.captureFallbackReason);
     Wire.put(event, "render_gain", .35);
     destination.event(event);
     window.registeredRoute = routeEpoch;
@@ -408,6 +419,10 @@ final class VoiceSession {
     Object token = hello.opt("capture_start_token");
     if (token != null && (!(token instanceof String) || !((String) token).matches("[a-f0-9]{32}")))
       throw new IOException("Invalid capture start capability");
+    Object frontend = hello.opt("capture_frontend");
+    if (frontend != null && !"mono".equals(frontend) && !"paired".equals(frontend))
+      throw new IOException("Invalid capture frontend capability");
+    source.pairedCaptureRequested = "paired".equals(frontend);
     source.captureStartToken = token == null ? "" : (String) token;
     CaptureWindow window = captureWindow;
     registerCapture(window, epoch);
@@ -460,6 +475,7 @@ final class VoiceSession {
     final ArrayBlockingQueue<Wire.Packet> queue = new ArrayBlockingQueue<>(128);
     volatile boolean closed, ready;
     String captureStartToken;
+    volatile boolean pairedCaptureRequested;
     DataOutputStream out;
 
     Link(Socket connection, String kind, int ticket) {
@@ -971,7 +987,8 @@ final class VoiceSession {
         destination = activeLink;
       }
       if (destination == null || destination.closed) throw new IOException("Mac disconnected");
-      if (type == Wire.MIC && !captureRegistered(generation)) return;
+      boolean microphonePacket = type == Wire.MIC || type == Wire.MIC_PAIRED;
+      if (microphonePacket && !captureRegistered(generation)) return;
       Wire.Packet packet = new Wire.Packet();
       packet.type = type;
       packet.generation = generation;
@@ -984,7 +1001,7 @@ final class VoiceSession {
       } catch (IOException error) {
         Link fallback = activeLink;
         if (fallback == null || fallback == destination || fallback.closed) throw error;
-        if (type != Wire.MIC || captureRegistered(generation)) fallback.offer(packet);
+        if (!microphonePacket || captureRegistered(generation)) fallback.offer(packet);
       }
     }
   }
@@ -1203,31 +1220,41 @@ final class VoiceSession {
               synchronized (captureResourceLock) {
                 if (!recording || !foreground || epoch != mine) return;
                 AudioRecord record = null;
+                CaptureAudioInput input = null;
                 Thread timeout = null;
                 long sequence = 0, origin = 0, last = System.nanoTime();
                 try {
                   // The bound lives in this AudioRecord worker, independent of
                   // the Mac runner and the UI event queue. Expiry follows the
                   // same epoch-owned finally path as any other capture end.
-                  if (!window.allows(SystemClock.elapsedRealtime())) return;
-                  int min =
-                      AudioRecord.getMinBufferSize(
-                          16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
-                  if (min <= 0) throw new IOException("不支持 16 kHz 录音");
-                  record =
-                      new AudioRecord(
-                          MediaRecorder.AudioSource.VOICE_COMMUNICATION,
-                          16000,
-                          AudioFormat.CHANNEL_IN_MONO,
-                          AudioFormat.ENCODING_PCM_16BIT,
-                          Math.max(min * 2, 6400));
-                  if (record.getState() != AudioRecord.STATE_INITIALIZED)
-                    throw new IOException("麦克风初始化失败");
-                  synchronized (VoiceSession.this) {
+                  if (window.watchdogRemaining(SystemClock.elapsedRealtime()) == 0) return;
+                  boolean preferPaired;
+                  // The authorized opening can precede the peer hello. Wait for this
+                  // route's explicit format choice before acquiring any recorder.
+                  while (true) {
                     if (!recording
                         || !foreground
                         || epoch != mine
                         || !window.allows(SystemClock.elapsedRealtime())) return;
+                    if (window.watchdogRemaining(SystemClock.elapsedRealtime()) == 0)
+                      throw new IOException("麦克风连接确认超时，请重试");
+                    synchronized (routeLock) {
+                      if (activeLink != null && activeLink.captureStartToken != null) {
+                        preferPaired = activeLink.pairedCaptureRequested;
+                        break;
+                      }
+                    }
+                    Thread.sleep(20);
+                  }
+                  input = CaptureAudioInput.open(preferPaired);
+                  record = input.recorder;
+                  window.paired = input.paired;
+                  window.captureFallbackReason = input.fallbackReason;
+                  synchronized (VoiceSession.this) {
+                    if (!recording
+                        || !foreground
+                        || epoch != mine
+                        || window.watchdogRemaining(SystemClock.elapsedRealtime()) == 0) return;
                     recorder = record;
                     record.startRecording();
                     if (record.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING)
@@ -1253,63 +1280,64 @@ final class VoiceSession {
                   }
                   CaptureClockStats clockStats = window.clockStats;
                   AudioTimestamp captureStamp =
-                      clockStats != null && Build.VERSION.SDK_INT >= 24
+                      clockStats != null && !window.paired && Build.VERSION.SDK_INT >= 24
                           ? new AudioTimestamp()
                           : null;
-                  short[] chunk = new short[320];
                   while (recording
                       && foreground
                       && epoch == mine
                       && window.allows(SystemClock.elapsedRealtime())) {
-                    int count = record.read(chunk, 0, chunk.length);
-                    if (count < 0) throw new IOException("录音读取错误 " + count);
-                    if (count == 0) continue;
-                    if (!recording
-                        || !foreground
-                        || epoch != mine
-                        || !window.allows(SystemClock.elapsedRealtime())) break;
-                    long now = System.nanoTime();
-                    double power = 0;
-                    for (int i = 0; i < count; i++) power += (double) chunk[i] * chunk[i];
-                    inputLevel = (float) Math.sqrt(power / count) / 32768;
-                    if (origin == 0) origin = now - count * 1000000000L / 16000;
-                    if (now - last > 400000000L && micFrames > 0) {
-                      JSONObject gap = Wire.event("capture_gap");
-                      Wire.put(gap, "milliseconds", (now - last) / 1000000);
-                      Wire.put(gap, "epoch", mine);
-                      Wire.put(gap, "sequence", sequence);
-                      send(gap);
-                    }
-                    last = now;
-                    sendPacket(
-                        Wire.MIC,
-                        mine,
-                        sequence++,
-                        micFrames,
-                        origin + micFrames * 1000000000L / 16000,
-                        Wire.pcm(chunk, count));
-                    micFrames += count;
-                    if (captureStamp != null
-                        && Build.VERSION.SDK_INT >= 24
-                        && recording
-                        && epoch == mine
-                        && window.allows(SystemClock.elapsedRealtime())
-                        && clockStats.due(System.nanoTime())) {
-                      boolean success;
-                      try {
-                        success =
-                            record.getTimestamp(captureStamp, AudioTimestamp.TIMEBASE_MONOTONIC)
-                                == AudioRecord.SUCCESS;
-                      } catch (RuntimeException unavailable) {
-                        success = false;
+                    CaptureAudioInput.Chunk chunk = input.read();
+                    if (chunk == null) continue;
+                    try {
+                      if (!recording
+                          || !foreground
+                          || epoch != mine
+                          || !window.allows(SystemClock.elapsedRealtime())) break;
+                      int count = chunk.frames;
+                      long now = System.nanoTime();
+                      inputLevel = chunk.level();
+                      if (origin == 0) origin = now - count * 1000000000L / 16000;
+                      if (now - last > 400000000L && micFrames > 0) {
+                        JSONObject gap = Wire.event("capture_gap");
+                        Wire.put(gap, "milliseconds", (now - last) / 1000000);
+                        Wire.put(gap, "epoch", mine);
+                        Wire.put(gap, "sequence", sequence);
+                        send(gap);
                       }
-                      clockStats.observe(
-                          success,
-                          captureStamp.framePosition,
-                          captureStamp.nanoTime,
-                          System.nanoTime(),
+                      last = now;
+                      sendPacket(
+                          chunk.paired ? Wire.MIC_PAIRED : Wire.MIC,
+                          mine,
+                          sequence++,
                           micFrames,
-                          origin);
+                          origin + micFrames * 1000000000L / 16000,
+                          Wire.pcm(chunk.samples, chunk.samples.length));
+                      micFrames += count;
+                      if (captureStamp != null
+                          && Build.VERSION.SDK_INT >= 24
+                          && recording
+                          && epoch == mine
+                          && window.allows(SystemClock.elapsedRealtime())
+                          && clockStats.due(System.nanoTime())) {
+                        boolean success;
+                        try {
+                          success =
+                              record.getTimestamp(captureStamp, AudioTimestamp.TIMEBASE_MONOTONIC)
+                                  == AudioRecord.SUCCESS;
+                        } catch (RuntimeException unavailable) {
+                          success = false;
+                        }
+                        clockStats.observe(
+                            success,
+                            captureStamp.framePosition,
+                            captureStamp.nanoTime,
+                            System.nanoTime(),
+                            micFrames,
+                            origin);
+                      }
+                    } finally {
+                      chunk.clear();
                     }
                   }
                 } catch (Exception error) {
@@ -1320,6 +1348,7 @@ final class VoiceSession {
                     listener.state("error", "录音已停止：" + error.getMessage());
                 } finally {
                   if (timeout != null) timeout.interrupt();
+                  if (input != null) input.clear();
                   if (record != null) {
                     try {
                       record.stop();
@@ -1586,7 +1615,26 @@ final class VoiceSession {
         j,
         "test_capture_remaining_ms",
         recording && window != null ? window.remaining(SystemClock.elapsedRealtime()) : 0);
-    boolean captureClockSupported = Build.VERSION.SDK_INT >= 24;
+    boolean pairedCapture =
+        window != null ? window.paired : activeLink != null && activeLink.pairedCaptureRequested;
+    Wire.put(
+        j,
+        "capture_frontend",
+        recording && window != null && window.nativeReady
+            ? (window.paired ? "paired" : "mono")
+            : "none");
+    Wire.put(j, "paired_capture_version", 1);
+    Wire.put(
+        j,
+        "capture_sample_rate",
+        recording && window != null && window.nativeReady ? (window.paired ? 48000 : 16000) : 0);
+    Wire.put(
+        j,
+        "capture_channels",
+        recording && window != null && window.nativeReady ? (window.paired ? 4 : 1) : 0);
+    if (recording && window != null && window.captureFallbackReason != null)
+      Wire.put(j, "capture_fallback_reason", window.captureFallbackReason);
+    boolean captureClockSupported = Build.VERSION.SDK_INT >= 24 && !pairedCapture;
     Wire.put(j, "capture_clock_evidence_supported", captureClockSupported);
     if (captureClockSupported
         && recording

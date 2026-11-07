@@ -31,6 +31,7 @@ python3 cc8-assistant/host/configuration.py check
 | schema_version | 当前为整数 1；未知版本失败 |
 | asr | minimax / sensevoice / whisper；失败不更换引擎，不扩大上传范围 |
 | brain | dot / minimax；MiniMax ASR/TTS 与大脑选择分开 |
+| capture_frontend | `mono` 默认；`paired` 为 0.15.45／APK 0.9.43 的成对参考候选，通过 `CC8_CAPTURE_FRONTEND` 或私有配置显式选择。仍需设备能力协商，格式不支持时在采样前回退单声道。参考 [协议](PROTOCOL_BOUNDARIES.md#成对参考输入候选)；候选尚需实时实机 A/B，不改变现用默认。 |
 | minimax_base | 保留三个官方 HTTPS 域名，不允许凭证、查询参数、第三方端点或其他路径 |
 | minimax_model / asr_model / tts_model | MiniMax 对应模型 ID 格式；不等于订阅支持或服务可用性保证 |
 | tts_voice / tts_speed / tts_pitch / tts_emotion | 音色及有界数值；默认仍为已选大黄蜂音色参数，emotion 默认 null |

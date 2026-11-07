@@ -12,6 +12,7 @@ from protocol import (
     HEADER,
     MAX_PACKET,
     MIC,
+    MIC_PAIRED,
     RENDER,
     SPEAKER,
     Packet,
@@ -57,6 +58,16 @@ class ProtocolFuzzTests(unittest.TestCase):
         stream = Fragmented(packet.encode(), chunk)
         self.assertEqual(receive(stream), packet)
         self.assertEqual(stream.raw, b'')
+
+    @seed(SEED)
+    @FUZZ
+    @given(raw=st.binary(min_size=1, max_size=1600), chunk=st.integers(1, 100))
+    def test_paired_pcm_preserves_complete_channel_pairs_under_fragmentation(self, raw, chunk):
+        packet = Packet(MIC_PAIRED, 9, 11, 320, 1000000000, raw * 4)
+        self.assertEqual(receive(Fragmented(packet.encode(), chunk)), packet)
+        for payload in (raw * 4 + b'xx', b''):
+            with self.assertRaises(ValueError):
+                Packet(MIC_PAIRED, data=payload).encode()
 
     @seed(SEED)
     @FUZZ

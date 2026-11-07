@@ -38,6 +38,7 @@ class SessionView:
     wake: bool
     screen_sleeping: bool
     awake: bool
+    capture_frontend: str = 'mono'
 
 
 @dataclass(frozen=True)

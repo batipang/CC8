@@ -128,6 +128,7 @@ def run_backend(dependencies: BackendDependencies):
         fast_stop=fast_stop,
         wake_detector=wake_detector,
         wake_window_seconds=config.wake_window_seconds,
+        capture_frontend=getattr(config, 'capture_frontend', 'mono'),
         echo_check=args.echo_check_after_start,
         workspace=dependencies.workspace(dependencies.private / 'reminders.json'),
     )

@@ -1,5 +1,13 @@
 # Changelog
 
+## Backend 0.15.45 / APK 0.9.43 — optional paired capture reference
+
+- Negotiate an opt-in same-grid microphone/reference stream, preserving mono for peers without the capability.
+- Downsample selected input channels with a causal anti-alias filter, retain partial reads, and send bounded interleaved logical frames.
+- Keep playback ownership on its existing digital timeline while AEC can use the paired candidate reference.
+- Preserve capture cancellation, foreground limits and strict fallback/handshake boundaries; report the active frontend separately.
+- Keep hardware-clock and real-time acoustic acceptance distinct from component measurements and offline tests.
+
 ## Diagnostics 1.0.6 — require a configured USB data link
 
 - Clear the transient analysis when USB loses data configuration even if the cable remains connected.

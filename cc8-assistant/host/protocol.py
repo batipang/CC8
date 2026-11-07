@@ -10,7 +10,7 @@ import struct
 HEADER = struct.Struct('!BIQQQ')
 # 长度与头字段为网络字节序，PCM 载荷为小端有符号 16 位。
 # frame 是采样位置，nanos 是设备时间，不能当作日历时间。
-MIC, RENDER, EVENT, SPEAKER = 1, 2, 3, 4
+MIC, RENDER, EVENT, SPEAKER, MIC_PAIRED = 1, 2, 3, 4, 5
 MAX_PACKET = 65536
 MAX_JSON_DEPTH = 16
 MAX_JSON_NODES = 4096
@@ -142,11 +142,26 @@ def validate_device_event(value: object) -> JsonObject:
         'desktop_camera_version': 32,
         'capture_reject_version': 32,
         'capture_start_ack_version': 32,
+        'paired_capture_version': 32,
+        'capture_sample_rate': 32,
+        'capture_channels': 32,
         'playout_receipt_version': 32,
         'render_clock_report_version': 32,
         'playback_done_id_version': 32,
         'playback_pause_applied_version': 32,
     }
+    if (
+        name in ('session_start', 'session_rebind')
+        and 'capture_frontend' in value
+        and value['capture_frontend'] not in ('mono', 'paired')
+    ):
+        raise ValueError('Invalid capture frontend')
+    if (
+        name in ('session_start', 'session_rebind')
+        and 'capture_fallback_reason' in value
+        and value['capture_fallback_reason'] not in ('platform_api', 'paired_format_unavailable')
+    ):
+        raise ValueError('Invalid capture fallback reason')
     if name == 'capture_gap':
         if ('epoch' in value) != ('sequence' in value):
             raise ValueError('Incomplete capture-gap identity')
@@ -192,7 +207,7 @@ class Packet:
     data: bytes = b''
 
     def encode(self) -> bytes:
-        if type(self.kind) is not int or self.kind not in (MIC, RENDER, EVENT, SPEAKER):
+        if type(self.kind) is not int or self.kind not in (MIC, RENDER, EVENT, SPEAKER, MIC_PAIRED):
             raise ValueError('Unknown packet type')
         for value, bits in (
             (self.generation, 32),
@@ -206,6 +221,8 @@ class Packet:
             raise ValueError('Packet payload must be bytes')
         if len(self.data) + HEADER.size > MAX_PACKET:
             raise ValueError('Packet too large')
+        if self.kind == MIC_PAIRED and (not self.data or len(self.data) % 4):
+            raise ValueError('Invalid paired PCM length')
         if self.kind != EVENT and (len(self.data) % 2 or len(self.data) > 6400):
             raise ValueError('Invalid PCM length')
         payload = (
