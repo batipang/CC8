@@ -1,5 +1,11 @@
 # Changelog
 
+## Diagnostics 1.0.3 — compare input channels during reference playback
+
+- Add optional device reference playback to bounded channel statistics.
+- Report its requested mode and observed playback head alongside channel metrics.
+- Read the visible diagnostic version from the installed package.
+
 ## Diagnostics 1.0.2 — inspect input channel signals
 
 - Add foreground six-second statistics for two- and four-channel input.

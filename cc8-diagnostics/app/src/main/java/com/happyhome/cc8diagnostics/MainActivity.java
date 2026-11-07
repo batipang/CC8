@@ -40,6 +40,7 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
   private int page = 0, sourceIndex = 2, rateIndex = 0;
   private boolean requestAec = true,
       communicationMode = false,
+      channelReference = false,
       foreground = false,
       destroyed = false,
       permissionApprovedPending = false;
@@ -164,7 +165,10 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
     stopButton.setEnabled(false);
     top.addView(stopButton, new LinearLayout.LayoutParams(dp(112), -2));
     root.addView(top);
-    note(root, "离线检测 · 不修改固件 · 1.0.1 · 兼容 Android 5.0 及以上");
+    Object version =
+        DeviceReport.safe(
+            () -> getPackageManager().getPackageInfo(getPackageName(), 0).versionName);
+    note(root, "离线检测 · 不修改固件 · " + version + " · 兼容 Android 5.0 及以上");
     LinearLayout navigation = new LinearLayout(this);
     String[] names = {"设备信息", "音频测试", "导出报告"};
     for (int i = 0; i < names.length; i++) {
@@ -352,6 +356,13 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
         new String[] {"16000 Hz（建议先测）", "48000 Hz", "44100 Hz"},
         rateIndex,
         index -> rateIndex = index);
+    CheckBox channelPlayback = new CheckBox(this);
+    channelPlayback.setText("多声道统计时播放本机参考音");
+    channelPlayback.setTextColor(INK);
+    channelPlayback.setChecked(channelReference);
+    channelPlayback.setOnCheckedChangeListener((button, checked) -> channelReference = checked);
+    pageHost.addView(channelPlayback);
+    audioSettings.add(channelPlayback);
     pair(
         pageHost,
         button("双声道统计 6 秒", () -> ensureMicrophone(() -> startChannels(2))),
@@ -424,7 +435,7 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
       toast("请在应用前台开始测试");
       return;
     }
-    if (probe.startChannels(SOURCES[sourceIndex], RATES[rateIndex], channels)) {
+    if (probe.startChannels(SOURCES[sourceIndex], RATES[rateIndex], channels, channelReference)) {
       status = "正在准备多声道检测…";
       elapsed = 0;
       lastLevel = -120;
@@ -667,9 +678,11 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
           writer.println("ERROR: foreground idle activity required");
           return;
         }
-        if (args.length != 5)
+        if (args.length != 5 && args.length != 6)
           throw new IllegalArgumentException(
-              "Expected source index, rate index, AEC flag, communication flag");
+              "Expected source, rate, AEC, communication and optional channel reference flag");
+        if (args.length == 6 && !"true".equals(args[5]) && !"false".equals(args[5]))
+          throw new IllegalArgumentException("Expected a boolean channel reference flag");
         int source = Integer.parseInt(args[1]), rate = Integer.parseInt(args[2]);
         if (source < 0 || source >= SOURCES.length || rate < 0 || rate >= RATES.length)
           throw new IllegalArgumentException("Unsupported source/rate index");
@@ -677,6 +690,7 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
         rateIndex = rate;
         requestAec = Boolean.parseBoolean(args[3]);
         communicationMode = Boolean.parseBoolean(args[4]);
+        channelReference = args.length == 6 && Boolean.parseBoolean(args[5]);
         page = 1;
         renderPage();
         writer.println("CC8_AUDIO_PAGE_READY; no recording started");
