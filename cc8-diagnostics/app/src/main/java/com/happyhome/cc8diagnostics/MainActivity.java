@@ -845,6 +845,13 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
         }
         RamPcmLease.Chunk chunk = probe.readAnalysis(args[1], Integer.parseInt(args[2]));
         if (chunk == null) {
+          String state = probe.analysisStatus().optString("state");
+          if ("invalid_cursor".equals(state)
+              || "expired".equals(state)
+              || "consumed".equals(state)) {
+            status = "临时分析不可读取，采样已清除";
+            updateStatus();
+          }
           writer.println("CC8_ANALYSIS_UNAVAILABLE");
           return;
         }
