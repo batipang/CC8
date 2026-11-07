@@ -327,6 +327,15 @@ class WeakNearTests(unittest.TestCase):
                     row = self.wait(b, key)
                 self.assertEqual(calls, ['recognize'] * asr_count)
                 self.assertEqual(row['gate'], 'stale')
+                if asr_count == 2:
+                    self.assertLessEqual(
+                        row['stages']['asr_end'], row['stages']['render_asr_start']
+                    )
+                    self.assertLessEqual(
+                        row['stages']['render_asr_start'], row['stages']['render_asr_end']
+                    )
+                else:
+                    self.assertNotIn('render_asr_start', row['stages'])
                 self.assertEqual(replies, [])
                 self.assertEqual(b.session.connection.packets[packet_count:], [])
                 self.assertEqual(b.metrics.get('echo_transcripts_rejected', 0), 0)

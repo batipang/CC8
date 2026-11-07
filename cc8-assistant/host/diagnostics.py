@@ -42,6 +42,8 @@ STAGES = (
             'utterance_end',
             'asr_start',
             'asr_end',
+            'render_asr_start',
+            'render_asr_end',
             ASR_STOP_STAGE,
             'brain_start',
             'first_clause',
@@ -67,6 +69,7 @@ OUTCOMES = frozenset(('completed', 'failed', 'cancelled', 'rejected'))
 INTERVALS = {
     'wake_to_asr_ms': ('wake_detected', 'asr_start'),
     'asr_ms': ('asr_start', 'asr_end'),
+    'render_asr_ms': ('render_asr_start', 'render_asr_end'),
     'utterance_to_asr_ms': ('utterance_end', 'asr_end'),
     'brain_first_clause_ms': ('brain_start', 'first_clause'),
     'dot_rpc_prepare_ms': ('dot_rpc_start', 'dot_rpc_ready'),

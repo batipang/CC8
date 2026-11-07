@@ -22,6 +22,7 @@ from diagnostics import (
 from capture_evidence import (
     validate as validate_capture,
     DECISIONS,
+    TOOL_PRIMARY_OMISSION_ONLY,
     TOOL_SAMPLE_REJECTION_REASONS,
     valid_tool_asr_comparison,
 )
@@ -57,6 +58,7 @@ ROW_FIELDS = frozenset(
         'gate',
         'tool_sample_rejection',
         'tool_asr_comparison',
+        TOOL_PRIMARY_OMISSION_ONLY,
         'confirmed_playback_clauses',
         'device_pause_from_trigger_ms',
         VAD_ONSET_PAUSE,
@@ -104,6 +106,17 @@ def receipt(value):
         ):
             raise ValueError('Invalid diagnostic elapsed time')
         clean_stages[name] = elapsed
+    if 'render_asr_start' in clean_stages or 'render_asr_end' in clean_stages:
+        primary_end = clean_stages.get('asr_end')
+        reference_start = clean_stages.get('render_asr_start')
+        reference_end = clean_stages.get('render_asr_end', reference_start)
+        if (
+            value['origin'] != 'voice'
+            or primary_end is None
+            or reference_start is None
+            or not primary_end <= reference_start <= reference_end
+        ):
+            raise ValueError('Invalid reference ASR stages')
     error = value.get('error')
     if error is not None:
         if not isinstance(error, dict) or set(error) != {'stage', 'kind'}:
@@ -201,6 +214,14 @@ def receipt(value):
         if not valid_tool_asr_comparison(comparison, result.get('tool_sample_rejection')):
             raise ValueError('Invalid tool ASR comparison receipt')
         result['tool_asr_comparison'] = dict(comparison)
+    if TOOL_PRIMARY_OMISSION_ONLY in value:
+        omission_only = value[TOOL_PRIMARY_OMISSION_ONLY]
+        if (
+            type(omission_only) is not bool
+            or result.get('tool_asr_comparison', {}).get('primary') != 'read_only_missing'
+        ):
+            raise ValueError('Invalid tool ASR omission detail')
+        result[TOOL_PRIMARY_OMISSION_ONLY] = omission_only
     for stage, field in DOT_CONTEXT_FIELDS.items():
         if stage in clean_stages or field in value:
             if stage not in clean_stages or type(value.get(field)) is not bool:
@@ -317,6 +338,9 @@ class DiagnosticRun:
                     'capture',
                     ASR_INPUT_SAMPLES,
                     'gate',
+                    'tool_sample_rejection',
+                    'tool_asr_comparison',
+                    TOOL_PRIMARY_OMISSION_ONLY,
                     'device_pause_from_trigger_ms',
                     VAD_ONSET_PAUSE,
                 ):

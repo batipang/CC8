@@ -187,6 +187,10 @@ class BargeInTests(unittest.TestCase):
 
                 rows = {row['request_id']: row for row in b.diagnostics.report()['requests']}
                 events = self.events(b)
+                stages = rows[candidate]['stages']
+                self.assertLessEqual(stages['asr_end'], stages['render_asr_start'])
+                self.assertLessEqual(stages['render_asr_start'], stages['render_asr_end'])
+                self.assertNotIn('render_asr_start', rows[old]['stages'])
                 self.assertFalse(any(event['event'] == 'transcript' for event in events))
                 self.assertFalse(any(event.get('phase') == 'error' for event in events))
                 resumes = [event for event in events if event['event'] == 'playback_resume']
