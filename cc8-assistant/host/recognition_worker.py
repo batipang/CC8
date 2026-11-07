@@ -360,23 +360,19 @@ class RecognitionWorker:
             except Exception as e:
                 decision = 'error'
                 with self.hooks.lock:
-                    if checking_render:
-                        if not is_current():
-                            decision = 'stale'
-                            continue
-                        # A failed reference check cannot confirm an interruption.
-                        # Release only this candidate's tentative pause.
-                        rejected = True
+                    if checking_render and not is_current():
+                        decision = 'stale'
+                        continue
                     self.hooks.diagnostics().failure(trace_id, 'asr', e)
-                    if checking_render and self.hooks.playing():
-                        # The device treats a status error as terminal for the
-                        # current playback generation, which the candidate does not own.
+                    if checking_render:
+                        # The unadmitted candidate does not own the current
+                        # response generation, including between spoken clauses.
+                        rejected = True
                         continue
                     if self.hooks.valid(generation):
                         try:
                             if (
-                                not checking_render
-                                and self.hooks.pause_state()
+                                self.hooks.pause_state()
                                 and evidence
                                 and (
                                     evidence.get('pause_token') == self.hooks.pause_state()['token']

@@ -107,8 +107,9 @@ class BargeInTests(unittest.TestCase):
         self.assertFalse(any(e['event'] == 'transcript' for e in self.events(b)))
 
     def test_render_recognition_failure_resumes_original_playback(self):
-        for cancelled in (False, True):
-            with self.subTest(cancelled=cancelled):
+        for scenario in ('playing', 'between_clauses', 'stopped'):
+            with self.subTest(scenario=scenario):
+                cancelled = scenario == 'stopped'
                 entered_render_asr = threading.Event()
                 release_render_asr = threading.Event()
                 terminal = threading.Event()
@@ -167,6 +168,16 @@ class BargeInTests(unittest.TestCase):
                         self.assertTrue(entered_render_asr.wait(1))
                         if cancelled:
                             b.cancel('user_stop')
+                        elif scenario == 'between_clauses':
+                            b.playback.end_frames = 320
+                            b.on_event(
+                                {
+                                    'event': 'play_done',
+                                    'generation': generation,
+                                    'played_frames': 320,
+                                }
+                            )
+                            self.assertFalse(b.playback.playing)
                     finally:
                         release_render_asr.set()
                     self.assertTrue(terminal.wait(1))
@@ -190,10 +201,11 @@ class BargeInTests(unittest.TestCase):
                     self.assertEqual(rows[candidate]['outcome'], 'failed')
                     self.assertEqual(rows[candidate]['error']['stage'], 'asr')
                     self.assertIsNone(b.playback.pause_state)
-                    b.playback.end_frames = 320
-                    b.on_event(
-                        {'event': 'play_done', 'generation': generation, 'played_frames': 320}
-                    )
+                    if scenario == 'playing':
+                        b.playback.end_frames = 320
+                        b.on_event(
+                            {'event': 'play_done', 'generation': generation, 'played_frames': 320}
+                        )
                     self.assertEqual(b.playback.completed, {generation})
                     self.assertIn('playback_done', b.diagnostics.report()['requests'][0]['stages'])
 
