@@ -361,14 +361,14 @@ class WeakNearTests(unittest.TestCase):
         self.assertEqual(phases[-1], 'listening')
 
     def test_empty_asr_only_prompts_to_repeat_for_confirmed_non_echo_speech(self):
-        for text, count, risky, expected in (
-            ('', 30, False, '刚才没听清，请再说一遍'),
-            ('。', 2, False, '我在听'),
-            ('谢谢观看', 30, False, '我在听'),
-            ('', 30, True, '我在听'),
+        for text, count, risky, phase, message in (
+            ('', 30, False, 'error', '刚才没听清，请再说一遍'),
+            ('。', 2, False, 'listening', '我在听'),
+            ('谢谢观看', 30, False, 'listening', '我在听'),
+            ('', 30, True, 'listening', '我在听'),
         ):
             with self.subTest(text=text, count=count, risky=risky):
-                b, key, _, replies, _, _, _ = self.start(
+                b, key, generation, replies, _, _, _ = self.start(
                     text,
                     capture=captured(credible=count, risky=risky),
                     risky=risky,
@@ -380,10 +380,13 @@ class WeakNearTests(unittest.TestCase):
                 self.assertEqual(replies, [])
                 events = [json.loads(p.data) for p in b.session.connection.packets]
                 statuses = [e for e in events if e['event'] == 'status']
-                self.assertEqual(statuses[-1]['message'], expected)
+                self.assertEqual((statuses[-1]['phase'], statuses[-1]['message']), (phase, message))
+                self.assertTrue(b.session.active)
+                self.assertTrue(b.session.awake)
+                self.assertEqual(b.session.generation, generation)
                 self.assertFalse(any(e['event'] == 'transcript' for e in events))
 
-    def test_empty_asr_resumes_playback_without_a_listening_status(self):
+    def test_empty_asr_resumes_playback_without_status_feedback(self):
         b, key, generation, replies, _, entered, release = self.start(
             '', capture=captured(credible=30), delayed=True
         )
@@ -406,7 +409,7 @@ class WeakNearTests(unittest.TestCase):
         self.assertEqual(replies, [])
         events = [json.loads(p.data) for p in b.session.connection.packets]
         self.assertTrue(any(e['event'] == 'playback_resume' for e in events))
-        self.assertFalse(any(e['event'] == 'status' and e['phase'] == 'listening' for e in events))
+        self.assertFalse(any(e['event'] == 'status' for e in events))
 
     def test_cancel_during_evidence_read_does_not_overwrite_new_owner_status(self):
         for text, count, risky in (
