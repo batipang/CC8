@@ -20,6 +20,7 @@ import uuid
 
 from private_output import PrivateOutput, private_directory
 from release_info import load_release
+from capture_frontend_evidence import FRONTENDS, summarize as summarize_capture_frontend
 from mac_voice import (
     PreparedSpeech,
     SpeechFixtureCleanupError,
@@ -986,7 +987,14 @@ class SmokeRun:
         sleep=time.sleep,
         checkpoint=lambda value: None,
         expected_apk=None,
+        expected_capture_frontend=None,
     ):
+        if expected_capture_frontend not in (None, *FRONTENDS) or (
+            expected_capture_frontend is not None and not capture
+        ):
+            raise ValueError('Capture frontend expectation requires bounded capture')
+        self.expected_capture_frontend = expected_capture_frontend
+        self.capture_frontend_evidence = None
         self.device, self.request = device, request
         self.capture, self.standby, self.acoustic = capture, standby, acoustic
         self.awake_dialogue = awake_dialogue
@@ -1128,6 +1136,10 @@ class SmokeRun:
             'speech_probe_source_sha256': self.speech_source_sha256,
             'expected_apk_version': self.expected_apk[0] if self.expected_apk else None,
             'expected_apk_code': self.expected_apk[1] if self.expected_apk else None,
+            'expected_capture_frontend': self.expected_capture_frontend,
+            'capture_frontend_evidence': dict(self.capture_frontend_evidence)
+            if self.capture_frontend_evidence is not None
+            else None,
             'state': state,
             'elapsed_seconds': round(self.clock() - self.started, 3),
             'checks': list(self.checks),
@@ -1315,6 +1327,14 @@ class SmokeRun:
             or device.get('capture_clock_evidence_supported') is True,
             'device_capture_clock_evidence_unsupported',
         )
+        if self.expected_capture_frontend is not None:
+            require(
+                type(device.get('paired_capture_version')) is int
+                and device['paired_capture_version'] == 1
+                and device.get('capture_frontend') == 'none'
+                and h.get('capture_frontend') == 'none',
+                'capture_frontend_evidence_unsupported',
+            )
         require(device.get('foreground') is True, 'assistant_not_foreground')
         require(device.get('microphone_active') is False, 'device_microphone_already_active')
         require(
@@ -1812,7 +1832,7 @@ class SmokeRun:
                 h.get('microphone_active') is True and h.get('local_wake_ready') is True,
                 'wake_capture_not_ready',
             )
-            device = self.capture_status()
+            device = self.capture_status(health=h)
             if self.tv_background:
                 epoch = device.get('test_capture_epoch')
                 require(type(epoch) is int and epoch > 0, 'tv_background_capture_epoch_missing')
@@ -1849,7 +1869,7 @@ class SmokeRun:
         if phase in ('calibrating', 'error', 'idle', 'listening', 'speaking', 'thinking'):
             evidence['device_phase'] = phase
 
-    def capture_status(self, status=None):
+    def capture_status(self, status=None, *, health=None):
         limit = self.capture_limit_ms
         d, ui = self.device.status() if status is None else status
         require(
@@ -1866,6 +1886,25 @@ class SmokeRun:
             and ui.get('camera_open') is False,
             'device_capture_state_invalid',
         )
+        # Query the same live backend only when there is a format to verify.
+        # Legacy devices remain unmeasured and cannot satisfy an explicit claim.
+        if health is None:
+            health = self.health() if 'capture_frontend' in d else {}
+        evidence = summarize_capture_frontend(d, health)
+        previous = self.capture_frontend_evidence
+        self.capture_frontend_evidence = evidence
+        require(
+            evidence['status'] != 'unconfirmed',
+            'capture_frontend_not_confirmed',
+        )
+        if self.expected_capture_frontend is not None:
+            require(
+                evidence['status'] == 'observed'
+                and evidence['frontend'] == self.expected_capture_frontend,
+                'capture_frontend_expectation_mismatch',
+            )
+        if previous is not None and previous['status'] == 'observed':
+            require(previous == evidence, 'capture_frontend_changed_during_test')
         return d
 
     def capture_clock_probe(self, device_status):
@@ -4139,6 +4178,11 @@ def main(argv=None):
         help='Require Android recording-clock evidence from the bounded capture window',
     )
     parser.add_argument(
+        '--expect-capture-frontend',
+        choices=FRONTENDS,
+        help='Require both peers to confirm this active native format; a fallback cannot pass',
+    )
+    parser.add_argument(
         '--leading-acoustic-evidence',
         action='store_true',
         help='Require corroboration of the leading blocks of the fixed speaker phrase',
@@ -4295,6 +4339,8 @@ def main(argv=None):
         parser.error('--clock-evidence requires --playback-evidence')
     if args.capture_clock_evidence and not args.capture:
         parser.error('--capture-clock-evidence requires --capture')
+    if args.expect_capture_frontend is not None and not args.capture:
+        parser.error('--expect-capture-frontend requires --capture')
     if args.leading_acoustic_evidence and not args.playback_evidence:
         parser.error('--leading-acoustic-evidence requires --playback-evidence')
     minimum_batch_backend = PAIRED_PLAYOUT_MIN_BACKEND
@@ -4421,6 +4467,8 @@ def main(argv=None):
             )
         if diagnose_tool:
             plan['tool_rejection_diagnose_engine'] = diagnose_tool
+        if args.expect_capture_frontend is not None:
+            plan['expected_capture_frontend'] = args.expect_capture_frontend
         print(json.dumps(plan, ensure_ascii=False, indent=2))
         return 0
     try:
@@ -4645,6 +4693,7 @@ def main(argv=None):
                             args.require_render_overlap and 'synthetic_barge' in enabled
                         ),
                         expected_apk=(manifest.assistant.version, manifest.assistant.version_code),
+                        expected_capture_frontend=args.expect_capture_frontend,
                         **dict.fromkeys(enabled - {'response_acoustic_evidence'}, True),
                     )
 

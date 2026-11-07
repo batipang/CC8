@@ -67,6 +67,8 @@ setup 可加 `--dry-run` 输出 argv 计划，不创建环境、不下载、不�
 
 `./cc8 audit-device-suite REPORT --expect-backend VERSION --expect-apk-code CODE` 离线复核设备批次或 30 轮时延报告，按单轮证据重新判定。未完成的批次仍以状态码 2 退出，同时列出首个未通过的阶段、此前连续通过的轮数，以及由这些合格轮次重算的时延统计。部分样本仅用于诊断，不能作为完整批次的验收结果。
 
+`verify-device --capture --expect-capture-frontend paired` 要求 CC8 和 Mac 确认实际成对输入；参数改为 `mono` 可检查单声道。不能用配置偏好或回退格式充数。默认仍只看计划，显式执行复用原停采与收尾约束；该参数不更改配置。`audit-device-suite REPORT --expect-capture-frontend paired` 对每个阶段重新要求相同格式，旧报告不能补判。见 [成对输入验收](AUTOMATED_DEVICE_CHECKS.md#成对输入的自动验收)。
+
 ## 离线升级准备
 
 `./cc8 upgrade --help` 提供源码版本规划、显式非密钥配置备份、只读校验及新恢复文件预生成；不安装或替换配置。入口与界限见 [UPGRADE_PREPARATION](UPGRADE_PREPARATION.md)。
