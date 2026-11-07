@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "p0-stop-route-20261107.1",
+  "release_id": "recovery-p0-01547-code83-20261107.1",
   "backend": {
     "version": "0.15.47"
   },
   "assistant": {
-    "version": "0.9.43",
-    "version_code": 80,
+    "version": "0.9.46",
+    "version_code": 83,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {
