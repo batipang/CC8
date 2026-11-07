@@ -125,46 +125,53 @@ class CleanupCompletionTests(unittest.TestCase):
     def registered_stop(self):
         b, hub, announcer, speech = Mock(), Mock(), Mock(), Mock()
         b.speech = speech
+        b.session.active = False
         handlers = {}
-        hub.events.get.side_effect = StopIteration
-        with tempfile.TemporaryDirectory() as folder:
-            dependencies = app_runtime.BackendDependencies(
-                private=Path(folder),
-                description='test',
-                load_config=Mock(
-                    return_value=SimpleNamespace(
-                        brain='dot',
-                        tls_port=18766,
-                        wake_window_seconds=60,
-                        chinese_wake_verifier='off',
-                    )
-                ),
-                direct_speech=Mock(return_value=speech),
-                local_speech=Mock(),
-                fast_stop=Mock(),
-                wake_detector=Mock(),
-                brain_router=Mock(),
-                minimax_brain=Mock(),
-                bridge=Mock(return_value=b),
-                workspace=Mock(),
-                transport_hub=Mock(return_value=hub),
-                pairing=Mock(),
-                connect_device=Mock(),
-                usb_present=Mock(),
-                announcement_server=Mock(return_value=announcer),
-            )
-            with (
-                patch.object(sys, 'argv', ['bridge.py', '--no-fast-stop']),
-                patch('app_runtime.threading.Thread.start'),
-                patch(
-                    'app_runtime.signal.signal',
-                    side_effect=lambda name, handler: handlers.update({name: handler}),
-                ),
-                patch('sys.stdout', new_callable=io.StringIO),
-                self.assertRaises(StopIteration),
-            ):
-                app_runtime.run_backend(dependencies)
-        return handlers[signal.SIGTERM], b, hub, announcer, speech
+
+        def stop_event(**kwargs):
+            handlers[signal.SIGTERM]()
+            return 'down', None, None
+
+        def run(get_event=None):
+            hub.events.get.side_effect = get_event or stop_event
+            with tempfile.TemporaryDirectory() as folder:
+                dependencies = app_runtime.BackendDependencies(
+                    private=Path(folder),
+                    description='test',
+                    load_config=Mock(
+                        return_value=SimpleNamespace(
+                            brain='dot',
+                            tls_port=18766,
+                            wake_window_seconds=60,
+                            chinese_wake_verifier='off',
+                        )
+                    ),
+                    direct_speech=Mock(return_value=speech),
+                    local_speech=Mock(),
+                    fast_stop=Mock(),
+                    wake_detector=Mock(),
+                    brain_router=Mock(),
+                    minimax_brain=Mock(),
+                    bridge=Mock(return_value=b),
+                    workspace=Mock(),
+                    transport_hub=Mock(return_value=hub),
+                    pairing=Mock(),
+                    connect_device=Mock(),
+                    usb_present=Mock(),
+                    announcement_server=Mock(return_value=announcer),
+                )
+                with (
+                    patch.object(sys, 'argv', ['bridge.py', '--no-fast-stop']),
+                    patch('app_runtime.threading.Thread.start'),
+                    patch(
+                        'app_runtime.signal.signal',
+                        side_effect=lambda name, handler: handlers.update({name: handler}),
+                    ),
+                    patch('sys.stdout', new_callable=io.StringIO),
+                ):
+                    app_runtime.run_backend(dependencies)
+
+        return run, b, hub, announcer, speech
 
     def test_rpc_guardian_exits_and_lifetime_socket_closes_if_cancel_raises(self):
         server = (
@@ -256,6 +263,35 @@ class CleanupCompletionTests(unittest.TestCase):
                 b.brain.close.assert_called_once()
                 speech.cancel.assert_called_once()
                 b.session.connection.close.assert_called_once()
+
+    def test_partial_startup_failure_releases_resources_that_were_constructed(self):
+        for stage in ('hub', 'ipc'):
+            run, b, hub, announcer, speech = self.registered_stop()
+            source = hub.start if stage == 'hub' else announcer.start
+            primary = OSError(SECRET)
+            source.side_effect = primary
+            with self.subTest(stage=stage), self.assertRaises(OSError) as caught:
+                run()
+            self.assertIs(caught.exception, primary)
+            hub.close.assert_called_once()
+            b.brain.close.assert_called_once()
+            speech.cancel.assert_called_once()
+            b.session.unbind.assert_called_once()
+            self.assertEqual(announcer.close.call_count, int(stage == 'ipc'))
+
+    def test_loop_failure_keeps_primary_cause_after_secondary_cleanup_failure(self):
+        run, b, hub, announcer, speech = self.registered_stop()
+        primary = KeyError(SECRET)
+        hub.close.side_effect = RuntimeError('secondary')
+        with self.assertRaises(KeyError) as caught:
+            run(Mock(side_effect=primary))
+        self.assertIs(caught.exception, primary)
+        announcer.close.assert_called_once()
+        b.brain.close.assert_called_once()
+        speech.cancel.assert_called_once()
+        b.session.unbind.assert_called_once()
+        self.assertEqual(b.save_status.call_count, 2)
+        self.assertNotIn(SECRET, str(b.log.call_args_list))
 
 
 if __name__ == '__main__':

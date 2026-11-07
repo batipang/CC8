@@ -1,5 +1,13 @@
 # Changelog
 
+## Backend 0.15.53 — deferred signals and startup resource ownership
+
+- Make stop/self-check signal callbacks record intent without acquiring resource locks. Process them at main-loop boundaries, give Stop priority and reject self-checks belonging to an old generation/capture epoch.
+- Run owned cleanup after partial startup and unexpected loop failures, preserving the original cause when cleanup also fails. Do not dispatch a newly dequeued packet after Stop.
+- Release RPC stdin under the writer lock; let stdout/stderr readers close their own pipes after draining admitted receipts. Clean up partial reader startup and prevent reuse of the failed client.
+- Unlink an announcement socket only when its device/inode matches this instance's successful bind. Preserve rejected files and replacement sockets during startup cleanup.
+- Retain original APK84, provider selection and capture rules. Carry the previous backend52 deployment and normal lifecycle evidence in this batch; login/sleep and physical/acoustic acceptance remain separate.
+
 ## Backend 0.15.52 — finish tasks and owned cleanup after failures
 
 - Preserve the original speech/task failure and finish its receipt even if closing the response iterator fails; keep already completed work completed.

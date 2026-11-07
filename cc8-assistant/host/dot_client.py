@@ -115,6 +115,8 @@ class CodexRpc:
         self.command = command
         self.popen = popen
         self.process = None
+        self.stdout_reader = None
+        self.stderr_reader = None
         self.lifecycle_lock = threading.Lock()
         self.guardian = None
         self.guardian_ending = threading.Event()
@@ -174,6 +176,7 @@ class CodexRpc:
                 env=runtime_environment(),
             )
             lifetime = self.guardian
+            process = self.process
 
         def observe_guardian():
             try:
@@ -186,25 +189,46 @@ class CodexRpc:
                 self.guardian_ending.set()
 
         def drain():
-            while self.process.stderr.read(8192):
+            try:
+                while process.stderr.read(8192):
+                    pass
+            except (OSError, ValueError):
                 pass
+            finally:
+                process.stderr.close()
 
-        threading.Thread(target=drain, daemon=True).start()
-        threading.Thread(target=self._read, daemon=True).start()
-        threading.Thread(target=observe_guardian, daemon=True).start()
-        self.request(
-            'initialize',
-            {
-                'clientInfo': {
-                    'name': 'cc8_bumblebee_voice',
-                    'title': 'CC8 Bumblebee',
-                    'version': '0.4.0',
+        try:
+            with self.lifecycle_lock:
+                if self.failed or lifetime is not self.guardian:
+                    raise DotError('Codex startup was cancelled', kind='transport_or_io')
+                self.stderr_reader = threading.Thread(target=drain, daemon=True)
+                self.stdout_reader = threading.Thread(
+                    target=self._read, args=(process,), daemon=True
+                )
+                self.stderr_reader.start()
+                self.stdout_reader.start()
+                threading.Thread(target=observe_guardian, daemon=True).start()
+            self.request(
+                'initialize',
+                {
+                    'clientInfo': {
+                        'name': 'cc8_bumblebee_voice',
+                        'title': 'CC8 Bumblebee',
+                        'version': '0.4.0',
+                    },
+                    'capabilities': {'experimentalApi': True},
                 },
-                'capabilities': {'experimentalApi': True},
-            },
-            timeout=20,
-        )
-        self.notify('initialized', {})
+                timeout=20,
+            )
+            self.notify('initialized', {})
+        except Exception:
+            # A partial thread/initialize failure still owns its guardian/pipes.
+            # Preserve the startup cause if releasing those resources also fails.
+            try:
+                self.close()
+            except Exception:
+                pass
+            raise
         with self.lifecycle_lock:
             self.initialized = not self.failed and not self.guardian_ending.is_set()
 
@@ -349,10 +373,11 @@ class CodexRpc:
         with self.approval_lock:
             return (thread_id, turn_id) in self.approval_scopes
 
-    def _read(self):
+    def _read(self, process=None):
+        process = self.process if process is None else process
         try:
             while True:
-                line = self.process.stdout.readline(self.MAX_LINE + 1)
+                line = process.stdout.readline(self.MAX_LINE + 1)
                 if not line:
                     break
                 if len(line) > self.MAX_LINE:
@@ -387,7 +412,11 @@ class CodexRpc:
                 str(error) if isinstance(error, DotError) else type(error).__name__
             )
         finally:
-            self._disconnect()
+            try:
+                self._disconnect()
+            finally:
+                # The reader closes only after all admitted receipts have drained.
+                process.stdout.close()
 
     def _disconnect(self):
         self.failed = True
@@ -407,6 +436,19 @@ class CodexRpc:
             confirmed = close_guardian(self.process, guardian)
             if not confirmed:
                 self.failure_reason = 'guardian_cleanup_unconfirmed'
+            elif self.process is not None:
+                # A started reader owns its pipe until EOF, including callbacks
+                # already admitted. Never close it from this foreign thread.
+                pipes = [self.process.stdin]
+                for reader, stream in (
+                    (self.stdout_reader, self.process.stdout),
+                    (self.stderr_reader, self.process.stderr),
+                ):
+                    if reader is None or reader.ident is None:
+                        pipes.append(stream)
+                # Disconnect makes an active nonblocking writer yield its lock.
+                with self.writer.lock:
+                    cleanup_all(*(stream.close for stream in pipes))
             return confirmed
 
 
