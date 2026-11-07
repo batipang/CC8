@@ -24,7 +24,11 @@ from vision import visual_request
 from wake_controller import WAITING
 
 
-MIN_ECHO_RISK_CREDIBLE_FRAMES = 5
+from recognition_empty import (
+    MIN_ECHO_RISK_CREDIBLE_FRAMES as MIN_ECHO_RISK_CREDIBLE_FRAMES,
+    RecognitionOutcome,
+    reject_empty,
+)
 
 
 class RecognitionWorker:
@@ -89,10 +93,7 @@ class RecognitionWorker:
             trace_id = job[6] if len(job) > 6 else self.hooks.diagnostics().begin('voice')
             accepted = False
             self.busy = True
-            rejected = False
-            decision = 'stale'
-            tool_sample_rejection = None
-            compare_target = None
+            outcome = RecognitionOutcome()
             checking_render = False
 
             def is_current():
@@ -104,8 +105,8 @@ class RecognitionWorker:
                     if not self.hooks.valid(generation):
                         continue
                     if not self.hooks.wake_allowed():
-                        decision = 'wake_closed'
-                        rejected = True
+                        outcome.decision = 'wake_closed'
+                        outcome.rejected = True
                         self.hooks.status('listening', WAITING)
                         continue
                     if not self.hooks.playing():
@@ -121,53 +122,7 @@ class RecognitionWorker:
                     continue
                 clean = re.sub('\\W', '', text)
                 if not clean or clean in ['谢谢观看', '感谢观看', '字幕由Amaraorg社区提供']:
-                    captured = (
-                        self.hooks.diagnostics().capture_record(trace_id) if not clean else None
-                    )
-                    with self.hooks.lock:
-                        if not self.hooks.valid(generation) or not self.hooks.wake_allowed():
-                            continue
-                        # An eligible QA utterance consumes its guard even
-                        # when ASR returned no words. A later utterance must
-                        # not dispatch in place of this sample.
-                        if (
-                            not clean
-                            and evidence is not None
-                            and evidence.get('local_wake') is True
-                            and evidence.get('echo_risk') is False
-                            and not self.hooks.playing()
-                            and not (self.hooks.echo_running() or self.hooks.echo_failed())
-                        ):
-                            tool_sample_rejection = self.hooks.tool_sample_rejection(
-                                text, True, evidence.get('captured_at')
-                            )
-                            if tool_sample_rejection is not None:
-                                decision = 'tool_sample_guard'
-                                rejected = True
-                                compare_target = self.hooks.tool_sample_comparison(
-                                    tool_sample_rejection
-                                )
-                                self.hooks.status(
-                                    'listening',
-                                    '正在核对工具测试语音'
-                                    if compare_target is not None
-                                    else '工具测试语音未通过核对',
-                                )
-                                continue
-                        decision = 'empty'
-                        rejected = True
-                        if not self.hooks.playing():
-                            ask_again = (
-                                captured is not None
-                                and not captured['echo_risk']
-                                and captured['credible_frames'] >= MIN_ECHO_RISK_CREDIBLE_FRAMES
-                                and self.hooks.awake()
-                                and not (self.hooks.echo_running() or self.hooks.echo_failed())
-                            )
-                            if ask_again:
-                                self.hooks.status('error', '刚才没听清，请再说一遍')
-                            else:
-                                self.hooks.status('listening', '我在听')
+                    reject_empty(self.hooks, outcome, generation, trace_id, text, clean, evidence)
                     continue
                 command = stop_command(text, self.hooks.wake_pattern)
                 risky = (
@@ -237,8 +192,8 @@ class RecognitionWorker:
                     if self.hooks.echo_running() and render_text:
                         self.hooks.record_echo_pair(text, render_text, echo)
                     if echo:
-                        decision = echo_decision
-                        rejected = True
+                        outcome.decision = echo_decision
+                        outcome.rejected = True
                         if echo_decision == 'echo_render':
                             self.hooks.metric('render_asr_rejections', increment=True)
                         self.hooks.set_metric_field('last_voice_gate', 'rejected', True)
@@ -255,7 +210,7 @@ class RecognitionWorker:
                     if (
                         self.hooks.echo_running() or self.hooks.echo_failed()
                     ) and clean not in STOP_COMMANDS:
-                        decision = 'calibration'
+                        outcome.decision = 'calibration'
                         if self.hooks.echo_running():
                             self.hooks.add_metric_field(
                                 'echo_self_check', 'unmatched_candidates', 1
@@ -276,8 +231,8 @@ class RecognitionWorker:
                     if weak_capture and command and stop_matches_reference(command, available):
                         # A decoded stop normally bypasses short-text echo checks.
                         # A matching playback quote needs confirmed near speech.
-                        decision = 'echo_text'
-                        rejected = True
+                        outcome.decision = 'echo_text'
+                        outcome.rejected = True
                         self.hooks.set_metric_field('last_voice_gate', 'rejected', True)
                         self.hooks.metric('echo_transcripts_rejected', increment=True)
                         if not self.hooks.playing():
@@ -288,8 +243,8 @@ class RecognitionWorker:
                         # fluent text. Require 50 ms of the existing near detector's
                         # confirmed output before committing a new risky request.
                         # This does not change VAD energy, tentative pause or ASR.
-                        decision = 'weak_near'
-                        rejected = True
+                        outcome.decision = 'weak_near'
+                        outcome.rejected = True
                         self.hooks.metric('weak_near_rejections', increment=True)
                         if not self.hooks.playing():
                             self.hooks.status('listening', '我在听')
@@ -306,29 +261,31 @@ class RecognitionWorker:
                         # ASR can add punctuation to the name alone. Detect
                         # that without stripping signs or decimal points from a query.
                         if all(ch.isspace() or category(ch).startswith('P') for ch in text):
-                            decision = 'wake_only'
-                            rejected = True
+                            outcome.decision = 'wake_only'
+                            outcome.rejected = True
                             self.hooks.cancel_session('wake_only')
                             self.hooks.status('listening', '我在听，请说出你的问题')
                             continue
-                    tool_sample_rejection = self.hooks.tool_sample_rejection(
+                    outcome.tool_sample_rejection = self.hooks.tool_sample_rejection(
                         text, local_wake, evidence.get('captured_at') if evidence else None
                     )
-                    if tool_sample_rejection is not None:
-                        decision = 'tool_sample_guard'
-                        rejected = True
-                        compare_target = self.hooks.tool_sample_comparison(tool_sample_rejection)
+                    if outcome.tool_sample_rejection is not None:
+                        outcome.decision = 'tool_sample_guard'
+                        outcome.rejected = True
+                        outcome.compare_target = self.hooks.tool_sample_comparison(
+                            outcome.tool_sample_rejection
+                        )
                         if not self.hooks.playing():
                             self.hooks.status(
                                 'listening',
                                 '正在核对工具测试语音'
-                                if compare_target is not None
+                                if outcome.compare_target is not None
                                 else '工具测试语音未通过核对',
                             )
                         continue
                     sleep_text = payload if payload is not None else text
                     if wake_mode and SLEEP_COMMAND.fullmatch(sleep_text.strip().rstrip('。.!！')):
-                        decision = 'wake_sleep'
+                        outcome.decision = 'wake_sleep'
                         self.hooks.set_awake(False)
                         self.hooks.cancel_session('wake_sleep')
                         self.hooks.status('listening', '请说“大黄蜂”或“Bumblebee”开始聊天')
@@ -337,7 +294,7 @@ class RecognitionWorker:
                         generation = self.hooks.cancel_session('verified_voice')
                     self.hooks.diagnostics().bind(trace_id, generation)
                     accepted = True
-                    decision = 'accepted'
+                    outcome.decision = 'accepted'
                     self.hooks.touch()
                     self.hooks.event('transcript', text=text)
                     self.hooks.log(
@@ -360,18 +317,18 @@ class RecognitionWorker:
                             )
                         self.hooks.enqueue_response(Reply(generation, text))
             except Cancelled:
-                decision = 'stale'
+                outcome.decision = 'stale'
             except Exception as e:
-                decision = 'error'
+                outcome.decision = 'error'
                 with self.hooks.lock:
                     if checking_render and not is_current():
-                        decision = 'stale'
+                        outcome.decision = 'stale'
                         continue
                     self.hooks.diagnostics().failure(trace_id, 'asr', e)
                     if checking_render:
                         # The unadmitted candidate does not own the current
                         # response generation, including between spoken clauses.
-                        rejected = True
+                        outcome.rejected = True
                         continue
                     if self.hooks.valid(generation):
                         try:
@@ -387,28 +344,34 @@ class RecognitionWorker:
                             pass
                         self.hooks.failure('这次识别没有完成，请再说一次', e, trace_key=trace_id)
             finally:
-                reason = tool_sample_rejection if decision == 'tool_sample_guard' else None
-                if reason is not None and compare_target is not None:
+                reason = (
+                    outcome.tool_sample_rejection
+                    if outcome.decision == 'tool_sample_guard'
+                    else None
+                )
+                if reason is not None and outcome.compare_target is not None:
 
                     def comparison_current():
                         return (
                             self.hooks.valid(generation)
-                            and self.hooks.tool_sample_comparison(reason) is compare_target
+                            and self.hooks.tool_sample_comparison(reason) is outcome.compare_target
                         )
 
-                    paired = comparison_evidence(compare_target, text, audio, comparison_current)
+                    paired = comparison_evidence(
+                        outcome.compare_target, text, audio, comparison_current
+                    )
                     with self.hooks.lock:
                         if paired is not None and not comparison_current():
                             paired = None
-                        self.hooks.diagnostics().gate(trace_id, decision, reason, paired)
+                        self.hooks.diagnostics().gate(trace_id, outcome.decision, reason, paired)
                 else:
-                    self.hooks.diagnostics().gate(trace_id, decision, reason)
+                    self.hooks.diagnostics().gate(trace_id, outcome.decision, reason)
                 self.busy = False
                 if not accepted:
                     self.hooks.diagnostics().finish(
-                        trace_id, 'rejected' if rejected else 'cancelled'
+                        trace_id, 'rejected' if outcome.rejected else 'cancelled'
                     )
-                if evidence and rejected:
+                if evidence and outcome.rejected:
                     try:
                         self.hooks.resume_rejected(evidence.get('pause_token'), generation)
                     except (OSError, EOFError) as error:
