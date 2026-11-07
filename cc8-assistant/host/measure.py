@@ -9,8 +9,10 @@ import sys
 from pathlib import Path
 import time
 import uuid
+from capture_evidence import TOOL_PRIMARY_OMISSION_ONLY
 from diagnose import PRIVATE, ROOT, query
 from diagnostic_run import DiagnosticRun, RunCapacityError, snapshot, voice_playout_coverage
+from diagnostics import summarize_requests
 from private_output import PrivateOutput, private_directory, read_private_json
 
 CONDITIONS = ('unspecified', 'quiet', 'tv')
@@ -191,7 +193,7 @@ def main(argv=None):
 
 def audit_main(argv=None):
     parser = argparse.ArgumentParser(
-        description='Recompute voice playback coverage from one saved run.'
+        description='Recompute recognition timing and voice playback coverage from a saved run.'
     )
     parser.add_argument('report', type=Path)
     args = parser.parse_args(argv)
@@ -227,6 +229,20 @@ def audit_main(argv=None):
             )
         ):
             raise ValueError('Invalid saved measurement')
+        latencies = summarize_requests(rows)['latencies']
+        omission_categories = {
+            True: 'omission_only',
+            False: 'other_differences',
+            None: 'unreported',
+        }
+        omissions = dict.fromkeys(omission_categories.values(), 0)
+        for row in rows:
+            if (
+                row.get('tool_sample_rejection') == 'read_only_missing'
+                or row.get('tool_asr_comparison', {}).get('primary') == 'read_only_missing'
+            ):
+                detail = row.get(TOOL_PRIMARY_OMISSION_ONLY)
+                omissions[omission_categories[detail]] += 1
         result = {
             'capture_state': capture['state'],
             'query_failures': capture['query_failures'],
@@ -234,6 +250,11 @@ def audit_main(argv=None):
             'window_discontinuities': coverage['window_discontinuities'],
             'playout_ack_is_audible_onset': False,
             'full_p0_acceptance': False,
+            'recognition_latencies_ms': {
+                name: latencies[name] for name in ('asr_ms', 'utterance_to_asr_ms', 'render_asr_ms')
+            },
+            'reference_asr_started': sum('render_asr_start' in row['stages'] for row in rows),
+            'tool_read_only_omissions': omissions,
             'voice_playout_coverage': voice_playout_coverage(rows),
         }
         print(json.dumps(result, ensure_ascii=False))

@@ -60,6 +60,81 @@ class PrivateOutputTests(unittest.TestCase):
 
 
 class MeasurementTests(unittest.TestCase):
+    def test_saved_audit_recomputes_recognition_timing_and_tool_omissions(self):
+        book = DiagnosticRun()
+        baseline = TraceBook().report()
+        book.ingest(baseline)
+        comparison = {'primary': 'read_only_missing', 'local': 'matched'}
+        omission = 'primary_read_only_omission_only'
+        rows = [
+            {
+                'request_id': f'{index:032x}',
+                'origin': 'voice',
+                'scenario': 'qa',
+                'generation': None,
+                'outcome': 'rejected',
+                'error': None,
+                'stages': {'utterance_end': 50, 'asr_start': 60, 'asr_end': 120},
+                **fields,
+            }
+            for index, fields in enumerate(
+                (
+                    {
+                        'gate': 'tool_sample_guard',
+                        'tool_sample_rejection': 'read_only_missing',
+                        'tool_asr_comparison': comparison,
+                        omission: True,
+                    },
+                    {
+                        'gate': 'tool_sample_guard',
+                        'tool_sample_rejection': 'comparison_only',
+                        'tool_asr_comparison': comparison,
+                        omission: False,
+                    },
+                    {'gate': 'tool_sample_guard', 'tool_sample_rejection': 'read_only_missing'},
+                    {'gate': 'tool_sample_guard', 'tool_sample_rejection': 'transcript_mismatch'},
+                    {
+                        'gate': 'error',
+                        'outcome': 'failed',
+                        'error': {'stage': 'asr', 'kind': 'timeout'},
+                        'stages': {
+                            'asr_start': 60,
+                            'asr_end': 120,
+                            'render_asr_start': 125,
+                            'render_asr_end': 340,
+                        },
+                    },
+                    {'stages': {'asr_end': 120, 'render_asr_start': 125}, 'outcome': None},
+                ),
+                start=1,
+            )
+        ]
+        book.ingest(dict(baseline, requests=rows))
+        report = book.report()
+        report['capture'] = {'state': 'partial', 'query_failures': 0}
+        report['summary'] = {'latencies': {'render_asr_ms': {'samples': 99}}}
+        report['tool_read_only_omissions'] = {'omission_only': 99}
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'run.json'
+            with PrivateOutput(path) as output:
+                output.write(report)
+            original = path.read_bytes()
+            with redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(audit_main([str(path)]), 0)
+            audited = json.loads(output.getvalue())
+            self.assertEqual(audited['recognition_latencies_ms']['asr_ms']['samples'], 5)
+            self.assertEqual(
+                audited['recognition_latencies_ms']['render_asr_ms'],
+                {'samples': 1, 'p50': 215, 'p95': 215},
+            )
+            self.assertEqual(audited['reference_asr_started'], 2)
+            self.assertEqual(
+                audited['tool_read_only_omissions'],
+                {'omission_only': 1, 'other_differences': 1, 'unreported': 1},
+            )
+            self.assertNotIn(rows[0]['request_id'], output.getvalue())
+            self.assertEqual(path.read_bytes(), original)
+
     def test_confirmed_voice_latency_keeps_failure_and_missing_evidence_visible(self):
         book = DiagnosticRun()
         before = TraceBook().report()
