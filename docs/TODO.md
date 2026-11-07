@@ -1,6 +1,6 @@
 # 大黄蜂统一待办：功能与工程质量
 
-更新于 2026-11-07。原排期基线为 Android 0.8.6 / 后台 0.11.0。当前部署为后台 0.15.45 / 原签名 APK 0.9.43（code80），源码 `7372264`，默认单声道。部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)。P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)。复选框按完整验收标准关闭。
+更新于 2026-11-07。原排期基线为 Android 0.8.6 / 后台 0.11.0。当前部署为后台 0.15.46 / 原签名 APK 0.9.43（code80），源码 `af88c56`，默认单声道。部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)。P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)。复选框按完整验收标准关闭。
 
 依据：[竞品复盘](COMPETITOR_REVIEW_2026-11-01.md)、[当前架构](ARCHITECTURE.md)、[实机与回归记录](VALIDATION.md)。本次已合并 [ToFix](ToFix.md) 的 20 个工程条目；这是功能与工程质量的唯一详细清单；[ROADMAP](ROADMAP.md)保留完成情况和阶段概览。
 
@@ -492,6 +492,7 @@
 ### 可维护性与配置基础
 
 - [ ] **F-06 — 按职责拆分语音桥接**
+  - 第二十四步：诊断统计和收音格式校验各自移入无状态模块，记录锁与录音归属仍由原组件持有。前后各 104 项定向检查通过，固定诊断和格式组合输出一致；现场回归仍开放。 [诊断汇总与收音格式校验](BRIDGE_REFACTOR.md#第二十四步诊断汇总与收音格式校验)
   - 第二十三步：原生 SpeexDSP 和 WebRTC AEC3 适配器归入 `echo_processors`，PCM 基础常量和电平归入 `audio_signal`。前后各 220 项定向检查通过，12 组原生回放、校准和换线报告一致。 [原生消回声适配器](BRIDGE_REFACTOR.md#第二十三步原生消回声适配器)
   - 第二十二步实机对照：0.15.29 与 0.15.30 用同一语音探针和原签名 APK 各跑一轮，均通过八项检查，每轮只接纳一条请求并在播完后独立确认停采。 [播报转录比对](BRIDGE_REFACTOR.md#第二十二步播报转录比对)
   - 第二十二步：播报转录比对归入 `recognition_echo`，停止词表归入 `recognition_commands`。前后各 132 项定向检查通过，4 项私有录音用例跳过，12 组原生 AEC3 对照一致。 [播报转录比对](BRIDGE_REFACTOR.md#第二十二步播报转录比对)
