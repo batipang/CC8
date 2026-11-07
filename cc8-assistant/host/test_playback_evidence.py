@@ -777,9 +777,20 @@ class ProbeIntegrationTests(unittest.TestCase):
                 token = capture.arm_response_probe(1)
                 capture.bind_response_probe('一加一等于几？', 101, START - 600_000_000)
                 feed(capture.evidence, reference, audio)
+                receipt = capture.read_response_probe(token)
+                if reason == 'not_observed':
+                    self.assertIn('window_diagnostic', receipt)
+                    self.assertEqual(
+                        receipt.pop('window_diagnostic'),
+                        {'correlation': 0.0, 'competing_correlation': 0.0},
+                    )
+                else:
+                    self.assertIn('leading_block_correlations', receipt)
+                    first, second = receipt.pop('leading_block_correlations')
+                    self.assertEqual(first, 0.0)
+                    self.assertGreater(second, 0.55)
                 self.assertEqual(
-                    capture.read_response_probe(token),
-                    {'status': 'unconfirmed', 'generation': 101, 'reason': reason},
+                    receipt, {'status': 'unconfirmed', 'generation': 101, 'reason': reason}
                 )
                 self.assertFalse(capture.evidence.mic.size)
                 self.assertEqual(capture.read_response_probe(token), {'status': 'unavailable'})
@@ -842,9 +853,13 @@ class ProbeIntegrationTests(unittest.TestCase):
                         block = microphone[5120 + start : 5120 + start + 320]
                         block[:] = 0.04 + (block - 0.04) * 0.035
                     feed(capture.evidence, reference, microphone, render_first=render_first)
-                    self.assertEqual(
-                        capture.read_response_probe(token), {'generation': 101, **expected}
-                    )
+                    receipt = capture.read_response_probe(token)
+                    if condition == 'weak_first_capture_block':
+                        self.assertIn('leading_block_correlations', receipt)
+                        first, second = receipt.pop('leading_block_correlations')
+                        self.assertLess(first, 0.55)
+                        self.assertGreater(second, 0.55)
+                    self.assertEqual(receipt, {'generation': 101, **expected})
                     self.assertEqual(capture.read_response_probe(token), {'status': 'unavailable'})
                     self.assertFalse(
                         capture.evidence.response_prefix.size or capture.evidence.mic.size

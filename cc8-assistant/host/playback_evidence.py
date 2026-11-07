@@ -316,7 +316,10 @@ class PlaybackEvidence:
             correlations.append(block_correlation(expected, measured))
         confidence = min(correlations)
         if confidence < 0.55:
-            return {'status': 'leading_match_unconfirmed'}
+            evidence = {'status': 'leading_match_unconfirmed'}
+            if self.current.input_end_ns is not None:
+                evidence['leading_block_correlations'] = [round(value, 4) for value in correlations]
+            return evidence
         detected_nanos = self.mic_start + round(capture_offset * 1e9 / RATE)
         evidence = {
             'status': 'observed',

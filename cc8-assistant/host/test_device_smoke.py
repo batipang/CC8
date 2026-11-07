@@ -2982,6 +2982,42 @@ class DeviceAutomationTests(unittest.TestCase):
                 value = {**receipt, 'window_diagnostic': {**diagnostic, **patch_values}}
                 self.assertEqual(summarize_response_acoustic(value, 8), expected)
 
+    def test_response_window_and_leading_block_misses_keep_only_bounded_scores(self):
+        for reason, field, valid, invalid in (
+            (
+                'not_observed',
+                'window_diagnostic',
+                {'correlation': 0.55, 'competing_correlation': 0.4},
+                (
+                    {'correlation': 0.56, 'competing_correlation': 0.5},
+                    {'correlation': 0.5, 'competing_correlation': 0.55},
+                    {'correlation': 0.5, 'competing_correlation': 0.4, 'unknown': 'discard'},
+                ),
+            ),
+            (
+                'leading_match_unconfirmed',
+                'leading_block_correlations',
+                [0.55, 0.81],
+                ([0.55], [0.55, 0.81, 0.0], [0.56, 0.81], [True, 0.0], [0.4, float('nan')]),
+            ),
+        ):
+            with self.subTest(reason=reason):
+                expected = {'status': 'unconfirmed', 'reason': reason}
+                receipt = {**expected, 'generation': 8}
+                self.assertEqual(summarize_response_acoustic(receipt, 8), expected)
+                self.assertEqual(
+                    summarize_response_acoustic({**receipt, field: valid}, 8),
+                    {**expected, field: valid},
+                )
+                for value in invalid:
+                    self.assertEqual(
+                        summarize_response_acoustic({**receipt, field: value}, 8), expected
+                    )
+                self.assertEqual(
+                    summarize_response_acoustic({**receipt, field: valid}, 9),
+                    {'status': 'unconfirmed', 'reason': 'generation_mismatch'},
+                )
+
     def test_response_anchor_diagnostic_is_bounded_and_owned(self):
         diagnostic = {
             'prefix_minus_projected_ms': -60,
