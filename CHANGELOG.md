@@ -1,5 +1,11 @@
 # Changelog
 
+## Backend 0.15.63 — retain combined automation checks
+
+- Generate latency and local-comparison plans through the same option composition as ordinary checks. Skipping repeated announcement/handover work no longer inserts an unrequested awake test or removes requested standby, acoustic, lifecycle and optional evidence checks.
+- Compare declared plans against the real runner's branch ordering without executing device callbacks, including capture/latency/standby combinations, evidence options, both stop routes and local tool comparison. Keep failed and partial field results separate from software coverage.
+- Carry the actual backend61 maintenance deployment and first short-probe outcome into this functional batch. No microphone, camera, model, voice, cancellation or transport behavior changes.
+
 ## Backend 0.15.62 — separate Dot RPC ownership
 
 - Move the unchanged Codex process/RPC/event-queue implementation into `codex_rpc`, and command/readiness helpers into `dot_runtime`. Keep voice turn orchestration in `dot_client` and preserve its public imports.

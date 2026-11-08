@@ -1,5 +1,11 @@
 # 当前 CC8 部署与验收范围
 
+## 0.15.61／code90 中文输入探针
+
+当前后台 **0.15.61**，源码 `3ea3f19`／原签名 **APK0.9.53（code90）**。[PR #427](https://github.com/batipang/CC8/pull/427) 与 [main 八项 CI](https://github.com/batipang/CC8/actions/runs/42448887449) 通过。五项后台维护升级及独立只读终审通过，保留原 profile、LaunchAgent、owner Codex 配置、两个已装 APK 与默认单声道；本机显式选定 `sensevoice_complete`。没有重新安装 APK，维护过程没有启动采集。
+
+一次真实短探针的六项生命周期／完整问答检查通过，诊断结果不可用，整轮记部分成功。独立收尾确认前台 USB 优先、Wi-Fi 就绪，麦克风、相机、播放／校准关闭，模型子进程退出，停采计数稳定。诊断缺测不冒充三路收音匹配；[细节与边界](CHINESE_INPUT_PROBE.md)。后续实际待机组期间保持本段源码、配置、模型及 APK 冻结；独立软件合入不替换正在观测的运行目录。72 小时未启动。
+
 ## 0.15.59／code90 倾听状态
 
 当前后台 **0.15.59**，源码 `1a2fc75`／原签名 **APK0.9.53（code90）**。[PR #425](https://github.com/batipang/CC8/pull/425) 与 [main 八项 CI](https://github.com/batipang/CC8/actions/runs/42444571624) 通过后，九项维护升级和独立只读复核通过；原 profile、LaunchAgent、owner Codex 配置及检测器1.0.6／code7 保持。

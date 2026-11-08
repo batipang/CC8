@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-dot-rpc-boundary-20261108.1",
+  "release_id": "p0-automation-plan-20261108.1",
   "backend": {
-    "version": "0.15.62"
+    "version": "0.15.63"
   },
   "assistant": {
     "version": "0.9.53",
