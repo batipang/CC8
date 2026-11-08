@@ -26,6 +26,8 @@ KEYWORDS = frozenset(('大黄蜂', 'Bumblebee'))
 WAITING = '等待唤醒 · 请说“大黄蜂”或“Bumblebee”'
 RECOVERING = '本地中文唤醒正在恢复，请稍后再说'
 RECOVERY_FAILED = '本地中文唤醒复核暂不可用，请暂停语音后重新开始'
+ENGLISH_RECOVERING = '英文唤醒增强正在恢复，基础英文唤醒仍可用'
+ENGLISH_RECOVERY_FAILED = '英文唤醒增强暂不可用，基础英文唤醒仍可用；可暂停语音后重新开始'
 
 
 class Detector(Protocol):
@@ -134,24 +136,40 @@ class WakeController:
 
     def _report_model_recovery(self):
         # Called only under the session guard for a current waiting frame.
-        value = self.complete_recovery_snapshot
-        if value is None:
-            return
-        state = value['state']
-        key = (self._model_generation(), state)
+        models = []
+        chinese = self.complete_recovery_snapshot
+        if chinese is not None and chinese['state'] != 'stopped':
+            models.append(('chinese', self._model_generation(), chinese['state']))
+        english = getattr(self.detector, 'english_recovery_snapshot', None)
         if (
-            key == self.last_recovery_status
-            or state == 'stopped'
-            or self.hooks.render_risk()
-            or self.hooks.busy()
+            self.complete_english_enabled
+            and isinstance(english, dict)
+            and english['state'] != 'stopped'
         ):
+            models.append(('english', self._english_generation(), english['state']))
+        if not models:
+            return
+        # Chinese verification is required for its configured main path;
+        # optional English recovery must not hide that failure or clear it.
+        pending = next((model for model in models if model[2] != 'ready'), None)
+        key = pending or ('ready', tuple(models))
+        if key == self.last_recovery_status or self.hooks.render_risk() or self.hooks.busy():
             return
         self.last_recovery_status = key
+        if pending is None:
+            self.hooks.status('listening', WAITING)
+            return
+        language, _, state = pending
+        recovering, failed = (
+            (RECOVERING, RECOVERY_FAILED)
+            if language == 'chinese'
+            else (ENGLISH_RECOVERING, ENGLISH_RECOVERY_FAILED)
+        )
         self.hooks.status(
             # The shipped HUD replaces listening detail with a generic label.
             # Use its visible recoverable-error surface until ready again.
-            'listening' if state == 'ready' else 'error',
-            WAITING if state == 'ready' else RECOVERY_FAILED if state == 'failed' else RECOVERING,
+            'error',
+            failed if state == 'failed' else recovering,
         )
 
     @property
