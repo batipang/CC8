@@ -1,5 +1,11 @@
 # Changelog
 
+## Backend 0.15.64 — distinguish local candidates before acoustic probes
+
+- Let an acoustic check observe an unadmitted local voice candidate for a bounded 2.5-second settling budget. Proceed only after explicit wake-closed rejection in the same capture, with unchanged wake/ASR/render counters. Keep refusal for owner activity, missing evidence, cancellation, route/capture changes, late RPCs and older peers without capture-generation evidence.
+- Recheck capture ownership and diagnostic identities after optional preparation and before the only stimulus. Export fixed states, counts and elapsed time; preserve pending failures and reject unsettled or extended evidence in offline audits. No voice-gate, model, provider, microphone-start, APK or protocol changes.
+- Carry backend63 deployment and fixed-question verification, plus the backend61 standby group's two passes and third pre-stimulus refusal, without claiming a proven cause or three successful cycles.
+
 ## Backend 0.15.63 — retain combined automation checks
 
 - Generate latency and local-comparison plans through the same option composition as ordinary checks. Skipping repeated announcement/handover work no longer inserts an unrequested awake test or removes requested standby, acoustic, lifecycle and optional evidence checks.

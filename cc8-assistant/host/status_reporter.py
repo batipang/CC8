@@ -127,6 +127,10 @@ class StatusReporter:
             'connected': state.connected,
             'transport': state.transport_kind,
             'microphone_active': state.active,
+            # Ephemeral request/capture ownership, never a device identifier.
+            # Test observers may wait across local VAD candidates only while
+            # this generation stays current; Stop/rebind/new capture change it.
+            'capture_generation': state.generation if state.active else None,
             'calibrating': self.hooks.calibration().active,
             'asr_engine': getattr(getattr(self.hooks.speech(), 'recognizer', None), 'engine', None),
             'brain_provider': getattr(self.hooks.brain(), 'selected', 'echo'),
