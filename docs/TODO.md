@@ -1,6 +1,6 @@
 # 大黄蜂统一待办：功能与工程质量
 
-更新于 2026-11-09。原排期基线为 Android 0.8.6 / 后台 0.11.0。当前部署为后台 0.15.75 / 原签名 APK 0.9.54（code91），源码 `909f3bd`，本机已明确选择 `sensevoice_complete`，默认单声道，英文增强仍关闭。部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)。P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)。复选框按完整验收标准关闭。
+更新于 2026-11-09。原排期基线为 Android 0.8.6 / 后台 0.11.0。当前部署为后台 0.15.76 / 原签名 APK 0.9.54（code91），源码 `bebb59b`，本机已明确选择 `sensevoice_complete`，默认单声道，英文增强仍关闭。部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)。P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)。复选框按完整验收标准关闭。
 
 依据：[竞品复盘](COMPETITOR_REVIEW_2026-11-01.md)、[当前架构](ARCHITECTURE.md)、[实机与回归记录](VALIDATION.md)。本次已合并 [ToFix](ToFix.md) 的 20 个工程条目；这是功能与工程质量的唯一详细清单；[ROADMAP](ROADMAP.md)保留完成情况和阶段概览。
 
@@ -32,6 +32,7 @@
 ## P0：稳定地听、说、运行
 
 - [ ] **P0-01 — 建立语音与运行基线、诊断报告**
+  - 后台76已部署并独立复核。一次新工具批次前4轮完成，第5轮ASR遗漏“只读”被拒绝，另有一个无ASR的wake_closed候选；按原条件停批，后25轮未执行。下一工具改进增加逐候选归属证明及qa/web固定题号入口，只改善失败样本收集与复核；不改正常语音门控／模型或补判旧失败。 [范围](MEASUREMENT_RUNS.md#01576-工具批次与候选归属)／[单题入口](AUTOMATED_DEVICE_CHECKS.md#固定问答与联网单题)
   - 0.15.75已部署，固定联网30轮回答与播放回执完成；声学19轮确认、11轮缺测，整批保留acoustic_incomplete，独立收尾复核通过。0.15.76候选只在原200ms定位歧义时补400ms联合定位、两段各自相关性和40ms前段唯一定位，原0.55／0.12与2ms一致性及前两块校验保持；未把旧缺测改成通过。 [本轮结果](MEASUREMENT_RUNS.md#01575-固定联网30轮结果)／[双段证明](AUTOMATED_DEVICE_CHECKS.md#歧义响应的双段及前段证明)
   - 0.15.73观察窗口已合入并部署，原APK91／配置保持。一次固定中文问答识别、Dot任务、播放和20秒播后观察完成；声学参考开头低于匹配门槛仍保留failed。独立复核停采，不重复试音或改标通过。 [部署与边界](CURRENT_DEPLOYMENT.md#01573code91-响应观察窗口)
   - 0.15.72固定联网30轮实际执行8轮：7轮链路通过，第8轮在正确识别、任务和播放完成后因声学探针过期停止，其余22轮未执行；前7轮中1轮声学模糊、6轮确认输出块。独立确认停采和原配置／包身份，不计完整30轮通过。0.15.73候选将观察窗口移至本轮开始输出，保留120秒绝对截止、20秒活动窗、20秒端到端计时范围与原匹配门槛；取消与新代次隔离由固定时钟和实际播放路径回归。 [时延记录](MEASUREMENT_RUNS.md#01572-联网批次与01573观察窗口候选)

@@ -24,6 +24,7 @@ from capture_frontend_evidence import FRONTENDS, summarize as summarize_capture_
 from smoke_resources import ResourceEvidence
 from response_clock import LEGACY_INTERVAL_MS, interval_clock
 from acoustic_window_pair import PAIR_ALIGNMENT, pair_evidence
+from tool_rejection_context import summarize_context, validate_context, STAGE_COUNTS
 from mac_voice import (
     PreparedSpeech,
     SpeechFixtureCleanupError,
@@ -158,6 +159,7 @@ TOOL_COMPARE_MIN_BACKEND = '0.15.11'
 TOOL_REJECTION_MIN_BACKEND = '0.15.20'
 TOOL_COMPARISON_CHECK = 'fixed_tool_asr_comparison'
 FIXED_TOOL_CASE_SCOPE = 'fixed_tool_case'
+FIXED_QA_CASE_SCOPE = 'fixed_qa_case'
 RENDER_OVERLAP_MIN_BACKEND = '0.14.83'
 STOP_RECEIPT_MIN_APK_CODE = 69
 STOP_VISUAL_MIN_APK_CODE = 71
@@ -984,6 +986,7 @@ class SmokeRun:
         latency_sample=False,
         tool_local_compare=False,
         fixed_tool_case=False,
+        fixed_qa_case=False,
         tool_compare_engine='whisper',
         tool_diagnose_engine=None,
         latency_scenario='qa',
@@ -1067,6 +1070,7 @@ class SmokeRun:
             raise ValueError('Local comparison engine requires an explicit comparison')
         self.tool_local_compare = tool_local_compare
         self.fixed_tool_case = fixed_tool_case
+        self.fixed_qa_case = fixed_qa_case
         self.tool_compare_engine = tool_compare_engine
         self.tool_diagnose_engine = tool_diagnose_engine
         self.tool_sample_token = None
@@ -1086,6 +1090,14 @@ class SmokeRun:
             and self.qa_question in questions
             else None
         )
+        if fixed_qa_case and (
+            not (capture and awake_dialogue and latency_sample)
+            or standby
+            or english_wake
+            or self.qa_fixture is None
+            or latency_scenario not in ('qa', 'web')
+        ):
+            raise ValueError('Fixed QA case requires one bound awake question')
         self.response_acoustic_evidence = response_acoustic_evidence
         self.response_acoustic_coverage = response_acoustic_coverage
         self.require_render_overlap = require_render_overlap
@@ -1197,6 +1209,16 @@ class SmokeRun:
             ),
             'awake_dialogue_enabled': self.awake_dialogue,
             **({'qa_fixture': self.qa_fixture} if self.qa_fixture is not None else {}),
+            **(
+                dict(
+                    scope=FIXED_QA_CASE_SCOPE,
+                    qa_case=self.qa_fixture['case'],
+                    latency_scenario=self.latency_scenario,
+                    qa_corpus_sha256=SCENARIO_DIGESTS[self.latency_scenario],
+                )
+                if self.fixed_qa_case
+                else {}
+            ),
             **(
                 {
                     'scope': TOOL_COMPARISON_CHECK
@@ -2356,6 +2378,10 @@ class SmokeRun:
                     'post_playback_quiet_seconds', 0
                 ),
             }
+            if tool_latency and not self.tool_local_compare:
+                context = summarize_context(rows)
+                if context is not None:
+                    self.acoustic_evidence['tool_rejection_context'] = context
             if tool_latency and not self.tool_local_compare and len(tool_rejected) == 1:
                 row = tool_rejected[0]
                 reason = row.get('tool_sample_rejection')
@@ -2533,6 +2559,23 @@ class SmokeRun:
                 'tv_background_guarded_prime_unconfirmed',
             )
             self.acoustic_evidence['background_prime_tool_case'] = TV_PRIME_TOOL_CASE
+        if self.fixed_qa_case:
+            evidence = self.acoustic_evidence
+            require(
+                evidence.get('latency_scenario') == self.latency_scenario,
+                'fixed_qa_route_not_confirmed',
+            )
+            require(
+                self.latency_scenario == 'qa' or evidence.get('latency_route_completed') is True,
+                'fixed_qa_route_not_confirmed',
+            )
+            require(matched_playout(evidence), 'fixed_qa_playout_not_confirmed')
+            require(
+                valid_qa_stage_latencies(evidence.get('qa_stage_latencies_ms')),
+                'fixed_qa_stage_timing_incomplete',
+            )
+            if self.latency_scenario == 'qa':
+                require(math_answer == 'matched', 'fixed_qa_answer_not_confirmed')
         if self.fixed_tool_case:
             evidence = self.acoustic_evidence
             require(
@@ -3626,7 +3669,8 @@ def device_suite_phases(
 def qa_fixture_matches(report, scenario, case):
     fixture = report.get('qa_fixture')
     return (
-        isinstance(fixture, dict)
+        report.get('scope') != FIXED_QA_CASE_SCOPE
+        and isinstance(fixture, dict)
         and type(fixture.get('case')) is int
         and fixture == {'scenario': scenario, 'case': case}
     )
@@ -3666,6 +3710,28 @@ def safe_tool_transcript_miss(report, expected_checks):
     gates = evidence.get('rejected_voice_gates')
     sole_input = evidence.get('sole_tool_rejection_input')
     counts = evidence.get('stage_counts')
+    context = None
+    extras = 0
+    if 'tool_rejection_context' in evidence:
+        context = validate_context(evidence['tool_rejection_context'])
+        if context is None or 'sole_tool_rejection_input' in evidence:
+            return False
+        extras = len(context['closed_candidates'])
+        sole_input = context['guarded']
+        if (
+            not isinstance(counts, dict)
+            or set(counts) != set(STAGE_COUNTS)
+            or any(
+                type(counts.get(k)) is not int
+                or counts[k]
+                != sum(
+                    k in row['stages']
+                    for row in [context['guarded'], *context['closed_candidates']]
+                )
+                for k in STAGE_COUNTS
+            )
+        ):
+            return False
     return (
         isinstance(rejected, dict)
         and len(rejected) == 1
@@ -3673,12 +3739,14 @@ def safe_tool_transcript_miss(report, expected_checks):
             reason in TOOL_TRANSCRIPT_MISMATCHES and type(count) is int and count == 1
             for reason, count in rejected.items()
         )
+        and (context is None or context['guarded']['tool_sample_rejection'] in rejected)
         and isinstance(gates, dict)
+        and (not extras or gates.get('wake_closed') == extras)
         and 'tool_sample_guard' in gates
         and all(
             gate in REJECTED_VOICE_GATES
             and type(count) is int
-            and count == int(gate == 'tool_sample_guard')
+            and count == (extras if gate == 'wake_closed' else int(gate == 'tool_sample_guard'))
             for gate, count in gates.items()
         )
         and isinstance(sole_input, dict)
@@ -3686,9 +3754,9 @@ def safe_tool_transcript_miss(report, expected_checks):
         and all(
             type(evidence.get(key)) is int and evidence[key] == expected
             for key, expected in (
-                ('new_voice_requests', 1),
+                ('new_voice_requests', 1 + extras),
                 ('admitted_voice_requests', 0),
-                ('rejected_voice_candidates', 1),
+                ('rejected_voice_candidates', 1 + extras),
                 ('pending_voice_candidates', 0),
                 ('unclassified_terminal_candidates', 0),
                 ('rejected_pause_count', 0),
@@ -4192,6 +4260,12 @@ def main(argv=None):
         help='Select simple questions, public web lookup, or read-only local tool prompts',
     )
     parser.add_argument(
+        '--qa-case',
+        type=int,
+        choices=range(1, 31),
+        help='Run one fixed simple or public-web corpus case (1-30)',
+    )
+    parser.add_argument(
         '--extended-voice-evidence',
         action='store_true',
         help='Add local stop and room-confirmed awake response to the fixed P0 device suite',
@@ -4322,6 +4396,17 @@ def main(argv=None):
         or args.self_playback_soak
     )
     tool_comparison = args.tool_asr_comparison is not None
+    fixed_qa_case = args.qa_case is not None
+    if fixed_qa_case and (
+        batch
+        or options != {'capture', 'awake_dialogue'}
+        or args.latency_scenario not in ('qa', 'web')
+        or args.tool_case is not None
+        or tool_comparison
+        or args.english_wake
+        or args.english_wake_pair
+    ):
+        parser.error('--qa-case requires only --capture --awake-dialogue and a qa/web scenario')
     fixed_tool_case = (
         args.tool_case is not None and not tool_comparison and args.latency_scenario == 'tool'
     )
@@ -4397,8 +4482,10 @@ def main(argv=None):
     tv_background = args.background_scenario == 'tv'
     if args.extended_voice_evidence and not args.p0_device_suite:
         parser.error('--extended-voice-evidence requires --p0-device-suite')
-    if args.latency_scenario != 'qa' and not (args.qa_latency_suite or fixed_tool_case):
-        parser.error('--latency-scenario requires --qa-latency-suite or a single fixed tool case')
+    if args.latency_scenario != 'qa' and not (
+        args.qa_latency_suite or fixed_tool_case or fixed_qa_case
+    ):
+        parser.error('--latency-scenario requires --qa-latency-suite, --qa-case or --tool-case')
     if args.response_acoustic_evidence and not (
         args.qa_latency_suite or (not batch and args.awake_dialogue)
     ):
@@ -4472,6 +4559,8 @@ def main(argv=None):
         minimum_batch_backend = EXTENDED_VOICE_MIN_BACKEND
     elif args.response_acoustic_evidence:
         minimum_batch_backend = RESPONSE_ACOUSTIC_MIN_BACKEND
+    if fixed_qa_case:
+        minimum_batch_backend = ROUTED_LATENCY_MIN_BACKEND
     if not args.execute:
         if prepared_english:
             cases = ENGLISH_WAKE_PHASES if args.english_wake_pair else ENGLISH_WAKE_PHASES[:1]
@@ -4530,7 +4619,7 @@ def main(argv=None):
         else:
             plan = {
                 'checks': planned_checks(
-                    options | ({'latency_sample'} if fixed_tool_case else set()),
+                    options | ({'latency_sample'} if fixed_tool_case or fixed_qa_case else set()),
                     stop_route=args.stop_route,
                     tool_comparison=tool_comparison,
                 ),
@@ -4575,6 +4664,15 @@ def main(argv=None):
                 tool_case=args.tool_case,
                 latency_scenario='tool',
                 qa_corpus_sha256=SCENARIO_DIGESTS['tool'],
+                minimum_backend_version=minimum_batch_backend,
+                dot_dispatch_expected=True,
+            )
+        if fixed_qa_case:
+            plan.update(
+                scope=FIXED_QA_CASE_SCOPE,
+                qa_case=args.qa_case,
+                latency_scenario=args.latency_scenario,
+                qa_corpus_sha256=SCENARIO_DIGESTS[args.latency_scenario],
                 minimum_backend_version=minimum_batch_backend,
                 dot_dispatch_expected=True,
             )
@@ -4795,6 +4893,7 @@ def main(argv=None):
                         latency_scenario='tool' if tool_comparison else args.latency_scenario,
                         tool_local_compare=tool_comparison,
                         fixed_tool_case=fixed_tool_case,
+                        fixed_qa_case=fixed_qa_case,
                         tool_compare_engine=args.tool_asr_comparison or 'whisper',
                         tool_diagnose_engine=diagnose_tool,
                         background=background,
@@ -4861,6 +4960,12 @@ def main(argv=None):
                             background=background_receipt,
                             standby_only=args.standby_suite,
                         )
+                    elif fixed_qa_case:
+                        result = make_run(
+                            options | {'latency_sample'},
+                            save,
+                            qa_question=SCENARIO_QUESTIONS[args.latency_scenario][args.qa_case - 1],
+                        ).run()
                     elif tool_comparison or fixed_tool_case:
                         result = make_run(
                             options | {'latency_sample'},
