@@ -33,7 +33,9 @@ jobs:
           python-version: '3.13'
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
-          distribution: temurin
+          # macOS matches the verified local JDK and uses AWS delivery;
+          # Linux keeps its existing provider. Both remain Java 21.
+          distribution: ${{ runner.os == 'macOS' && 'corretto' || 'temurin' }}
           java-version: '21'
       - name: Install lightweight test dependencies
         run: python -m pip install -r requirements-dev.txt

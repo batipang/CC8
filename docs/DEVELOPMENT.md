@@ -93,9 +93,11 @@ python3 device-access/cc8_install.py --check
 
 `python tools/quality.py setup` 安装固定 Java 格式器：优先使用原官方 Release 下载地址，只有该入口返回 HTTP 5xx 时，才尝试一次清单固定的官方 Release Asset API。两个入口共用原大小与 SHA-256 校验，错误或超大文件不安装，未验证的旧缓存不被失败下载替换，每次失败删除独立临时文件。不对 403/404、校验错误或其他网络错误改用备用源，不降级版本；`check` 仍只读本机缓存，绝不自动下载。本轮固定文件由[官方 release 元数据](https://api.github.com/repos/google/google-java-format/releases/tags/v1.35.0)核对 asset ID，原版本、大小、摘要和 Java 要求保持。
 
-同一 CI 步骤中的 `python tools/ci_tools.py setup actionlint` 采用同样的一次性 5xx 备用入口。两个现有平台按[官方元数据](https://api.github.com/repos/rhysd/actionlint/releases/tags/v1.7.12)固定 asset ID 与大小，原 SHA-256、版本和归档内可执行文件校验保持；非官方仓库、非法身份/大小、校验失败或不安全归档不能被备用入口放行。现有 gitleaks 清单没有新增备用源或变更版本。
+`python tools/ci_tools.py setup actionlint` 与 `setup gitleaks` 采用同样的一次性 5xx 备用入口。现有平台按 [actionlint 元数据](https://api.github.com/repos/rhysd/actionlint/releases/tags/v1.7.12)和 [gitleaks 元数据](https://api.github.com/repos/gitleaks/gitleaks/releases/tags/v8.30.1)固定 asset ID 与大小，原 SHA-256、版本和归档内可执行文件校验保持；非官方仓库、非法身份/大小、校验失败或不安全归档不能被备用入口放行。秘密扫描仍检查全部历史并完整脱敏，不跳过扫描。
 
 Android CI 从[Gradle 官方 Release Asset API](https://api.github.com/repos/gradle/gradle-distributions/releases/tags/v8.11.1)取得同一个 8.11.1 分发包，先核对固定大小和现有 Wrapper 的 SHA-256，再解压到单个作业临时目录并加入 PATH。保留原 setup-gradle 固定 Action、Wrapper JAR 校验和关闭缓存设置，去除其重复的 CDN 下载安装；两个项目仍执行完整编译、lint、签名和版本检查。脚本本身有下载期限、大小上限和失败退出，不因网络故障采用其他 Gradle 版本。
+
+macOS 离线 CI 使用与本机已验证开发环境一致的 Corretto 21，由同一个固定 setup-java Action 经 AWS 官方分发；Linux 继续使用 Temurin 21。Java 主版本要求不变，macOS 避开当前返回 504 的 Temurin GitHub Release 下载路径，全部离线测试仍须实际通过。
 
 ```sh
 # 安装器边界 / 传输 / 回执检查：不访问真实设备
