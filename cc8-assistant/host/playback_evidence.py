@@ -14,6 +14,7 @@ import numpy as np
 from dsp import RATE
 from render_clock_report import RenderClockReceipt
 from response_clock import LEGACY_INTERVAL_MS, MAX_INTERVAL_MS
+from acoustic_window_pair import PAIR_ALIGNMENT, pair_evidence
 
 PROBE_TEXT = '这是扬声器和麦克风的声学检查。请保持安静，检查结束后恢复正常。'
 WINDOW = 3200  # 200 ms, long enough to reject most accidental short matches.
@@ -93,7 +94,7 @@ def fit_room_response(reference, measured):
     )
 
 
-def match_window(audio, template):
+def match_window(audio, template, *, rival_radius_ms=30):
     template = template - template.mean()
     # FFT convolution plus rolling variance gives gain/DC invariant NCC.
     size = 1 << (len(audio) + len(template) - 1).bit_length()
@@ -109,7 +110,7 @@ def match_window(audio, template):
     scores = np.clip(scores, 0, 1)
     peak = int(np.argmax(scores))
     confidence = float(scores[peak])
-    radius = round(0.03 * RATE / 2)
+    radius = round(rival_radius_ms * RATE / 2000)
     scores[max(0, peak - radius) : peak + radius + 1] = 0
     rival = float(np.max(scores))
     status = (
@@ -150,6 +151,7 @@ class PlaybackEvidence:
         self.template_start = None
         self.template_offset = None
         self.pending_room_result = None
+        self.pending_window_result = None
         self.clock_resets = 0
         self.max_clock_step_ms = 0
 
@@ -196,7 +198,9 @@ class PlaybackEvidence:
         with self.lock:
             if self.current is None or (probe is not None and probe is not self.current):
                 return
-            if status == 'expired' and self.pending_room_result is not None:
+            if status == 'expired' and self.pending_window_result is not None:
+                self._finish('ambiguous', **self.pending_window_result)
+            elif status == 'expired' and self.pending_room_result is not None:
                 self._finish('observed', **self.pending_room_result)
             else:
                 self._finish(status)
@@ -220,6 +224,7 @@ class PlaybackEvidence:
         self.segment_frame = 0
         self.template_start = self.template_offset = None
         self.pending_room_result = None
+        self.pending_window_result = None
         probe.result = {
             'schema': 2,
             'status': status,
@@ -268,6 +273,7 @@ class PlaybackEvidence:
                 self.reference.fill(0)
                 self.reference = np.empty(0)
                 self.template_start = self.template_offset = None
+                self.pending_window_result = None
                 self.render_start = nanos
                 self.segment_frame = frame
             if self.render_start is None:
@@ -278,6 +284,11 @@ class PlaybackEvidence:
                 keep = REFERENCE_LIMIT
             elif probe.input_end_ns is not None and self.clock_resets:
                 keep = ROOM_REFERENCE_LIMIT
+            elif probe.input_end_ns is not None:
+                keep = min(
+                    REFERENCE_LIMIT,
+                    max(LEADING_LIMIT + 2 * LEADING_BLOCK, self.template_offset + 2 * WINDOW),
+                )
             else:
                 keep = LEADING_LIMIT + 2 * LEADING_BLOCK
             if len(self.reference) < keep:
@@ -550,8 +561,59 @@ class PlaybackEvidence:
                 return {'status': 'response_prefix_discontinuous'}
         return leading
 
+    def _confirm_window_pair(self, left, right):
+        """Caller holds the evidence lock and has checked both bounded extents."""
+        end = self.template_offset + 2 * WINDOW
+        reference = self.reference[self.template_offset : end]
+        if np.std(reference[WINDOW:]) < MIN_REFERENCE_RMS:
+            return None
+        peak, confidence, rival, status = match_window(
+            self.mic[left : right + WINDOW : 2], reference[::2]
+        )
+        if status != 'observed':
+            return None
+        first = first_leading_block(self.reference)
+        if first is None:
+            return None
+        origin = left + peak - self.template_offset
+        prefix_left = origin + first - PREFIX_SEARCH_RADIUS
+        prefix_right = origin + first + PREFIX_SEARCH_RADIUS + 2 * LEADING_BLOCK
+        if prefix_left < 0 or prefix_right > len(self.mic):
+            return None
+        # A periodic onset can hide a short speaker pause. Require a unique
+        # independent 40ms onset, within the existing 2ms agreement bound.
+        prefix_peak, prefix_confidence, prefix_rival, prefix_status = match_window(
+            self.mic[prefix_left:prefix_right:2],
+            self.reference[first : first + 2 * LEADING_BLOCK : 2],
+            rival_radius_ms=2,
+        )
+        if prefix_status != 'observed':
+            return None
+        correlations = [
+            block_correlation(
+                reference[i : i + WINDOW : 2],
+                self.mic[left + peak + i : left + peak + i + WINDOW : 2],
+            )
+            for i in (0, WINDOW)
+        ]
+        proof = pair_evidence(
+            dict(
+                version=1,
+                window_ms=200,
+                window_correlations=correlations,
+                joint_correlation=confidence,
+                competing_correlation=rival,
+                prefix_window_ms=40,
+                prefix_correlation=prefix_confidence,
+                prefix_competing_correlation=prefix_rival,
+                prefix_offset_ms=(prefix_left + prefix_peak - first - origin) * 1000 / RATE,
+            )
+        )
+        return (peak, confidence, rival, proof) if proof is not None else None
+
     def _analyze(self):
         self.pending_room_result = None
+        self.pending_window_result = None
         if self.template_start is None or self.mic_start is None:
             return
         left = round((self.template_start - self.mic_start) * RATE / 1e9) + MIN_DELAY
@@ -563,6 +625,27 @@ class PlaybackEvidence:
             return
         template = self.reference[self.template_offset : self.template_offset + WINDOW][::2]
         peak, confidence, rival, status = match_window(self.mic[left:right:2], template)
+        pair = None
+        if (
+            status == 'ambiguous'
+            and self.current.input_end_ns is not None
+            and not self.clock_resets
+        ):
+            end = self.template_offset + 2 * WINDOW
+            if end <= REFERENCE_LIMIT:
+                if len(self.reference) < end or right + WINDOW > len(self.mic):
+                    self.pending_window_result = dict(
+                        correlation=round(confidence, 4),
+                        competing_correlation=round(rival, 4),
+                        matching_window_ms=200,
+                        search_delay_ms=[-80, 800],
+                        matched_window_delay_ms=None,
+                    )
+                    return
+                extended = self._confirm_window_pair(left, right)
+                if extended is not None:
+                    peak, confidence, rival, pair = extended
+                    status = 'observed'
         leading = {'status': 'not_checked'}
         if status == 'observed':
             if self.clock_resets:
@@ -578,11 +661,14 @@ class PlaybackEvidence:
                         return
                 else:
                     leading = self._leading_evidence(origin, self.reference, offset)
+        if pair is not None and leading['status'] == 'observed':
+            leading['alignment'] = PAIR_ALIGNMENT
+            leading['window_pair'] = pair
         evidence = dict(
             leading_acoustic_evidence=leading,
             correlation=round(confidence, 4),
             competing_correlation=round(rival, 4),
-            matching_window_ms=200,
+            matching_window_ms=400 if pair is not None else 200,
             search_delay_ms=[-80, 800],
             matched_window_delay_ms=round((MIN_DELAY + peak) * 1000 / RATE, 3)
             if status == 'observed'

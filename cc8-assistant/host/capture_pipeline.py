@@ -257,6 +257,8 @@ class CapturePipeline:
             }
             if 'alignment' in leading:
                 receipt['alignment'] = leading['alignment']
+            if 'window_pair' in leading:
+                receipt['window_pair'] = leading['window_pair']
             if measured > LEGACY_INTERVAL_MS:
                 proof = self.input_quality.prove_interval(
                     owner.clock_mark,

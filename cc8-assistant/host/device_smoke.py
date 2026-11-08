@@ -23,6 +23,7 @@ from release_info import load_release
 from capture_frontend_evidence import FRONTENDS, summarize as summarize_capture_frontend
 from smoke_resources import ResourceEvidence
 from response_clock import LEGACY_INTERVAL_MS, interval_clock
+from acoustic_window_pair import PAIR_ALIGNMENT, pair_evidence
 from mac_voice import (
     PreparedSpeech,
     SpeechFixtureCleanupError,
@@ -263,6 +264,11 @@ def require(condition, reason):
 def observed_response_interval(value):
     if not isinstance(value, dict) or value.get('status') != 'observed':
         return None
+    if value.get('alignment') == PAIR_ALIGNMENT:
+        if pair_evidence(value.get('window_pair')) is None:
+            return None
+    elif 'window_pair' in value:
+        return None
     elapsed = value.get(ACOUSTIC_RESPONSE_METRIC)
     if type(elapsed) not in (int, float):
         return None
@@ -462,9 +468,12 @@ def summarize_response_acoustic(value, generation):
             'matched_render_frames_room_fit',
             'matched_render_frames_room_alignment',
             'matched_after_digital_silence',
+            PAIR_ALIGNMENT,
         ):
             return {'status': 'unconfirmed', 'reason': 'invalid_receipt'}
         timing['alignment'] = value['alignment']
+    if value.get('alignment') == PAIR_ALIGNMENT:
+        timing['window_pair'] = pair_evidence(value['window_pair'])
     return timing
 
 
