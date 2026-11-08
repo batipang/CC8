@@ -185,6 +185,7 @@ def build_components(
             connected=lambda: host.session.connection is not None,
             calibration_busy=lambda: host.calibration.active or host.calibration.running,
             cancel_session=lambda reason: host.cancel(reason),
+            session_generation=lambda: host.session.generation,
             valid=lambda generation: host.valid(generation),
             offer=lambda job: host.response.offer(job),
             diagnostics=lambda: host.diagnostics,
@@ -194,6 +195,7 @@ def build_components(
             failure=lambda message, error: host.failure(message, error),
             metric=host.record_metric,
             save_status=lambda: host.save_status(),
+            log=lambda name, **fields: host.log(name, **fields),
         )
     )
     reminders = ReminderScheduler(

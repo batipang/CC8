@@ -1,5 +1,12 @@
 # Changelog
 
+## Backend 0.15.71 — announcement admission and terminal receipts
+
+- Keep announcement admission bound to the generation returned by cancellation. Recheck ownership after diagnostic setup, probe preparation and queue admission; settle superseded announcements without enqueuing old work or cancelling a newer request.
+- On startup failure, release only the failed owner and invalidate uncertain queue admission even when the microphone is already active. Keep the original error, record a content-free runtime failure and settle its waiter despite secondary cleanup failures. No automatic replay is introduced.
+- Serialize announcement start/completion publication with session ownership. Delayed old completion cannot replace newer status or metrics; every completion waiter is released even if device notification, diagnostics, metric or status persistence fails.
+- Carry backend70 deployment evidence with this functional batch. Keep APK90, providers, voice, capture policy and protocol unchanged; full P0-06 acceptance remains open.
+
 ## Backend 0.15.70 — transactional text admission and Unicode validation
 
 - Reject unencodable Unicode in owner text requests and announcements before cancelling existing work. Preserve the existing character limits, whitespace rules, valid emoji and multiline text; include the common validator in strict type checks.
