@@ -11,7 +11,7 @@ mlx==0.29.4
 mlx-metal==0.29.4
 mlx-whisper==0.4.3
 numba==0.62.1
-numpy==2.3.4
+numpy==2.5.4
 packaging==26.3
 pywebrtc-audio==0.2.0
 pyyaml==6.0.3
