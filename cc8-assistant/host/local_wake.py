@@ -280,6 +280,10 @@ class WakeDetector:
         return self.english.stream_samples, alternate.stream_samples
 
     @property
+    def chinese_stream_samples(self):
+        return self.chinese.stream_samples
+
+    @property
     def compute_seconds(self):
         alternate = self.english_alternate
         verifier = self.chinese_verifier

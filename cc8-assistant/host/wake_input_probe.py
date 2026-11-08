@@ -11,6 +11,9 @@ from wake_input_receipt import (
     CHINESE_FIXTURE_FRAMES,
     CHINESE_MAX_FRAMES,
     CHINESE_PCM_SHA256,
+    CHINESE_QA_FRAMES,
+    CHINESE_QA_PCM_SHA256,
+    CHINESE_QA_PROFILE,
     FIXTURE_FRAMES,
     FIXTURE_PCM_SHA256,
     MAX_FRAMES,
@@ -25,6 +28,8 @@ NAME_END = 10400
 QUESTION_FIRST, QUESTION_LAST = 13600, 35600
 # Fixed case 27 mixture has a 200 ms noise lead before the spoken name.
 CHINESE_WINDOWS = (3200, 16000, 20800, 51200)
+# Fixed short public reference segments; these are not inferred word timestamps.
+CHINESE_QA_WINDOWS = (0, 12800, 16000, 35600)
 NAME_SEARCH = 30
 RIVAL_RADIUS = 80
 
@@ -49,11 +54,15 @@ def _scores(audio, reference):
 
 
 def compare_stream(samples, reference, *, chinese=False):
-    minimum = CHINESE_FIXTURE_FRAMES + 1280 if chinese else MIN_MATCH_FRAMES
+    minimum = len(reference) + 1280 if chinese else MIN_MATCH_FRAMES
     if len(samples) < minimum:
         return {'status': 'capture_incomplete'}
     audio, source = _downsample(samples), _downsample(reference)
-    windows = CHINESE_WINDOWS if chinese else (0, NAME_END, QUESTION_FIRST, QUESTION_LAST)
+    windows = (
+        (CHINESE_QA_WINDOWS if len(reference) == CHINESE_QA_FRAMES else CHINESE_WINDOWS)
+        if chinese
+        else (0, NAME_END, QUESTION_FIRST, QUESTION_LAST)
+    )
     name_first, name_end, question_first, question_last = (n // DECIMATION for n in windows)
     question = source[question_first:question_last]
     scores = _scores(audio, question)
@@ -104,8 +113,17 @@ def compare_stream(samples, reference, *, chinese=False):
 
 class WakeInputProbe:
     def __init__(self, pcm, *, chinese=False, timer=threading.Timer):
+        self.short_chinese = (
+            chinese
+            and len(pcm) == 2 * CHINESE_QA_FRAMES
+            and hashlib.sha256(pcm).hexdigest() == CHINESE_QA_PCM_SHA256
+        )
         fixture = (
-            (CHINESE_FIXTURE_FRAMES, CHINESE_PCM_SHA256)
+            (
+                (CHINESE_QA_FRAMES, CHINESE_QA_PCM_SHA256)
+                if self.short_chinese
+                else (CHINESE_FIXTURE_FRAMES, CHINESE_PCM_SHA256)
+            )
             if chinese
             else (FIXTURE_FRAMES, FIXTURE_PCM_SHA256)
         )
@@ -158,7 +176,10 @@ class WakeInputProbe:
                     audio.fill(0)
                 return
             start = self.frames
-            if not self.chinese:
+            if self.chinese:
+                if start == 0 and type(stream_samples) is int and 0 <= stream_samples < 2**53:
+                    self.stream_samples = stream_samples
+            else:
                 if start == 0 and type(stream_samples) is tuple and len(stream_samples) == 2:
                     self.stream_samples = stream_samples
                 self.english_render_rejections += english_render_rejected
@@ -195,13 +216,17 @@ class WakeInputProbe:
                 'alternate': alternate_shape,
             }
             streams = {'primary': primary, 'alternate': alternate_view}
-            if self.stream_samples is not None:
+            if self.stream_samples is not None and self.chinese:
+                result['live_decoder'] = {'primary_samples_before': self.stream_samples}
+            elif self.stream_samples is not None:
                 result['live_decoder'] = {
                     'primary_samples_before': self.stream_samples[0],
                     'alternate_samples_before': self.stream_samples[1],
                     'render_rejections': self.english_render_rejections,
                 }
             if self.chinese:
+                if self.short_chinese:
+                    result['fixture'] = CHINESE_QA_PROFILE
                 raw_view = raw[: self.frames]
                 result.update(
                     language='zh',
@@ -223,14 +248,38 @@ class WakeInputProbe:
                     raw_fresh_replay={'status': 'not_run'},
                 )
             result['fresh_replay'] = {'status': 'not_run'}
-            if all(result[key]['status'] == 'matched' for key in streams):
-                from local_wake import replay_chinese_inputs, replay_english_inputs
+            if self.chinese:
+                from local_wake import replay_chinese_inputs
+
+                matched = {
+                    key: audio
+                    for key, audio in streams.items()
+                    if result[key]['status'] == 'matched'
+                }
+                replay = {'status': 'not_run'}
+                if matched:
+                    try:
+                        replay = replay_chinese_inputs(matched, self.cancelled.is_set)
+                    except (ImportError, OSError, RuntimeError, ValueError):
+                        replay = {'status': 'unavailable'}
+                result['individual_replay'] = {
+                    key: (
+                        {'status': 'not_run'}
+                        if key not in matched
+                        else {'status': 'measured', 'keyword_hit': replay[key + '_hit']}
+                        if replay.get('status') == 'measured'
+                        else {'status': 'unavailable'}
+                    )
+                    for key in streams
+                }
+                if len(matched) == len(streams):
+                    result['fresh_replay'] = replay
+            elif all(result[key]['status'] == 'matched' for key in streams):
+                from local_wake import replay_english_inputs
 
                 try:
-                    result['fresh_replay'] = (
-                        replay_chinese_inputs(streams, self.cancelled.is_set)
-                        if self.chinese
-                        else replay_english_inputs(primary, alternate_view, self.cancelled.is_set)
+                    result['fresh_replay'] = replay_english_inputs(
+                        primary, alternate_view, self.cancelled.is_set
                     )
                 except (ImportError, OSError, RuntimeError, ValueError):
                     result['fresh_replay'] = {'status': 'unavailable'}

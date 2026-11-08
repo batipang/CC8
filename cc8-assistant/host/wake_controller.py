@@ -511,8 +511,12 @@ class WakeController:
                 return False
             # Snapshot under the same lock as the first observed decoder input.
             stream_samples = None
-            if probe is not None and not probe.chinese and not probe.frames:
-                stream_samples = getattr(self.detector, 'english_stream_samples', None)
+            if probe is not None and not probe.frames:
+                stream_samples = getattr(
+                    self.detector,
+                    'chinese_stream_samples' if probe.chinese else 'english_stream_samples',
+                    None,
+                )
             if echo_risk:
                 alternate_pcm = None
             if alternate_pcm is not None:

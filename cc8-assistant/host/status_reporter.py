@@ -116,6 +116,7 @@ class StatusReporter:
             'local_wake_chinese_unavailable': metrics.get('local_wake_chinese_unavailable', 0),
             'wake_input_probe_supported': True,
             'chinese_wake_input_probe_supported': True,
+            'chinese_wake_input_probe_version': 2,
             'tool_sample_guard_supported': True,
             'tool_rejection_diagnosis_supported': True,
             'waiting_for_wake': state.active
