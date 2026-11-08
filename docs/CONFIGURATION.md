@@ -37,6 +37,7 @@ python3 cc8-assistant/host/configuration.py check
 | tts_voice / tts_speed / tts_pitch / tts_emotion | 音色及有界数值；默认仍为已选大黄蜂音色参数，emotion 默认 null |
 | wake_window_seconds | 唤醒后空闲对话窗口，整数 15～300 秒、默认 60；环境变量 CC8_WAKE_WINDOW_SECONDS，见 [LOCAL_WAKE](LOCAL_WAKE.md) |
 | chinese_wake_verifier | 中文唤醒复核候选，默认 `off`，可显式设为 `sensevoice`（原短窗双支路）或 `sensevoice_complete`（主路候选整句本地复核）。两者互斥，见 [中文整句复核](COMPLETE_CHINESE_WAKE.md)。环境变量 `CC8_CHINESE_WAKE_VERIFIER`，两种模式均需本机已校验的 SenseVoice 模型，原 `sensevoice` 另需快速停止收音支路。对话 ASR 仍由 `asr` 控制。 |
+| english_wake_verifier | 英语扩展候选整句复核，默认 `off`；显式 `whisper_complete` 使用本机固定 Whisper 缓存，仅在原英文检测未确认、同句存在扩展本地候选时判断名字。环境变量 `CC8_ENGLISH_WAKE_VERIFIER`；就绪检查校验权重，不下载或加载模型，不改变 MiniMax 对话 ASR。见 [英语完成句确认](LOCAL_WAKE.md#英语扩展候选完成句确认)。 |
 | tls_port | 已配对 Wi-Fi 的 TCP 端口，1024～65535，默认 18766 |
 | connect_timeout / read_timeout | MiniMax 请求的连接/读取秒数，分别限制 1～30 / 1～120，默认 8 / 20 |
 | credential_file | 现有 owner-only 密钥文件的引用，校验配置时不读取其内容 |

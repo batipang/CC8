@@ -55,6 +55,7 @@ FIELDS = {
     'read_timeout': Field('integer', 20, minimum=1, maximum=120),
     'wake_window_seconds': Field('integer', 60, minimum=15, maximum=300),
     'chinese_wake_verifier': Field('choice', 'off', ('off', 'sensevoice', 'sensevoice_complete')),
+    'english_wake_verifier': Field('choice', 'off', ('off', 'whisper_complete')),
     'credential_file': Field('path', '.toolchains/cc8/voice-secrets.env', max_length=4096),
     'signing_keystore': Field('path', None, max_length=4096, nullable=True),
 }
@@ -75,6 +76,7 @@ ENV_FIELDS = {
     'CC8_READ_TIMEOUT': 'read_timeout',
     'CC8_WAKE_WINDOW_SECONDS': 'wake_window_seconds',
     'CC8_CHINESE_WAKE_VERIFIER': 'chinese_wake_verifier',
+    'CC8_ENGLISH_WAKE_VERIFIER': 'english_wake_verifier',
     'CC8_MINIMAX_CREDENTIAL_FILE': 'credential_file',
     'CC8_SIGNING_KEYSTORE': 'signing_keystore',
 }

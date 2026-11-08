@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-smoke-resources-20261108.1",
+  "release_id": "p0-english-confirmation-20261108.1",
   "backend": {
-    "version": "0.15.65"
+    "version": "0.15.66"
   },
   "assistant": {
     "version": "0.9.53",

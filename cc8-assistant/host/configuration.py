@@ -52,6 +52,7 @@ class RuntimeConfig:
     sources: tuple[tuple[str, str], ...]
     legacy_profile: bool
     capture_frontend: str = 'mono'
+    english_wake_verifier: str = 'off'
 
     def public_summary(self) -> dict[str, object]:
         return {
@@ -72,6 +73,7 @@ class RuntimeConfig:
             'read_timeout': self.read_timeout,
             'wake_window_seconds': self.wake_window_seconds,
             'chinese_wake_verifier': self.chinese_wake_verifier,
+            'english_wake_verifier': self.english_wake_verifier,
             'credential_reference_configured': bool(self.credential_file),
             'signing_reference_configured': self.signing_keystore is not None,
             'sources': dict(self.sources),
@@ -189,6 +191,7 @@ def load_config(root: Path = ROOT, environ: Mapping[str, str] | None = None) -> 
         read_timeout=cast(int, values['read_timeout']),
         wake_window_seconds=cast(int, values['wake_window_seconds']),
         chinese_wake_verifier=cast(str, values['chinese_wake_verifier']),
+        english_wake_verifier=cast(str, values['english_wake_verifier']),
         credential_file=_path(cast(str, values['credential_file']), root, 'credential_file'),
         signing_keystore=_path(cast(str, values['signing_keystore']), root, 'signing_keystore')
         if values['signing_keystore'] is not None

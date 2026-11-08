@@ -27,7 +27,9 @@ class EnglishWake(StreamingKeywords):
     KEYWORDS = frozenset(('Bumblebee',))
 
     @classmethod
-    def load(cls, model=ENGLISH_MODEL):
+    def load(cls, model=ENGLISH_MODEL, *, max_active_paths=8):
+        if type(max_active_paths) is not int or max_active_paths not in (8, 16):
+            raise ValueError('Invalid English decoder width')
         import sherpa_onnx
 
         def file(name):
@@ -44,7 +46,7 @@ class EnglishWake(StreamingKeywords):
             keywords_file=str(RESOURCES / 'wake-english-keywords.txt'),
             num_threads=1,
             provider='cpu',
-            max_active_paths=8,
+            max_active_paths=max_active_paths,
             keywords_score=1.0,
             keywords_threshold=0.25,
             num_trailing_blanks=1,
@@ -121,6 +123,8 @@ class WakeDetector:
         chinese_verifier=None,
         chinese_complete=None,
         complete_chinese_enabled=False,
+        english_candidate=None,
+        english_complete=None,
     ):
         self.chinese = chinese
         self.english = english
@@ -134,6 +138,16 @@ class WakeDetector:
         else:
             self.complete_recovery = None
         self.complete_chinese_enabled = complete_chinese_enabled
+        self.english_candidate = english_candidate
+        self.english_complete = english_complete
+        self.english_candidate_hit = False
+        if english_complete is not None:
+            from wake_process_recovery import CaptureWakeRecovery
+
+            self.english_recovery = CaptureWakeRecovery(english_complete)
+        else:
+            self.english_recovery = None
+        self.english_candidate_active = False
         self.alternate_active = False
 
     @classmethod
@@ -144,6 +158,7 @@ class WakeDetector:
         english_model=ENGLISH_MODEL,
         verify_chinese=False,
         verify_chinese_complete=False,
+        verify_english_complete=False,
     ):
         if verify_chinese and verify_chinese_complete:
             raise ValueError('Choose one Chinese wake verifier')
@@ -172,6 +187,12 @@ class WakeDetector:
 
             verify_model()
             complete = CompleteWakeVerifierProcess()
+        english_candidate = english_complete = None
+        if verify_english_complete:
+            from english_wake_process import EnglishWakeVerifierProcess
+
+            english_candidate = EnglishWake.load(english_model, max_active_paths=16).alternate()
+            english_complete = EnglishWakeVerifierProcess()
         return cls(
             chinese,
             english,
@@ -179,6 +200,8 @@ class WakeDetector:
             chinese_verifier=verifier,
             chinese_complete=complete,
             complete_chinese_enabled=verify_chinese_complete,
+            english_candidate=english_candidate,
+            english_complete=english_complete,
         )
 
     def start_capture(self):
@@ -186,16 +209,45 @@ class WakeDetector:
             self.chinese_verifier.worker.start()
         if self.chinese_complete is not None:
             self.complete_recovery.start_capture()
+        if self.english_recovery is not None:
+            self.english_recovery.start_capture()
 
     def stop_capture(self):
         if self.chinese_verifier is not None:
             self.chinese_verifier.worker.close()
         if self.chinese_complete is not None:
             self.complete_recovery.stop_capture()
+        if self.english_recovery is not None:
+            self.english_recovery.stop_capture()
 
     def poll_capture(self):
         if self.complete_recovery is not None:
             self.complete_recovery.poll_capture()
+        if self.english_recovery is not None:
+            self.english_recovery.poll_capture()
+
+    @property
+    def complete_english_enabled(self):
+        return self.english_candidate is not None and self.english_recovery is not None
+
+    @property
+    def english_recovery_generation(self):
+        return self.english_recovery.generation if self.english_recovery is not None else 0
+
+    @property
+    def english_recovery_snapshot(self):
+        return self.english_recovery.snapshot if self.english_recovery is not None else None
+
+    def english_recovery_commit(self):
+        return self.english_recovery.commit_guard() if self.english_recovery else nullcontext()
+
+    def recheck_english(self, pcm, current):
+        recovery = self.english_recovery
+        if recovery is None or not recovery.available or not current():
+            return None
+        lease = recovery.generation
+        verdict = self.english_complete.confirm(pcm)
+        return verdict if current() and recovery.generation == lease else None
 
     @property
     def complete_recovery_generation(self):
@@ -241,6 +293,9 @@ class WakeDetector:
             self.english_alternate.reset(clear_metrics=clear_metrics)
         if self.chinese_verifier is not None:
             self.chinese_verifier.reset(clear_metrics=clear_metrics)
+        if self.english_candidate is not None:
+            self.english_candidate.reset(clear_metrics=clear_metrics)
+        self.english_candidate_hit = self.english_candidate_active = False
         self.alternate_active = False
 
     def feed(self, pcm, *, alternate_pcm=None):
@@ -249,6 +304,17 @@ class WakeDetector:
         if self.chinese_verifier is not None:
             chinese = self.chinese_verifier.feed(chinese, pcm, alternate_pcm)
         english = self.english.feed(pcm)
+        # A wider hit is only a candidate. It cannot escape as a wake keyword.
+        self.english_candidate_hit = False
+        if self.english_candidate is not None:
+            if alternate_pcm is not None:
+                self.english_candidate_hit = (
+                    self.english_candidate.feed(alternate_pcm) == 'Bumblebee'
+                )
+                self.english_candidate_active = True
+            elif self.english_candidate_active:
+                self.english_candidate.reset(clear_metrics=False)
+                self.english_candidate_active = False
         alternate = ''
         if self.english_alternate is not None:
             if alternate_pcm is not None:

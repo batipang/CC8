@@ -9,7 +9,14 @@ from typing import Callable, Protocol, ContextManager
 import numpy as np
 from diagnostics import TraceBook
 from capture_evidence import CaptureEvidence, OnsetPrefix, FRAME_NS, FRAME_JITTER_NS
-from dsp import UTTERANCE_TOO_LONG, VoiceDetector, ReferenceCapture, NearSpeechDetector, level
+from dsp import (
+    UTTERANCE_TOO_LONG,
+    MAX_UTTERANCE_FRAMES,
+    VoiceDetector,
+    ReferenceCapture,
+    NearSpeechDetector,
+    level,
+)
 from fast_stop import can_fast_stop
 from protocol import JsonValue
 from session_ports import EventSink, MetricSink
@@ -68,6 +75,9 @@ class EndpointHooks:
     complete_chinese_ticket: Callable[[WaitingUtterance, int], WaitingUtterance | None] = (
         lambda *_: None
     )
+    complete_english_ticket: Callable[[WaitingUtterance, int | None], WaitingUtterance] = (
+        lambda base, _: base
+    )
 
 
 class EndpointPipeline:
@@ -78,6 +88,7 @@ class EndpointPipeline:
         self.vad = VoiceDetector()
         self.vad_stamps = deque(maxlen=VoiceDetector.PRE_ROLL_FRAMES)
         self.waiting_turn = None
+        self.waiting_last_sample_ns = None
         self.reference_capture = ReferenceCapture()
         self.near_speech = NearSpeechDetector()
         self.voice_trace = None
@@ -129,6 +140,7 @@ class EndpointPipeline:
     def reset_transport(self):
         self.complete_wake.reset()
         self.waiting_turn = None
+        self.waiting_last_sample_ns = None
         self.vad_stamps.clear()
         self.cancel_partial_trace()
         self.reset_voice_onset()
@@ -146,6 +158,7 @@ class EndpointPipeline:
     def reset_session(self):
         self.complete_wake.reset()
         self.waiting_turn = None
+        self.waiting_last_sample_ns = None
         self.vad_stamps.clear()
         self.cancel_partial_trace()
         self.reset_voice_onset()
@@ -168,6 +181,7 @@ class EndpointPipeline:
     def reset_voice_activity(self):
         self.complete_wake.reset()
         self.waiting_turn = None
+        self.waiting_last_sample_ns = None
         self.vad_stamps.clear()
         self.cancel_partial_trace()
         self.reset_voice_onset()
@@ -306,9 +320,13 @@ class EndpointPipeline:
         self.observe_voice_onset(stamp, voiced)
         self.vad.external_voice = voiced
         was_talking = self.vad.talking
+        retained_audio = getattr(self.vad, 'audio', None)
+        retained = len(retained_audio) if retained_audio is not None else None
         self.vad_stamps.append((stamp, capture_echo_risk))
         began, utterance, _ = self.vad.feed(cleaned)
         if utterance is UTTERANCE_TOO_LONG:
+            self.waiting_turn = None
+            self.waiting_last_sample_ns = None
             self.discard_overlong_utterance()
             return
         render_audio = self.reference_capture.feed(reference, began, utterance is not None)
@@ -324,6 +342,7 @@ class EndpointPipeline:
                 else None
             )
             self.waiting_turn = self.hooks.wake_ticket(first_stamp)
+            self.waiting_last_sample_ns = stamp
             self.cancel_partial_trace()
             self.capture_evidence = CaptureEvidence(
                 onset_prefix=self.onset_prefix.before(stamp, voiced=voiced)
@@ -348,6 +367,11 @@ class EndpointPipeline:
                 self.hooks.status('listening', '我在听，你继续说')
         elif claimed_wake:
             self.turn_local_wake = True
+        if was_talking and retained is not None and retained < MAX_UTTERANCE_FRAMES:
+            # The endpoint can stop retaining trailing quiet at the cap.
+            # Bind candidate receipts to the last actual PCM frame, not the
+            # later completion trigger or an inferred length offset.
+            self.waiting_last_sample_ns = stamp
         if not was_talking and not began:
             self.onset_prefix.feed(frame, voiced=voiced, credible=credible)
         if claimed_wake and self.voice_trace is not None:
@@ -422,7 +446,10 @@ class EndpointPipeline:
                 # A different completed candidate may have just authorized
                 # wake. This older endpoint must not borrow that authorization
                 # and submit overlapping audio as a second ordinary question.
-                job += (self.waiting_turn,)
+                ticket = self.waiting_turn
+                if ticket is not None:
+                    ticket = self.hooks.complete_english_ticket(ticket, self.waiting_last_sample_ns)
+                job += (ticket,)
             self.hooks.enqueue(job)
             self.voice_trace = None
 

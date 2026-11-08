@@ -5,7 +5,7 @@ lock before entering the session guard; resets use guard -> native lock order.
 """
 
 from __future__ import annotations
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from collections import deque
 from contextlib import nullcontext
 import time
@@ -16,6 +16,11 @@ import numpy as np
 from assistant_identity import WAKE_PATTERN
 from session_ports import EventSink, MetricSink
 from wake_utterance import WaitingUtterance
+from english_wake_candidates import (
+    EnglishWakeCandidates,
+    EnglishConfirmation,
+    EnglishWaitingUtterance,
+)
 
 KEYWORDS = frozenset(('大黄蜂', 'Bumblebee'))
 WAITING = '等待唤醒 · 请说“大黄蜂”或“Bumblebee”'
@@ -71,6 +76,37 @@ class WakeController:
         self.complete_chinese_jobs = {}
         self.complete_risk = False
         self.last_recovery_status = None
+        self.english_candidates = EnglishWakeCandidates()
+
+    @property
+    def complete_english_enabled(self):
+        return getattr(self.detector, 'complete_english_enabled', False) is True
+
+    def _english_generation(self):
+        value = getattr(self.detector, 'english_recovery_generation', 0)
+        return value if type(value) is int and value >= 0 else 0
+
+    def complete_english_ticket(self, base, last_sample_ns):
+        with self.hooks.lock:
+            if (
+                not self.complete_english_enabled
+                or type(base) is not EnglishWaitingUtterance
+                or base.serial != self.serial
+                or base.generation != self.hooks.generation()
+                or not self.hooks.active()
+                or self.hooks.awake()
+                or self.hooks.render_risk()
+                or not self.hooks.capture_current(base.first_sample_ns)
+                or type(last_sample_ns) is not int
+                or not self.hooks.capture_current(last_sample_ns)
+            ):
+                return base
+            return (
+                self.english_candidates.issue(
+                    base, last_sample_ns, model_generation=self._english_generation()
+                )
+                or base
+            )
 
     @property
     def ready(self):
@@ -182,12 +218,21 @@ class WakeController:
                 or not self.hooks.capture_current(first_sample_ns)
             ):
                 return None
-            return WaitingUtterance(
+            ticket = WaitingUtterance(
                 self.serial,
                 self.hooks.generation(),
                 first_sample_ns,
                 model_generation=self._model_generation(),
             )
+            if self.complete_english_enabled:
+                return EnglishWaitingUtterance(
+                    ticket.serial,
+                    ticket.generation,
+                    ticket.first_sample_ns,
+                    model_generation=ticket.model_generation,
+                    verifier_generation=self._english_generation(),
+                )
+            return ticket
 
     def pending_chinese_utterance(self, base):
         """Read-only busy evidence, never an audio/cloud authorization."""
@@ -241,14 +286,25 @@ class WakeController:
                 last_sample_ns,
                 base.model_generation,
             )
-            return replace(
-                base, keyword='大黄蜂', last_sample_ns=last_sample_ns, candidate_token=token
+            return WaitingUtterance(
+                base.serial,
+                base.generation,
+                base.first_sample_ns,
+                keyword='大黄蜂',
+                last_sample_ns=last_sample_ns,
+                candidate_token=token,
+                model_generation=base.model_generation,
             )
 
     def recheck_utterance(self, ticket, pcm, generation):
         detector = self.detector
         chinese = isinstance(ticket, WaitingUtterance) and ticket.keyword == '大黄蜂'
+        english = type(ticket) is EnglishConfirmation
+        english_owned = False
         model_generation = None
+        if english:
+            with self.hooks.lock:
+                english_owned = self.english_candidates.consume(ticket)
         if chinese:
             with self.hooks.lock:
                 issued = self.complete_chinese_jobs.get(ticket.candidate_token)
@@ -293,6 +349,16 @@ class WakeController:
             with self.hooks.lock:
                 return current_locked()
 
+        def english_current():
+            with self.hooks.lock:
+                return (
+                    current_locked()
+                    and english_owned
+                    and self.complete_english_enabled
+                    and ticket.verifier_generation == self._english_generation()
+                    and self.hooks.capture_current(ticket.last_sample_ns)
+                )
+
         decode = getattr(detector, 'recheck_chinese' if chinese else 'recheck_utterance', None)
         if not callable(decode) or not current():
             return None
@@ -300,8 +366,17 @@ class WakeController:
         if chinese:
             self.hooks.metric('local_wake_chinese_rechecks', increment=True)
         started = time.perf_counter()
+        english_used = False
         try:
             hit = decode(pcm, current)
+            # Always preserve the original completed 8-path decision first.
+            # Optional receipt/model failure may not veto its positives.
+            if hit is False and english and english_current():
+                confirm = getattr(detector, 'recheck_english', None)
+                if callable(confirm):
+                    english_used = True
+                    self.hooks.metric('local_wake_english_confirmations', increment=True)
+                    hit = confirm(pcm, english_current)
         except Exception as error:
             # The optional local path fails closed; its failure must neither
             # authorize cloud ASR nor report an ASR/provider error to the user.
@@ -312,9 +387,15 @@ class WakeController:
             self.hooks.metric(
                 'local_wake_recheck_ms', round((time.perf_counter() - started) * 1000, 2)
             )
-            commit = getattr(detector, 'complete_recovery_commit', None) if chinese else None
+            commit = (
+                getattr(detector, 'english_recovery_commit', None)
+                if english_used
+                else getattr(detector, 'complete_recovery_commit', None)
+                if chinese
+                else None
+            )
             with commit() if callable(commit) else nullcontext():
-                if not current_locked():
+                if not current_locked() or (english_used and not english_current()):
                     return None
                 if type(hit) is bool and hit:
                     # Model generation and the wake-state commit share only
@@ -403,6 +484,7 @@ class WakeController:
                         start()
                 return
             self.serial += 1
+            self.english_candidates.reset()
             self.pending_chinese.clear()
             self.complete_chinese_jobs.clear()
             self.complete_risk = False
@@ -430,6 +512,7 @@ class WakeController:
 
     def awake_changed(self, awake):
         with self.hooks.lock:
+            self.english_candidates.reset()
             self.pending_chinese.clear()
             self.complete_chinese_jobs.clear()
             self._cancel_input_probe()
@@ -476,15 +559,16 @@ class WakeController:
             ):
                 return False
             awake = self.hooks.awake()
-            if awake and not self.complete_chinese_enabled:
+            if awake and not (self.complete_chinese_enabled or self.complete_english_enabled):
                 return False
             if (
                 not awake
-                and self.complete_chinese_enabled
+                and (self.complete_chinese_enabled or self.complete_english_enabled)
                 and bool(echo_risk) != self.complete_risk
             ):
                 self.complete_risk = bool(echo_risk)
                 self.serial += 1
+                self.english_candidates.reset()
                 self.pending_chinese.clear()
                 self.complete_chinese_jobs.clear()
                 # A queued confirmation cannot survive a completed playback
@@ -496,7 +580,7 @@ class WakeController:
         # The model actor has its own capture lease and never calls the session.
         # Do not run it under native_lock: a commit/route callback can need that
         # lock while a model-generation transition waits on the commit guard.
-        if self.complete_chinese_enabled:
+        if self.complete_chinese_enabled or self.complete_english_enabled:
             poll = getattr(self.detector, 'poll_capture', None)
             if callable(poll):
                 poll()
@@ -519,10 +603,15 @@ class WakeController:
                 )
             if echo_risk:
                 alternate_pcm = None
+            english_generation = self._english_generation()
             if alternate_pcm is not None:
                 keyword = self.detector.feed(pcm, alternate_pcm=alternate_pcm)
             else:
                 keyword = self.detector.feed(pcm)
+            english_candidate = (
+                getattr(self.detector, 'english_candidate_hit', False) is True
+                and english_generation == self._english_generation()
+            )
         with self.hooks.lock:
             recognized = isinstance(keyword, str) and keyword in KEYWORDS
             if (
@@ -532,6 +621,14 @@ class WakeController:
                 or generation != self.hooks.generation()
             ):
                 return False
+            if english_candidate and not echo_risk and self.complete_english_enabled:
+                if self.english_candidates.mark(
+                    capture_nanos,
+                    serial=serial,
+                    generation=generation,
+                    model_generation=english_generation,
+                ):
+                    self.hooks.metric('local_wake_english_candidates', increment=True)
             if not recognized and probe is None:
                 self._report_model_recovery()
                 return False

@@ -56,6 +56,9 @@ def build_audio_pipeline(
                 claim_wake=lambda: host.wake.claim_prefix(),
                 reset_wake_gap=lambda: host.wake.reset('capture_gap'),
                 wake_ticket=lambda stamp: host.wake.waiting_utterance(stamp),
+                complete_english_ticket=lambda base, stamp: host.wake.complete_english_ticket(
+                    base, stamp
+                ),
                 complete_chinese_enabled=lambda: host.wake.complete_chinese_enabled,
                 complete_chinese_pending=lambda base: host.wake.pending_chinese_utterance(base),
                 complete_chinese_guard=lambda: host.session.guard,

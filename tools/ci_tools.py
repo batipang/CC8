@@ -8,14 +8,18 @@ import platform
 import shutil
 import tarfile
 import tempfile
+import urllib.error
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / 'tools/resources/ci-tools.json'
+REPOSITORIES = {'actionlint': 'rhysd/actionlint', 'gitleaks': 'gitleaks/gitleaks'}
 
 
 def tool_info(name):
     info = json.loads(MANIFEST.read_text())[name]
+    if info['repo'] != REPOSITORIES[name]:
+        raise RuntimeError('CLI must use its pinned official repository')
     system = platform.system().lower() + '-' + platform.machine().lower()
     if system not in info['platforms']:
         raise RuntimeError('Unsupported CI CLI platform: ' + system)
@@ -49,20 +53,51 @@ def binary(name):
     return executable
 
 
-def setup(name):
-    asset, url, archive, executable = tool_info(name)
-    archive.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='.ci-tool-', dir=archive.parent) as temporary:
-        downloaded = Path(temporary) / 'download.tar.gz'
-        with urllib.request.urlopen(url, timeout=30) as response, downloaded.open('wb') as out:
+def _download_archive(asset, request, downloaded):
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response, downloaded.open('wb') as out:
             total = 0
             while block := response.read(65536):
                 total += len(block)
-                if total > 100 * 1024 * 1024:
+                if total > asset.get('size', 100 * 1024 * 1024):
                     raise RuntimeError('CLI download exceeds size limit')
                 out.write(block)
+        if 'size' in asset and total != asset['size']:
+            raise RuntimeError('CLI download size mismatch')
         if hashlib.sha256(downloaded.read_bytes()).hexdigest() != asset['sha256']:
             raise RuntimeError('CLI download checksum mismatch')
+    except BaseException:
+        downloaded.unlink(missing_ok=True)
+        raise
+
+
+def setup(name):
+    asset, url, archive, executable = tool_info(name)
+    identity = asset.get('github_asset_id')
+    if identity is not None and (type(identity) is not int or not 0 < identity < 2**63):
+        raise RuntimeError('Invalid pinned CLI asset identity')
+    if 'size' in asset and (
+        type(asset['size']) is not int or not 0 < asset['size'] <= 100 * 1024 * 1024
+    ):
+        raise RuntimeError('Invalid pinned CLI asset size')
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='.ci-tool-', dir=archive.parent) as temporary:
+        downloaded = Path(temporary) / 'download.tar.gz'
+        try:
+            _download_archive(asset, url, downloaded)
+        except urllib.error.HTTPError as error:
+            if not 500 <= error.code <= 599 or identity is None:
+                raise
+            error.close()
+            print('CLI release unavailable; trying the pinned official asset API once.')
+            request = urllib.request.Request(
+                f'https://api.github.com/repos/{REPOSITORIES[name]}/releases/assets/{identity}',
+                headers={
+                    'Accept': 'application/octet-stream',
+                    'X-GitHub-Api-Version': '2022-11-28',
+                },
+            )
+            _download_archive(asset, request, downloaded)
         with tarfile.open(downloaded, 'r:gz') as source:
             member = source.getmember(name)
             if not member.isfile() or member.size > 100 * 1024 * 1024:

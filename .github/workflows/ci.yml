@@ -33,7 +33,9 @@ jobs:
           python-version: '3.13'
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
-          distribution: temurin
+          # macOS matches the verified local JDK and uses AWS delivery;
+          # Linux keeps its existing provider. Both remain Java 21.
+          distribution: ${{ runner.os == 'macOS' && 'corretto' || 'temurin' }}
           java-version: '21'
       - name: Install lightweight test dependencies
         run: python -m pip install -r requirements-dev.txt
@@ -84,9 +86,35 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+      - name: Provision the exact pinned Gradle distribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          distribution="$RUNNER_TEMP/gradle-8.11.1-bin.zip"
+          curl --disable --fail --location --silent --show-error \
+            --connect-timeout 20 --max-time 180 --max-filesize 136920070 \
+            --header 'Accept: application/octet-stream' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            'https://api.github.com/repos/gradle/gradle-distributions/releases/assets/207876967' \
+            --output "$distribution"
+          python3 - "$distribution" <<'PY'
+          import hashlib
+          import sys
+          digest = hashlib.sha256()
+          size = 0
+          with open(sys.argv[1], 'rb') as artifact:
+              for block in iter(lambda: artifact.read(1024 * 1024), b''):
+                  digest.update(block)
+                  size += len(block)
+          if size != 136920070 or digest.hexdigest() != 'f397b287023acdba1e9f6fc5ea72d22dd63669d59ed4a289a29b1a76eee151c6':
+              raise SystemExit('Pinned Gradle distribution size/checksum mismatch')
+          PY
+          unzip -q "$distribution" -d "$RUNNER_TEMP/cc8-gradle"
+          printf '%s\n' "$RUNNER_TEMP/cc8-gradle/gradle-8.11.1/bin" >> "$GITHUB_PATH"
       - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         with:
-          gradle-version: '8.11.1'
+          # Keep wrapper validation and Gradle integration; provisioning above
+          # verifies the unchanged distribution pin without the failing CDN.
           cache-disabled: true
       - name: Prepare SDK and ignored build configuration
         run: |

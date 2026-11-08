@@ -91,6 +91,19 @@ class ConfigurationTests(unittest.TestCase):
                 load_config(self.root, {'CC8_CAPTURE_FRONTEND': value})
             self.assertNotIn('PRIVATE-SENTINEL', str(failure.exception))
 
+    def test_optional_english_confirmation_preserves_asr_and_service_priority(self):
+        self.assertEqual(load_config(self.root, {}).english_wake_verifier, 'off')
+        self.save(english_wake_verifier='whisper_complete')
+        configured = load_config(self.root, {})
+        self.assertEqual(configured.english_wake_verifier, 'whisper_complete')
+        self.assertEqual(configured.asr, 'minimax')
+        env = {'CC8_ENGLISH_WAKE_VERIFIER': 'off'}
+        config = load_config(self.root, env)
+        self.assertEqual(config.public_summary()['english_wake_verifier'], 'off')
+        self.assertEqual(config.service_environment(env), env)
+        with self.assertRaises(ConfigError):
+            load_config(self.root, {'CC8_ENGLISH_WAKE_VERIFIER': 'cloud'})
+
     def test_invalid_fields_do_not_fallback_or_print_values(self):
         cases = (
             {'asr': 'PRIVATE-SENTINEL'},
