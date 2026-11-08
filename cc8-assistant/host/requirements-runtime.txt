@@ -6,7 +6,7 @@ fsspec==2026.9.0
 hf-xet==1.8.0
 huggingface-hub==0.36.0
 idna==3.20
-llvmlite==0.45.1
+llvmlite==0.50.0
 mlx==0.29.4
 mlx-metal==0.29.4
 mlx-whisper==0.4.3
