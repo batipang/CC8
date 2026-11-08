@@ -56,6 +56,10 @@ def build_audio_pipeline(
                 claim_wake=lambda: host.wake.claim_prefix(),
                 reset_wake_gap=lambda: host.wake.reset('capture_gap'),
                 wake_ticket=lambda stamp: host.wake.waiting_utterance(stamp),
+                complete_chinese_enabled=lambda: host.wake.complete_chinese_enabled,
+                complete_chinese_ticket=lambda base, stamp: host.wake.complete_chinese_ticket(
+                    base, stamp
+                ),
                 playing=lambda: host.playback.playing,
                 last_audio_end=lambda: host.playback.last_audio_end,
                 last_spoken=lambda: host.playback.last_spoken,

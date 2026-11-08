@@ -13,6 +13,7 @@ from fast_stop import can_fast_stop
 from protocol import JsonValue
 from session_ports import EventSink, MetricSink
 from wake_utterance import WaitingUtterance
+from complete_wake_capture import CompleteWakeCapture
 
 
 class WakeFrame(Protocol):
@@ -60,12 +61,17 @@ class EndpointHooks:
     claim_wake: Callable[[], bool]
     reset_wake_gap: Callable[[], None]
     wake_ticket: Callable[[int | None], WaitingUtterance | None] = lambda _: None
+    complete_chinese_enabled: Callable[[], bool] = lambda: False
+    complete_chinese_ticket: Callable[[WaitingUtterance, int], WaitingUtterance | None] = (
+        lambda *_: None
+    )
 
 
 class EndpointPipeline:
     def __init__(self, hooks: EndpointHooks, fast_stop=None):
         self.hooks = hooks
         self.fast_stop = fast_stop
+        self.complete_wake = CompleteWakeCapture()
         self.vad = VoiceDetector()
         self.vad_stamps = deque(maxlen=VoiceDetector.PRE_ROLL_FRAMES)
         self.waiting_turn = None
@@ -112,6 +118,7 @@ class EndpointPipeline:
             self.voice_trace = None
 
     def reset_transport(self):
+        self.complete_wake.reset()
         self.waiting_turn = None
         self.vad_stamps.clear()
         self.cancel_partial_trace()
@@ -128,6 +135,7 @@ class EndpointPipeline:
         self.capture_evidence = None
 
     def reset_session(self):
+        self.complete_wake.reset()
         self.waiting_turn = None
         self.vad_stamps.clear()
         self.cancel_partial_trace()
@@ -149,6 +157,7 @@ class EndpointPipeline:
             self.fast_stop.reset()
 
     def reset_voice_activity(self):
+        self.complete_wake.reset()
         self.waiting_turn = None
         self.vad_stamps.clear()
         self.cancel_partial_trace()
@@ -241,8 +250,47 @@ class EndpointPipeline:
                 else:
                     self.hooks.log('fast_stop_reference_suppressed')
         if stamp < self.ignore_vad_until_ns:
+            self.complete_wake.reset()
             return
         voiced, credible = self.near_speech.feed(cleaned, frame.raw, reference)
+        if (
+            self.hooks.complete_chinese_enabled()
+            and not self.hooks.awake()
+            and not capture_echo_risk
+        ):
+            completed = self.complete_wake.feed(
+                cleaned,
+                self.near_speech.speech,
+                stamp,
+                self.hooks.wake_ticket,
+                self.hooks.complete_chinese_ticket,
+            )
+            if completed is not None:
+                trace = self.hooks.diagnostics().begin('voice')
+                self.hooks.diagnostics().mark(trace, 'utterance_end')
+                # No onset timestamp is invented: the ordinary voice-detected
+                # stage belongs to its own endpoint. This is a completed local
+                # waiting candidate, using the actual device input end stamp.
+                self.hooks.enqueue(
+                    (
+                        completed.ticket.generation,
+                        completed.audio,
+                        False,
+                        [],
+                        {
+                            'echo_risk': False,
+                            'captured_at': time.monotonic(),
+                            'pause_token': None,
+                            'local_wake': False,
+                            'input_end_ns': completed.input_end_ns,
+                        },
+                        None,
+                        trace,
+                        completed.ticket,
+                    )
+                )
+        else:
+            self.complete_wake.reset()
         self.observe_voice_onset(stamp, voiced)
         self.vad.external_voice = voiced
         was_talking = self.vad.talking
@@ -356,12 +404,18 @@ class EndpointPipeline:
                 self.hooks.metric('local_wake_utterances_withheld', increment=True)
                 self.voice_trace = None
                 return
-            if not self.hooks.wake_allowed():
+            if not self.hooks.wake_allowed() or (
+                self.waiting_turn is not None and not self.turn_local_wake
+            ):
+                # A different completed candidate may have just authorized
+                # wake. This older endpoint must not borrow that authorization
+                # and submit overlapping audio as a second ordinary question.
                 job += (self.waiting_turn,)
             self.hooks.enqueue(job)
             self.voice_trace = None
 
     def apply_fast_stop(self, keyword, stamp):
+        self.complete_wake.reset()
         start = time.perf_counter()
         was_playing = self.hooks.playing()
         self.last_fast_stop_ns = stamp

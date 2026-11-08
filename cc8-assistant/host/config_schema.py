@@ -54,7 +54,7 @@ FIELDS = {
     'connect_timeout': Field('integer', 8, minimum=1, maximum=30),
     'read_timeout': Field('integer', 20, minimum=1, maximum=120),
     'wake_window_seconds': Field('integer', 60, minimum=15, maximum=300),
-    'chinese_wake_verifier': Field('choice', 'off', ('off', 'sensevoice')),
+    'chinese_wake_verifier': Field('choice', 'off', ('off', 'sensevoice', 'sensevoice_complete')),
     'credential_file': Field('path', '.toolchains/cc8/voice-secrets.env', max_length=4096),
     'signing_keystore': Field('path', None, max_length=4096, nullable=True),
 }

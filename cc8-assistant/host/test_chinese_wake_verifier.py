@@ -27,8 +27,10 @@ class ChineseWakeVerifierTests(unittest.TestCase):
     def test_primary_veto_requires_explicit_confusable_without_target(self):
         for text, expected in (
             ('请别打黄蜂', ''),
-            ('大黃風箏', TARGET),
+            ('大黃風箏', ''),
             ('大黃风筝', ''),
+            ('別打黃蜂', ''),
+            ('大黄蜂和大黃風箏', TARGET),
             ('别打黄蜂，大黄蜂请回答', TARGET),
             ('', TARGET),
             ('其他文本', TARGET),
@@ -167,6 +169,27 @@ class ChineseWakeVerifierTests(unittest.TestCase):
         )
         self.assertTrue(bridge.session.awake)
         self.assertFalse(self.verifier.alternate_audio)
+
+    def test_complete_mode_verifies_weights_without_loading_or_starting_inference(self):
+        stop = SimpleNamespace(detector=object(), engine_lock=object())
+        with (
+            patch('local_wake.ChineseWake'),
+            patch('local_wake.EnglishWake.load'),
+            patch('recognition.verify_model') as verify,
+            patch('complete_wake_process.CompleteWakeVerifierProcess') as worker,
+        ):
+            wake = WakeDetector.load(stop, verify_chinese_complete=True)
+            self.assertTrue(wake.complete_chinese_enabled)
+            self.assertIsNone(wake.chinese_verifier)
+            verify.assert_called_once_with()
+            worker.assert_called_once_with()
+            worker.return_value.start.assert_not_called()
+            wake.start_capture()
+            worker.return_value.start.assert_called_once_with()
+            wake.stop_capture()
+            worker.return_value.close.assert_called_once_with()
+            with self.assertRaises(ValueError):
+                WakeDetector.load(stop, verify_chinese=True, verify_chinese_complete=True)
 
     def test_transport_rebind_starts_worker_only_for_the_existing_capture(self):
         wake = WakeDetector(Mock(), Mock(), chinese_verifier=self.verifier)

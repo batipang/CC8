@@ -70,6 +70,9 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(config.chinese_wake_verifier, 'sensevoice')
         self.assertEqual(config.asr, 'minimax')
         self.assertEqual(config.service_environment(env), env)
+        complete = load_config(self.root, {'CC8_CHINESE_WAKE_VERIFIER': 'sensevoice_complete'})
+        self.assertEqual(complete.chinese_wake_verifier, 'sensevoice_complete')
+        self.assertEqual(complete.asr, 'minimax')
         with self.assertRaises(ConfigError):
             load_config(self.root, {'CC8_CHINESE_WAKE_VERIFIER': 'minimax'})
 
