@@ -15,6 +15,7 @@ from failure_feedback import feedback
 from reply_types import Reply, TextReply
 from test_failure_feedback import Brain, SECRET
 from tools.java_toolchain import java_bin
+from test_interrupted_task_notice import method
 
 ROOT = Path(__file__).resolve().parents[2]
 JAVA = ROOT / 'cc8-assistant/app/src/main/java/com/happyhome/cc8assistant'
@@ -486,11 +487,12 @@ class DeviceFeedbackTests(unittest.TestCase):
         methods = '\n'.join(
             'void '
             + event
-            + '(int gen, String next, String message){Packet p=new Packet(gen);Data j=new Data(next,message);'
+            + '(int gen, String next, String message){Packet p=new Packet(gen);Data j=new Data(next,message);j.listening=suppliedListeningState;j.captureId=suppliedCaptureId!=null?suppliedCaptureId:captureWindow==null?null:captureWindow.id;j.epoch=suppliedCaptureEpoch!=null?suppliedCaptureEpoch:Integer.valueOf(epoch);'
             + branch(source, event)
             + '}'
             for event in events
         )
+        methods += '\n' + method(source, 'boolean currentStatusPresentation(')
         helper = JAVA / 'StatusFeedback.java'
         field = (
             'final StatusFeedback statusFeedback=new StatusFeedback();' if helper.exists() else ''
@@ -499,8 +501,10 @@ class DeviceFeedbackTests(unittest.TestCase):
             """package com.happyhome.cc8assistant;
 class FeedbackCheck {
  boolean foreground=true,recording=false,announcement=false,visual=false,textSession=false;
- int minimumGeneration=0,textGeneration=0,announcementGeneration=0,visualGeneration=0;
- final Object routeLock=new Object();long route=5, activeRoute=5;
+ int minimumGeneration=0,textGeneration=0,announcementGeneration=0,visualGeneration=0,epoch=1,lifecycle=1;
+ final Object routeLock=new Object();long route=5, activeRoute=5,routeEpoch=5;
+ static class CaptureWindow{static int count;final String id="capture"+(++count);boolean startConfirmed=true;}
+ CaptureWindow captureWindow=new CaptureWindow();
  boolean dotChatSupported,savedTasksSupported;
  // The transport handshake itself is covered by the capture route tests.
  static class Link {}
@@ -509,17 +513,27 @@ class FeedbackCheck {
  String recordingPhase(){return recording?"listening":"idle";}
  boolean currentRoute(long wanted){return activeRoute==wanted;}
  String phase="idle";
+ Object suppliedListeningState="unknown";
+ Object suppliedCaptureId,suppliedCaptureEpoch;
  String pendingVisionNonce="",desktopVisionNonce="";
  static class Packet{int generation;Packet(int g){generation=g;}}
- static class Data{String next,message;Data(String n,String m){next=n;message=m;}
-  String optString(String k){return "phase".equals(k)?next:message;}
+ static class Data{String next,message;Object listening="unknown",captureId,epoch;Data(String n,String m){next=n;message=m;}
+  String optString(String k){return "phase".equals(k)?next:"listening_state".equals(k)?String.valueOf(listening):message;}
   String optString(String k,String fallback){return optString(k);}
   Object opt(String k){
+   if("listening_state".equals(k))return listening;
+   if("capture_id".equals(k))return captureId;
+   if("epoch".equals(k))return epoch;
    if(!"playback_interrupted_by_transport".equals(k))return null;
    return "notice".equals(next)?Boolean.TRUE:"string-notice".equals(next)?"true":null;
   }}
- static class Listener{String phase="idle",message="";boolean playing;int visionCalls;boolean preserveVisionError;
-  void state(String p,String m){phase=p;message=m;}
+ class Listener{String phase="idle",message="";boolean playing;int visionCalls;boolean preserveVisionError;
+  final ListeningState listeningState=new ListeningState();
+  void state(String p,String m){listeningState.localPhase(p);phase=p;message=m;}
+  void status(StatusPresentation update){
+   if(!currentStatusPresentation(update))return;
+   if(listeningState.hostStatus(update.phase,update.listeningState,foreground&&recording,update.generation))state(update.phase,update.message);
+  }
   void playback(boolean active){playing=active;}
   void vision(boolean active,String message){vision(active,message,false);}
   void vision(boolean active,String message,boolean preserve){visionCalls++;preserveVisionError=preserve;}
@@ -545,6 +559,8 @@ class FeedbackCheck {
             command = [str(java / 'javac'), '-encoding', 'UTF-8', '-d', str(folder), str(test)]
             if helper.exists():
                 command.append(str(helper))
+            command.append(str(JAVA / 'ListeningState.java'))
+            command.append(str(JAVA / 'StatusPresentation.java'))
             compiled = subprocess.run(command, capture_output=True, text=True, timeout=30)
             self.assertEqual(compiled.returncode, 0, compiled.stderr)
             result = subprocess.run(
@@ -560,6 +576,93 @@ class FeedbackCheck {
             )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_explicit_waiting_and_awake_status_reach_the_real_presentation_helper(self):
+        self.compile_and_run("""c.recording=true;c.suppliedListeningState="waiting";
+ c.status(8,"listening","translated waiting detail");
+ yes(c.listener.listeningState.label().startsWith("等待唤醒"),"waiting label hidden");
+ c.suppliedListeningState="awake";c.status(9,"listening","translated awake detail");
+ yes(c.listener.listeningState.label().equals("正在倾听 · 可以直接说"),"awake label hidden");
+ c.suppliedListeningState="waiting";c.status(8,"listening","old waiting");
+ yes(c.listener.listeningState.state().equals("awake"),"stale status changed wake label");""")
+
+    def test_local_output_preserves_state_but_new_capture_drops_old_ownership(self):
+        self.compile_and_run("""c.recording=true;c.suppliedListeningState="waiting";
+ c.status(8,"listening","waiting");c.listener.state("speaking","output");
+ c.listener.state("listening","local completion");
+ yes(c.listener.listeningState.state().equals("waiting"),"output guessed wake state");
+ c.listener.state("idle","stopped");
+ yes(c.listener.listeningState.state().equals("unknown"),"stop retained old capture");
+ c.suppliedListeningState="awake";c.status(9,"listening","awake");
+ c.listener.state("calibrating","new capture");
+ yes(c.listener.listeningState.state().equals("unknown"),"new capture retained old state");
+ c.suppliedListeningState="waiting";c.foreground=false;c.status(10,"listening","background");
+ yes(c.listener.listeningState.state().equals("unknown"),"background published wake state");""")
+
+    def test_missing_or_invalid_host_state_remains_legacy_unknown(self):
+        self.compile_and_run("""c.recording=true;c.suppliedListeningState="waiting";
+ c.status(8,"listening","waiting");c.suppliedListeningState=null;
+ c.status(9,"listening","legacy");
+ yes(c.listener.listeningState.state().equals("unknown"),"legacy status borrowed old state");
+ c.suppliedListeningState="unexpected";c.status(10,"listening","invalid");
+ yes(c.listener.listeningState.label().equals("正在倾听 · 大黄蜂 / Bumblebee"),"invalid state invented authorization");""")
+
+    def test_wrong_metadata_types_cannot_publish_a_listening_state(self):
+        self.compile_and_run("""c.recording=true;c.suppliedListeningState="waiting";
+ c.status(8,"listening","waiting");c.suppliedListeningState=Boolean.TRUE;
+ c.status(9,"listening","wrong type");
+ yes(c.listener.listeningState.state().equals("waiting"),"nonstring state changed label");
+ c.suppliedListeningState="awake";c.suppliedCaptureId=Boolean.TRUE;c.status(9,"listening","wrong owner type");
+ yes(c.listener.listeningState.state().equals("waiting"),"nonstring capture owner changed label");
+ c.suppliedCaptureId=null;c.suppliedCaptureEpoch="1";c.status(9,"listening","wrong epoch type");
+ yes(c.listener.listeningState.state().equals("waiting"),"string epoch changed label");""")
+
+    def test_queued_listening_callback_cannot_reappear_after_stop_or_background(self):
+        self.compile_and_run("""c.recording=true;c.suppliedListeningState="waiting";
+ c.status(8,"listening","waiting");
+ StatusPresentation queued=new StatusPresentation("listening","queued","awake",8,c.epoch,c.lifecycle,c.route,c.captureWindow);
+ c.listener.state("idle","stopped");
+ c.recording=false;c.listener.status(queued);
+ yes(c.listener.phase.equals("idle")&&c.listener.listeningState.state().equals("unknown"),"queued callback revived stopped capture label");
+ c.recording=true;c.foreground=false;c.listener.status(queued);
+ yes(c.listener.phase.equals("idle")&&c.listener.listeningState.state().equals("unknown"),"queued callback revived background label");
+ c.foreground=true;c.recording=false;c.announcement_begin(9,"","");c.status(9,"error","announcement error without microphone");
+ yes(c.listener.phase.equals("error"),"capture guard hid unrelated output error");""")
+
+    def test_queued_callback_cannot_borrow_new_capture_route_or_lifetime(self):
+        self.compile_and_run("""c.recording=true;c.suppliedListeningState="waiting";
+ c.status(8,"listening","waiting");
+ StatusPresentation old=new StatusPresentation("listening","old","awake",8,c.epoch,c.lifecycle,c.route,c.captureWindow);
+ c.listener.state("calibrating","new capture");CaptureWindow before=c.captureWindow;
+ c.captureWindow=new CaptureWindow();c.epoch++;c.listener.status(old);
+ yes(c.listener.phase.equals("calibrating")&&c.listener.listeningState.state().equals("unknown"),"old capture borrowed new recording");
+ c.captureWindow=before;c.epoch--;c.routeEpoch++;c.listener.status(old);
+ yes(c.listener.phase.equals("calibrating"),"old route overwrote current UI");
+ c.routeEpoch--;c.lifecycle++;c.listener.status(old);
+ yes(c.listener.phase.equals("calibrating"),"old activity lifetime overwrote current UI");
+ c.lifecycle--;c.minimumGeneration=9;c.listener.status(old);
+ yes(c.listener.phase.equals("calibrating"),"old generation overwrote current UI");""")
+
+    def test_new_request_cannot_inherit_the_previous_request_waiting_label(self):
+        self.compile_and_run("""c.recording=true;c.suppliedListeningState="waiting";
+ c.status(8,"listening","waiting");c.status(9,"thinking","new request");
+ c.listener.state("listening","local output completed");
+ yes(c.listener.listeningState.state().equals("unknown"),"new turn borrowed old waiting label");
+ c.suppliedListeningState="awake";c.status(9,"listening","confirmed");
+ yes(c.listener.listeningState.state().equals("awake"),"current turn could not publish state");""")
+
+    def test_delayed_wire_status_cannot_bind_to_a_new_capture_or_unconfirmed_start(self):
+        self.compile_and_run("""c.recording=true;c.suppliedListeningState="waiting";
+ c.status(8,"listening","current");String old=c.captureWindow.id;
+ c.captureWindow=new CaptureWindow();c.epoch++;c.listener.state("calibrating","new capture");
+ c.suppliedListeningState="awake";c.suppliedCaptureId=old;c.status(9,"listening","old wire capture");
+ yes(c.listener.phase.equals("calibrating"),"old wire capture borrowed new window");
+ c.suppliedCaptureId=null;c.suppliedCaptureEpoch=Integer.valueOf(c.epoch-1);c.status(9,"listening","old epoch");
+ yes(c.listener.phase.equals("calibrating"),"old wire epoch changed UI");
+ c.suppliedCaptureEpoch=null;c.captureWindow.startConfirmed=false;c.status(9,"listening","not confirmed");
+ yes(c.listener.phase.equals("calibrating"),"pending native start advertised listening");
+ c.captureWindow.startConfirmed=true;c.status(8,"listening","fresh receipt");
+ yes(c.listener.listeningState.state().equals("awake"),"rejected old metadata consumed rightful status");""")
+
     def test_route_interruption_notice_survives_rebind_and_clears_for_new_work(self):
         self.compile_and_run("""c.recording=true;c.hello(8,"notice","连接切换中断播报");
  c.status(8,"listening","连接已切换，我在听");c.hello(8,"","duplicate handshake");
@@ -570,7 +673,7 @@ class FeedbackCheck {
  yes(c.recording&&c.listener.playing,"interruption prevented a new request");""")
 
     def test_interruption_uses_only_current_foreground_route_and_boolean_flag(self):
-        self.compile_and_run("""c.activeRoute=6;c.hello(8,"notice","stale route");
+        self.compile_and_run("""c.activeRoute=6;c.routeEpoch=6;c.hello(8,"notice","stale route");
  yes(!c.listener.phase.equals("error"),"stale route reported interruption");
  c.route=6;c.foreground=false;c.hello(8,"notice","background");
  yes(!c.listener.phase.equals("error"),"background notice changed UI");

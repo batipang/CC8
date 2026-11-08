@@ -24,6 +24,10 @@ final class VoiceSession {
 
     void state(String phase, String message);
 
+    default void status(StatusPresentation update) {
+      state(update.phase, update.message);
+    }
+
     void caption(String text, String mood);
 
     void playbackPresentation(PlaybackPresentation update);
@@ -816,6 +820,19 @@ final class VoiceSession {
           send(Wire.event("pong"));
         } else if ("status".equals(event)) {
           String nextPhase = j.optString("phase", "listening");
+          String listeningState = "unknown";
+          if ("listening".equals(nextPhase)) {
+            CaptureWindow window = captureWindow;
+            listeningState =
+                ListeningState.hostValue(
+                    j.opt("listening_state"),
+                    j.opt("capture_id"),
+                    j.opt("epoch"),
+                    window == null ? null : window.id,
+                    epoch,
+                    window != null && window.startConfirmed);
+            if (listeningState == null) return;
+          }
           boolean permitted =
               recording
                   || (announcement && p.generation == announcementGeneration)
@@ -829,7 +846,16 @@ final class VoiceSession {
               && p.generation >= minimumGeneration
               && statusFeedback.accept(p.generation, nextPhase)) {
             phase = nextPhase;
-            listener.state(phase, j.optString("message"));
+            listener.status(
+                new StatusPresentation(
+                    phase,
+                    j.optString("message"),
+                    listeningState,
+                    p.generation,
+                    epoch,
+                    lifecycle,
+                    route,
+                    captureWindow));
           }
         } else if ("transcript".equals(event)) {
           if (recording && p.generation >= minimumGeneration && currentRoute(route)) {
@@ -1623,6 +1649,21 @@ final class VoiceSession {
       if (foreground && recording && captureWindow == window && player == null)
         window.observeStopVisuals(
             routeEpoch, minimumGeneration, appliedNanos, SystemClock.elapsedRealtime());
+    }
+  }
+
+  boolean currentStatusPresentation(StatusPresentation update) {
+    synchronized (routeLock) {
+      return update != null
+          && update.current(
+              foreground,
+              recording,
+              captureWindow,
+              epoch,
+              lifecycle,
+              routeEpoch,
+              minimumGeneration,
+              statusFeedback.current(update.generation));
     }
   }
 

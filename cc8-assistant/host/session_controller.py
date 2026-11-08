@@ -144,8 +144,23 @@ class SessionController:
         self.hooks.metric('transport_changes', self.hooks.metric_value('transport_changes') + 1)
 
     def status(self, phase, message):
-        if self.connection is not None:
-            self.hooks.event('status', phase=phase, message=message)
+        if phase != 'listening':
+            if self.connection is not None:
+                self.hooks.event('status', phase=phase, message=message)
+            return
+        with self.guard:
+            if self.connection is not None:
+                # Prose is not a protocol state. Publish this capture snapshot
+                # atomically without changing other phases' lock contract.
+                state = 'unknown' if not self.active else 'awake' if self.awake else 'waiting'
+                self.hooks.event(
+                    'status',
+                    phase=phase,
+                    message=message,
+                    listening_state=state,
+                    capture_id=self.capture_id if self.active else None,
+                    epoch=self.epoch,
+                )
 
     def valid(self, generation):
         return (

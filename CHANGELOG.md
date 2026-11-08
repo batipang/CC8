@@ -1,5 +1,11 @@
 # Changelog
 
+## Backend 0.15.59 / APK 0.9.53 - explicit listening state
+
+- Show waiting for a wake word separately from an awake conversation using an explicit bounded host status field, independent of translated prose. Preserve the approved layout, avatar, clock and audio behavior.
+- Keep state through local output and recoverable errors; clear it on Stop, Home and fresh calibration. Discard queued listening callbacks once capture is no longer current; retain unrelated output failure feedback. Missing/invalid state from older peers remains unknown.
+- Expose the actual native listening label match without retaining messages. Include backend58 deployment and real local-verifier fault evidence, with its extra echo-text pause/resume explicitly left as an open acoustic limitation.
+
 ## Backend 0.15.58 — capture-owned local wake recovery
 
 - Recover an exited or timed-out complete Chinese verifier only within the current active capture: at most three starts per failure burst, with two- and five-second backoff and budget renewal after thirty seconds of readiness. Never replay failed audio or rearm a stopped microphone.
