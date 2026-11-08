@@ -57,26 +57,31 @@ def generate_startup(cases):
         def recv(self, count):
             return self.data.read(count)
 
+    packets = []
+
+    class Recorder:
+        kind = 'usb'
+
+        def sendall(self, raw):
+            packet = receive(Reader(raw))
+            if packet.kind != EVENT:
+                raise AssertionError('Startup QA emitted unexpected audio')
+            packets.append(packet)
+
+    # One receiver replays the entire corpus. Preserve controller-owned
+    # generations and completed receipts across cases, as normal requests do.
+    with patch('threading.Thread.start'):
+        host = Bridge(NoAudio(), Brain())
+    host.session.connection = Recorder()
+    host.log = lambda *args, **kwargs: None
+    host.save_status = lambda: None
+    host.speak = lambda *args: True
     rows = []
     for case in cases:
-        packets = []
-
-        class Recorder:
-            kind = 'usb'
-
-            def sendall(self, raw):
-                packet = receive(Reader(raw))
-                if packet.kind != EVENT:
-                    raise AssertionError('Startup QA emitted unexpected audio')
-                packets.append(packet)
-
-        with patch('threading.Thread.start'):
-            host = Bridge(NoAudio(), Brain())
-        host.session.connection = Recorder()
-        host.log = lambda *args, **kwargs: None
-        host.save_status = lambda: None
-        host.speak = lambda *args: True
+        packets.clear()
         before = host.generation
+        calls_before = host.brain.calls
+        tasks_before = host.workspace.snapshot()['tasks']
         original_event, original_enqueue = host.event, host.enqueue_response
 
         def event(name, **fields):
@@ -127,8 +132,8 @@ def generate_startup(cases):
             host.session.active
             or host.session.text_generation is not None
             or host.announcements.generation is not None
-            or host.brain.calls
-            or host.workspace.tasks
+            or host.brain.calls != calls_before
+            or host.workspace.snapshot()['tasks'] != tasks_before
         ):
             raise AssertionError('Startup failure retained work or capture')
         errors = [
@@ -162,7 +167,7 @@ def generate_startup(cases):
             except EndWorker:
                 pass
         if (
-            host.brain.calls != 1
+            host.brain.calls != calls_before + 1
             or host.workspace.tasks[-1]['status'] != 'completed'
             or host.session.text_generation is not None
             or host.session.active
@@ -188,7 +193,7 @@ def generate_startup(cases):
                 'wire_requests': 0,
                 'recovery_wire_requests': 0,
                 'startup_task_created': False,
-                'explicit_recovery_dispatches': host.brain.calls,
+                'explicit_recovery_dispatches': host.brain.calls - calls_before,
             }
         )
     return rows
