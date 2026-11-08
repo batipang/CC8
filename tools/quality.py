@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import urllib.error
 import urllib.request
 
 if __package__:
@@ -51,25 +52,14 @@ def verified_formatter():
     return info, path
 
 
-def setup_formatter():
-    info, path = formatter_info()
-    if path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest() == info['sha256']:
-        print('Pinned Java formatter already verified.')
-        return
-    expected_url = (
-        'https://github.com/google/google-java-format/releases/download/v'
-        + info['version']
-        + '/'
-        + info['filename']
-    )
-    if info['url'] != expected_url:
-        raise RuntimeError('Formatter URL must be the pinned official release')
-    path.parent.mkdir(parents=True, exist_ok=True)
+def _download_formatter(info, path, request):
+    # Each attempt owns a new partial; neither an HTTP error nor an invalid
+    # body may replace a cached tool or concatenate data from another route.
     fd, temporary = tempfile.mkstemp(prefix='.java-format-', dir=path.parent)
     try:
         with (
             os.fdopen(fd, 'wb') as out,
-            urllib.request.urlopen(info['url'], timeout=30) as response,
+            urllib.request.urlopen(request, timeout=30) as response,
         ):
             size = 0
             while block := response.read(65536):
@@ -85,6 +75,40 @@ def setup_formatter():
         os.replace(temporary, path)
     finally:
         Path(temporary).unlink(missing_ok=True)
+
+
+def setup_formatter():
+    info, path = formatter_info()
+    if path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest() == info['sha256']:
+        print('Pinned Java formatter already verified.')
+        return
+    expected_url = (
+        'https://github.com/google/google-java-format/releases/download/v'
+        + info['version']
+        + '/'
+        + info['filename']
+    )
+    if info['url'] != expected_url:
+        raise RuntimeError('Formatter URL must be the pinned official release')
+    asset = info.get('github_asset_id')
+    if asset is not None and (type(asset) is not int or not 0 < asset < 2**63):
+        raise RuntimeError('Invalid pinned formatter asset identity')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        _download_formatter(info, path, info['url'])
+    except urllib.error.HTTPError as error:
+        if not 500 <= error.code <= 599 or asset is None:
+            raise
+        error.close()
+        # The public browser download can fail while the official release
+        # asset route remains available. This is one bounded second route to
+        # exactly the same bytes: all size/SHA checks remain authoritative.
+        print('Release download unavailable; trying the pinned official asset API once.')
+        request = urllib.request.Request(
+            f'https://api.github.com/repos/google/google-java-format/releases/assets/{asset}',
+            headers={'Accept': 'application/octet-stream', 'X-GitHub-Api-Version': '2022-11-28'},
+        )
+        _download_formatter(info, path, request)
     print('Pinned Java formatter downloaded and SHA-256 verified.')
 
 

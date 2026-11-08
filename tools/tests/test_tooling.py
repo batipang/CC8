@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import urllib.error
 from unittest.mock import Mock, patch
 
 from tools import java_toolchain, quality, test_all
@@ -126,6 +127,136 @@ class RunnerTests(unittest.TestCase):
 
 
 class FormatterTests(unittest.TestCase):
+    def test_partial_primary_body_is_discarded_before_the_second_route(self):
+        class Partial(io.BytesIO):
+            def read(self, size=-1):
+                if self.tell():
+                    raise urllib.error.HTTPError('https://github.com', 503, 'test only', {}, None)
+                return super().read(1)
+
+        with tempfile.TemporaryDirectory() as folder:
+            root, manifest, path = self.manifest(folder)
+            info = json.loads(manifest.read_text())
+            info['github_asset_id'] = 365932021
+            manifest.write_text(json.dumps(info))
+            with (
+                patch.object(quality, 'ROOT', root),
+                patch.object(quality, 'MANIFEST', manifest),
+                patch(
+                    'tools.quality.urllib.request.urlopen',
+                    side_effect=[Partial(b'junk'), io.BytesIO(b'jar')],
+                ) as network,
+                patch('sys.stdout', new_callable=io.StringIO),
+            ):
+                quality.setup_formatter()
+                quality.verified_formatter()
+            self.assertEqual(network.call_count, 2)
+            self.assertEqual(path.read_bytes(), b'jar')
+            self.assertEqual(list(path.parent.glob('.java-format-*')), [])
+
+    def test_official_asset_fallback_is_one_attempt_and_keeps_exact_binary_pin(self):
+        for code in (500, 502, 503, 504):
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as folder:
+                root, manifest, path = self.manifest(folder)
+                info = json.loads(manifest.read_text())
+                info['github_asset_id'] = 365932021
+                manifest.write_text(json.dumps(info))
+                error = urllib.error.HTTPError(info['url'], code, 'test gateway', {}, io.BytesIO())
+                with (
+                    patch.object(quality, 'ROOT', root),
+                    patch.object(quality, 'MANIFEST', manifest),
+                    patch(
+                        'tools.quality.urllib.request.urlopen',
+                        side_effect=[error, io.BytesIO(b'jar')],
+                    ) as network,
+                    patch('sys.stdout', new_callable=io.StringIO),
+                ):
+                    quality.setup_formatter()
+                    quality.verified_formatter()
+                    # Subsequent setup uses verified cache, never more routes.
+                    quality.setup_formatter()
+                self.assertEqual(network.call_count, 2)
+                self.assertEqual(network.call_args_list[0].args, (info['url'],))
+                request = network.call_args_list[1].args[0]
+                self.assertEqual(
+                    request.full_url,
+                    'https://api.github.com/repos/google/google-java-format/releases/assets/365932021',
+                )
+                self.assertEqual(request.get_header('Accept'), 'application/octet-stream')
+                self.assertTrue(error.closed)
+                self.assertTrue(all(c.kwargs == {'timeout': 30} for c in network.call_args_list))
+                self.assertEqual(path.read_bytes(), b'jar')
+                self.assertEqual(list(path.parent.glob('.java-format-*')), [])
+
+    def test_fallback_never_masks_bad_bytes_client_errors_or_unbounded_retry(self):
+        cases = (
+            ('bad_hash', io.BytesIO(b'bad'), None),
+            ('oversize', io.BytesIO(b'too large'), None),
+            ('not_found', 404, None),
+            ('forbidden', 403, None),
+            ('transport_error', urllib.error.URLError('test only'), None),
+            ('api_bad_hash', 504, io.BytesIO(b'bad')),
+            ('api_oversize', 504, io.BytesIO(b'too large')),
+            ('api_gateway', 504, 504),
+        )
+        for name, first, second in cases:
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as folder:
+                root, manifest, path = self.manifest(folder)
+                info = json.loads(manifest.read_text())
+                info['github_asset_id'] = 365932021
+                manifest.write_text(json.dumps(info))
+                path.parent.mkdir(parents=True)
+                path.write_bytes(b'old corrupt cache')
+
+                def reply(value):
+                    return (
+                        urllib.error.HTTPError(info['url'], value, 'test only', {}, None)
+                        if type(value) is int
+                        else value
+                    )
+
+                values = [reply(first)] + ([reply(second)] if second is not None else [])
+                with (
+                    patch.object(quality, 'ROOT', root),
+                    patch.object(quality, 'MANIFEST', manifest),
+                    patch('tools.quality.urllib.request.urlopen', side_effect=values) as network,
+                    patch('sys.stdout', new_callable=io.StringIO),
+                ):
+                    with self.assertRaises((RuntimeError, urllib.error.URLError)):
+                        quality.setup_formatter()
+                self.assertEqual(network.call_count, len(values))
+                self.assertEqual(path.read_bytes(), b'old corrupt cache')
+                self.assertEqual(list(path.parent.glob('.java-format-*')), [])
+
+    def test_invalid_asset_identity_or_nonofficial_primary_fails_before_network(self):
+        for value in (True, 0, -1, 2**63, '365932021', 'https://private.invalid'):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as folder:
+                root, manifest, _ = self.manifest(folder)
+                info = json.loads(manifest.read_text())
+                info['github_asset_id'] = value
+                manifest.write_text(json.dumps(info))
+                with (
+                    patch.object(quality, 'ROOT', root),
+                    patch.object(quality, 'MANIFEST', manifest),
+                    patch('tools.quality.urllib.request.urlopen') as network,
+                ):
+                    with self.assertRaises(RuntimeError):
+                        quality.setup_formatter()
+                    network.assert_not_called()
+        with tempfile.TemporaryDirectory() as folder:
+            root, manifest, _ = self.manifest(folder)
+            info = json.loads(manifest.read_text())
+            info.update(github_asset_id=365932021, url='https://other.invalid/formatter.jar')
+            manifest.write_text(json.dumps(info))
+            with (
+                patch.object(quality, 'ROOT', root),
+                patch.object(quality, 'MANIFEST', manifest),
+                patch('tools.quality.urllib.request.urlopen') as network,
+            ):
+                with self.assertRaises(RuntimeError):
+                    quality.setup_formatter()
+                network.assert_not_called()
+
     def manifest(self, folder, payload=b'jar'):
         root = Path(folder)
         manifest = root / 'formatter.json'

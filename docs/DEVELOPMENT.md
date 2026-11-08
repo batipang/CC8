@@ -91,6 +91,10 @@ python3 device-access/cc8_install.py --check
 
 ## 离线检查
 
+`python tools/quality.py setup` 安装固定 Java 格式器：优先使用原官方 Release 下载地址，只有该入口返回 HTTP 5xx 时，才尝试一次清单固定的官方 Release Asset API。两个入口共用原大小与 SHA-256 校验，错误或超大文件不安装，未验证的旧缓存不被失败下载替换，每次失败删除独立临时文件。不对 403/404、校验错误或其他网络错误改用备用源，不降级版本；`check` 仍只读本机缓存，绝不自动下载。本轮固定文件由[官方 release 元数据](https://api.github.com/repos/google/google-java-format/releases/tags/v1.35.0)核对 asset ID，原版本、大小、摘要和 Java 要求保持。
+
+同一 CI 步骤中的 `python tools/ci_tools.py setup actionlint` 采用同样的一次性 5xx 备用入口。两个现有平台按[官方元数据](https://api.github.com/repos/rhysd/actionlint/releases/tags/v1.7.12)固定 asset ID 与大小，原 SHA-256、版本和归档内可执行文件校验保持；非官方仓库、非法身份/大小、校验失败或不安全归档不能被备用入口放行。现有 gitleaks 清单没有新增备用源或变更版本。
+
 ```sh
 # 安装器边界 / 传输 / 回执检查：不访问真实设备
 python3 -m unittest discover -s device-access/tests -p 'test_*.py' -v

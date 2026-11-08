@@ -8,6 +8,7 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+import urllib.error
 from unittest.mock import Mock, patch
 
 from tools import ci_tools, security
@@ -131,10 +132,10 @@ class AuditTests(unittest.TestCase):
 
 
 class CliDownloadTests(unittest.TestCase):
-    def archive(self, folder, link=False):
+    def archive(self, folder, link=False, name='gitleaks'):
         archive = Path(folder) / 'tool.tar.gz'
         with tarfile.open(archive, 'w:gz') as output:
-            member = tarfile.TarInfo('gitleaks')
+            member = tarfile.TarInfo(name)
             if link:
                 member.type = tarfile.SYMTYPE
                 member.linkname = '/etc/passwd'
@@ -143,6 +144,143 @@ class CliDownloadTests(unittest.TestCase):
                 member.size = 4
                 output.addfile(member, io.BytesIO(b'tool'))
         return archive
+
+    def test_official_fallback_installs_only_the_pinned_archive_and_binary(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = self.archive(folder, name='actionlint')
+            payload = source.read_bytes()
+            source.unlink()
+            archive, executable = Path(folder) / 'cached.tar.gz', Path(folder) / 'actionlint'
+            asset = {
+                'sha256': hashlib.sha256(payload).hexdigest(),
+                'size': len(payload),
+                'github_asset_id': 384924896,
+            }
+            error = urllib.error.HTTPError(
+                'https://github.com/rhysd/actionlint', 504, 'test gateway', {}, io.BytesIO()
+            )
+            with (
+                patch.object(
+                    ci_tools,
+                    'tool_info',
+                    return_value=(
+                        asset,
+                        'https://github.com/rhysd/actionlint/releases/download/v1.7.12/tool.tar.gz',
+                        archive,
+                        executable,
+                    ),
+                ),
+                patch(
+                    'tools.ci_tools.urllib.request.urlopen',
+                    side_effect=[error, io.BytesIO(payload)],
+                ) as network,
+                patch('sys.stdout', new_callable=io.StringIO),
+            ):
+                ci_tools.setup('actionlint')
+                self.assertEqual(ci_tools.binary('actionlint'), executable)
+            self.assertEqual(executable.read_bytes(), b'tool')
+            self.assertEqual(archive.read_bytes(), payload)
+            self.assertTrue(error.closed)
+            self.assertEqual(network.call_count, 2)
+            request = network.call_args_list[1].args[0]
+            self.assertEqual(
+                request.full_url,
+                'https://api.github.com/repos/rhysd/actionlint/releases/assets/384924896',
+            )
+            self.assertEqual(request.get_header('Accept'), 'application/octet-stream')
+            self.assertEqual(list(Path(folder).glob('.ci-tool-*')), [])
+
+    def test_failed_primary_or_api_never_replaces_either_existing_cache_file(self):
+        for case in (
+            '403',
+            '404',
+            'no_pin',
+            'primary_hash',
+            'api_hash',
+            'api_size',
+            'api_symlink',
+            'api_504',
+        ):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as folder:
+                source = self.archive(folder, link=case == 'api_symlink', name='actionlint')
+                payload = source.read_bytes()
+                source.unlink()
+                archive, executable = Path(folder) / 'cached.tar.gz', Path(folder) / 'actionlint'
+                archive.write_bytes(b'old archive')
+                executable.write_bytes(b'old executable')
+                asset = {
+                    'sha256': hashlib.sha256(payload).hexdigest(),
+                    'size': len(payload),
+                    'github_asset_id': 384924896,
+                }
+                error = lambda code: urllib.error.HTTPError(
+                    'https://github.com', code, 'test only', {}, None
+                )
+                if case in ('403', '404'):
+                    values = [error(int(case))]
+                elif case == 'no_pin':
+                    del asset['github_asset_id']
+                    values = [error(504)]
+                elif case == 'primary_hash':
+                    values = [io.BytesIO(b'x' * len(payload))]
+                elif case == 'api_hash':
+                    values = [error(504), io.BytesIO(b'x' * len(payload))]
+                elif case == 'api_size':
+                    values = [error(504), io.BytesIO(payload + b'extra')]
+                elif case == 'api_symlink':
+                    values = [error(504), io.BytesIO(payload)]
+                else:
+                    values = [error(504), error(504)]
+                with (
+                    patch.object(
+                        ci_tools,
+                        'tool_info',
+                        return_value=(
+                            asset,
+                            'https://github.com/rhysd/actionlint',
+                            archive,
+                            executable,
+                        ),
+                    ),
+                    patch('tools.ci_tools.urllib.request.urlopen', side_effect=values) as network,
+                    patch('sys.stdout', new_callable=io.StringIO),
+                ):
+                    with self.assertRaises((RuntimeError, urllib.error.HTTPError)):
+                        ci_tools.setup('actionlint')
+                self.assertEqual(network.call_count, len(values))
+                self.assertEqual(archive.read_bytes(), b'old archive')
+                self.assertEqual(executable.read_bytes(), b'old executable')
+                self.assertEqual(list(Path(folder).glob('.ci-tool-*')), [])
+
+    def test_invalid_pinned_size_identity_and_repository_stop_before_network(self):
+        for field, values in (
+            ('github_asset_id', (True, 0, -1, 2**63, '384924896')),
+            ('size', (True, 0, -1, 101 * 1024 * 1024, '2353908')),
+        ):
+            for value in values:
+                with (
+                    self.subTest(field=field, value=value),
+                    tempfile.TemporaryDirectory() as folder,
+                ):
+                    p = Path(folder)
+                    asset = {field: value, 'sha256': '0' * 64}
+                    with (
+                        patch.object(
+                            ci_tools,
+                            'tool_info',
+                            return_value=(asset, 'https://github.com', p / 'archive', p / 'binary'),
+                        ),
+                        patch('tools.ci_tools.urllib.request.urlopen') as network,
+                    ):
+                        with self.assertRaises(RuntimeError):
+                            ci_tools.setup('actionlint')
+                        network.assert_not_called()
+        with tempfile.TemporaryDirectory() as folder:
+            p = Path(folder) / 'manifest.json'
+            p.write_text(json.dumps({'actionlint': {'repo': 'other/repository'}}))
+            with patch.object(ci_tools, 'MANIFEST', p):
+                with self.assertRaisesRegex(RuntimeError, 'official repository'):
+                    ci_tools.tool_info('actionlint')
 
     def test_changed_executable_is_not_trusted_even_with_verified_archive(self):
         with tempfile.TemporaryDirectory() as folder:
