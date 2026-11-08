@@ -254,6 +254,7 @@ class NearSpeechDetector:
         self.residual = deque(maxlen=20)
         self.noise = -58.0
         self.voiced = False
+        self.speech = False
         self.credible = False
         self.correlation = 0.0
         self.residual_correlation = 0.0
@@ -285,6 +286,7 @@ class NearSpeechDetector:
         threshold = max(self.MIN_DBFS, min(self.MAX_DBFS, self.noise + self.NOISE_MARGIN_DB))
         raw = np.rint(np.clip(cleaned * 1.5, -0.98, 0.98) * 32768).astype('<i2').tobytes()
         speech = bool(self.vad.is_speech(raw, RATE))
+        self.speech = speech
         if not speech:
             self.noise = 0.995 * self.noise + 0.005 * db
         self.raw.append(mic.copy())

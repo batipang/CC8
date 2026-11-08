@@ -111,15 +111,35 @@ class WakeDetector:
     KEYWORDS = ChineseWake.KEYWORDS | EnglishWake.KEYWORDS
     utterance_recheck_supported = True
 
-    def __init__(self, chinese, english, english_alternate=None, *, chinese_verifier=None):
+    def __init__(
+        self,
+        chinese,
+        english,
+        english_alternate=None,
+        *,
+        chinese_verifier=None,
+        chinese_complete=None,
+        complete_chinese_enabled=False,
+    ):
         self.chinese = chinese
         self.english = english
         self.english_alternate = english_alternate
         self.chinese_verifier = chinese_verifier
+        self.chinese_complete = chinese_complete
+        self.complete_chinese_enabled = complete_chinese_enabled
         self.alternate_active = False
 
     @classmethod
-    def load(cls, stop=None, *, english_model=ENGLISH_MODEL, verify_chinese=False):
+    def load(
+        cls,
+        stop=None,
+        *,
+        english_model=ENGLISH_MODEL,
+        verify_chinese=False,
+        verify_chinese_complete=False,
+    ):
+        if verify_chinese and verify_chinese_complete:
+            raise ValueError('Choose one Chinese wake verifier')
         chinese = (
             ChineseWake(stop.detector, lock=stop.engine_lock)
             if stop is not None
@@ -138,15 +158,42 @@ class WakeDetector:
             except (ImportError, OSError, RuntimeError, ValueError):
                 # An optional model or stream must never disable standard wake.
                 pass
-        return cls(chinese, english, english.alternate(), chinese_verifier=verifier)
+        complete = None
+        if verify_chinese_complete:
+            from recognition import verify_model
+            from complete_wake_process import CompleteWakeVerifierProcess
+
+            verify_model()
+            complete = CompleteWakeVerifierProcess()
+        return cls(
+            chinese,
+            english,
+            english.alternate(),
+            chinese_verifier=verifier,
+            chinese_complete=complete,
+            complete_chinese_enabled=verify_chinese_complete,
+        )
 
     def start_capture(self):
         if self.chinese_verifier is not None:
             self.chinese_verifier.worker.start()
+        if self.chinese_complete is not None:
+            self.chinese_complete.start()
 
     def stop_capture(self):
         if self.chinese_verifier is not None:
             self.chinese_verifier.worker.close()
+        if self.chinese_complete is not None:
+            self.chinese_complete.close()
+
+    def recheck_chinese(self, pcm, current):
+        if not self.complete_chinese_enabled or self.chinese_complete is None or not current():
+            return None
+        verdict = self.chinese_complete.classify_complete(pcm)
+        if verdict is None or not current():
+            return None
+        target, confusable = verdict
+        return target or not confusable
 
     def recheck_utterance(self, pcm, current):
         from wake_utterance import recheck_utterance

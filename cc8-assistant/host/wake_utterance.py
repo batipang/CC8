@@ -1,6 +1,7 @@
 """Bounded local keyword recheck, without session state or cloud recognition."""
 
 from dataclasses import dataclass
+import re
 from typing import Callable, Protocol, TypeAlias
 import numpy as np
 from numpy.typing import NDArray
@@ -14,6 +15,9 @@ class WaitingUtterance:
     serial: int
     generation: int
     first_sample_ns: int
+    keyword: str = 'Bumblebee'
+    last_sample_ns: int | None = None
+    candidate_token: str | None = None
 
     def __post_init__(self) -> None:
         if any(
@@ -21,6 +25,20 @@ class WaitingUtterance:
             for value in (self.serial, self.generation, self.first_sample_ns)
         ):
             raise ValueError('Invalid waiting utterance ownership')
+        if self.keyword not in ('Bumblebee', '大黄蜂'):
+            raise ValueError('Invalid waiting keyword')
+        if self.last_sample_ns is not None and (
+            type(self.last_sample_ns) is not int or self.last_sample_ns < self.first_sample_ns
+        ):
+            raise ValueError('Invalid waiting utterance end')
+        if self.keyword == '大黄蜂' and (
+            self.last_sample_ns is None
+            or not isinstance(self.candidate_token, str)
+            or re.fullmatch('[a-f0-9]{32}', self.candidate_token) is None
+        ):
+            raise ValueError('Chinese confirmation requires a completed interval')
+        if self.keyword == 'Bumblebee' and self.candidate_token is not None:
+            raise ValueError('Unexpected Chinese ownership')
 
 
 class KeywordRecheck(Protocol):

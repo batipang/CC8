@@ -5,9 +5,11 @@ lock before entering the session guard; resets use guard -> native lock order.
 """
 
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from collections import deque
 import time
 import threading
+import secrets
 from typing import Callable, ContextManager, Protocol
 import numpy as np
 from assistant_identity import WAKE_PATTERN
@@ -62,6 +64,9 @@ class WakeController:
         self.deadline = None
         self.input_probe = None
         self.reading_input_probe = None
+        self.pending_chinese = deque(maxlen=16)
+        self.complete_chinese_jobs = {}
+        self.complete_risk = False
 
     @property
     def ready(self):
@@ -69,13 +74,27 @@ class WakeController:
 
     @property
     def chinese_verifier_configured(self):
-        return getattr(self.detector, 'chinese_verifier', None) is not None
+        return (
+            getattr(self.detector, 'chinese_verifier', None) is not None
+            or self.complete_chinese_enabled
+        )
+
+    @property
+    def complete_chinese_enabled(self):
+        return getattr(self.detector, 'complete_chinese_enabled', False) is True
 
     @property
     def chinese_verifier_ready(self):
         if not self.chinese_verifier_configured:
             return False
-        worker = self.detector.chinese_verifier.worker
+        verifier = getattr(self.detector, 'chinese_verifier', None)
+        worker = (
+            verifier.worker
+            if verifier is not None
+            else getattr(self.detector, 'chinese_complete', None)
+        )
+        if worker is None:
+            return False
         if not self.native_lock.acquire(blocking=False):
             return worker.last_ready is True
         try:
@@ -125,8 +144,59 @@ class WakeController:
                 return None
             return WaitingUtterance(self.serial, self.hooks.generation(), first_sample_ns)
 
+    def complete_chinese_ticket(self, base, last_sample_ns):
+        with self.hooks.lock:
+            if (
+                not self.complete_chinese_enabled
+                or not isinstance(base, WaitingUtterance)
+                or base.serial != self.serial
+                or base.generation != self.hooks.generation()
+                or type(last_sample_ns) is not int
+                or last_sample_ns < base.first_sample_ns
+                or not self.hooks.active()
+                or self.hooks.awake()
+                or self.hooks.render_risk()
+                or not self.hooks.capture_current(base.first_sample_ns)
+                or not self.hooks.capture_current(last_sample_ns)
+            ):
+                return None
+            matches = [
+                stamp
+                for stamp in self.pending_chinese
+                if base.first_sample_ns <= stamp <= last_sample_ns
+            ]
+            if not matches:
+                return None
+            self.pending_chinese = deque(
+                (stamp for stamp in self.pending_chinese if stamp > last_sample_ns), maxlen=16
+            )
+            token = secrets.token_hex(16)
+            if len(self.complete_chinese_jobs) == 8:
+                del self.complete_chinese_jobs[next(iter(self.complete_chinese_jobs))]
+            self.complete_chinese_jobs[token] = (
+                base.serial,
+                base.generation,
+                base.first_sample_ns,
+                last_sample_ns,
+            )
+            return replace(
+                base, keyword='大黄蜂', last_sample_ns=last_sample_ns, candidate_token=token
+            )
+
     def recheck_utterance(self, ticket, pcm, generation):
         detector = self.detector
+        chinese = isinstance(ticket, WaitingUtterance) and ticket.keyword == '大黄蜂'
+        if chinese:
+            with self.hooks.lock:
+                issued = self.complete_chinese_jobs.get(ticket.candidate_token)
+                if issued != (
+                    ticket.serial,
+                    ticket.generation,
+                    ticket.first_sample_ns,
+                    ticket.last_sample_ns,
+                ):
+                    return None
+                del self.complete_chinese_jobs[ticket.candidate_token]
 
         def current_locked():
             return (
@@ -139,16 +209,25 @@ class WakeController:
                 and not self.hooks.awake()
                 and not self.hooks.render_risk()
                 and self.hooks.capture_current(ticket.first_sample_ns)
+                and (
+                    not chinese
+                    or (
+                        self.complete_chinese_enabled
+                        and self.hooks.capture_current(ticket.last_sample_ns)
+                    )
+                )
             )
 
         def current():
             with self.hooks.lock:
                 return current_locked()
 
-        decode = getattr(detector, 'recheck_utterance', None)
+        decode = getattr(detector, 'recheck_chinese' if chinese else 'recheck_utterance', None)
         if not callable(decode) or not current():
             return None
         self.hooks.metric('local_wake_rechecks', increment=True)
+        if chinese:
+            self.hooks.metric('local_wake_chinese_rechecks', increment=True)
         started = time.perf_counter()
         try:
             hit = decode(pcm, current)
@@ -157,12 +236,17 @@ class WakeController:
             # authorize cloud ASR nor report an ASR/provider error to the user.
             self.hooks.metric('local_wake_recheck_errors', increment=True)
             self.hooks.log('local_wake_recheck_failed', error_type=type(error).__name__)
-            return None
+            hit = None
         with self.hooks.lock:
             self.hooks.metric(
                 'local_wake_recheck_ms', round((time.perf_counter() - started) * 1000, 2)
             )
-            if not current_locked() or type(hit) is not bool:
+            if not current_locked():
+                return None
+            if type(hit) is not bool:
+                if chinese:
+                    self.hooks.metric('local_wake_chinese_unavailable', increment=True)
+                    self.hooks.status('listening', '本地中文唤醒复核暂不可用，请暂停语音后重新开始')
                 return None
             if hit:
                 # This completed job owns the prefix; the next utterance must
@@ -174,7 +258,10 @@ class WakeController:
                     self.clock() + self.window_seconds if self.hooks.wake_mode() else None
                 )
                 self.hooks.metric('local_wake_count', increment=True)
-                self.hooks.metric('local_wake_english_count', increment=True)
+                if not chinese:
+                    self.hooks.metric('local_wake_english_count', increment=True)
+                else:
+                    self.hooks.metric('local_wake_chinese_recheck_hits', increment=True)
                 self.hooks.metric('local_wake_recheck_hits', increment=True)
                 self.hooks.log('local_wake_recheck_accepted')
                 self.hooks.status('listening', '我在听，请继续说')
@@ -227,6 +314,9 @@ class WakeController:
                         start()
                 return
             self.serial += 1
+            self.pending_chinese.clear()
+            self.complete_chinese_jobs.clear()
+            self.complete_risk = False
             self.pending_prefix = False
             self._cancel_input_probe()
             if self.detector is not None:
@@ -249,6 +339,8 @@ class WakeController:
 
     def awake_changed(self, awake):
         with self.hooks.lock:
+            self.pending_chinese.clear()
+            self.complete_chinese_jobs.clear()
             self._cancel_input_probe()
             self.deadline = (
                 self.clock() + self.window_seconds
@@ -293,6 +385,15 @@ class WakeController:
                 or not self.hooks.capture_current(capture_nanos)
             ):
                 return False
+            if self.complete_chinese_enabled and bool(echo_risk) != self.complete_risk:
+                self.complete_risk = bool(echo_risk)
+                self.serial += 1
+                self.pending_chinese.clear()
+                self.complete_chinese_jobs.clear()
+                # A queued confirmation cannot survive a completed playback
+                # interval, even if it is processed after the tail risk ends.
+                with self.native_lock:
+                    self.detector.reset(clear_metrics=False)
             serial = self.serial
             probe = self.input_probe
         # No session callbacks inside this native call or its lock.
@@ -335,6 +436,13 @@ class WakeController:
                         english_render_rejected=render_rejected and keyword == 'Bumblebee',
                     )
             if not recognized:
+                return False
+            if keyword == '大黄蜂' and self.complete_chinese_enabled:
+                if echo_risk:
+                    self.pending_chinese.clear()
+                    return False
+                self.pending_chinese.append(capture_nanos)
+                self.hooks.metric('local_wake_chinese_candidates', increment=True)
                 return False
             if render_rejected:
                 self.hooks.metric('wake_render_rejections', increment=True)

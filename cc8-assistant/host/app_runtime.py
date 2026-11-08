@@ -114,7 +114,10 @@ def run_backend(dependencies: BackendDependencies):
         else 'Streaming stop commands disabled.',
         flush=True,
     )
-    if config.chinese_wake_verifier == 'sensevoice':
+    if config.chinese_wake_verifier == 'sensevoice_complete':
+        wake_detector = dependencies.wake_detector(fast_stop, verify_chinese_complete=True)
+        print('Complete Chinese wake confirmation configured; loads on capture.', flush=True)
+    elif config.chinese_wake_verifier == 'sensevoice':
         wake_detector = dependencies.wake_detector(fast_stop, verify_chinese=True)
         print(
             'Chinese wake verifier configured; loads when capture starts.'

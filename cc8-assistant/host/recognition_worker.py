@@ -22,6 +22,7 @@ from session_ports import RecognitionHooks
 from tool_asr_compare import comparison_evidence
 from vision import visual_request
 from wake_controller import WAITING
+from wake_utterance import WaitingUtterance
 
 
 from recognition_empty import (
@@ -52,6 +53,7 @@ class RecognitionWorker:
         except queue.Full:
             try:
                 old = self.queue.get_nowait()
+                self.erase_complete_wake(old)
                 if len(old) > 6:
                     self.hooks.diagnostics().finish(old[6], 'cancelled')
             except queue.Empty:
@@ -62,11 +64,19 @@ class RecognitionWorker:
         while True:
             try:
                 old = self.queue.get_nowait()
+                self.erase_complete_wake(old)
                 if len(old) > 6:
                     self.hooks.diagnostics().gate(old[6], 'stale')
                     self.hooks.diagnostics().finish(old[6], 'cancelled')
             except queue.Empty:
                 break
+
+    @staticmethod
+    def erase_complete_wake(job):
+        # This buffer is owned by the new completed-candidate job. Ordinary
+        # caller-owned audio and legacy waiting jobs retain their old contract.
+        if len(job) > 7 and isinstance(job[7], WaitingUtterance) and job[7].keyword == '大黄蜂':
+            job[1].fill(0)
 
     def _recognize_current(self, audio, is_current):
         if not is_current():
@@ -87,6 +97,7 @@ class RecognitionWorker:
             render_audio = job[5] if len(job) > 5 else None
             waiting = job[7] if len(job) > 7 else None
             if not self.hooks.valid(generation):
+                self.erase_complete_wake(job)
                 if len(job) > 6:
                     self.hooks.diagnostics().gate(job[6], 'stale')
                     self.hooks.diagnostics().finish(job[6], 'cancelled')
@@ -385,6 +396,7 @@ class RecognitionWorker:
                         self.hooks.diagnostics().gate(trace_id, outcome.decision, reason, paired)
                 else:
                     self.hooks.diagnostics().gate(trace_id, outcome.decision, reason)
+                self.erase_complete_wake(job)
                 self.busy = False
                 if not accepted:
                     self.hooks.diagnostics().finish(

@@ -18,13 +18,14 @@ UNAVAILABLE = (False, False)
 
 
 def classify_text(text):
-    text = text.replace('黃', '黄')
+    text = text.translate(str.maketrans({'黃': '黄', '風': '风', '箏': '筝'}))
     return '大黄蜂' in text, any(word in text for word in ('打黄蜂', '大黄风筝'))
 
 
 class WakeVerifierProcess:
     # The wake controller serializes start, readiness, decode and close.
-    def __init__(self):
+    def __init__(self, *, worker_script=None):
+        self._worker_script = worker_script
         self._process = None
         self._channel = None
         self._ready = False
@@ -42,7 +43,12 @@ class WakeVerifierProcess:
             try:
                 with child:
                     self._process = subprocess.Popen(
-                        [sys.executable, '-I', str(SCRIPT), str(child.fileno())],
+                        [
+                            sys.executable,
+                            '-I',
+                            str(self._worker_script or SCRIPT),
+                            str(child.fileno()),
+                        ],
                         pass_fds=(child.fileno(),),
                         stdin=subprocess.DEVNULL,
                         stdout=subprocess.DEVNULL,

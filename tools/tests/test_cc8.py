@@ -111,6 +111,41 @@ class CommandTests(unittest.TestCase):
             self.assertFalse(next(c['ok'] for c in result['checks'] if c['id'] == 'configuration'))
             self.assertNotIn('SECRET_VALUE', json.dumps(result))
 
+    def test_voice_doctor_requires_optional_chinese_model_only_when_selected(self):
+        for mode in ('off', 'sensevoice', 'sensevoice_complete'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                self.fixture(root)
+
+                def models(root, engine):
+                    if engine == 'sensevoice':
+                        raise RuntimeError('test-only missing local weights')
+                    return True
+
+                with (
+                    patch.dict('os.environ', {'CC8_CHINESE_WAKE_VERIFIER': mode}, clear=True),
+                    patch.object(
+                        cc8,
+                        'python_info',
+                        return_value={
+                            'version': [3, 13],
+                            'system': 'Darwin',
+                            'machine': 'arm64',
+                            'missing_or_wrong': [],
+                        },
+                    ),
+                    patch.object(cc8, 'credential_ready', return_value=True),
+                    patch.object(cc8, 'other_runtime', return_value=False),
+                    patch.object(cc8, 'verified_models', side_effect=models),
+                ):
+                    result = cc8.doctor('voice', root)
+                checks = [c for c in result['checks'] if c['id'] == 'chinese_wake_model']
+                self.assertEqual(len(checks), 0 if mode == 'off' else 1)
+                if checks:
+                    self.assertFalse(checks[0]['ok'])
+                    self.assertIn('--sensevoice', checks[0]['fix'])
+                self.assertFalse(result['device_capture_started'])
+
     def test_credentials_only_check_owner_readability_and_format_not_network(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

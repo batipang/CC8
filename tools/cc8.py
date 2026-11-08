@@ -334,6 +334,12 @@ def doctor(profile, root=ROOT):
                     + (' --sensevoice' if config.asr == 'sensevoice' else '')
                     + '; Whisper needs a separately verified snapshot',
                 )
+                if getattr(config, 'chinese_wake_verifier', 'off') != 'off':
+                    check(
+                        'chinese_wake_model',
+                        lambda: verified_models(root, 'sensevoice'),
+                        './cc8 setup --profile voice --sensevoice',
+                    )
                 check(
                     'minimax_credential_format',
                     lambda: credential_ready(config, os.environ),
