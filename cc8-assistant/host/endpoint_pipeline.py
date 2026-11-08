@@ -3,8 +3,9 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from collections import deque
+from contextlib import nullcontext
 import time
-from typing import Callable, Protocol
+from typing import Callable, Protocol, ContextManager
 import numpy as np
 from diagnostics import TraceBook
 from capture_evidence import CaptureEvidence, OnsetPrefix, FRAME_NS, FRAME_JITTER_NS
@@ -62,6 +63,8 @@ class EndpointHooks:
     reset_wake_gap: Callable[[], None]
     wake_ticket: Callable[[int | None], WaitingUtterance | None] = lambda _: None
     complete_chinese_enabled: Callable[[], bool] = lambda: False
+    complete_chinese_pending: Callable[[WaitingUtterance | None], bool] = lambda _: False
+    complete_chinese_guard: Callable[[], ContextManager[object]] = nullcontext
     complete_chinese_ticket: Callable[[WaitingUtterance, int], WaitingUtterance | None] = (
         lambda *_: None
     )
@@ -92,6 +95,12 @@ class EndpointPipeline:
         self.last_fast_stop_ns = 0
         self.fast_stop_observation = None
         self.ignore_vad_until_ns = 0
+
+    @property
+    def waiting_chinese_busy(self):
+        return self.complete_wake.vad.talking and self.hooks.complete_chinese_pending(
+            self.complete_wake.ticket
+        )
 
     def reset_voice_onset(self):
         self.voice_onset_ns = None
@@ -253,44 +262,47 @@ class EndpointPipeline:
             self.complete_wake.reset()
             return
         voiced, credible = self.near_speech.feed(cleaned, frame.raw, reference)
-        if (
-            self.hooks.complete_chinese_enabled()
-            and not self.hooks.awake()
-            and not capture_echo_risk
-        ):
-            completed = self.complete_wake.feed(
-                cleaned,
-                self.near_speech.speech,
-                stamp,
-                self.hooks.wake_ticket,
-                self.hooks.complete_chinese_ticket,
-            )
-            if completed is not None:
-                trace = self.hooks.diagnostics().begin('voice')
-                self.hooks.diagnostics().mark(trace, 'utterance_end')
-                # No onset timestamp is invented: the ordinary voice-detected
-                # stage belongs to its own endpoint. This is a completed local
-                # waiting candidate, using the actual device input end stamp.
-                self.hooks.enqueue(
-                    (
-                        completed.ticket.generation,
-                        completed.audio,
-                        False,
-                        [],
-                        {
-                            'echo_risk': False,
-                            'captured_at': time.monotonic(),
-                            'pause_token': None,
-                            'local_wake': False,
-                            'input_end_ns': completed.input_end_ns,
-                        },
-                        None,
-                        trace,
-                        completed.ticket,
-                    )
+        # Publish completion into the existing queue atomically with idle's
+        # session decision; there must be no observable gap after VAD reset.
+        with self.hooks.complete_chinese_guard():
+            if (
+                self.hooks.complete_chinese_enabled()
+                and not self.hooks.awake()
+                and not capture_echo_risk
+            ):
+                completed = self.complete_wake.feed(
+                    cleaned,
+                    self.near_speech.speech,
+                    stamp,
+                    self.hooks.wake_ticket,
+                    self.hooks.complete_chinese_ticket,
                 )
-        else:
-            self.complete_wake.reset()
+                if completed is not None:
+                    trace = self.hooks.diagnostics().begin('voice')
+                    self.hooks.diagnostics().mark(trace, 'utterance_end')
+                    # No onset timestamp is invented: the ordinary voice-detected
+                    # stage belongs to its own endpoint. This is a completed local
+                    # waiting candidate, using the actual device input end stamp.
+                    self.hooks.enqueue(
+                        (
+                            completed.ticket.generation,
+                            completed.audio,
+                            False,
+                            [],
+                            {
+                                'echo_risk': False,
+                                'captured_at': time.monotonic(),
+                                'pause_token': None,
+                                'local_wake': False,
+                                'input_end_ns': completed.input_end_ns,
+                            },
+                            None,
+                            trace,
+                            completed.ticket,
+                        )
+                    )
+            else:
+                self.complete_wake.reset()
         self.observe_voice_onset(stamp, voiced)
         self.vad.external_voice = voiced
         was_talking = self.vad.talking

@@ -3,6 +3,7 @@
 ## Backend 0.15.57 — complete Chinese wake candidate review
 
 - Add explicit `sensevoice_complete` mode, off by default: hold existing primary Chinese keyword hits until a bounded complete local utterance can veto explicit confusables. Reuse the existing WebRTC speech bit without lowering ordinary ASR or interruption gates. MiniMax ASR/TTS, owner Dot and APK88 remain.
+- Keep screen-idle decisions behind a current Chinese name candidate while its weak utterance is collected; publish completion and queue ownership together, without letting unowned background speech hold the screen on.
 - Bind completed candidates to one-use generation and capture receipts; invalidate them across playback, cancellation, capture gaps and transport changes. Prevent the parallel ordinary endpoint from borrowing a new wake and submitting the same question twice.
 - Bound and isolate the local model child, distinguish unavailable inference from a valid non-veto, show current-only recovery guidance, check selected weights in doctor and erase owned candidate PCM when consumed or discarded.
 - Verify 544 pinned digital conditions with the actual candidate capture/controller and local child; preserve all original positives without new false triggers. This replays pinned keyword hit frames, not physical or human wake acceptance. Include prior APK88 connection field evidence in this functional batch.

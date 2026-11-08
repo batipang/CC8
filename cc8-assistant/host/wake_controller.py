@@ -144,6 +144,20 @@ class WakeController:
                 return None
             return WaitingUtterance(self.serial, self.hooks.generation(), first_sample_ns)
 
+    def pending_chinese_utterance(self, base):
+        """Read-only busy evidence, never an audio/cloud authorization."""
+        with self.hooks.lock:
+            return (
+                self.complete_chinese_enabled
+                and isinstance(base, WaitingUtterance)
+                and base.serial == self.serial
+                and base.generation == self.hooks.generation()
+                and self.hooks.active()
+                and not self.hooks.awake()
+                and self.hooks.capture_current(base.first_sample_ns)
+                and any(stamp >= base.first_sample_ns for stamp in self.pending_chinese)
+            )
+
     def complete_chinese_ticket(self, base, last_sample_ns):
         with self.hooks.lock:
             if (

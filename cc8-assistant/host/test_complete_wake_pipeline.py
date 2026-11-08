@@ -97,6 +97,97 @@ class CompletePipelineTests(unittest.TestCase):
                 self.assertEqual(b.metrics.get('voice_asr_attempts', 0), 0)
                 self.assertTrue(all(not np.any(pcm) for pcm in local.owned))
 
+    def test_idle_waits_for_owned_weak_chinese_candidate_then_can_sleep(self):
+        f, b, local, asr, answered, order, _ = self.pipeline(False)
+        f.frames(b, last=45)
+        self.assertFalse(b.capture.endpoint.vad.talking)
+        self.assertTrue(b.capture.endpoint.complete_wake.vad.talking)
+        b.session.last_interaction = time.monotonic() - 901
+        b.session.idle_tick()
+        self.assertFalse(b.session.screen_sleeping)
+        f.frames(b, first=46, last=140)
+        self.assertTrue(local.checked.wait(1))
+        self.settle(b)
+        b.session.idle_tick()
+        self.assertTrue(b.session.screen_sleeping)
+        self.assertFalse(asr.is_set())
+        self.assertFalse(answered.is_set())
+
+    def test_unowned_raw_speech_does_not_extend_screen_idle(self):
+        f, b, local, *_ = self.pipeline(False)
+        local.feed = lambda *a, **k: ''
+        # The raw speech bit may be true for background sound; no local name.
+        b.capture.endpoint.near_speech.feed = lambda *a: (
+            setattr(b.capture.endpoint.near_speech, 'speech', True) or False,
+            False,
+        )
+        f.frames(b, last=45)
+        self.assertTrue(b.capture.endpoint.complete_wake.vad.talking)
+        b.session.last_interaction = time.monotonic() - 901
+        b.session.idle_tick()
+        self.assertTrue(b.session.screen_sleeping)
+
+    def test_cancelled_partial_candidate_cannot_hold_screen_awake(self):
+        f, b, *_ = self.pipeline(False)
+        f.frames(b, last=45)
+        self.assertTrue(b.capture.endpoint.waiting_chinese_busy)
+        b.wake.reset('cancel')
+        self.assertFalse(b.capture.endpoint.waiting_chinese_busy)
+        b.session.last_interaction = time.monotonic() - 901
+        b.session.idle_tick()
+        self.assertTrue(b.session.screen_sleeping)
+
+    def test_idle_cannot_observe_vad_reset_before_completed_job_is_enqueued(self):
+        f, b, local, *_ = self.pipeline(False)
+        local.block = True
+        f.frames(b, last=139)
+        entered, release, idle_done = threading.Event(), threading.Event(), threading.Event()
+        original = b.capture.endpoint.hooks.enqueue
+        errors = []
+
+        def enqueue(job):
+            entered.set()
+            if not release.wait(2):
+                raise RuntimeError('test enqueue was not released')
+            original(job)
+
+        def capture():
+            try:
+                f.frames(b, first=140, last=140)
+            except Exception as error:
+                errors.append(error)
+
+        def idle():
+            b.session.idle_tick()
+            idle_done.set()
+
+        b.capture.endpoint.hooks = replace(b.capture.endpoint.hooks, enqueue=enqueue)
+        b.session.last_interaction = time.monotonic() - 901
+        recorder = threading.Thread(target=capture)
+        ticker = threading.Thread(target=idle)
+        recorder.start()
+        try:
+            self.assertTrue(entered.wait(1))
+            self.assertFalse(b.capture.endpoint.complete_wake.vad.talking)
+            self.assertTrue(b.recognition.queue.empty())
+            ticker.start()
+            self.assertFalse(idle_done.wait(0.05))
+            release.set()
+            recorder.join(1)
+            self.assertTrue(local.checked.wait(1))
+            self.assertTrue(idle_done.wait(1))
+            self.assertFalse(b.session.screen_sleeping)
+        finally:
+            release.set()
+            local.release.set()
+            recorder.join(2)
+            if ticker.ident is not None:
+                ticker.join(2)
+        self.assertEqual(errors, [])
+        self.assertFalse(recorder.is_alive())
+        self.assertFalse(ticker.is_alive())
+        self.settle(b)
+
     def test_eviction_and_discard_erase_only_owned_chinese_audio(self):
         diagnostics = Mock()
         worker = RecognitionWorker(SimpleNamespace(diagnostics=lambda: diagnostics))
@@ -130,14 +221,17 @@ class CompletePipelineTests(unittest.TestCase):
             return value
 
         b.speech.recognize = recognize
-        original_enqueue = b.capture.endpoint.hooks.enqueue
+        original_feed = b.capture.endpoint.vad.feed
 
-        def enqueue(job):
-            original_enqueue(job)
-            if len(job) > 7 and job[7].keyword == '大黄蜂':
+        def feed(pcm):
+            # The completed candidate is now queued under the session guard.
+            # Force ASR to start after that guard releases, before the parallel
+            # ordinary endpoint finishes, just as the original race required.
+            if local.owned:
                 self.assertTrue(asr.wait(1))
+            return original_feed(pcm)
 
-        b.capture.endpoint.hooks = replace(b.capture.endpoint.hooks, enqueue=enqueue)
+        b.capture.endpoint.vad.feed = feed
         try:
             f.frames(b, last=140)
         finally:
