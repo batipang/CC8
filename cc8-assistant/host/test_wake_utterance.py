@@ -191,6 +191,9 @@ class WakeUtteranceTests(unittest.TestCase):
         for values in ((True, 7, 150), (0, False, 150), (0, 7, -1)):
             with self.assertRaises(ValueError):
                 WaitingUtterance(*values)
+        for model in (True, -1, None, 1.0):
+            with self.assertRaises(ValueError):
+                WaitingUtterance(0, 7, 150, model_generation=model)
 
 
 if __name__ == '__main__':

@@ -18,11 +18,17 @@ class WaitingUtterance:
     keyword: str = 'Bumblebee'
     last_sample_ns: int | None = None
     candidate_token: str | None = None
+    model_generation: int = 0
 
     def __post_init__(self) -> None:
         if any(
             type(value) is not int or value < 0
-            for value in (self.serial, self.generation, self.first_sample_ns)
+            for value in (
+                self.serial,
+                self.generation,
+                self.first_sample_ns,
+                self.model_generation,
+            )
         ):
             raise ValueError('Invalid waiting utterance ownership')
         if self.keyword not in ('Bumblebee', '大黄蜂'):

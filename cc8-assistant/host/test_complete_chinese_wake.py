@@ -67,6 +67,35 @@ class CompleteChineseWakeTests(unittest.TestCase):
         f.detector.recheck_chinese.assert_not_called()
         self.assertFalse(f.state.awake)
 
+        # A later, independently collected sentence still works on the new model.
+        base = f.controller.waiting_utterance(201)
+        f.controller.feed(np.zeros(FRAME), 100, capture_nanos=250)
+        ticket = f.controller.complete_chinese_ticket(base, 300)
+        self.assertTrue(f.controller.recheck_utterance(ticket, np.zeros(FRAME), 100))
+
+    def test_changed_model_receipt_cannot_consume_the_issued_ticket(self):
+        f = self.owner()
+        f.detector.complete_recovery_generation = 1
+        ticket = self.ticket(f)
+        self.assertIsNone(
+            f.controller.recheck_utterance(
+                replace(ticket, model_generation=2), np.zeros(FRAME), 100
+            )
+        )
+        self.assertTrue(f.controller.recheck_utterance(ticket, np.zeros(FRAME), 100))
+
+    def test_collecting_utterance_cannot_borrow_a_restarted_model(self):
+        f = self.owner()
+        f.detector.complete_recovery_generation = 1
+        base = f.controller.waiting_utterance(100)
+        f.controller.feed(np.zeros(FRAME), 100, capture_nanos=150)
+        self.assertTrue(f.controller.pending_chinese_utterance(base))
+        f.detector.complete_recovery_generation = 2
+        self.assertFalse(f.controller.pending_chinese_utterance(base))
+        self.assertIsNone(f.controller.complete_chinese_ticket(base, 200))
+        f.detector.recheck_chinese.assert_not_called()
+        self.assertFalse(f.state.awake)
+
     def test_model_restart_during_decode_cannot_authorize_old_audio(self):
         f = self.owner()
         f.detector.complete_recovery_generation = 1
