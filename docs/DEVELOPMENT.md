@@ -95,6 +95,8 @@ python3 device-access/cc8_install.py --check
 
 同一 CI 步骤中的 `python tools/ci_tools.py setup actionlint` 采用同样的一次性 5xx 备用入口。两个现有平台按[官方元数据](https://api.github.com/repos/rhysd/actionlint/releases/tags/v1.7.12)固定 asset ID 与大小，原 SHA-256、版本和归档内可执行文件校验保持；非官方仓库、非法身份/大小、校验失败或不安全归档不能被备用入口放行。现有 gitleaks 清单没有新增备用源或变更版本。
 
+Android CI 从[Gradle 官方 Release Asset API](https://api.github.com/repos/gradle/gradle-distributions/releases/tags/v8.11.1)取得同一个 8.11.1 分发包，先核对固定大小和现有 Wrapper 的 SHA-256，再解压到单个作业临时目录并加入 PATH。保留原 setup-gradle 固定 Action、Wrapper JAR 校验和关闭缓存设置，去除其重复的 CDN 下载安装；两个项目仍执行完整编译、lint、签名和版本检查。脚本本身有下载期限、大小上限和失败退出，不因网络故障采用其他 Gradle 版本。
+
 ```sh
 # 安装器边界 / 传输 / 回执检查：不访问真实设备
 python3 -m unittest discover -s device-access/tests -p 'test_*.py' -v
