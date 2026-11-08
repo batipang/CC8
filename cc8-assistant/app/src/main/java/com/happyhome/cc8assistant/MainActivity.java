@@ -79,6 +79,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
       linked = false,
       pending = false;
   private String phase = "idle", mood = "friendly";
+  private final ListeningState listeningState = new ListeningState();
   private final Handler handler = new Handler(Looper.getMainLooper());
   private AlertDialog connectionInfoDialog;
   private JSONObject connectionInfoAvailability;
@@ -490,7 +491,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
             : "thinking".equals(phase)
                 ? "正在处理 · " + (active ? "可开口打断" : "点击停止任务")
                 : "listening".equals(phase)
-                    ? "正在倾听 · 大黄蜂 / Bumblebee"
+                    ? listeningState.label()
                     : "calibrating".equals(phase) ? "正在校准 · 请保持安静" : lastStateMessage;
     if ("error".equals(phase)) {
       int end = message.indexOf('。');
@@ -1407,7 +1408,22 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     runOnUiThread(() -> applyState(next, message));
   }
 
+  @Override
+  public void status(StatusPresentation update) {
+    runOnUiThread(
+        () -> {
+          if (!session.currentStatusPresentation(update)) return;
+          if (!listeningState.hostStatus(
+              update.phase,
+              update.listeningState,
+              foreground && session.isRecording(),
+              update.generation)) return;
+          applyState(update.phase, update.message);
+        });
+  }
+
   private void applyState(String next, String message) {
+    listeningState.localPhase(next);
     phase = next;
     lastStateMessage = message;
     refresh();
@@ -1535,7 +1551,10 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     runOnUiThread(
         () -> {
           active = session.isRecording();
-          if (!active) screen(false);
+          if (!active) {
+            listeningState.localPhase("idle");
+            screen(false);
+          }
           if (active) heardText.setText("等待你的指令");
           refresh();
         });
@@ -1604,6 +1623,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
             WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
                 | WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON);
     phase = "idle";
+    listeningState.localPhase("idle");
     companion.update(0, 0, "calm", "idle", false, false);
     super.onPause();
   }
@@ -1637,6 +1657,16 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     writer.println("CC8_ASSISTANT_STATUS " + session.snapshot());
     JSONObject ui = new JSONObject();
     Wire.put(ui, "connection_dialog", connectionDialogObservation());
+    Wire.put(ui, "listening_state", listeningState.state());
+    Wire.put(
+        ui,
+        "listening_state_visible",
+        foreground
+            && !screenSleeping
+            && "listening".equals(phase)
+            && stateText != null
+            && stateText.isShown()
+            && listeningState.label().equals(stateText.getText().toString()));
     Wire.put(
         ui,
         "ui_phase",
