@@ -32,6 +32,7 @@ files = [
     "cc8-assistant/host/configuration.py",
     "cc8-assistant/host/release_info.py",
     "cc8-assistant/host/playout_receipt.py",
+    "cc8-assistant/host/request_text.py",
 ]
 mypy_path = "$MYPY_CONFIG_FILE_DIR/cc8-assistant/host"
 cache_dir = ".toolchains/cc8/quality/mypy-cache"

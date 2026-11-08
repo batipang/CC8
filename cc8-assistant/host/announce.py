@@ -18,6 +18,7 @@ from vision import jpeg_dimensions
 from qa_speech import tool_sample_request
 from known_speech_receipt import valid_request as known_speech_request
 from wake_input_receipt import valid_request as wake_input_request
+from request_text import validate_request_text
 
 SOCKET = Path(__file__).resolve().parents[2] / 'device-access/private/voice-runtime/announce.sock'
 
@@ -31,14 +32,7 @@ class Announcement:
 
 
 def validate_text(text):
-    if (
-        not isinstance(text, str)
-        or not text.strip()
-        or len(text) > 500
-        or any(ord(c) < 32 and c not in '\n\t' for c in text)
-    ):
-        raise ValueError('Text must contain 1–500 characters')
-    return text.strip()
+    return validate_request_text(text, 500)
 
 
 class AnnouncementServer:

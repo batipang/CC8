@@ -133,6 +133,10 @@ class StatusReporter:
             'connected': state.connected,
             'transport': state.transport_kind,
             'microphone_active': state.active,
+            # Owner-only ephemeral control state, distinct from worker liveness
+            # and capture leases. Reading it never arms or advances a request.
+            'session_generation': state.generation,
+            'text_request_active': state.text_request_active,
             # Ephemeral request/capture ownership, never a device identifier.
             # Test observers may wait across local VAD candidates only while
             # this generation stays current; Stop/rebind/new capture change it.

@@ -40,6 +40,7 @@ class SessionView:
     screen_sleeping: bool
     awake: bool
     capture_frontend: str = 'mono'
+    text_request_active: bool = False
 
 
 @dataclass(frozen=True)
