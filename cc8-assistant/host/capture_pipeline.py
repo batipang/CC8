@@ -11,7 +11,8 @@ from diagnostics import TraceBook
 from dsp import RATE, FRAME, level
 from protocol import MIC, RENDER, MIC_PAIRED
 from paired_capture import decode_pairs
-from input_quality import InputQuality
+from input_quality import InputQuality, CaptureClockMark
+from response_clock import LEGACY_INTERVAL_MS, MAX_INTERVAL_MS, interval_clock
 from session_ports import EventSink, MetricSink
 from echo_pipeline import EchoPipeline
 from endpoint_pipeline import EndpointPipeline
@@ -43,6 +44,7 @@ class ResponseAcoustic:
     probe: Probe | None = None
     generation: int | None = None
     input_end_ns: int | None = None
+    clock_mark: CaptureClockMark | None = None
 
 
 class CapturePipeline:
@@ -126,7 +128,8 @@ class CapturePipeline:
                 token,
                 self.hooks.epoch(),
                 normalize_question(ALL_QUESTIONS[case - 1]),
-                time.monotonic() + 120,
+                time.monotonic() + MAX_INTERVAL_MS / 1000,
+                clock_mark=self.input_quality.clock_mark(),
             )
             return token
 
@@ -170,6 +173,12 @@ class CapturePipeline:
                     owner.epoch,
                     seconds=min(20, remaining),
                     input_end_ns=owner.input_end_ns,
+                    interval_limit_ms=MAX_INTERVAL_MS
+                    if self.input_quality.prove_interval(
+                        owner.clock_mark, owner.input_end_ns, owner.input_end_ns
+                    )
+                    is not None
+                    else LEGACY_INTERVAL_MS,
                 )
             except RuntimeError:
                 owner.status = 'probe_setup_failed'
@@ -248,6 +257,20 @@ class CapturePipeline:
             }
             if 'alignment' in leading:
                 receipt['alignment'] = leading['alignment']
+            if measured > LEGACY_INTERVAL_MS:
+                proof = self.input_quality.prove_interval(
+                    owner.clock_mark,
+                    owner.input_end_ns,
+                    owner.input_end_ns + round(measured * 1e6),
+                )
+                proof = interval_clock(proof, measured)
+                if proof is None:
+                    return {
+                        'status': 'unconfirmed',
+                        'generation': probe.generation,
+                        'reason': 'capture_clock_gap',
+                    }
+                receipt['interval_clock'] = proof
             return receipt
 
     def clear_response_probe(self):
@@ -335,6 +358,7 @@ class CapturePipeline:
     def note_read_gap(self, epoch, sequence):
         if epoch is None:
             # Legacy device events had no epoch or following packet identity.
+            self.input_quality.break_run(self.input_quality.token())
             self.evidence.cancel('capture_read_gap')
             if owner := self.known_speech:
                 owner.cancel('capture_gap')

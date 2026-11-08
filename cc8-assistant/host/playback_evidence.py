@@ -13,6 +13,7 @@ import threading
 import numpy as np
 from dsp import RATE
 from render_clock_report import RenderClockReceipt
+from response_clock import LEGACY_INTERVAL_MS, MAX_INTERVAL_MS
 
 PROBE_TEXT = '这是扬声器和麦克风的声学检查。请保持安静，检查结束后恢复正常。'
 WINDOW = 3200  # 200 ms, long enough to reject most accidental short matches.
@@ -129,6 +130,7 @@ class Probe:
     done: threading.Event = field(default_factory=threading.Event)
     result: dict | None = None
     render_clock: RenderClockReceipt = field(default_factory=RenderClockReceipt)
+    interval_limit_ms: int = LEGACY_INTERVAL_MS
 
 
 class PlaybackEvidence:
@@ -151,13 +153,33 @@ class PlaybackEvidence:
         self.clock_resets = 0
         self.max_clock_step_ms = 0
 
-    def arm(self, generation, epoch, *, seconds=20, input_end_ns=None):
+    def arm(
+        self,
+        generation,
+        epoch,
+        *,
+        seconds=20,
+        input_end_ns=None,
+        interval_limit_ms=LEGACY_INTERVAL_MS,
+    ):
         if type(seconds) not in (int, float) or not math.isfinite(seconds) or not 0 < seconds <= 20:
             raise ValueError('Invalid playback probe deadline')
+        if (
+            type(interval_limit_ms) is not int
+            or interval_limit_ms not in (LEGACY_INTERVAL_MS, MAX_INTERVAL_MS)
+            or interval_limit_ms == MAX_INTERVAL_MS
+            and (type(input_end_ns) is not int or input_end_ns < 0)
+        ):
+            raise ValueError('Invalid response interval extent')
         with self.lock:
             if self.current is not None:
                 raise RuntimeError('Playback probe already active')
-            probe = Probe(generation, epoch, input_end_ns=input_end_ns)
+            probe = Probe(
+                generation,
+                epoch,
+                input_end_ns=input_end_ns,
+                interval_limit_ms=interval_limit_ms,
+            )
             self.current = probe
             self.clock_resets = 0
             self.max_clock_step_ms = 0
@@ -334,7 +356,7 @@ class PlaybackEvidence:
             )
         if self.current.input_end_ns is not None:
             elapsed = detected_nanos - self.current.input_end_ns
-            if 0 <= elapsed <= 20_000_000_000:
+            if 0 <= elapsed <= self.current.interval_limit_ms * 1_000_000:
                 evidence['last_voiced_to_confirmed_output_block_ms'] = round(elapsed / 1e6, 3)
         return evidence
 

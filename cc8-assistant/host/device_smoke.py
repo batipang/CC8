@@ -22,6 +22,7 @@ from private_output import PrivateOutput, private_directory
 from release_info import load_release
 from capture_frontend_evidence import FRONTENDS, summarize as summarize_capture_frontend
 from smoke_resources import ResourceEvidence
+from response_clock import LEGACY_INTERVAL_MS, interval_clock
 from mac_voice import (
     PreparedSpeech,
     SpeechFixtureCleanupError,
@@ -263,7 +264,11 @@ def observed_response_interval(value):
     if not isinstance(value, dict) or value.get('status') != 'observed':
         return None
     elapsed = value.get(ACOUSTIC_RESPONSE_METRIC)
-    return elapsed if type(elapsed) in (int, float) and 0 <= elapsed <= 20000 else None
+    if type(elapsed) not in (int, float):
+        return None
+    if 0 <= elapsed <= LEGACY_INTERVAL_MS:
+        return elapsed
+    return elapsed if interval_clock(value.get('interval_clock'), elapsed) is not None else None
 
 
 RESPONSE_PROBE_STATES = frozenset(
@@ -449,6 +454,8 @@ def summarize_response_acoustic(value, generation):
     if elapsed is None:
         return {'status': 'unconfirmed', 'reason': 'invalid_interval'}
     timing = {'status': 'observed', ACOUSTIC_RESPONSE_METRIC: elapsed}
+    if elapsed > LEGACY_INTERVAL_MS:
+        timing['interval_clock'] = interval_clock(value.get('interval_clock'), elapsed)
     if 'alignment' in value:
         if value['alignment'] not in (
             'matched_render_frames',
