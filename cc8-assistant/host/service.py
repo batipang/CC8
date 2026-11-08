@@ -52,7 +52,11 @@ def agent_payload():
         'ThrottleInterval': 10,
         'ProgramArguments': [str(PYTHON), str(Path(__file__).resolve()), 'run'],
         'WorkingDirectory': str(ROOT),
-        'ProcessType': 'Background',
+        # This process serves explicit, deadline-bound voice interactions.
+        # Background throttling is inherited by its local model children and
+        # can make their unchanged startup deadlines fail before readiness.
+        # The socket-based service cannot use XPC Adaptive transactions.
+        'ProcessType': 'Interactive',
         'Umask': 0o077,
         'EnvironmentVariables': {'PATH': command_path(), **config.service_environment(os.environ)},
     }

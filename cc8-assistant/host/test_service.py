@@ -75,6 +75,11 @@ class ServiceTests(unittest.TestCase):
         self.assertNotIn('launch.py', ' '.join(value['ProgramArguments']))
         self.assertEqual(value['KeepAlive'], {'SuccessfulExit': False})
         self.assertGreaterEqual(value['ThrottleInterval'], 10)
+        # Launchd propagates this scheduling policy to model children. Keep
+        # user-requested inference out of Darwin background throttling.
+        self.assertEqual(value['ProcessType'], 'Interactive')
+        self.assertNotIn('LowPriorityIO', value)
+        self.assertNotIn('LowPriorityBackgroundIO', value)
         self.assertEqual(set(value['EnvironmentVariables']), {'PATH'})
         self.assertIn('/opt/homebrew/bin', value['EnvironmentVariables']['PATH'])
 

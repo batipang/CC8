@@ -1,5 +1,16 @@
 # Changelog
 
+## Backend 0.15.67 — interactive service scheduling and independent recovery feedback
+
+- Generate the voice LaunchAgent with interactive application resource policy instead of background throttling inherited by deadline-bound local model children. Preserve startup/decode deadlines, bounded retries, owner configuration, capture rules and original APK90.
+- Surface optional English recovery on the existing safe waiting/error surface. Prioritize required Chinese recovery, retain an outstanding English error when Chinese becomes ready, and clear only when active recoveries are ready. Keep baseline English admission unchanged; suppress repeated, stale, awake, busy and render-risk status updates.
+- Carry backend66 deployment and its failed pre-stimulus English field screen into this functional batch. Isolated Darwin-background/application-policy reproduction is diagnostic evidence, not post-deployment acceptance. English enhancement remains off and unadopted.
+
+## Backend 0.15.66 — optional local English candidate confirmation
+
+- Keep original eight-path English results first; gate additional sixteen-path candidates with one-use same-utterance ownership and an isolated pinned local Whisper verdict. Preserve native positives, cloud ASR/provider selection and default-off configuration.
+- Keep model lifetime capture-owned, offline and bounded, with cancelled/replaced audio excluded. Add source-verified official artifact fallbacks for actual CI dependency outages; retain checksum/size verification and protected checks.
+
 ## Backend 0.15.65 — retain resource evidence in existing device checks
 
 - Record bounded bridge-only memory, CPU, thread and descriptor gauges from health reads that device checks already perform. Keep periodic samples and the last actual read, with explicit missing/invalid values, a fixed capacity and no process IDs, transcripts or new IPC/audio work.
