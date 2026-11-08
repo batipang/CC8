@@ -75,7 +75,7 @@ def private_json(path):
 
 
 def source_identity(http_fixture='fake', dot_fixture='fake'):
-    names = ['check_failure_ui.py', 'qa_faults.py', 'qa_variant.py', 'qa_ui.py']
+    names = ['check_failure_ui.py', 'qa_faults.py', 'qa_startup.py', 'qa_variant.py', 'qa_ui.py']
     if http_fixture != 'fake':
         names.append('qa_http.py')
     if dot_fixture == 'local_stdio':

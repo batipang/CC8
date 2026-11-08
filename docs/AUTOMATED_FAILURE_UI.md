@@ -189,3 +189,16 @@ ASR/TTS30项各经一次真实本地TLS服务端请求，Dot18项仍模拟，恢
 独立QA0.9.3/code38完成48/48：ASR15、Dot18、TTS15，均点开完整错误指引，下一请求完成、旧错误被忽略，结束清理核验通过；耗时614.238秒。报告 `qa-ui-20261102T222214Z-5dcb3d19.json` 只保存在私有目录，协议语料摘要 `93bf06fd90d2c0fd3db2d16f71581c81fd824475adf1b24a30b007931f77eefb`。
 
 QA APK摘要 `516eebd0868a5eb9a1fcb82955bf640ab483c7de3d2c16bb209fb03246d7848a`；构建发生于提交前，回执如实标记dirty，应用输入及四个自动化模块逐文件摘要随后与提交 `85456d9` 一致核验。生产仍0.13.7/APK0.8.8，无部署替换；原backend实例恢复确认。受保护目录拒绝和初期兼容适配失败的报告保留；一次旧 `pm uninstall` 失败留下的QA包已核验同一摘要后经 `cmd package uninstall` 移除，未抹掉失败记录。
+
+## 启动失败检查组（源码0.15.72／code91）
+
+新增 `--case-set startup`，固定21项，全部离线；主机计划和执行分别为：
+
+```sh
+python cc8 verify-failure-ui --host-only --case-set startup
+python cc8 verify-failure-ui --host-only --case-set startup --execute
+```
+
+文字开始通知失败、队列忙、队列先入账后抛错、初始取消失败，以及逐字播报的队列、准备、初始取消失败各三次。真实Bridge／Session／播报控制器生成原协议事件，逐项核对归属清理、零任务／模型派发、固定错误指引和下一条明确请求仅执行一次；不使用用户服务凭证、网络、子进程、音频或设备。该组拒绝任何TLS／Dot子进程fixture，摘要绑定新增生成器源码。
+
+同组可通过既有 `--runtime-root ... --qa-receipt ... --case-set startup --execute` 走无录音／拍照权限的实体隔离界面重放，继承原安装签名、生产空闲复核、错误详情、新请求、旧错误隔离和收尾规则。设备回放、正式组合部署与生产故障注入仍按实际结果单列；主机组通过不等于完整P0-06验收关闭。[实现与范围](STARTUP_FAILURE_FEEDBACK.md)。

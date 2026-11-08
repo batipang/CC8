@@ -840,7 +840,12 @@ final class VoiceSession {
                   || (textSession && p.generation == textGeneration)
                   // Playback failure first cancels output, then reports why.
                   // Admit that one terminal error only for the request we owned.
-                  || ("error".equals(nextPhase) && statusFeedback.cancelled(p.generation));
+                  // Before begin, require a typed startup marker on the exact
+                  // unstarted cancellation successor instead.
+                  || ("error".equals(nextPhase)
+                      && (statusFeedback.cancelled(p.generation)
+                          || (Boolean.TRUE.equals(j.opt("request_start_failed"))
+                              && statusFeedback.unstarted(p.generation))));
           if (foreground
               && permitted
               && p.generation >= minimumGeneration

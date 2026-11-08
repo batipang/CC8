@@ -70,6 +70,12 @@ final class StatusFeedback {
     return incoming == generation && cancelled;
   }
 
+  synchronized boolean unstarted(int incoming) {
+    // The host can reject a request before text/announcement begin exists.
+    // Only the exact cancellation successor may report this once.
+    return incoming >= 0 && incoming == generation && !begun;
+  }
+
   synchronized boolean current(int incoming) {
     return incoming == generation;
   }

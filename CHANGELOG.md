@@ -1,5 +1,13 @@
 # Changelog
 
+## Backend 0.15.72 / Assistant 0.9.54 — visible startup failure and explicit recovery
+
+- Publish fixed, classified startup failure guidance for text and literal announcements after rollback. Bind feedback and diagnostics to the original cancellation successor, preserve primary errors and never overwrite newer work or retry a request.
+- Keep local queue and handled delivery failures inside the authenticated device event path; readiness/input rejection keeps the existing notice without cancelling active work.
+- Admit one strictly typed startup-failure status on the exact unstarted device generation, including failures before text/announcement begin. Reject unbound, duplicate and stale feedback; do not start capture or fabricate task progress.
+- Add a fixed offline startup QA group:21 cases across text notification, queue/uncertain admission, initial cancellation and announcement queue/preparation/cancellation. Generate actual framed controller events, verify zero startup dispatch and one explicit recovery, and reuse the capture-disabled device UI replay.
+- Carry PR437/main CI evidence with this batch. Runtime remains backend70/APK90 until the backend71/72 and original-signed code91 combination is deployed and independently validated.
+
 ## Backend 0.15.71 — announcement admission and terminal receipts
 
 - Keep announcement admission bound to the generation returned by cancellation. Recheck ownership after diagnostic setup, probe preparation and queue admission; settle superseded announcements without enqueuing old work or cancelling a newer request.

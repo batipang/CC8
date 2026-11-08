@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 from dataclasses import dataclass
+import queue
 import re
 from typing import TYPE_CHECKING, Callable
 
@@ -76,14 +77,20 @@ class DeviceEventRouter:
         elif event == 'workspace_get':
             self.publish_workspace()
         elif event == 'text_request':
-            try:
-                self.submit_text(j.get('text'))
-            except (ValueError, RuntimeError):
-                self.event(
-                    'workspace_result',
-                    ok=False,
-                    message='文字指令未提交，请连接 Mac 并等待校准结束',
-                )
+            with self.session.guard:
+                generation = self.session.generation
+                try:
+                    self.submit_text(j.get('text'))
+                except (ValueError, RuntimeError, OSError, queue.Full):
+                    # Startup failures publish their own generation-bound
+                    # guidance after rollback. Input/readiness rejection has
+                    # not cancelled work and still uses the existing notice.
+                    if self.session.generation == generation:
+                        self.event(
+                            'workspace_result',
+                            ok=False,
+                            message='文字指令未提交，请连接 Mac 并等待校准结束',
+                        )
         elif event == 'reminder_action':
             try:
                 self.reminder_action(j.get('arguments'))

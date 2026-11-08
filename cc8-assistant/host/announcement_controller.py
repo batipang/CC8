@@ -5,7 +5,8 @@ from dataclasses import dataclass
 import queue
 from typing import Callable, ContextManager
 from announce import Announcement, validate_text
-from diagnostics import TraceBook
+from diagnostics import TraceBook, error_kind
+from failure_feedback import feedback
 from session_ports import EventSink, MetricSink
 
 
@@ -45,7 +46,18 @@ class AnnouncementController:
                 or self.generation is not None
             ):
                 raise RuntimeError('Announcement unavailable')
-            generation = self.hooks.cancel_session('announcement')
+            previous = self.hooks.session_generation()
+            try:
+                generation = self.hooks.cancel_session('announcement')
+            except Exception as error:
+                if self.hooks.session_generation() == previous + 1:
+                    try:
+                        self.hooks.diagnostics().begin('announcement', previous + 1)
+                        self.hooks.diagnostics().failure(previous + 1, 'runtime', error)
+                    except Exception as secondary:
+                        self._cleanup_error('diagnostics', secondary)
+                self._start_failure(previous + 1, error)
+                raise
             job = Announcement(generation, text)
 
             def current():
@@ -96,12 +108,27 @@ class AnnouncementController:
                             self.hooks.cancel_session('announcement_submit_failed')
                         except Exception as secondary:
                             self._cleanup_error('cancellation', secondary)
+                    self._start_failure(generation + 1, error)
                 finally:
                     job.done.set()
                 if isinstance(error, queue.Full):
                     raise RuntimeError('Announcement queue busy') from None
                 raise
             return job
+
+    def _start_failure(self, generation, error):
+        if self.hooks.session_generation() != generation or not self.hooks.connected():
+            return
+        try:
+            self.hooks.event(
+                'status',
+                generation=generation,
+                phase='error',
+                request_start_failed=True,
+                message='本次播报未启动。' + feedback('runtime', error_kind(error)).message,
+            )
+        except Exception as secondary:
+            self._cleanup_error('feedback', secondary)
 
     def _cleanup_error(self, phase, error):
         try:
