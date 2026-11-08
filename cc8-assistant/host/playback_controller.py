@@ -31,6 +31,7 @@ class PlaybackHooks(PauseHooks):
     send: Callable[[Packet], None]
     failure: FailureSink
     speech: Callable[[], object]
+    begin_response_output: Callable[[int], None] = lambda generation: None
     begin_clock_report: Callable[[int, int], bool] = lambda generation, playback_id: False
     complete_clock_report: Callable[[int, object, object, int | None], None] = (
         lambda generation, playback_id, value, frames: None
@@ -217,6 +218,7 @@ class PlaybackController:
                 request_playout = self.device_can_report_playout
                 if request_playout:
                     self.playout_probe.begin(generation, playback_id)
+                self.hooks.begin_response_output(generation)
                 request_clock = self.device_can_report_clock and self.hooks.begin_clock_report(
                     generation, playback_id
                 )

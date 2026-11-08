@@ -168,6 +168,7 @@ def build_components(
             cancel_timeline_pause=lambda: host.capture.echo.cancel_pause(),
             pause_timeline=lambda nanos: host.capture.echo.pause_at(nanos),
             resume_timeline=lambda nanos: host.capture.echo.resume_at(nanos),
+            begin_response_output=lambda generation: host.capture.begin_response_output(generation),
             begin_clock_report=lambda generation, playback_id: host.capture.begin_render_clock(
                 generation, playback_id
             ),

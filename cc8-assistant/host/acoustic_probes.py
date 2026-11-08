@@ -206,5 +206,6 @@ class AcousticProbes:
                     self.capture.clear_known_speech()
 
     def cancel_playback_observation(self):
+        self.capture.cancel_response_observation()
         self.capture.end_probe()
         self.capture.evidence.cancel()
