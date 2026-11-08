@@ -7,6 +7,7 @@ lock before entering the session guard; resets use guard -> native lock order.
 from __future__ import annotations
 from dataclasses import dataclass, replace
 from collections import deque
+from contextlib import nullcontext
 import time
 import threading
 import secrets
@@ -18,6 +19,8 @@ from wake_utterance import WaitingUtterance
 
 KEYWORDS = frozenset(('大黄蜂', 'Bumblebee'))
 WAITING = '等待唤醒 · 请说“大黄蜂”或“Bumblebee”'
+RECOVERING = '本地中文唤醒正在恢复，请稍后再说'
+RECOVERY_FAILED = '本地中文唤醒复核暂不可用，请暂停语音后重新开始'
 
 
 class Detector(Protocol):
@@ -67,6 +70,7 @@ class WakeController:
         self.pending_chinese = deque(maxlen=16)
         self.complete_chinese_jobs = {}
         self.complete_risk = False
+        self.last_recovery_status = None
 
     @property
     def ready(self):
@@ -84,6 +88,37 @@ class WakeController:
         return getattr(self.detector, 'complete_chinese_enabled', False) is True
 
     @property
+    def complete_recovery_snapshot(self):
+        value = getattr(self.detector, 'complete_recovery_snapshot', None)
+        return value if isinstance(value, dict) else None
+
+    def _model_generation(self):
+        value = getattr(self.detector, 'complete_recovery_generation', 0)
+        return value if type(value) is int and value >= 0 else 0
+
+    def _report_model_recovery(self):
+        # Called only under the session guard for a current waiting frame.
+        value = self.complete_recovery_snapshot
+        if value is None:
+            return
+        state = value['state']
+        key = (self._model_generation(), state)
+        if (
+            key == self.last_recovery_status
+            or state == 'stopped'
+            or self.hooks.render_risk()
+            or self.hooks.busy()
+        ):
+            return
+        self.last_recovery_status = key
+        self.hooks.status(
+            # The shipped HUD replaces listening detail with a generic label.
+            # Use its visible recoverable-error surface until ready again.
+            'listening' if state == 'ready' else 'error',
+            WAITING if state == 'ready' else RECOVERY_FAILED if state == 'failed' else RECOVERING,
+        )
+
+    @property
     def chinese_verifier_ready(self):
         if not self.chinese_verifier_configured:
             return False
@@ -95,6 +130,11 @@ class WakeController:
         )
         if worker is None:
             return False
+        recovery = self.complete_recovery_snapshot
+        if recovery is not None:
+            # Capture frames own readiness polling and recovery. Health must
+            # not wait for a concurrent process spawn/close state lock.
+            return worker.last_ready is True and recovery['state'] == 'ready'
         if not self.native_lock.acquire(blocking=False):
             return worker.last_ready is True
         try:
@@ -192,6 +232,7 @@ class WakeController:
                 base.generation,
                 base.first_sample_ns,
                 last_sample_ns,
+                self._model_generation(),
             )
             return replace(
                 base, keyword='大黄蜂', last_sample_ns=last_sample_ns, candidate_token=token
@@ -200,16 +241,23 @@ class WakeController:
     def recheck_utterance(self, ticket, pcm, generation):
         detector = self.detector
         chinese = isinstance(ticket, WaitingUtterance) and ticket.keyword == '大黄蜂'
+        model_generation = None
         if chinese:
             with self.hooks.lock:
                 issued = self.complete_chinese_jobs.get(ticket.candidate_token)
-                if issued != (
-                    ticket.serial,
-                    ticket.generation,
-                    ticket.first_sample_ns,
-                    ticket.last_sample_ns,
+                if (
+                    issued is None
+                    or len(issued) != 5
+                    or issued[:4]
+                    != (
+                        ticket.serial,
+                        ticket.generation,
+                        ticket.first_sample_ns,
+                        ticket.last_sample_ns,
+                    )
                 ):
                     return None
+                model_generation = issued[4]
                 del self.complete_chinese_jobs[ticket.candidate_token]
 
         def current_locked():
@@ -227,6 +275,7 @@ class WakeController:
                     not chinese
                     or (
                         self.complete_chinese_enabled
+                        and self._model_generation() == model_generation
                         and self.hooks.capture_current(ticket.last_sample_ns)
                     )
                 )
@@ -255,19 +304,37 @@ class WakeController:
             self.hooks.metric(
                 'local_wake_recheck_ms', round((time.perf_counter() - started) * 1000, 2)
             )
-            if not current_locked():
-                return None
+            commit = getattr(detector, 'complete_recovery_commit', None) if chinese else None
+            with commit() if callable(commit) else nullcontext():
+                if not current_locked():
+                    return None
+                if type(hit) is bool and hit:
+                    # Model generation and the wake-state commit share only
+                    # this short guard. Release it before any route callback.
+                    self.hooks.set_awake(True)
+                    self.pending_prefix = False
             if type(hit) is not bool:
                 if chinese:
                     self.hooks.metric('local_wake_chinese_unavailable', increment=True)
-                    self.hooks.status('listening', '本地中文唤醒复核暂不可用，请暂停语音后重新开始')
+                    recovery = self.complete_recovery_snapshot
+                    self.hooks.status(
+                        'error',
+                        RECOVERING
+                        if recovery and recovery['state'] not in ('failed', 'stopped')
+                        else RECOVERY_FAILED,
+                    )
                 return None
             if hit:
                 # This completed job owns the prefix; the next utterance must
                 # not inherit it through the streaming prefix handoff.
-                self.hooks.set_awake(True)
-                self.pending_prefix = False
                 self.hooks.touch_activity()
+                if (
+                    not self.hooks.active()
+                    or not self.hooks.awake()
+                    or ticket.serial != self.serial
+                    or generation != self.hooks.generation()
+                ):
+                    return None
                 self.deadline = (
                     self.clock() + self.window_seconds if self.hooks.wake_mode() else None
                 )
@@ -331,6 +398,8 @@ class WakeController:
             self.pending_chinese.clear()
             self.complete_chinese_jobs.clear()
             self.complete_risk = False
+            if reason in ('start', 'stop', 'transport'):
+                self.last_recovery_status = None
             self.pending_prefix = False
             self._cancel_input_probe()
             if self.detector is not None:
@@ -394,12 +463,18 @@ class WakeController:
             if (
                 self.detector is None
                 or not self.hooks.active()
-                or self.hooks.awake()
                 or generation != self.hooks.generation()
                 or not self.hooks.capture_current(capture_nanos)
             ):
                 return False
-            if self.complete_chinese_enabled and bool(echo_risk) != self.complete_risk:
+            awake = self.hooks.awake()
+            if awake and not self.complete_chinese_enabled:
+                return False
+            if (
+                not awake
+                and self.complete_chinese_enabled
+                and bool(echo_risk) != self.complete_risk
+            ):
                 self.complete_risk = bool(echo_risk)
                 self.serial += 1
                 self.pending_chinese.clear()
@@ -410,11 +485,21 @@ class WakeController:
                     self.detector.reset(clear_metrics=False)
             serial = self.serial
             probe = self.input_probe
+        # The model actor has its own capture lease and never calls the session.
+        # Do not run it under native_lock: a commit/route callback can need that
+        # lock while a model-generation transition waits on the commit guard.
+        if self.complete_chinese_enabled:
+            poll = getattr(self.detector, 'poll_capture', None)
+            if callable(poll):
+                poll()
         # No session callbacks inside this native call or its lock.
         with self.native_lock:
             # A reset between admission and native entry must not inject an old
             # frame into a fresh stream, even though its result would be rejected.
             if serial != self.serial:
+                return False
+            if awake:
+                # Never feed keyword streams during an awake conversation.
                 return False
             # Snapshot under the same lock as the first observed decoder input.
             stream_samples = None
@@ -428,14 +513,15 @@ class WakeController:
                 keyword = self.detector.feed(pcm)
         with self.hooks.lock:
             recognized = isinstance(keyword, str) and keyword in KEYWORDS
-            if not recognized and probe is None:
-                return False
             if (
                 serial != self.serial
                 or not self.hooks.active()
                 or self.hooks.awake()
                 or generation != self.hooks.generation()
             ):
+                return False
+            if not recognized and probe is None:
+                self._report_model_recovery()
                 return False
             render_rejected = recognized and echo_risk and bool(WAKE_PATTERN.search(render_text))
             if probe is not None and probe is self.input_probe:

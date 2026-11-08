@@ -1,6 +1,7 @@
 """Bilingual local wake streams; Chinese reuses stop weights, English uses BPE KWS."""
 
 from pathlib import Path
+from contextlib import nullcontext
 
 from dsp import FRAME
 from fast_stop import MODEL, ROOT, keyword_spotter
@@ -126,6 +127,12 @@ class WakeDetector:
         self.english_alternate = english_alternate
         self.chinese_verifier = chinese_verifier
         self.chinese_complete = chinese_complete
+        if chinese_complete is not None:
+            from wake_process_recovery import CaptureWakeRecovery
+
+            self.complete_recovery = CaptureWakeRecovery(chinese_complete)
+        else:
+            self.complete_recovery = None
         self.complete_chinese_enabled = complete_chinese_enabled
         self.alternate_active = False
 
@@ -178,19 +185,46 @@ class WakeDetector:
         if self.chinese_verifier is not None:
             self.chinese_verifier.worker.start()
         if self.chinese_complete is not None:
-            self.chinese_complete.start()
+            self.complete_recovery.start_capture()
 
     def stop_capture(self):
         if self.chinese_verifier is not None:
             self.chinese_verifier.worker.close()
         if self.chinese_complete is not None:
-            self.chinese_complete.close()
+            self.complete_recovery.stop_capture()
+
+    def poll_capture(self):
+        if self.complete_recovery is not None:
+            self.complete_recovery.poll_capture()
+
+    @property
+    def complete_recovery_generation(self):
+        return self.complete_recovery.generation if self.complete_recovery is not None else 0
+
+    @property
+    def complete_recovery_snapshot(self):
+        return self.complete_recovery.snapshot if self.complete_recovery is not None else None
+
+    def complete_recovery_commit(self):
+        return (
+            self.complete_recovery.commit_guard()
+            if self.complete_recovery is not None
+            else nullcontext()
+        )
 
     def recheck_chinese(self, pcm, current):
         if not self.complete_chinese_enabled or self.chinese_complete is None or not current():
             return None
+        recovery = getattr(self, 'complete_recovery', None)
+        lease = recovery.generation if recovery is not None else 0
+        if recovery is not None and not recovery.available:
+            return None
         verdict = self.chinese_complete.classify_complete(pcm)
-        if verdict is None or not current():
+        if (
+            verdict is None
+            or not current()
+            or (recovery is not None and recovery.generation != lease)
+        ):
             return None
         target, confusable = verdict
         return target or not confusable

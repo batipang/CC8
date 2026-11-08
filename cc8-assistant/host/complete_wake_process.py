@@ -45,6 +45,13 @@ class CompleteWakeVerifierProcess(WakeVerifierProcess):
         with self._state:
             return super().ready
 
+    @property
+    def running(self):
+        with self._state:
+            return self._channel is not None or (
+                self._process is not None and self._process.poll() is None
+            )
+
     def close(self):
         with self._state:
             super().close()
