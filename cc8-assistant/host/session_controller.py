@@ -408,6 +408,9 @@ class SessionController:
     def tool_sample_rejection(self, text, local_wake, captured_at):
         return self.tool_samples.rejection(self, text, local_wake, captured_at)
 
+    def tool_sample_asr_rejection(self, local_wake, captured_at):
+        return self.tool_samples.asr_rejection(self, local_wake, captured_at)
+
     def tool_sample_comparison(self, reason='comparison_only'):
         return self.tool_samples.comparison(self, reason)
 

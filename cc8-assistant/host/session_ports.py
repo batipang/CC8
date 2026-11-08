@@ -126,3 +126,4 @@ class RecognitionHooks:
     tool_sample_rejection: Callable[[str, bool, float | None], str | None] = lambda *_: None
     tool_sample_comparison: Callable[[str], tuple[int, str] | None] = lambda _: None
     recheck_wake: Callable[[WaitingUtterance, Samples, int], bool | None] = lambda *_: None
+    tool_sample_asr_rejection: Callable[[bool, float | None], str | None] = lambda *_: None
