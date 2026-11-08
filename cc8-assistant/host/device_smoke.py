@@ -28,6 +28,11 @@ from mac_voice import (
     validate_prepared_speech,
     __file__ as voice_source,
 )
+from chinese_wake_evidence import (
+    snapshot as chinese_wake_snapshot,
+    counter_delta as chinese_wake_delta,
+    run_fixed_standby,
+)
 from capture_evidence import (
     validate as validate_capture,
     ONSET_PREFIX_COUNTS,
@@ -89,6 +94,7 @@ STOP_QUERY = '停一下'
 ASR_STOP_QUERY = '大黄蜂，别说了。'
 ENGLISH_QUESTION = 'What is three plus five?'
 ENGLISH_WAKE_MIN_BACKEND = '0.14.67'
+CHINESE_WAKE_EVIDENCE_MIN_BACKEND = '0.15.57'
 ENGLISH_WAKE_PHASES = (
     ('awake', frozenset(('capture', 'awake_dialogue'))),
     ('standby', frozenset(('capture', 'standby', 'acoustic'))),
@@ -956,6 +962,7 @@ class SmokeRun:
         awake_dialogue=False,
         english_wake=False,
         english_fixture=None,
+        chinese_fixture=None,
         wake_input_shape=False,
         latency_sample=False,
         tool_local_compare=False,
@@ -1000,6 +1007,22 @@ class SmokeRun:
         self.awake_dialogue = awake_dialogue
         self.english_wake = english_wake
         self.english_fixture = english_fixture
+        if chinese_fixture is not None and (
+            english_fixture is not None
+            or english_wake
+            or wake_input_shape
+            or not capture
+            or not (acoustic or awake_dialogue)
+            or qa_question != ACOUSTIC_QUESTION
+        ):
+            raise ValueError('Chinese fixture requires a bounded fixed Chinese wake question')
+        self.chinese_fixture = chinese_fixture
+        self.chinese_fixture_metadata = (
+            validate_prepared_speech(chinese_fixture.metadata)
+            if chinese_fixture is not None
+            else None
+        )
+        self.chinese_fixture_played = False
         self.wake_input_shape = wake_input_shape
         self.english_fixture_played = False
         self.latency_sample = latency_sample
@@ -1173,6 +1196,14 @@ class SmokeRun:
                 if self.english_fixture is not None
                 else {}
             ),
+            **(
+                {
+                    'prepared_chinese_input': self.chinese_fixture_metadata,
+                    'chinese_fixture_played': self.chinese_fixture_played,
+                }
+                if self.chinese_fixture is not None
+                else {}
+            ),
             'require_render_overlap': self.require_render_overlap,
             'known_speech_evidence_required': self.known_speech_required,
             'known_speech_room_model_enabled': self.known_speech_room_model,
@@ -1231,9 +1262,17 @@ class SmokeRun:
         if self.english_wake:
             if self.english_fixture is None:
                 self.device.prepare_speech_probe(english=True)
+        elif self.chinese_fixture is not None:
+            require(
+                validate_prepared_speech(self.chinese_fixture.metadata)
+                == self.chinese_fixture_metadata,
+                'chinese_stimulus_identity_changed',
+            )
         elif self.acoustic or self.awake_dialogue or self.interruption_enabled:
             self.device.prepare_speech_probe()
         h = self.health()
+        if self.chinese_fixture is not None:
+            require(chinese_wake_snapshot(h) is not None, 'chinese_wake_counters_unavailable')
         if self.english_wake:
             english_wake_counts(h)
         if self.multi_clause or self.wake_self_playback or self.echo_soak:
@@ -2092,6 +2131,7 @@ class SmokeRun:
                 'response_acoustic_probe_not_armed',
             )
         mic_before = h.get('mic_frames')
+        chinese_before = chinese_wake_snapshot(h)
         wake_before = english_wake_counts(h) if self.english_wake else None
         input_before = (
             self.health().get('english_wake_input_samples') if self.english_wake else None
@@ -2121,7 +2161,15 @@ class SmokeRun:
                 == {'status': 'ready'},
                 'tool_sample_guard_not_ready',
             )
-        if self.english_fixture is not None:
+        if self.chinese_fixture is not None:
+            require(
+                validate_prepared_speech(self.chinese_fixture.metadata)
+                == self.chinese_fixture_metadata,
+                'chinese_stimulus_identity_changed',
+            )
+            self.chinese_fixture.play()
+            self.chinese_fixture_played = True
+        elif self.english_fixture is not None:
             self.english_fixture.play()
             self.english_fixture_played = True
         elif self.english_wake:
@@ -2191,6 +2239,7 @@ class SmokeRun:
             # Keep only fixed counts, categories and timing. A completed task
             # is not a played answer.
             self.acoustic_evidence = {
+                'chinese_wake_counters': chinese_wake_delta(chinese_before, health),
                 'new_mic_frames': (
                     mic_now - mic_before
                     if type(mic_now) is int
@@ -4344,7 +4393,9 @@ def main(argv=None):
     if args.leading_acoustic_evidence and not args.playback_evidence:
         parser.error('--leading-acoustic-evidence requires --playback-evidence')
     minimum_batch_backend = PAIRED_PLAYOUT_MIN_BACKEND
-    if args.require_render_overlap:
+    if args.standby_suite:
+        minimum_batch_backend = CHINESE_WAKE_EVIDENCE_MIN_BACKEND
+    elif args.require_render_overlap:
         minimum_batch_backend = RENDER_OVERLAP_MIN_BACKEND
     elif args.self_playback_soak:
         minimum_batch_backend = TOOL_SAMPLE_MIN_BACKEND if tv_background else ECHO_SOAK_MIN_BACKEND
@@ -4403,6 +4454,7 @@ def main(argv=None):
                     plan['tool_rejection_coverage'] = True
             if args.standby_suite:
                 plan['standby_seconds_per_phase'] = STANDBY_SECONDS
+                plan['shared_prepared_chinese_input'] = True
             if args.self_playback_soak:
                 plan['self_playback_seconds_per_phase'] = ECHO_SOAK_SECONDS
                 if background_receipt is not None:
@@ -4494,6 +4546,8 @@ def main(argv=None):
             'runtime_source_version_mismatch',
         )
         instance = health.get('runtime_instance')
+        if args.standby_suite:
+            require(chinese_wake_snapshot(health) is not None, 'chinese_wake_counters_unavailable')
         if args.known_speech_evidence:
             require(
                 health.get('known_speech_evidence_supported') is True,
@@ -4665,7 +4719,12 @@ def main(argv=None):
                         )
 
                 def make_run(
-                    enabled, checkpoint, *, qa_question=ACOUSTIC_QUESTION, english_fixture=None
+                    enabled,
+                    checkpoint,
+                    *,
+                    qa_question=ACOUSTIC_QUESTION,
+                    english_fixture=None,
+                    chinese_fixture=None,
                 ):
                     return SmokeRun(
                         device,
@@ -4681,6 +4740,7 @@ def main(argv=None):
                         stop_route=args.stop_route,
                         english_wake=args.english_wake,
                         english_fixture=english_fixture,
+                        chinese_fixture=chinese_fixture,
                         wake_input_shape=args.wake_input_shape,
                         response_acoustic_evidence=(
                             args.response_acoustic_evidence
@@ -4721,6 +4781,8 @@ def main(argv=None):
                             fixture_directory=fixture_directory,
                             awake_only=not args.english_wake_pair,
                         )
+                    elif args.standby_suite:
+                        result = run_fixed_standby(make_run, save, run_device_suite)
                     elif batch:
                         result = run_device_suite(
                             make_run,

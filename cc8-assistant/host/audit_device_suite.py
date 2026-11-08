@@ -36,6 +36,7 @@ from device_smoke import (
     valid_tv_prime,
 )
 from mac_voice import validate_prepared_speech
+from chinese_wake_evidence import valid_counter_delta
 from private_output import read_private_json
 from qa_speech import SCENARIO_DIGESTS
 from soak_background import valid_background
@@ -484,6 +485,18 @@ def audit(
     if require_qa_fixture_binding and not qa_fixture_bound:
         return {**result, 'reason': 'suite_qa_fixture_binding_missing'}
 
+    fixed_chinese = 'prepared_chinese_input' in data or 'prepared_chinese_input_cleaned' in data
+    modern_standby = standby_only and tuple(map(int, backend.split('.'))) >= (0, 15, 60)
+    result['same_chinese_stimulus_verified'] = False
+    chinese_metadata = None
+    if fixed_chinese or modern_standby:
+        try:
+            chinese_metadata = validate_prepared_speech(data.get('prepared_chinese_input'))
+        except ValueError:
+            return {**result, 'reason': 'chinese_stimulus_identity_unconfirmed'}
+        if not standby_only or data.get('prepared_chinese_input_cleaned') is not True:
+            return {**result, 'reason': 'chinese_stimulus_cleanup_unconfirmed'}
+
     reports = []
     artifact = None
     failure = None
@@ -496,6 +509,19 @@ def audit(
             failure = {'phase': name, 'reason': 'phase_plan_mismatch'}
             break
         report = phase.get('report')
+        if (
+            chinese_metadata is not None
+            and phase.get('state') == 'passed'
+            and (
+                not isinstance(report, dict)
+                or report.get('prepared_chinese_input') != chinese_metadata
+                or report.get('chinese_fixture_played') is not True
+                or not isinstance(report.get('acoustic_evidence'), dict)
+                or not valid_counter_delta(report['acoustic_evidence'].get('chinese_wake_counters'))
+            )
+        ):
+            failure = {'phase': name, 'reason': 'phase_chinese_stimulus_unconfirmed'}
+            break
         if not matches_capture_frontend(report, expect_capture_frontend):
             failure = {'phase': name, 'reason': 'capture_frontend_expectation_mismatch'}
             break
@@ -695,6 +721,7 @@ def audit(
             result['background'] = background
             if background['kind'] == 'tv':
                 result['background_dispatch_guarded'] = True
+    result['same_chinese_stimulus_verified'] = chinese_metadata is not None
     return {**result, 'verified': True}
 
 
