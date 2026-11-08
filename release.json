@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-chinese-wake-evidence-20261108.1",
+  "release_id": "p0-chinese-input-probe-20261108.1",
   "backend": {
-    "version": "0.15.60"
+    "version": "0.15.61"
   },
   "assistant": {
     "version": "0.9.53",

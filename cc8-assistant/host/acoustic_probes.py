@@ -82,7 +82,7 @@ class AcousticProbes:
 
     def arm_wake_input_probe(self, root, directory, metadata):
         from known_speech_evidence import load_fixture
-        from wake_input_receipt import CHINESE_PCM_SHA256
+        from wake_input_receipt import CHINESE_PCM_SHA256, CHINESE_QA_PCM_SHA256
 
         def ready():
             return (
@@ -105,7 +105,10 @@ class AcousticProbes:
         with self.session.guard:
             if self.wake.serial != binding or not ready():
                 raise RuntimeError('Wake input probe owner changed')
-            if isinstance(metadata, dict) and metadata.get('pcm_sha256') == CHINESE_PCM_SHA256:
+            if isinstance(metadata, dict) and metadata.get('pcm_sha256') in (
+                CHINESE_PCM_SHA256,
+                CHINESE_QA_PCM_SHA256,
+            ):
                 return self.wake.arm_input_probe(pcm, chinese=True)
             return self.wake.arm_input_probe(pcm)
 

@@ -14,6 +14,10 @@ CHINESE_FIXTURE_FRAMES = 90432
 CHINESE_PCM_SHA256 = '8e7318bb9667ef38e81d49168e2bd8cc0b0878ba3369d24735636c010696d80e'
 CHINESE_WAV_SHA256 = '0ea74fc0f9241dbf78a4d0d554c251ca5d3b55d9a49638ab8f737dddba870454'
 CHINESE_MAX_FRAMES = 128000
+CHINESE_QA_FRAMES = 39821
+CHINESE_QA_PCM_SHA256 = '9d57eaf0a8050b3a15c72afd8a1789340ffa6a095bf67740797dc0288c15a3ad'
+CHINESE_QA_WAV_SHA256 = '5ffc5f5053a9da32cea04754eec242c779750b224d279f176ee05735c43c7d29'
+CHINESE_QA_PROFILE = 'chinese_qa_v1'
 
 
 def valid_request(value):
@@ -40,6 +44,7 @@ def valid_request(value):
     return (meta['frames'], meta['pcm_sha256'], meta['wav_sha256']) in (
         (FIXTURE_FRAMES, FIXTURE_PCM_SHA256, FIXTURE_WAV_SHA256),
         (CHINESE_FIXTURE_FRAMES, CHINESE_PCM_SHA256, CHINESE_WAV_SHA256),
+        (CHINESE_QA_FRAMES, CHINESE_QA_PCM_SHA256, CHINESE_QA_WAV_SHA256),
     )
 
 
@@ -116,12 +121,53 @@ def _valid_raw_replay(value, minimum):
     )
 
 
+def _valid_chinese_decoder(value, frames):
+    return (
+        isinstance(value, dict)
+        and set(value) == {'primary_samples_before'}
+        and frames >= 160
+        and type(value['primary_samples_before']) is int
+        and 0 <= value['primary_samples_before'] < 2**53
+    )
+
+
+def _valid_individual_replay(value, streams, minimum):
+    results = value['individual_replay']
+    valid = (
+        isinstance(results, dict)
+        and set(results) == set(streams)
+        and all(
+            _valid_replay(
+                results[key],
+                value[key]['status'] == 'matched'
+                and minimum <= value['primary_frames'] == value[key + '_frames'],
+                {'keyword_hit'},
+            )
+            for key in streams
+        )
+    )
+    if not valid:
+        return False
+    if all(value[key]['status'] == 'matched' for key in streams):
+        aggregate = value.get('fresh_replay')
+        if not isinstance(aggregate, dict):
+            return False
+        if aggregate.get('status') == 'measured':
+            return all(
+                results[key] == {'status': 'measured', 'keyword_hit': aggregate.get(key + '_hit')}
+                for key in streams
+            )
+        return all(results[key] == {'status': 'unavailable'} for key in streams)
+    return True
+
+
 def summarize(value):
     if value == {'status': 'unavailable'}:
         return value
     if not isinstance(value, dict):
         return {'status': 'invalid'}
     chinese = value.get('language') == 'zh'
+    short_chinese = chinese and value.get('fixture') == CHINESE_QA_PROFILE
     english_raw = value.get('language') == 'en'
     streams = (
         ('primary', 'alternate', 'raw') if chinese or english_raw else ('primary', 'alternate')
@@ -129,12 +175,20 @@ def summarize(value):
     replay_streams = streams if chinese else ('primary', 'alternate')
     frame_counts = tuple(stream + '_frames' for stream in streams)
     limit = CHINESE_MAX_FRAMES if chinese else MAX_FRAMES
-    minimum = CHINESE_FIXTURE_FRAMES + 1280 if chinese else MIN_MATCH_FRAMES
+    minimum = (
+        (CHINESE_QA_FRAMES if short_chinese else CHINESE_FIXTURE_FRAMES) + 1280
+        if chinese
+        else MIN_MATCH_FRAMES
+    )
     fields = {'status', 'raw_audio_saved', *streams, *frame_counts}
     if chinese or english_raw:
         fields.add('language')
     if english_raw:
         fields.add('raw_fresh_replay')
+    if short_chinese:
+        fields.add('fixture')
+    if chinese and 'individual_replay' in value:
+        fields.add('individual_replay')
     if (
         set(value) - {'fresh_replay', 'live_decoder'} != fields
         or chinese
@@ -145,14 +199,25 @@ def summarize(value):
         or not 0 <= value['primary_frames'] <= limit
         or any(not 0 <= value[key] <= value['primary_frames'] for key in frame_counts)
         or not all(_valid_stream(value[key]) for key in streams)
+        or any(
+            value[key + '_frames'] != value['primary_frames']
+            and value[key] != {'status': 'input_gap'}
+            for key in streams
+        )
+        or chinese
+        and 'individual_replay' in value
+        and not _valid_individual_replay(value, streams, minimum)
         or english_raw
         and not _valid_raw_replay(value, minimum)
         or (
             'live_decoder' in value
             and (
-                chinese
-                or not _valid_live_decoder(
-                    value['live_decoder'], value['primary_frames'], value['alternate_frames']
+                not (
+                    _valid_chinese_decoder(value['live_decoder'], value['primary_frames'])
+                    if chinese
+                    else _valid_live_decoder(
+                        value['live_decoder'], value['primary_frames'], value['alternate_frames']
+                    )
                 )
             )
         )

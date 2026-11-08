@@ -6,6 +6,8 @@
 
 六项实际设备自动检查在 66.061 秒完成，核对真实 TextView 从等待唤醒到正在倾听、Home 清空及维护重开不复原旧状态；固定公开问题完成识别、Dot 回答、播放及至少 20 秒播后观察。独立终审确认前台 USB 优先、Wi-Fi 就绪、双端麦克风与相机关、播放／校准结束，停采计数稳定。[实现与范围](LISTENING_STATE.md)。界面状态验收不替代一般唤醒召回率或误打断验收，72 小时未启动。
 
+0.15.60 的固定中文声源／阶段计数工具已通过 [PR #426](https://github.com/batipang/CC8/pull/426) 和 [main 八项 CI](https://github.com/batipang/CC8/actions/runs/42446914452)。工具直接检查未改动的本段 0.15.59：同 WAV 亮屏对照和一次真实待机问答通过，总计 1088.351 秒，903.286 秒确认黑屏，两轮中文候选／复核／通过各 1 次、不可用 0 次。独立复核资源关闭、计数稳定和安装包／配置保持。没有工具部署导致的服务重启；仅一轮待机，不替代三轮和原失败。 [详情](CHINESE_WAKE_EVIDENCE.md)。
+
 ## 0.15.58／code88 本地模型进程恢复
 
 当前后台 **0.15.58**，源码 `4f60c32`／原签名 **APK0.9.51（code88）**。PR [#423](https://github.com/batipang/CC8/pull/423) 和 [#424](https://github.com/batipang/CC8/pull/424)、[最终 main 八项 CI](https://github.com/batipang/CC8/actions/runs/42439588235)通过。五项后台维护检查在 21.834 秒完成，独立核对原 profile、LaunchAgent、owner 配置及两个 APK 保持，前台 USB 优先、Wi-Fi 就绪、麦克风和相机关。
