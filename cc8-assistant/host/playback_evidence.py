@@ -161,9 +161,9 @@ class PlaybackEvidence:
             self.current = probe
             self.clock_resets = 0
             self.max_clock_step_ms = 0
-            self.timer = threading.Timer(seconds, lambda: self.cancel('expired', probe))
-            self.timer.daemon = True
             try:
+                self.timer = threading.Timer(seconds, lambda: self.cancel('expired', probe))
+                self.timer.daemon = True
                 self.timer.start()
             except RuntimeError:
                 self._finish('timer_unavailable')

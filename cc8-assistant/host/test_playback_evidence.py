@@ -664,6 +664,7 @@ class ProbeIntegrationTests(unittest.TestCase):
     def bridge(self):
         bridge = Bridge(None, None)
         bridge.session.connection = Sink()
+        bridge.session.generation = 101
         bridge.save_status = lambda: None
         return bridge
 
@@ -718,6 +719,7 @@ class ProbeIntegrationTests(unittest.TestCase):
                 bridge.recognition.hooks.bind_response_probe(
                     '大黄蜂，一加一等于几？', 101, START - 600_000_000
                 )
+                bridge.capture.begin_response_output(101)
                 self.assertFalse(bridge.capture.measuring)
                 self.assertEqual(rpc(path, fetch)['status'], 'observing')
                 reference = public_signal()
@@ -754,7 +756,9 @@ class ProbeIntegrationTests(unittest.TestCase):
         capture.reset_transport('wifi')
         self.assertEqual(capture.read_response_probe(token), {'status': 'unavailable'})
         token = capture.arm_response_probe(1)
+        bridge.session.generation = 102
         capture.bind_response_probe('一加一等于几？', 102, START)
+        capture.begin_response_output(102)
         capture.evidence.microphone(7, START, np.ones(320))
         self.assertTrue(capture.evidence.mic.size)
         capture.reset_session()
@@ -776,6 +780,7 @@ class ProbeIntegrationTests(unittest.TestCase):
             with self.subTest(reason=reason):
                 token = capture.arm_response_probe(1)
                 capture.bind_response_probe('一加一等于几？', 101, START - 600_000_000)
+                capture.begin_response_output(101)
                 feed(capture.evidence, reference, audio)
                 receipt = capture.read_response_probe(token)
                 if reason == 'not_observed':
@@ -836,6 +841,7 @@ class ProbeIntegrationTests(unittest.TestCase):
                     capture = bridge.capture
                     token = capture.arm_response_probe(1)
                     capture.bind_response_probe('一加一等于几？', 101, START - 600_000_000)
+                    capture.begin_response_output(101)
                     reference = public_signal()
                     start = 7360 if condition == 'past_limit' else 5120
                     reference[:start] = 0
@@ -884,6 +890,7 @@ class ProbeIntegrationTests(unittest.TestCase):
                 capture = bridge.capture
                 token = capture.arm_response_probe(1)
                 capture.bind_response_probe('一加一等于几？', 101, START - 600_000_000)
+                capture.begin_response_output(101)
                 observer = capture.evidence
                 probe = observer.current
                 render_end = 3840 if condition == 'reference' else len(reference)
@@ -934,6 +941,7 @@ class ProbeIntegrationTests(unittest.TestCase):
         capture = bridge.capture
         token = capture.arm_response_probe(1)
         capture.bind_response_probe('一加一等于几？', 101, START - 600_000_000)
+        capture.begin_response_output(101)
         observer = capture.evidence
         probe = observer.current
         tone = 0.15 * np.sin(np.arange(16000) * 2 * np.pi * 400 / RATE)
@@ -962,6 +970,7 @@ class ProbeIntegrationTests(unittest.TestCase):
         capture = bridge.capture
         token = capture.arm_response_probe(1)
         capture.bind_response_probe('一加一等于几？', 101, START - 600_000_000)
+        capture.begin_response_output(101)
         reference = public_signal()
         split, gap = 3840, 960
         observer = capture.evidence

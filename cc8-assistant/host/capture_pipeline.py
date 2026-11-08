@@ -41,6 +41,8 @@ class ResponseAcoustic:
     expires: float
     status: str = 'waiting'
     probe: Probe | None = None
+    generation: int | None = None
+    input_end_ns: int | None = None
 
 
 class CapturePipeline:
@@ -99,105 +101,160 @@ class CapturePipeline:
         return probe
 
     def live_response_probe(self):
-        owner = self.response_probe
-        if owner is not None and (
-            time.monotonic() >= owner.expires or owner.epoch != self.hooks.epoch()
-        ):
-            self.clear_response_probe()
-            return None
-        return owner
+        with self.evidence.lock:
+            owner = self.response_probe
+            if owner is not None and (
+                time.monotonic() >= owner.expires or owner.epoch != self.hooks.epoch()
+            ):
+                self.clear_response_probe()
+                return None
+            return owner
 
     def arm_response_probe(self, case):
         if type(case) is not int or not 1 <= case <= len(ALL_QUESTIONS):
             raise ValueError('Invalid public QA case')
-        if (
-            not self.hooks.active()
-            or self.known_speech is not None
-            or self.probe is not None
-            or self.live_response_probe() is not None
-        ):
-            raise RuntimeError('Response acoustic test requires idle active capture')
-        token = uuid.uuid4().hex
-        self.response_probe = ResponseAcoustic(
-            token,
-            self.hooks.epoch(),
-            normalize_question(ALL_QUESTIONS[case - 1]),
-            time.monotonic() + 120,
-        )
-        return token
+        with self.evidence.lock:
+            if (
+                not self.hooks.active()
+                or self.known_speech is not None
+                or self.probe is not None
+                or self.live_response_probe() is not None
+            ):
+                raise RuntimeError('Response acoustic test requires idle active capture')
+            token = uuid.uuid4().hex
+            self.response_probe = ResponseAcoustic(
+                token,
+                self.hooks.epoch(),
+                normalize_question(ALL_QUESTIONS[case - 1]),
+                time.monotonic() + 120,
+            )
+            return token
 
     def bind_response_probe(self, text, generation, input_end_ns):
-        owner = self.live_response_probe()
-        if owner is None or owner.status != 'waiting':
-            return
-        if normalize_question(text) != owner.question:
-            owner.status = 'unmatched_input'
-            return
-        if type(input_end_ns) is not int or input_end_ns < 0:
-            owner.status = 'input_clock_unavailable'
-            return
-        remaining = owner.expires - time.monotonic()
-        if remaining <= 0:
-            owner.status = 'expired'
-            return
-        try:
-            owner.probe = self.evidence.arm(
-                generation, owner.epoch, seconds=min(20, remaining), input_end_ns=input_end_ns
-            )
-        except RuntimeError:
-            owner.status = 'probe_setup_failed'
-            return
-        owner.status = 'observing'
+        with self.evidence.lock:
+            owner = self.live_response_probe()
+            if owner is None or owner.status != 'waiting':
+                return
+            if normalize_question(text) != owner.question:
+                owner.status = 'unmatched_input'
+                return
+            if type(input_end_ns) is not int or input_end_ns < 0:
+                owner.status = 'input_clock_unavailable'
+                return
+            # Dot/web waiting retains scalars only. The bounded PCM observation
+            # belongs to output, not ASR completion, within the same 120s lease.
+            owner.generation = generation
+            owner.input_end_ns = input_end_ns
+            owner.status = 'awaiting_output'
+
+    def begin_response_output(self, generation):
+        # Playback holds publication -> evidence, cancellation session -> evidence
+        # and then publication. Never acquire the session guard from this lock.
+        with self.evidence.lock:
+            owner = self.live_response_probe()
+            if (
+                owner is None
+                or owner.status != 'awaiting_output'
+                or owner.generation != generation
+                or generation != self.hooks.generation()
+                or not self.hooks.active()
+            ):
+                return
+            remaining = owner.expires - time.monotonic()
+            if remaining <= 0:
+                self.clear_response_probe()
+                return
+            try:
+                probe = self.evidence.arm(
+                    generation,
+                    owner.epoch,
+                    seconds=min(20, remaining),
+                    input_end_ns=owner.input_end_ns,
+                )
+            except RuntimeError:
+                owner.status = 'probe_setup_failed'
+                return
+            # Timer setup can run reentrant teardown. Never publish its old
+            # probe over a replacement owner, or cancel the replacement's probe.
+            if self.response_probe is not owner or owner.status != 'awaiting_output':
+                self.evidence.cancel(probe=probe)
+                return
+            owner.probe = probe
+            owner.status = 'observing'
+
+    def cancel_response_observation(self):
+        with self.evidence.lock:
+            owner = self.response_probe
+            # An unbound public arm must survive the normal admission cancel.
+            if owner is not None and owner.status == 'awaiting_output':
+                owner.status = 'cancelled'
+            if owner is not None and owner.probe is not None:
+                self.evidence.cancel(probe=owner.probe)
 
     def read_response_probe(self, token):
-        owner = self.live_response_probe()
-        if owner is None or token != owner.token:
-            return {'status': 'unavailable'}
-        probe = owner.probe
-        if probe is None:
-            if owner.status != 'waiting':
-                self.clear_response_probe()
-            return {'status': owner.status}
-        if not probe.done.is_set():
-            return {'status': owner.status}
-        leading = probe.result['leading_acoustic_evidence']
-        measured = leading.get('last_voiced_to_confirmed_output_block_ms')
-        self.clear_response_probe()
-        if measured is None:
-            reason = probe.result['status']
-            if reason == 'observed':
-                reason = leading['status']
+        with self.evidence.lock:
+            owner = self.live_response_probe()
+            if owner is None or token != owner.token:
+                return {'status': 'unavailable'}
+            probe = owner.probe
+            if probe is None:
+                if owner.status == 'awaiting_output':
+                    return {'status': 'observing'}
+                if owner.status != 'waiting':
+                    self.clear_response_probe()
+                if owner.status == 'cancelled':
+                    return {
+                        'status': 'unconfirmed',
+                        'generation': owner.generation,
+                        'reason': 'cancelled',
+                    }
+                return {'status': owner.status}
+            if not probe.done.is_set():
+                return {'status': owner.status}
+            leading = probe.result['leading_acoustic_evidence']
+            measured = leading.get('last_voiced_to_confirmed_output_block_ms')
+            self.clear_response_probe()
+            if measured is None:
+                reason = probe.result['status']
                 if reason == 'observed':
-                    reason = 'interval_out_of_bounds'
-            receipt = {'status': 'unconfirmed', 'generation': probe.generation, 'reason': reason}
-            if reason in ('ambiguous', 'not_observed'):
-                receipt['window_diagnostic'] = {
-                    key: probe.result[key] for key in ('correlation', 'competing_correlation')
+                    reason = leading['status']
+                    if reason == 'observed':
+                        reason = 'interval_out_of_bounds'
+                receipt = {
+                    'status': 'unconfirmed',
+                    'generation': probe.generation,
+                    'reason': reason,
                 }
-            if reason == 'leading_match_unconfirmed' and 'leading_block_correlations' in leading:
-                receipt['leading_block_correlations'] = leading['leading_block_correlations']
-            if reason == 'response_prefix_alignment_mismatch':
-                receipt['anchor_diagnostic'] = leading['anchor_diagnostic']
-            if reason == 'response_prefix_discontinuous' and 'room_fit_status' in leading:
-                receipt['room_fit_status'] = leading['room_fit_status']
-            if reason == 'reference_not_found' and 'reference_prefix' in leading:
-                receipt['reference_prefix'] = leading['reference_prefix']
+                if reason in ('ambiguous', 'not_observed'):
+                    receipt['window_diagnostic'] = {
+                        key: probe.result[key] for key in ('correlation', 'competing_correlation')
+                    }
+                if (
+                    reason == 'leading_match_unconfirmed'
+                    and 'leading_block_correlations' in leading
+                ):
+                    receipt['leading_block_correlations'] = leading['leading_block_correlations']
+                if reason == 'response_prefix_alignment_mismatch':
+                    receipt['anchor_diagnostic'] = leading['anchor_diagnostic']
+                if reason == 'response_prefix_discontinuous' and 'room_fit_status' in leading:
+                    receipt['room_fit_status'] = leading['room_fit_status']
+                if reason == 'reference_not_found' and 'reference_prefix' in leading:
+                    receipt['reference_prefix'] = leading['reference_prefix']
+                return receipt
+            receipt = {
+                'status': 'observed',
+                'generation': probe.generation,
+                'last_voiced_to_confirmed_output_block_ms': measured,
+            }
+            if 'alignment' in leading:
+                receipt['alignment'] = leading['alignment']
             return receipt
-        receipt = {
-            'status': 'observed',
-            'generation': probe.generation,
-            'last_voiced_to_confirmed_output_block_ms': measured,
-        }
-        if 'alignment' in leading:
-            receipt['alignment'] = leading['alignment']
-        return receipt
 
     def clear_response_probe(self):
-        if self.response_probe is not None:
-            probe = self.response_probe.probe
-            self.response_probe = None
-            if probe is not None:
-                self.evidence.cancel(probe=probe)
+        with self.evidence.lock:
+            owner, self.response_probe = self.response_probe, None
+            if owner is not None and owner.probe is not None:
+                self.evidence.cancel(probe=owner.probe)
 
     def end_probe(self, probe=None, status='cancelled'):
         if self.probe is not None and (probe is None or self.probe is probe):
