@@ -1,5 +1,13 @@
 # 当前 CC8 部署与验收范围
 
+## 0.15.75／code91 长响应计时与固定联网30轮
+
+[PR #445](https://github.com/batipang/CC8/pull/445) 和 [main八项CI](https://github.com/batipang/CC8/actions/runs/42509264849) 通过，源码 `909f3bd` 已部署为后台0.15.75。五项后台维护19.367秒完成，原APK91、检测器7、完整profile／LaunchAgent／ENV、owner Codex及Interactive策略保持。首次只读预检误用开发Python，被依赖检查拦截，零维护步骤；改用已核对26项依赖的原语音环境后完成预检和一次实际更新。
+
+固定联网30轮、零重试，30轮均完成正确回答、播放回执及播后观察；声学确认19轮，另11轮缺测（ambiguous 3、leading_match_unconfirmed 6、not_observed 2），整批保留 `acoustic_incomplete`。第30轮确认20.137562秒区间，附56.620秒连续采集、零缺口的时钟证明。独立收尾复核原实例／配置／包身份、USB优先／Wi-Fi就绪、所有观察请求与任务终态、前台停采、模型子进程退出及稳定暂停。未关闭P0-01或一般真人／电视条件，最终72小时未开始。 [统计及范围](MEASUREMENT_RUNS.md#01575-固定联网30轮结果)
+
+下一源码候选0.15.76只为歧义响应探针增加双段及唯一前段定位证明；现场仍75，原11项缺测不补判，不重复整批以挑选通过样本。
+
 ## 0.15.74／code91 就绪后健康恢复
 
 [PR #441](https://github.com/batipang/CC8/pull/441) 与 [main 八项 CI](https://github.com/batipang/CC8/actions/runs/42503987142) 通过，源码 `5814cee` 已部署为后台 0.15.74，原 APK0.9.54（code91）与检测器7保持。五项后台维护在19.911秒完成；独立核对原 profile、完整 LaunchAgent／ENV、owner Codex、Interactive 策略、双线路及安装包，麦克风／相机／播放／校准关闭且采集模型子进程退出，没有新增请求或音频活动。
