@@ -113,6 +113,31 @@ class ToolSampleGate:
         if sample.state != 'open':
             return sample.closed_reason
         sample.state = 'closed'
+        reason = self._capture_rejection(session, sample, local_wake, captured_at)
+        if reason is not None:
+            return reason
+        if sample.comparison is not None:
+            return 'comparison_only'
+        return tool_transcript_rejection(text, sample.expected)
+
+    def asr_rejection(self, session: SessionController, local_wake, captured_at):
+        """Read-only upload admission for an explicitly reserved comparison.
+
+        The final transcript gate still consumes the one sample. Once closed,
+        further candidates remain observable but need no provider or decoder.
+        Ordinary dialogue and tool-intent measurements keep their own rules.
+        Caller holds the original session guard; no second state owner exists.
+        """
+        sample = self._sample
+        if sample is None or sample.comparison is None:
+            return None
+        if sample.state != 'open':
+            return sample.closed_reason
+        return self._capture_rejection(session, sample, local_wake, captured_at)
+
+    @staticmethod
+    def _capture_rejection(session: SessionController, sample: ToolSample, local_wake, captured_at):
+        # Shared by upload admission and final consumption under the same guard.
         if not session.active or sample.capture_id != session.capture_id:
             return 'capture_changed'
         if sample.generation != session.generation:
@@ -130,9 +155,7 @@ class ToolSampleGate:
             and sample.opened_at <= captured_at <= sample.opened_at + 20
         ):
             return 'capture_window'
-        if sample.comparison is not None:
-            return 'comparison_only'
-        return tool_transcript_rejection(text, sample.expected)
+        return None
 
     def comparison(self, session: SessionController, reason='comparison_only'):
         sample = self._sample

@@ -139,6 +139,17 @@ class RecognitionWorker:
                     if waiting is not None:
                         evidence = {**evidence, 'local_wake': True}
                         self.hooks.diagnostics().mark(trace_id, 'wake_detected')
+                    # A fixed comparison authorizes one capture-bound sample,
+                    # not every later VAD candidate in this awake window.
+                    upload_rejection = self.hooks.tool_sample_asr_rejection(
+                        bool(evidence and evidence.get('local_wake')),
+                        evidence.get('captured_at') if evidence else None,
+                    )
+                    if upload_rejection is not None:
+                        outcome.tool_sample_rejection = upload_rejection
+                        outcome.decision = 'tool_sample_guard'
+                        outcome.rejected = True
+                        continue
                     if not self.hooks.playing():
                         self.hooks.status('thinking', '正在识别语音…')
                     self.hooks.diagnostics().asr_start(trace_id, len(audio))

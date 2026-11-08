@@ -1,5 +1,11 @@
 # Changelog
 
+## Backend 0.15.69 — bound recognition to the reserved comparison sample
+
+- Before provider recognition, validate the capture, route, generation, local-wake evidence and input window of explicitly armed ASR comparisons. Bound, closed or mismatched comparison samples remain rejected and observable without another cloud/local recognition call. Keep ordinary dialogue and tool-intent measurements unchanged.
+- Share capture validation with the existing final transcript gate; only that final gate consumes the valid sample. Keep original local comparison cancellation and task-dispatch prohibitions. Additional rejected candidates still fail the automatic comparison checks.
+- Preserve the failed contextual English field batch: two of six cases attempted, second stopped after an additional ASR attempt, zero new Dot tasks; enhanced mode never began. Independent cleanup verified original settings and APKs, paused resources and English enhancement off. The additional sound source is unknown; no acoustic tuning follows from this failure.
+
 ## Backend 0.15.68 — isolate wake admission and endpoint transitions
 
 - Separate complete-utterance wake admission, local model observations and endpoint lifecycle transitions into stateless helpers. Keep every mutable field, lock, worker and queue with its original controller; preserve public methods, property descriptors and recovery-constant imports.

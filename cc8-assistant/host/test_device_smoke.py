@@ -5012,6 +5012,39 @@ class DeviceAutomationTests(unittest.TestCase):
                         run.acoustic_probe(awake=True)
                 device.speak_probe.assert_called_once_with(question=run.qa_question)
 
+    def test_tool_comparison_does_not_hide_a_followup_blocked_before_asr(self):
+        pair = {
+            'request_id': 'private-first',
+            'origin': 'voice',
+            'outcome': 'rejected',
+            'gate': 'tool_sample_guard',
+            'tool_sample_rejection': 'comparison_only',
+            'stages': {'wake_detected': 1, 'asr_start': 2, 'asr_end': 3},
+            'tool_asr_comparison': {'primary': 'matched', 'local': 'matched'},
+            'asr_input_samples': 16000,
+        }
+        blocked = {
+            'request_id': 'private-followup',
+            'origin': 'voice',
+            'outcome': 'rejected',
+            'gate': 'tool_sample_guard',
+            'tool_sample_rejection': 'not_open',
+            'stages': {'voice_detected': 0, 'utterance_end': 1},
+        }
+        run, _, _, _ = self.acoustic_fixture(lambda _: [pair, blocked], awake=True)
+        run.latency_sample = True
+        run.latency_scenario = 'tool'
+        run.qa_question = SCENARIO_QUESTIONS['tool'][0]
+        run.tool_local_compare = True
+        run.tool_compare_engine = 'whisper'
+        run.tool_sample_token = 'a' * 32
+        with self.assertRaisesRegex(CheckFailure, 'tool_comparison_unexpected_voice_activity'):
+            run.acoustic_probe(awake=True)
+        evidence = run.acoustic_evidence
+        self.assertEqual(evidence['stage_counts']['asr_start'], 1)
+        self.assertEqual(evidence['stage_counts']['brain_start'], 0)
+        self.assertNotIn('private', json.dumps(evidence))
+
     def test_tool_comparison_rejects_using_the_same_engine_before_device_access(self):
         from release_info import RELEASE
 
