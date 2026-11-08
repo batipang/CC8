@@ -67,6 +67,7 @@ def voice_busy(host: Bridge) -> bool:
         or host.visual.generation is not None
         or host.announcements.generation is not None
         or host.capture.endpoint.vad.talking
+        or host.capture.endpoint.waiting_chinese_busy
     )
 
 
