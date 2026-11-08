@@ -1,5 +1,13 @@
 # 当前 CC8 部署与验收范围
 
+## 0.15.67／code90 交互资源策略与四轮启动检查
+
+当前后台 **0.15.67**，源码 `04cb4ee`／原签名 **APK0.9.53（code90）**。[PR #433](https://github.com/batipang/CC8/pull/433) 和 [main 八项 CI](https://github.com/batipang/CC8/actions/runs/42477039219) 通过后，五项维护升级在20.305秒完成。独立检查实际加载的服务为 `Interactive`，原 LaunchAgent 除该分类外的字节、ENV、profile、owner Codex、两个 APK、默认单声道及显式中文整句复核保持。
+
+随后在原模式和临时英文增强模式下各测同一固定近音词、正确词，共四轮。各轮启动／归属／20秒观察／停止与恢复流程通过；临时增强的两轮均看到原中文和新英文模型就绪、观察期未换进程。两模式分别为近音词零唤醒／ASR，正确词一次英文唤醒／ASR，零 Dot 派发。增强模式正确词仅产生一个扩展候选，两项新增确认次数均为零，故整体增强筛选仍是 `screen_not_confirmed`；不能把基础八路命中和模型就绪当作新增路径有效。
+
+英文增强已恢复关闭，公开合成文件已删除。独立终审核对完整原配置／安装包、已加载策略、前台 USB 优先／Wi-Fi就绪、双端停采、相机／播放／校准关闭、模型进程退出和稳定暂停。原后台66的失败保留。[详细边界](REALTIME_SERVICE.md#01567-部署后检查)。0.15.68为职责整理源码候选，暂保留现场67，最终72小时未启动。
+
 ## 0.15.66／code90 英文增强候选与启动故障
 
 当前后台 **0.15.66**，源码 `057875e`／原签名 **APK0.9.53（code90）**。[PR #432](https://github.com/batipang/CC8/pull/432) 与 [main 八项 CI](https://github.com/batipang/CC8/actions/runs/42471878931) 通过。五项维护升级21.717秒完成，独立只读终审确认原配置、LaunchAgent、owner Codex、两个 APK、单声道及显式 `sensevoice_complete` 保持；未重装 APK。

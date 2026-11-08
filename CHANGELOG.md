@@ -1,5 +1,11 @@
 # Changelog
 
+## Backend 0.15.68 — isolate wake admission and endpoint transitions
+
+- Separate complete-utterance wake admission, local model observations and endpoint lifecycle transitions into stateless helpers. Keep every mutable field, lock, worker and queue with its original controller; preserve public methods, property descriptors and recovery-constant imports.
+- Compare all fourteen original method bodies and their forwarding signatures structurally, retain twenty-five other controller members unchanged, and run the same 423 focused checks before and after. Twelve public-PCM cases using the actual runtime's native AEC binary retain identical audio, calibration, pause and route reports.
+- Preserve voice/model thresholds, providers, startup policy, APK90 and protocol. Carry backend67 deployment and its four-case startup/resource evidence into this engineering batch; the optional English confirmation branch was not exercised and remains off. The deployed backend67 is retained while this source candidate is checked.
+
 ## Backend 0.15.67 — interactive service scheduling and independent recovery feedback
 
 - Generate the voice LaunchAgent with interactive application resource policy instead of background throttling inherited by deadline-bound local model children. Preserve startup/decode deadlines, bounded retries, owner configuration, capture rules and original APK90.
