@@ -1,5 +1,13 @@
 # 当前 CC8 部署与验收范围
 
+## 0.15.70／code90 文字提交与异常输入
+
+当前后台 **0.15.70**，源码 `3b0eea9`／原签名 **APK0.9.53（code90）**。[PR #436](https://github.com/batipang/CC8/pull/436)与[main八项CI](https://github.com/batipang/CC8/actions/runs/42489319936)通过。五项维护检查在19.641秒完成；独立复核确认原两个APK、profile、完整LaunchAgent与ENV、owner Codex、Interactive策略及原语音设置保持。
+
+正式运行IPC的三项固定异常输入在4.27秒内均返回 `invalid_request`，会话代次与文字归属未变，没有新增任务、ASR或音频活动。独立终审核对同一实例、USB优先／Wi-Fi就绪、双端停采、相机／播放／校准关闭及模型子进程退出。该轮只覆盖空闲时异常输入拒绝；已有工作保留、启动故障和更新归属的恢复为离线回归，不冒充现场故障注入。[文字提交边界](TEXT_ADMISSION.md)。
+
+0.15.71播报提交与完成收尾为下一源码候选，现场保留70；P0-06仍开放，最终72小时未启动。常规部署记录随功能批提交。
+
 ## 0.15.69／code90 对照识别前边界
 
 当前后台 **0.15.69**，源码 `7385f91`／原签名 **APK0.9.53（code90）**。[PR #435](https://github.com/batipang/CC8/pull/435)与[main八项CI](https://github.com/batipang/CC8/actions/runs/42484528098)通过。职责整理68和对照识别前边界69合为一次运行更新，五项维护检查在19.506秒完成；原两个APK、profile、完整LaunchAgent与ENV、owner Codex、Interactive策略、默认单声道和中文整句复核保持。

@@ -1,6 +1,6 @@
 # 大黄蜂统一待办：功能与工程质量
 
-更新于 2026-11-08。原排期基线为 Android 0.8.6 / 后台 0.11.0。当前部署为后台 0.15.69 / 原签名 APK 0.9.53（code90），源码 `7385f91`，本机已明确选择 `sensevoice_complete`，默认单声道，英文增强仍关闭。部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)。P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)。复选框按完整验收标准关闭。
+更新于 2026-11-08。原排期基线为 Android 0.8.6 / 后台 0.11.0。当前部署为后台 0.15.70 / 原签名 APK 0.9.53（code90），源码 `3b0eea9`，本机已明确选择 `sensevoice_complete`，默认单声道，英文增强仍关闭。部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)。P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)。复选框按完整验收标准关闭。
 
 依据：[竞品复盘](COMPETITOR_REVIEW_2026-11-01.md)、[当前架构](ARCHITECTURE.md)、[实机与回归记录](VALIDATION.md)。本次已合并 [ToFix](ToFix.md) 的 20 个工程条目；这是功能与工程质量的唯一详细清单；[ROADMAP](ROADMAP.md)保留完成情况和阶段概览。
 
@@ -345,6 +345,8 @@
   - 依赖：P0-01、P0-02；本地唤醒场景依赖 P0-03。范围：CC8 / Mac 联调。不改变“应用内黑屏仍在前台”的既有含义。
 
 - [ ] **P0-06 — 超时、额度、权限和断网的明确反馈**
+  - 0.15.71源码候选将逐字播报的提交、准备／入队失败和完成收尾合为一批：更新请求后旧播报不再排队或覆盖状态，失败队列即使先入账也失效，辅助收尾异常仍释放等待回执；提醒与播放探针沿用原入口。13项新增回归在原70复现14处断言失败、零fixture错误。[播报提交](ANNOUNCEMENT_ADMISSION.md)
+  - 0.15.70已部署，三项正式IPC异常输入均被拒绝，会话代次／归属保持且无新任务／音频活动，独立停采复核通过。启动故障及已有任务保留仍按离线范围记录，新增恢复验收未关闭。[实际部署](CURRENT_DEPLOYMENT.md#01570code90-文字提交与异常输入)
   - 文字提交入口发现尚未收尾的启动失败及更新归属问题，重新开放本项以补齐修复后的部署与恢复验证。原有57项故障矩阵和后续实机记录保留通过，不改写历史结果。
   - 0.15.70 源码候选补文字提交事务：发送开始／亮屏失败或队列异常时清除原归属、结束诊断并使未确认任务失效；新归属到来后旧请求返回 superseded，不覆盖或挤出新任务。输入的无效 Unicode 在取消工作前拒绝。 [提交边界](TEXT_ADMISSION.md)
   - 0.15.53 候选在启动 / 主循环失败后也执行清理，次要清理错误不替换原始原因；IPC 启动被拒绝时保留原路径。回归覆盖已准入的 RPC 回执在退出时继续交付，避免强制关读管道丢失结果。 [边界与范围](SIGNAL_RESOURCE_LIFETIME.md)

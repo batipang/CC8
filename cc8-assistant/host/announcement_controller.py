@@ -15,6 +15,7 @@ class AnnouncementHooks:
     connected: Callable[[], bool]
     calibration_busy: Callable[[], bool]
     cancel_session: Callable[[str], int]
+    session_generation: Callable[[], int]
     valid: Callable[[int], bool]
     offer: Callable[[Announcement], None]
     diagnostics: Callable[[], TraceBook]
@@ -24,6 +25,7 @@ class AnnouncementHooks:
     failure: Callable[[str, BaseException], None]
     metric: MetricSink
     save_status: Callable[[], None]
+    log: EventSink
 
 
 class AnnouncementController:
@@ -44,28 +46,81 @@ class AnnouncementController:
             ):
                 raise RuntimeError('Announcement unavailable')
             generation = self.hooks.cancel_session('announcement')
-            self.generation = generation
-            self.hooks.diagnostics().begin('announcement', generation)
             job = Announcement(generation, text)
+
+            def current():
+                return (
+                    self.hooks.session_generation() == generation and self.generation == generation
+                )
+
+            def superseded():
+                # Return an already settled receipt, never enqueue or retry old work.
+                try:
+                    self.hooks.diagnostics().finish(generation, 'cancelled')
+                except Exception as secondary:
+                    self._cleanup_error('superseded', secondary)
+                finally:
+                    job.done.set()
+                return job
+
+            if self.hooks.session_generation() != generation:
+                return superseded()
+            if not self.hooks.connected():
+                raise RuntimeError('Announcement unavailable')
+            self.generation = generation
             try:
+                self.hooks.diagnostics().begin('announcement', generation)
+                if not current():
+                    return superseded()
                 if prepare is not None:
                     prepare(generation)
+                if not current():
+                    return superseded()
                 self.hooks.offer(job)
+                if not current():
+                    return superseded()
             except Exception as error:
+                if not current():
+                    return superseded()
                 self.generation = None
-                self.hooks.diagnostics().finish(generation, 'failed')
+                job.result = 'failed'
+                try:
+                    try:
+                        self.hooks.diagnostics().failure(generation, 'runtime', error)
+                    except Exception as secondary:
+                        self._cleanup_error('diagnostics', secondary)
+                    # An offer may enqueue before raising. Invalidate that
+                    # generation even if recording keeps session.valid true.
+                    if self.hooks.session_generation() == generation:
+                        try:
+                            self.hooks.cancel_session('announcement_submit_failed')
+                        except Exception as secondary:
+                            self._cleanup_error('cancellation', secondary)
+                finally:
+                    job.done.set()
                 if isinstance(error, queue.Full):
                     raise RuntimeError('Announcement queue busy') from None
                 raise
             return job
 
+    def _cleanup_error(self, phase, error):
+        try:
+            self.hooks.log(
+                'announcement_cleanup_failed', phase=phase, error_type=type(error).__name__
+            )
+        except Exception:
+            pass
+
     def read_announcement(self, job):
         generation = job.generation
         try:
-            if not self.hooks.valid(generation):
-                return
-            self.hooks.event('announcement_begin', generation=generation)
-            self.hooks.status('thinking', '正在准备播报 · 麦克风状态保持不变')
+            with self.hooks.lock:
+                if not self.hooks.valid(generation):
+                    return
+                self.hooks.event('announcement_begin', generation=generation)
+                if not self.hooks.valid(generation):
+                    return
+                self.hooks.status('thinking', '正在准备播报 · 麦克风状态保持不变')
             # Read user-provided text literally, without an LLM rewrite or lookup.
             pieces = [job.text[i : i + 120] for i in range(0, len(job.text), 120)]
             for text in pieces:
@@ -79,25 +134,33 @@ class AnnouncementController:
                 if self.hooks.valid(generation):
                     self.hooks.failure('这次播报没有完成', error)
         finally:
-            if self.hooks.connected():
-                try:
-                    self.hooks.event('announcement_done', generation=generation, result=job.result)
-                except (OSError, EOFError):
-                    pass
-            if self.generation == generation:
-                self.generation = None
-            self.hooks.metric(
-                'last_announcement', {'status': job.result, 'characters': len(job.text)}
-            )
-            self.hooks.diagnostics().finish(
-                generation,
-                'completed'
-                if job.result == 'completed'
-                else 'failed'
-                if job.result == 'failed'
-                else 'cancelled',
-            )
             try:
-                self.hooks.save_status()
+                with self.hooks.lock:
+                    if self.generation == generation:
+                        self.generation = None
+                    self.hooks.diagnostics().finish(
+                        generation,
+                        'completed'
+                        if job.result == 'completed'
+                        else 'failed'
+                        if job.result == 'failed'
+                        else 'cancelled',
+                    )
+                    # A delayed old dispatch still settles its own waiter and
+                    # trace, but cannot replace the current UI or metric.
+                    if self.hooks.session_generation() == generation:
+                        if self.hooks.connected():
+                            try:
+                                self.hooks.event(
+                                    'announcement_done', generation=generation, result=job.result
+                                )
+                            except (OSError, EOFError):
+                                pass
+                        if self.hooks.session_generation() == generation:
+                            self.hooks.metric(
+                                'last_announcement',
+                                {'status': job.result, 'characters': len(job.text)},
+                            )
+                            self.hooks.save_status()
             finally:
                 job.done.set()
