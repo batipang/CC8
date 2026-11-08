@@ -1082,6 +1082,8 @@ class DeviceAutomationTests(unittest.TestCase):
     def assert_suite_runtime_binding(self, mode):
         import device_smoke
         from release_info import RELEASE
+        from chinese_wake_evidence import COUNTERS
+        from test_wake_input_probe import metadata
 
         snapshot = dict(
             ok=True,
@@ -1089,6 +1091,7 @@ class DeviceAutomationTests(unittest.TestCase):
             protocol_version=RELEASE.protocol_version,
             release_id=RELEASE.release_id,
             runtime_instance='first-private-instance',
+            **dict.fromkeys(COUNTERS, 0),
         )
         with tempfile.TemporaryDirectory() as folder:
             directory = Path(folder)
@@ -1104,6 +1107,7 @@ class DeviceAutomationTests(unittest.TestCase):
                 )
 
             def smoke(device, request, checkpoint, expected_apk, **options):
+                chinese_fixture = options.pop('chinese_fixture', None)
                 calls.append(device)
                 with (directory / 'automation-test.lock').open('rb') as other:
                     with self.assertRaises(BlockingIOError):
@@ -1124,6 +1128,8 @@ class DeviceAutomationTests(unittest.TestCase):
                     )
                     if mode == '--standby-suite':
                         report.update(
+                            prepared_chinese_input=chinese_fixture.metadata,
+                            chinese_fixture_played=True,
                             elapsed_seconds=925,
                             standby_evidence={
                                 'last_awake_seconds': 895,
@@ -1160,6 +1166,9 @@ class DeviceAutomationTests(unittest.TestCase):
                 patch('device_smoke.private_directory', return_value=directory),
                 patch('device_smoke.Device') as device,
                 patch('device_smoke.SmokeRun', side_effect=smoke),
+                patch(
+                    'chinese_wake_evidence.PreparedSpeech', return_value=Mock(metadata=metadata())
+                ),
                 patch('device_smoke.sys.platform', 'linux'),
                 redirect_stdout(io.StringIO()),
             ):
