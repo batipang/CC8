@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "p0-text-admission-20261108.1",
+  "release_id": "p0-startup-feedback-recovery-20261108.1",
   "backend": {
     "version": "0.15.70"
   },
   "assistant": {
-    "version": "0.9.53",
-    "version_code": 90,
+    "version": "0.9.55",
+    "version_code": 92,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {
