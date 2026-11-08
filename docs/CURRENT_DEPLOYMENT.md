@@ -1,5 +1,13 @@
 # 当前 CC8 部署与验收范围
 
+## 0.15.73／code91 响应观察窗口
+
+[PR #440](https://github.com/batipang/CC8/pull/440)及[main八项CI](https://github.com/batipang/CC8/actions/runs/42501324804)通过，源码 `6f586b4` 已部署为后台0.15.73；APK0.9.54（code91）与检测器7保持。后台维护五项在19.626秒完成，独立核对原profile／完整LaunchAgent／ENV／owner Codex、Interactive策略、两个包、双线路与停采状态保持。
+
+随后一次固定中文清醒问答正确识别、完成任务和播放，句尾至确认起播回执5587.0毫秒，播后观察20.010秒；一个额外候选被wake_closed拒绝，未新增准入对话、暂停或未决请求。声学探针返回 `reference_not_found / nonzero_below_floor`，整项保留failed，不把微弱非零参考开头当成数字静音或放宽门槛。独立复核同一实例、任务终态、前台／USB优先／Wi-Fi就绪、原配置／包身份、双端停采及模型子进程退出。未重试，完整联网30轮和一般真人声学验收仍开放，最终72小时未开始。
+
+0.15.74为下一源码候选，只修复监督器在后台首次就绪后仍套用180秒初始加载宽限期的问题。[就绪后故障规则与验证范围](AUTOMATED_SERVICE_CHECKS.md#就绪后的健康失败与首次加载宽限期)。现场目前仍为73，合入与部署后另记实际证据。
+
 ## 0.15.72／code91 请求启动与失败反馈
 
 当前后台 **0.15.72**，源码 `ed6468f`／原签名 **APK0.9.54（code91）**。[PR #438](https://github.com/batipang/CC8/pull/438)、[main八项CI](https://github.com/batipang/CC8/actions/runs/42494437704)及code92前向恢复包的[独立CI](https://github.com/batipang/CC8/actions/runs/42494186006)通过。前一批71与72合为一次更新，九项维护检查在52.982秒完成；实际安装回调与摘要核对成功。

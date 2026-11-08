@@ -61,8 +61,23 @@ while True:
             data.extend(block)
         if json.loads(data)['operation'] != 'health':
             raise SystemExit(97)
-        peer.sendall((json.dumps({'ok': True, 'model_ready': mode != 'unhealthy', 'recognition_worker': True, 'response_worker': True}) + '\\n').encode())
-    if mode in ('disable', 'argv_unavailable'):
+        healthy = mode != 'unhealthy'
+        if mode in ('ready_then_unhealthy', 'ready_then_error'):
+            healthy = index == 0
+        elif mode == 'startup_then_ready':
+            healthy = index >= 3
+        elif mode == 'transient':
+            healthy = index not in (1, 2, 4, 5)
+        stop_after_ready = (
+            mode == 'startup_then_ready' and index >= 3
+            or mode == 'transient' and index >= 6
+        )
+        # Publish the fixture's owner Stop before its final ready reply, so the
+        # next poll cannot race with a deliberately non-accepting server.
+        if stop_after_ready:
+            atomic_private_json(private / 'enabled.json', {'enabled': False})
+        peer.sendall((json.dumps({'ok': True, 'model_ready': healthy, 'recognition_worker': True, 'response_worker': True}) + '\\n').encode())
+    if mode in ('disable', 'argv_unavailable') or stop_after_ready:
         atomic_private_json(private / 'enabled.json', {'enabled': False})
         while True:
             import time
@@ -117,6 +132,7 @@ def exercise(root):
     original_enabled = service.enabled
     mode = (private / 'mode').read_text()
     clock_offset = [0]
+    health_queries = [0]
     stop = threading.Event()
     backoffs, phases, spawned = [], [], []
     pending_backoff = [False]
@@ -138,8 +154,15 @@ def exercise(root):
 
     def health(operation):
         result = diagnose.query(private / 'announce.sock', operation, timeout=0.5)
-        if result.get('model_ready') is False:
+        health_queries[0] += 1
+        if result.get('model_ready') is False and mode == 'unhealthy':
             clock_offset[0] = 200
+        # Bound the old implementation too: it must fail an assertion, not wait
+        # for 180 seconds or leave a live fixture child when grace is misapplied.
+        if mode in ('ready_then_unhealthy', 'ready_then_error') and health_queries[0] >= 12:
+            stop.set()
+        if mode == 'ready_then_error' and result.get('model_ready') is False:
+            raise OSError('synthetic IPC unavailable')
         return result
 
     argv_probe = service.own_process if mode != 'argv_unavailable' else lambda _pid: False
@@ -184,8 +207,11 @@ def exercise(root):
             original_state(phase, failures)
             phases.append(phase)
             pending_backoff[0] = phase == 'backoff'
-            if mode == 'unhealthy' and phase == 'backoff':
-                (private / 'mode').write_text('disable')
+            if phase == 'backoff':
+                if mode == 'unhealthy':
+                    (private / 'mode').write_text('disable')
+                elif mode in ('ready_then_unhealthy', 'ready_then_error'):
+                    (private / 'mode').write_text('startup_then_ready')
 
         supervisor.start_child = start
         supervisor.state = state
@@ -198,6 +224,9 @@ def exercise(root):
                 'backoffs': backoffs,
                 'ready': phases.count('ready'),
                 'unhealthy': phases.count('unhealthy'),
+                'starting': phases.count('starting'),
+                'health_queries': health_queries[0],
+                'startup_budget_advanced': clock_offset[0] != 0,
                 'final': phases[-1],
                 'alive': alive,
                 'overlap': (private / 'overlap').exists(),
@@ -460,6 +489,45 @@ class SupervisorProcessTests(unittest.TestCase):
         self.assertEqual(report['backoffs'], [1])
         self.assertGreaterEqual(report['unhealthy'], 2)
         self.assertGreaterEqual(report['ready'], 1)
+        self.assertFalse(report['enabled'])
+
+    def test_post_ready_unhealthy_child_is_replaced_before_startup_grace_expires(self):
+        report = self.check_mode('ready_then_unhealthy')
+        self.assertEqual(report['spawned'], 2)
+        self.assertEqual(report['backoffs'], [1])
+        self.assertEqual(report['unhealthy'], 2)
+        self.assertGreaterEqual(report['ready'], 2)
+        self.assertGreaterEqual(report['starting'], 3)
+        self.assertLess(report['health_queries'], 12)
+        self.assertFalse(report['startup_budget_advanced'])
+        self.assertFalse(report['enabled'])
+
+    def test_post_ready_ipc_errors_use_the_same_failure_budget(self):
+        report = self.check_mode('ready_then_error')
+        self.assertEqual(report['spawned'], 2)
+        self.assertEqual(report['backoffs'], [1])
+        self.assertEqual(report['unhealthy'], 2)
+        self.assertLess(report['health_queries'], 12)
+        self.assertFalse(report['startup_budget_advanced'])
+        self.assertFalse(report['enabled'])
+
+    def test_initial_startup_grace_still_allows_three_unhealthy_samples(self):
+        report = self.check_mode('startup_then_ready')
+        self.assertEqual(report['spawned'], 1)
+        self.assertEqual(report['backoffs'], [])
+        self.assertEqual(report['unhealthy'], 0)
+        self.assertGreaterEqual(report['starting'], 3)
+        self.assertGreaterEqual(report['ready'], 1)
+        self.assertFalse(report['startup_budget_advanced'])
+        self.assertFalse(report['enabled'])
+
+    def test_two_transient_failures_recover_without_replacement_and_reset_budget(self):
+        report = self.check_mode('transient')
+        self.assertEqual(report['spawned'], 1)
+        self.assertEqual(report['backoffs'], [])
+        self.assertEqual(report['unhealthy'], 4)
+        self.assertGreaterEqual(report['ready'], 3)
+        self.assertFalse(report['startup_budget_advanced'])
         self.assertFalse(report['enabled'])
 
     def test_supervisor_keeps_and_reaps_its_real_child_when_argv_is_unavailable(self):

@@ -299,6 +299,7 @@ class Supervisor:
                     )
                 started = time.monotonic()
                 bad_health = 0
+                was_ready = False
                 while self.pid is not None and enabled() and not self.stop.wait(2):
                     if self.child is not None:
                         if self.child.poll() is not None:
@@ -314,11 +315,14 @@ class Supervisor:
                     except (OSError, ValueError):
                         healthy = False
                     if healthy:
+                        was_ready = True
                         bad_health = 0
                         self.state('ready', failures)
                         if time.monotonic() - started >= 60:
                             failures = 0
-                    elif time.monotonic() - started > 180:
+                    # Loading grace applies only until this worker first becomes
+                    # ready. A later outage must use the normal failure budget.
+                    elif was_ready or time.monotonic() - started > 180:
                         bad_health += 1
                         if bad_health >= 3:
                             break
