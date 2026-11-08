@@ -146,6 +146,50 @@ class CommandTests(unittest.TestCase):
                     self.assertIn('--sensevoice', checks[0]['fix'])
                 self.assertFalse(result['device_capture_started'])
 
+    def test_english_model_check_uses_minimal_environment_and_no_worker_start(self):
+        with patch.object(cc8.subprocess, 'run', return_value=Mock(returncode=0)) as run:
+            self.assertTrue(cc8.verified_english_wake_model(Path('/work area')))
+        args, kwargs = run.call_args
+        self.assertEqual(args[0][-1], '--check-model')
+        self.assertTrue(args[0][0].endswith('/voice-venv/bin/python'))
+        self.assertEqual(set(kwargs['env']), {'PATH', 'HOME', 'PYTHONNOUSERSITE'})
+        self.assertTrue(kwargs['check'])
+        self.assertEqual(kwargs['timeout'], 20)
+
+    def test_voice_doctor_requires_english_weights_only_when_configured(self):
+        for mode in ('off', 'whisper_complete'):
+            with tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                self.fixture(root)
+                with (
+                    patch.dict('os.environ', {'CC8_ENGLISH_WAKE_VERIFIER': mode}, clear=True),
+                    patch.object(
+                        cc8,
+                        'python_info',
+                        return_value={
+                            'version': [3, 13],
+                            'system': 'Darwin',
+                            'machine': 'arm64',
+                            'missing_or_wrong': [],
+                        },
+                    ),
+                    patch.object(cc8, 'credential_ready', return_value=True),
+                    patch.object(cc8, 'other_runtime', return_value=False),
+                    patch.object(cc8, 'verified_models', return_value=True),
+                    patch.object(
+                        cc8,
+                        'verified_english_wake_model',
+                        side_effect=RuntimeError('test only missing'),
+                    ) as model,
+                ):
+                    report = cc8.doctor('voice', root)
+                checks = [c for c in report['checks'] if c['id'] == 'english_wake_model']
+                self.assertEqual(len(checks), int(mode != 'off'))
+                self.assertEqual(model.call_count, int(mode != 'off'))
+                self.assertFalse(report['device_capture_started'])
+                if checks:
+                    self.assertFalse(checks[0]['ok'])
+
     def test_credentials_only_check_owner_readability_and_format_not_network(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

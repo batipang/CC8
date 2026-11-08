@@ -1,6 +1,7 @@
 """Capture-owned whole-utterance classifier; unavailable is distinct from a veto."""
 
 from pathlib import Path
+import math
 import signal
 import socket
 import struct
@@ -31,8 +32,17 @@ class CompleteWakeVerifierProcess(WakeVerifierProcess):
     replacement worker. State locks never span inference or session callbacks.
     """
 
-    def __init__(self):
-        super().__init__(worker_script=Path(__file__).resolve())
+    VALID_REPLIES = frozenset((0, 1, 2, 3))
+
+    def __init__(self, *, worker_script=None, request_seconds=COMPLETE_SECONDS):
+        if (
+            type(request_seconds) not in (int, float)
+            or not 0 < request_seconds <= 5
+            or not math.isfinite(request_seconds)
+        ):
+            raise ValueError('Invalid local confirmation deadline')
+        super().__init__(worker_script=worker_script or Path(__file__).resolve())
+        self.request_seconds = request_seconds
         self._state = threading.RLock()
         self._decode = threading.Lock()
 
@@ -83,14 +93,14 @@ class CompleteWakeVerifierProcess(WakeVerifierProcess):
                 if not self.ready:
                     return None
                 channel, process = self._channel, self._process
-            deadline = time.monotonic() + COMPLETE_SECONDS
-            channel.settimeout(COMPLETE_SECONDS)
+            deadline = time.monotonic() + self.request_seconds
+            channel.settimeout(self.request_seconds)
             channel.sendall(struct.pack('>I', audio.nbytes))
             _set_remaining(channel, deadline)
             channel.sendall(memoryview(audio).cast('B'))
             _set_remaining(channel, deadline)
             reply = channel.recv(1)
-            if len(reply) != 1 or reply[0] > 3:
+            if len(reply) != 1 or reply[0] not in self.VALID_REPLIES:
                 raise ValueError('Invalid complete wake response')
             with self._state:
                 if self._channel is not channel or self._process is not process:

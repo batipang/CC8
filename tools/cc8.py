@@ -186,6 +186,21 @@ def verified_models(root, engine):
     return True
 
 
+def verified_english_wake_model(root):
+    result = subprocess.run(
+        [
+            str(root / '.toolchains/cc8/voice-venv/bin/python'),
+            str(root / 'cc8-assistant/host/english_wake_process.py'),
+            '--check-model',
+        ],
+        capture_output=True,
+        timeout=20,
+        check=True,
+        env={'PATH': command_path(), 'HOME': str(Path.home()), 'PYTHONNOUSERSITE': '1'},
+    )
+    return result.returncode == 0
+
+
 def credential_ready(config, environ):
     value = environ.get('CC8_MINIMAX_API_KEY', '')
     if not value:
@@ -339,6 +354,12 @@ def doctor(profile, root=ROOT):
                         'chinese_wake_model',
                         lambda: verified_models(root, 'sensevoice'),
                         './cc8 setup --profile voice --sensevoice',
+                    )
+                if getattr(config, 'english_wake_verifier', 'off') == 'whisper_complete':
+                    check(
+                        'english_wake_model',
+                        lambda: verified_english_wake_model(root),
+                        'Provide the pinned local Whisper snapshot; see docs/LOCAL_WAKE.md',
                     )
                 check(
                     'minimax_credential_format',

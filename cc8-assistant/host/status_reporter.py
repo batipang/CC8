@@ -110,6 +110,12 @@ class StatusReporter:
             'chinese_wake_verifier_ready': self.hooks.wake().chinese_verifier_ready,
             'chinese_complete_wake_enabled': self.hooks.wake().complete_chinese_enabled,
             'chinese_complete_recovery': self.hooks.wake().complete_recovery_snapshot,
+            'english_complete_wake_enabled': self.hooks.wake().complete_english_enabled,
+            'english_complete_recovery': getattr(
+                self.hooks.wake().detector, 'english_recovery_snapshot', None
+            ),
+            'local_wake_english_candidates': metrics.get('local_wake_english_candidates', 0),
+            'local_wake_english_confirmations': metrics.get('local_wake_english_confirmations', 0),
             'local_wake_chinese_candidates': metrics.get('local_wake_chinese_candidates', 0),
             'local_wake_chinese_rechecks': metrics.get('local_wake_chinese_rechecks', 0),
             'local_wake_chinese_recheck_hits': metrics.get('local_wake_chinese_recheck_hits', 0),

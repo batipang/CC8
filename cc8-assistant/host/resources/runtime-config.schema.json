@@ -175,7 +175,22 @@
       },
       "enum": [
         "off",
-        "sensevoice"
+        "sensevoice",
+        "sensevoice_complete"
+      ]
+    },
+    "english_wake_verifier": {
+      "default": "off",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "not": {
+        "type": "string",
+        "pattern": "sk-(?:cp-|proj-|ant-)|^Bearer |[\\u0000-\\u001f]|^\\s|\\s$"
+      },
+      "enum": [
+        "off",
+        "whisper_complete"
       ]
     },
     "credential_file": {

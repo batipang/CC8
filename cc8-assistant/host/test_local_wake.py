@@ -47,6 +47,43 @@ class Backend:
 
 
 class LocalWakeTests(unittest.TestCase):
+    def test_opt_in_wider_stream_is_candidate_only_and_model_lifetime_is_capture_owned(self):
+        _, stop, _ = self.pair()
+        primary, wide = EnglishWake(Backend()), EnglishWake(Backend())
+        worker = Mock(ready=True, running=True)
+        worker.confirm.return_value = True
+        with (
+            patch.object(EnglishWake, 'load', side_effect=(primary, wide)) as load,
+            patch('english_wake_process.EnglishWakeVerifierProcess', return_value=worker),
+        ):
+            wake = WakeDetector.load(stop, verify_english_complete=True)
+        self.assertEqual(load.call_args_list[0].kwargs, {})
+        self.assertEqual(load.call_args_list[1].kwargs, {'max_active_paths': 16})
+        worker.start.assert_not_called()
+        self.assertEqual(wake.english_recovery_snapshot['state'], 'stopped')
+        wake.start_capture()
+        wake.poll_capture()
+        worker.start.assert_called_once()
+        self.assertTrue(wake.complete_english_enabled)
+        candidate = wake.english_candidate
+        candidate.stream.results = ['Bumblebee']
+        frame = np.zeros(160)
+        self.assertEqual(wake.feed(frame, alternate_pcm=frame), '')
+        self.assertTrue(wake.english_candidate_hit)
+        self.assertTrue(wake.recheck_english(frame, lambda: True))
+        old_stream = candidate.stream
+        self.assertEqual(wake.feed(frame), '')
+        self.assertFalse(wake.english_candidate_hit)
+        self.assertIsNot(candidate.stream, old_stream)
+        wake.reset(clear_metrics=False)
+        self.assertFalse(wake.english_candidate_active)
+        wake.stop_capture()
+        worker.close.assert_called_once()
+        self.assertEqual(wake.english_recovery_snapshot['state'], 'stopped')
+        self.assertIsNone(wake.recheck_english(frame, lambda: True))
+        wake.poll_capture()
+        worker.start.assert_called_once()
+
     def test_only_english_wake_uses_wider_decoder_search(self):
         model_files = (
             'tokens.txt',

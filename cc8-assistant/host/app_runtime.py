@@ -114,11 +114,16 @@ def run_backend(dependencies: BackendDependencies):
         else 'Streaming stop commands disabled.',
         flush=True,
     )
+    wake_options = {}
+    if getattr(config, 'english_wake_verifier', 'off') == 'whisper_complete':
+        wake_options['verify_english_complete'] = True
     if config.chinese_wake_verifier == 'sensevoice_complete':
-        wake_detector = dependencies.wake_detector(fast_stop, verify_chinese_complete=True)
+        wake_detector = dependencies.wake_detector(
+            fast_stop, verify_chinese_complete=True, **wake_options
+        )
         print('Complete Chinese wake confirmation configured; loads on capture.', flush=True)
     elif config.chinese_wake_verifier == 'sensevoice':
-        wake_detector = dependencies.wake_detector(fast_stop, verify_chinese=True)
+        wake_detector = dependencies.wake_detector(fast_stop, verify_chinese=True, **wake_options)
         print(
             'Chinese wake verifier configured; loads when capture starts.'
             if wake_detector.chinese_verifier is not None
@@ -126,7 +131,7 @@ def run_backend(dependencies: BackendDependencies):
             flush=True,
         )
     else:
-        wake_detector = dependencies.wake_detector(fast_stop)
+        wake_detector = dependencies.wake_detector(fast_stop, **wake_options)
     bridge = dependencies.bridge(
         speech,
         dependencies.brain_router(dependencies.minimax_brain(config=config), selected=config.brain)
