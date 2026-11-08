@@ -5,6 +5,7 @@ ADC saturation, device AGC, clipping location, speech quality or acoustic SPL.
 No sample, waveform, transcript or per-frame history is retained.
 """
 
+from dataclasses import dataclass
 import math
 import threading
 
@@ -12,9 +13,18 @@ import numpy as np
 
 from audio_signal import RATE
 from protocol import MAX_PACKET
+from response_clock import MAX_INTERVAL_MS
 
 CLIP_THRESHOLD = 32760  # Same near-full-scale boundary as the Android diagnostic.
 CONTINUITY_TOLERANCE_NS = 2_000_000
+
+
+@dataclass(frozen=True)
+class CaptureClockMark:
+    owner: object
+    samples: int
+    discontinuities: int
+    nanos: int
 
 
 class InputQuality:
@@ -34,6 +44,40 @@ class InputQuality:
     def token(self):
         with self.lock:
             return self.owner
+
+    def clock_mark(self):
+        with self.lock:
+            if not self.enabled or not self.samples or self.next_nanos is None:
+                return None
+            return CaptureClockMark(self.owner, self.samples, self.discontinuities, self.next_nanos)
+
+    def prove_interval(self, mark, input_end_ns, output_ns):
+        with self.lock:
+            if (
+                not isinstance(mark, CaptureClockMark)
+                or mark.owner is not self.owner
+                or not self.enabled
+                or mark.discontinuities != self.discontinuities
+                or self.next_nanos is None
+                or type(input_end_ns) is not int
+                or type(output_ns) is not int
+                or not mark.nanos <= input_end_ns <= output_ns <= self.next_nanos
+            ):
+                return None
+            samples = self.samples - mark.samples
+            duration_ns = round(samples * 1e9 / RATE)
+            # Bound accumulated clock drift too, not just adjacent-packet gaps.
+            if (
+                samples <= 0
+                or abs(self.next_nanos - mark.nanos - duration_ns) > CONTINUITY_TOLERANCE_NS
+                or duration_ns > MAX_INTERVAL_MS * 1_000_000 + CONTINUITY_TOLERANCE_NS
+            ):
+                return None
+            return {
+                'version': 1,
+                'coverage_ms': round(samples * 1000 / RATE, 3),
+                'discontinuities': 0,
+            }
 
     def close(self):
         with self.lock:

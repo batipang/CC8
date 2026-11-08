@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-post-ready-recovery-20261109.1",
+  "release_id": "p0-long-response-clock-20261109.1",
   "backend": {
-    "version": "0.15.74"
+    "version": "0.15.75"
   },
   "assistant": {
     "version": "0.9.54",
