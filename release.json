@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-comparison-upload-boundary-20261108.1",
+  "release_id": "p0-text-admission-20261108.1",
   "backend": {
-    "version": "0.15.69"
+    "version": "0.15.70"
   },
   "assistant": {
     "version": "0.9.53",

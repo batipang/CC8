@@ -1,5 +1,13 @@
 # Changelog
 
+## Backend 0.15.70 — transactional text admission and Unicode validation
+
+- Reject unencodable Unicode in owner text requests and announcements before cancelling existing work. Preserve the existing character limits, whitespace rules, valid emoji and multiline text; include the common validator in strict type checks.
+- Make text startup terminal when wake notifications, text-begin delivery or queue admission fail. Clear only the failed owner, invalidate ambiguous queued work and retain the original failure if diagnostic/cancellation cleanup also fails.
+- Recheck request ownership around startup callbacks and queue admission. Superseded requests return an explicit non-success receipt instead of overwriting a newer owner or evicting its queued job; no request is retried.
+- Add owner-only, content-free session-generation and text-ownership observations without altering capture leases or worker liveness.
+- Carry backend69 grouped deployment and its unopened-comparison field evidence with this functional batch. Original failed English measurements and the initial maintenance readiness failure remain preserved; default providers, APK90, audio thresholds and protocol remain unchanged.
+
 ## Backend 0.15.69 — bound recognition to the reserved comparison sample
 
 - Before provider recognition, validate the capture, route, generation, local-wake evidence and input window of explicitly armed ASR comparisons. Bound, closed or mismatched comparison samples remain rejected and observable without another cloud/local recognition call. Keep ordinary dialogue and tool-intent measurements unchanged.

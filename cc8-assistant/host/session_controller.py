@@ -12,6 +12,7 @@ import time
 import uuid
 from protocol import Packet
 from reply_types import TextReply
+from request_text import validate_request_text
 from session_ports import SessionHooks, SessionView
 from device_session import (
     apply_settings,
@@ -71,6 +72,7 @@ class SessionController:
             self.screen_sleeping,
             self.awake,
             self.capture_frontend,
+            self.text_generation is not None,
         )
 
     def deactivate(self):
@@ -217,23 +219,73 @@ class SessionController:
                 self.flush_screen_event()
 
     def submit_text(self, text):
-        if (
-            not isinstance(text, str)
-            or not text.strip()
-            or len(text) > 6000
-            or any(ord(c) < 32 and c not in '\n\t' for c in text)
-        ):
-            raise ValueError('Text must contain 1–6000 characters')
+        text = validate_request_text(text, 6000)
         with self.guard:
             if self.connection is None or self.hooks.calibration().active:
                 raise RuntimeError('Text request unavailable')
             generation = self.hooks.cancel('text_request')
+
+            def current():
+                return self.generation == generation and self.text_generation == generation
+
+            def superseded():
+                self.hooks.diagnostics().finish(generation, 'cancelled')
+                return {'ok': False, 'generation': generation, 'status': 'superseded'}
+
+            # Cancellation can synchronously publish into a replacement route
+            # or admit newer work. Never overwrite that newer text owner.
+            if self.generation != generation:
+                return superseded()
+            if self.connection is None:
+                raise RuntimeError('Text request unavailable')
             self.text_generation = generation
-            self.hooks.touch_activity()
-            self.hooks.diagnostics().begin('text', generation)
-            self.hooks.event('text_begin', generation=generation, text=text.strip())
-            self.hooks.enqueue_response(TextReply(generation, text.strip()))
+            stage = 'runtime'
+            try:
+                self.hooks.diagnostics().begin('text', generation)
+                stage = 'transport'
+                self.hooks.touch_activity()
+                if not current():
+                    return superseded()
+                self.hooks.event('text_begin', generation=generation, text=text)
+                if not current():
+                    return superseded()
+                if self.connection is None:
+                    raise RuntimeError('Text request unavailable')
+                stage = 'runtime'
+                self.hooks.enqueue_response(TextReply(generation, text))
+                if not current():
+                    return superseded()
+            except Exception as error:
+                if not current():
+                    return superseded()
+                self._abort_text_submission(generation, stage, error)
+                raise
             return {'ok': True, 'generation': generation}
+
+    def _abort_text_submission(self, generation, stage, error):
+        # Caller holds the session guard. Clear first, then invalidate any
+        # ambiguous queue admission. Diagnostic callbacks may admit newer work.
+        if self.generation != generation or self.text_generation != generation:
+            return
+        self.text_generation = None
+        try:
+            self.hooks.diagnostics().failure(generation, stage, error)
+        except Exception as secondary:
+            self._log_text_submission_cleanup('diagnostics', secondary)
+        if self.generation == generation:
+            try:
+                self.hooks.cancel('text_submit_failed')
+            except Exception as secondary:
+                self._log_text_submission_cleanup('cancellation', secondary)
+
+    def _log_text_submission_cleanup(self, phase, error):
+        # Optional diagnostics must not mask the original submission failure.
+        try:
+            self.hooks.log(
+                'text_submission_cleanup_failed', phase=phase, error_type=type(error).__name__
+            )
+        except Exception:
+            pass
 
     def cancel(self, reason='speech', *, expected_generation=None, expected_epoch=None):
         # 推进代次使旧模型、音频、字幕和看图结果失效，但不能撤销已执行的工具动作。
