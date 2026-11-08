@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-complete-chinese-wake-20261108.1",
+  "release_id": "p0-local-wake-recovery-20261108.1",
   "backend": {
-    "version": "0.15.57"
+    "version": "0.15.58"
   },
   "assistant": {
     "version": "0.9.51",

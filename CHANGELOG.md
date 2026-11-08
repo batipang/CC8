@@ -1,5 +1,12 @@
 # Changelog
 
+## Backend 0.15.58 — capture-owned local wake recovery
+
+- Recover an exited or timed-out complete Chinese verifier only within the current active capture: at most three starts per failure burst, with two- and five-second backoff and budget renewal after thirty seconds of readiness. Never replay failed audio or rearm a stopped microphone.
+- Fence queued and in-flight Chinese candidates to their model generation through the final wake-state commit; keep route callbacks outside the short commit lease and process work outside session/native locks.
+- Publish bounded recovery state and safe waiting guidance without spawning from health polling. Preserve APK88, providers, decoder deadlines, voice and UI.
+- Carry the deployed backend57 four-case acoustic comparison, selected-mode QA/self-playback evidence and failed standby cleanup report into this functional batch. General human/room and full standby acceptance remain separate.
+
 ## Backend 0.15.57 — complete Chinese wake candidate review
 
 - Add explicit `sensevoice_complete` mode, off by default: hold existing primary Chinese keyword hits until a bounded complete local utterance can veto explicit confusables. Reuse the existing WebRTC speech bit without lowering ordinary ASR or interruption gates. MiniMax ASR/TTS, owner Dot and APK88 remain.
