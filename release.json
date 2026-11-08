@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "p0-probe-idle-20261108.1",
+  "release_id": "p0-smoke-resources-20261108.1",
   "backend": {
-    "version": "0.15.64"
+    "version": "0.15.65"
   },
   "assistant": {
     "version": "0.9.53",

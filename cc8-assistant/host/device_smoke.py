@@ -21,6 +21,7 @@ import uuid
 from private_output import PrivateOutput, private_directory
 from release_info import load_release
 from capture_frontend_evidence import FRONTENDS, summarize as summarize_capture_frontend
+from smoke_resources import ResourceEvidence
 from mac_voice import (
     PreparedSpeech,
     SpeechFixtureCleanupError,
@@ -1115,6 +1116,7 @@ class SmokeRun:
         self.prepared_input_cleaned = None
         self.preparation_attempted = False
         self.pre_probe_idle_evidence = None
+        self.resource_evidence = ResourceEvidence()
 
     def health(self):
         if self.runtime_change_reason is not None:
@@ -1129,6 +1131,7 @@ class SmokeRun:
         except RuntimeChanged as error:
             self.runtime_change_reason = str(error)
             raise
+        self.resource_evidence.observe(value, self.clock() - self.started)
         return value
 
     def wait(self, condition, seconds, reason):
@@ -1233,6 +1236,7 @@ class SmokeRun:
             'capture_clock_evidence': self.capture_clock_evidence,
             'capture_start_failure': self.capture_start_failure,
             'pre_probe_idle_evidence': self.pre_probe_idle_evidence,
+            'runtime_resource_evidence': self.resource_evidence.report(),
         }
 
     def check(self, name, action, *, continue_if_unconfirmed=False):

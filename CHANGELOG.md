@@ -1,5 +1,11 @@
 # Changelog
 
+## Backend 0.15.65 — retain resource evidence in existing device checks
+
+- Record bounded bridge-only memory, CPU, thread and descriptor gauges from health reads that device checks already perform. Keep periodic samples and the last actual read, with explicit missing/invalid values, a fixed capacity and no process IDs, transcripts or new IPC/audio work.
+- Recompute resource summaries in saved-suite audits, including failed-phase evidence. Reject malformed rows and unsupported extensions; expose gaps, dropped samples and cumulative resets without promoting a functional pass into long-term stability acceptance. Preserve old reports without inventing resource coverage.
+- Carry backend64 deployment and the actual pending-candidate settlement check, plus the rejected offline phonetic dictionary experiment. The running standby version remains frozen; final 72-hour acceptance stays pending.
+
 ## Backend 0.15.64 — distinguish local candidates before acoustic probes
 
 - Let an acoustic check observe an unadmitted local voice candidate for a bounded 2.5-second settling budget. Proceed only after explicit wake-closed rejection in the same capture, with unchanged wake/ASR/render counters. Keep refusal for owner activity, missing evidence, cancellation, route/capture changes, late RPCs and older peers without capture-generation evidence.
