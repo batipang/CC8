@@ -122,7 +122,7 @@ def fixture_backend(root):
     server = AnnouncementServer(b, private / 'announce.sock')
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
-    with patch('dot_client.runtime_environment', return_value={'PATH': '/usr/bin:/bin'}):
+    with patch('codex_rpc.runtime_environment', return_value={'PATH': '/usr/bin:/bin'}):
         try:
             server.start()
             stop.wait(30)

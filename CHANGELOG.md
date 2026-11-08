@@ -1,5 +1,11 @@
 # Changelog
 
+## Backend 0.15.62 — separate Dot RPC ownership
+
+- Move the unchanged Codex process/RPC/event-queue implementation into `codex_rpc`, and command/readiness helpers into `dot_runtime`. Keep voice turn orchestration in `dot_client` and preserve its public imports.
+- Retain request budgets, guardian/pipe ownership, receipt admission, approval policy, owner configuration and cancellation behavior. This responsibility-only refactor changes no model, audio gate, provider, Android package or transport protocol.
+- Validate the seven original code bodies structurally and run the same focused checks before/after; test doubles follow their new owning modules without removing assertions. Leave the deployed 0.15.61 frozen while its instrumented standby suite is active.
+
 ## Backend 0.15.59 / APK 0.9.53 - explicit listening state
 
 - Show waiting for a wake word separately from an awake conversation using an explicit bounded host status field, independent of translated prose. Preserve the approved layout, avatar, clock and audio behavior.

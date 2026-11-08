@@ -220,7 +220,7 @@ class DotTests(unittest.TestCase):
         self.assertEqual(sent[1]['result']['permissions'], {})
 
     def test_child_inherits_desktop_capabilities_without_changing_configuration(self):
-        with patch('dot_client.shutil.which', return_value='/bin/codex'):
+        with patch('dot_runtime.shutil.which', return_value='/bin/codex'):
             command = codex_command()
         self.assertEqual(command[0], '/bin/codex')
         self.assertIn('web_search="live"', command)
