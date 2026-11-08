@@ -69,8 +69,8 @@ class RuntimeEnvironmentTests(unittest.TestCase):
             wrapper = Path(folder) / 'codex'
             wrapper.write_text('#!/usr/bin/env node\n')
             with (
-                patch('dot_client.codex_command', return_value=[str(wrapper)]),
-                patch('dot_client.shutil.which', return_value=None),
+                patch('dot_runtime.codex_command', return_value=[str(wrapper)]),
+                patch('dot_runtime.shutil.which', return_value=None),
             ):
                 result = runtime_status()
             self.assertTrue(result['codex_available'])
@@ -83,8 +83,8 @@ class RuntimeEnvironmentTests(unittest.TestCase):
             binary = Path(folder) / 'codex'
             binary.write_bytes(b'\xcf\xfa\xed\xfe')
             with (
-                patch('dot_client.codex_command', return_value=[str(binary)]),
-                patch('dot_client.shutil.which', return_value=None),
+                patch('dot_runtime.codex_command', return_value=[str(binary)]),
+                patch('dot_runtime.shutil.which', return_value=None),
             ):
                 self.assertTrue(runtime_status()['ready'])
 

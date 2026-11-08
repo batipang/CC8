@@ -105,9 +105,9 @@ class DotRpcIoTests(unittest.TestCase):
                     rpc._send = Mock()
                     clock = SimpleNamespace(monotonic=Mock(side_effect=[9.0, observed]))
                     with (
-                        patch('dot_client.deadline_after', return_value=10.0),
-                        patch('dot_client.time', clock),
-                        patch('dot_client.queue.Queue', return_value=waiter),
+                        patch('codex_rpc.deadline_after', return_value=10.0),
+                        patch('codex_rpc.time', clock),
+                        patch('codex_rpc.queue.Queue', return_value=waiter),
                     ):
                         if observed < 10:
                             self.assertEqual(rpc.request(method, {}), {'received': True})

@@ -32,7 +32,7 @@ class RpcStreamOwnershipTests(unittest.TestCase):
     def test_confirmed_close_releases_owned_stdio_without_garbage_collection(self):
         rpc = CodexRpc(command=[sys.executable, '-I', '-S', '-u', '-c', PEER])
         try:
-            with patch('dot_client.runtime_environment', return_value={'PATH': '/usr/bin:/bin'}):
+            with patch('codex_rpc.runtime_environment', return_value={'PATH': '/usr/bin:/bin'}):
                 rpc.start()
             process = rpc.process
             self.assertTrue(rpc.close())
@@ -63,7 +63,7 @@ class RpcStreamOwnershipTests(unittest.TestCase):
             observed.append(event)
 
         try:
-            with patch('dot_client.runtime_environment', return_value={'PATH': '/usr/bin:/bin'}):
+            with patch('codex_rpc.runtime_environment', return_value={'PATH': '/usr/bin:/bin'}):
                 rpc.start()
             rpc.listen(listener)
             rpc.notify('fixture/emit', {})
@@ -100,7 +100,7 @@ class RpcStreamOwnershipTests(unittest.TestCase):
 
         try:
             with (
-                patch('dot_client.runtime_environment', return_value={'PATH': '/usr/bin:/bin'}),
+                patch('codex_rpc.runtime_environment', return_value={'PATH': '/usr/bin:/bin'}),
                 patch('dot_client.threading.Thread.start', new=start),
                 self.assertRaises(RuntimeError) as caught,
             ):
@@ -137,7 +137,7 @@ class RpcStreamOwnershipTests(unittest.TestCase):
                 done.set()
 
         try:
-            with patch('dot_client.runtime_environment', return_value={'PATH': '/usr/bin:/bin'}):
+            with patch('codex_rpc.runtime_environment', return_value={'PATH': '/usr/bin:/bin'}):
                 rpc.start()
             rpc.request('fixture/freeze', {})
             writer = threading.Thread(target=send, daemon=True)

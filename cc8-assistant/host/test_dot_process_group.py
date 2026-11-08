@@ -58,7 +58,7 @@ OWNER = textwrap.dedent("""
     root = Path(sys.argv[2])
     path = root / 'tool.pid'
     rpc = CodexRpc(command=[sys.executable, '-u', str(root / 'server.py'), str(path), 'resistant'])
-    with patch('dot_client.runtime_environment', return_value={'PATH': '/usr/bin:/bin'}):
+    with patch('codex_rpc.runtime_environment', return_value={'PATH': '/usr/bin:/bin'}):
         rpc.start()
     tool = int(path.read_text())
     receipt = {'guardian': rpc.process.pid, 'group': os.getpgid(tool), 'tool': tool}
@@ -106,7 +106,7 @@ class DotProcessGroupTests(unittest.TestCase):
                 group = None
                 try:
                     with patch(
-                        'dot_client.runtime_environment', return_value={'PATH': '/usr/bin:/bin'}
+                        'codex_rpc.runtime_environment', return_value={'PATH': '/usr/bin:/bin'}
                     ):
                         rpc.start()
                     tool = int(path.read_text())
@@ -204,9 +204,7 @@ class DotProcessGroupTests(unittest.TestCase):
                             os.kill(pid, signal.SIGKILL)
 
     def test_closed_client_cannot_start_a_process(self):
-        with patch(
-            'dot_client.subprocess.Popen', side_effect=DotError('Unexpected spawn')
-        ) as spawn:
+        with patch('codex_rpc.subprocess.Popen', side_effect=DotError('Unexpected spawn')) as spawn:
             rpc = CodexRpc(command=['unused'], popen=spawn)
             rpc.close()
             with self.assertRaises(DotError):
