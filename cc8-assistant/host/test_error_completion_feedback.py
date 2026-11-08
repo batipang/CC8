@@ -487,7 +487,7 @@ class DeviceFeedbackTests(unittest.TestCase):
         methods = '\n'.join(
             'void '
             + event
-            + '(int gen, String next, String message){Packet p=new Packet(gen);Data j=new Data(next,message);j.listening=suppliedListeningState;j.captureId=suppliedCaptureId!=null?suppliedCaptureId:captureWindow==null?null:captureWindow.id;j.epoch=suppliedCaptureEpoch!=null?suppliedCaptureEpoch:Integer.valueOf(epoch);'
+            + '(int gen, String next, String message){Packet p=new Packet(gen);Data j=new Data(next,message);j.startFailure=suppliedStartFailure;j.listening=suppliedListeningState;j.captureId=suppliedCaptureId!=null?suppliedCaptureId:captureWindow==null?null:captureWindow.id;j.epoch=suppliedCaptureEpoch!=null?suppliedCaptureEpoch:Integer.valueOf(epoch);'
             + branch(source, event)
             + '}'
             for event in events
@@ -515,12 +515,14 @@ class FeedbackCheck {
  String phase="idle";
  Object suppliedListeningState="unknown";
  Object suppliedCaptureId,suppliedCaptureEpoch;
+ Object suppliedStartFailure;
  String pendingVisionNonce="",desktopVisionNonce="";
  static class Packet{int generation;Packet(int g){generation=g;}}
- static class Data{String next,message;Object listening="unknown",captureId,epoch;Data(String n,String m){next=n;message=m;}
+ static class Data{String next,message;Object listening="unknown",captureId,epoch,startFailure;Data(String n,String m){next=n;message=m;}
   String optString(String k){return "phase".equals(k)?next:"listening_state".equals(k)?String.valueOf(listening):message;}
   String optString(String k,String fallback){return optString(k);}
   Object opt(String k){
+   if("request_start_failed".equals(k))return startFailure;
    if("listening_state".equals(k))return listening;
    if("capture_id".equals(k))return captureId;
    if("epoch".equals(k))return epoch;

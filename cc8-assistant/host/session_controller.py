@@ -13,6 +13,8 @@ import uuid
 from protocol import Packet
 from reply_types import TextReply
 from request_text import validate_request_text
+from diagnostics import error_kind
+from failure_feedback import feedback
 from session_ports import SessionHooks, SessionView
 from device_session import (
     apply_settings,
@@ -223,7 +225,18 @@ class SessionController:
         with self.guard:
             if self.connection is None or self.hooks.calibration().active:
                 raise RuntimeError('Text request unavailable')
-            generation = self.hooks.cancel('text_request')
+            previous = self.generation
+            try:
+                generation = self.hooks.cancel('text_request')
+            except Exception as error:
+                if self.generation == previous + 1:
+                    try:
+                        self.hooks.diagnostics().begin('text', previous + 1)
+                        self.hooks.diagnostics().failure(previous + 1, 'runtime', error)
+                    except Exception as secondary:
+                        self._log_text_submission_cleanup('diagnostics', secondary)
+                self._text_start_failure(previous + 1, 'runtime', error)
+                raise
 
             def current():
                 return self.generation == generation and self.text_generation == generation
@@ -277,6 +290,27 @@ class SessionController:
                 self.hooks.cancel('text_submit_failed')
             except Exception as secondary:
                 self._log_text_submission_cleanup('cancellation', secondary)
+        self._text_start_failure(generation + 1, stage, error)
+
+    def _text_start_failure(self, generation, stage, error):
+        # Cancellation increments once before provider/transport cleanup. Only
+        # that successor can display this error; a new request owns later ones.
+        if (
+            self.generation != generation
+            or self.text_generation is not None
+            or self.connection is None
+        ):
+            return
+        try:
+            self.hooks.event(
+                'status',
+                generation=generation,
+                phase='error',
+                request_start_failed=True,
+                message='本次文字指令未启动。' + feedback(stage, error_kind(error)).message,
+            )
+        except Exception as secondary:
+            self._log_text_submission_cleanup('feedback', secondary)
 
     def _log_text_submission_cleanup(self, phase, error):
         # Optional diagnostics must not mask the original submission failure.

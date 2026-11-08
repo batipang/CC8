@@ -158,6 +158,46 @@ class HierarchyTests(unittest.TestCase):
 
 
 class ControllerFixtureTests(unittest.TestCase):
+    def test_startup_matrix_has_no_dispatch_before_failure_and_owned_recovery(self):
+        with (
+            patch.object(socket.socket, 'connect', side_effect=AssertionError('network forbidden')),
+            patch.object(subprocess, 'Popen', side_effect=AssertionError('process forbidden')),
+        ):
+            rows = qa_faults.generate(cases=qa_faults.STARTUP_CASES)
+        from protocol import EVENT, decode_event
+
+        self.assertEqual(len(rows), 21)
+        self.assertEqual([row['case'] for row in rows], list(qa_faults.STARTUP_CASES))
+        for row in rows:
+            with self.subTest(case=row['case'].ident):
+                self.assertIs(row['startup_task_created'], False)
+                self.assertEqual(row['explicit_recovery_dispatches'], 1)
+                self.assertEqual(row['provider_requests'], 0)
+                self.assertTrue(all(p.kind == EVENT for p in row['error'] + row['recovery']))
+                failure = decode_event(row['stale_error'].data)
+                self.assertIs(failure['request_start_failed'], True)
+                self.assertEqual(failure['message'], row['expected_message'])
+                self.assertFalse(
+                    any(decode_event(p.data)['event'] == 'dot_result' for p in row['error'])
+                )
+                begins = [
+                    p for p in row['recovery'] if decode_event(p.data)['event'] == 'text_begin'
+                ]
+                self.assertEqual(len(begins), 1)
+                self.assertGreater(begins[0].generation, row['stale_error'].generation)
+        self.assertIn('qa_startup.py', check.source_identity())
+
+    def test_startup_selection_rejects_network_and_mixed_or_duplicate_cases(self):
+        for kwargs in ({'http_fixture': 'loopback_tls'}, {'dot_fixture': 'local_stdio'}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                qa_faults.generate(cases=qa_faults.STARTUP_CASES, **kwargs)
+        for cases in (
+            qa_faults.STARTUP_CASES[:1] * 2,
+            qa_faults.STARTUP_CASES[:1] + qa_faults.CASES[:1],
+        ):
+            with self.subTest(cases=cases), self.assertRaises(ValueError):
+                qa_faults.generate(cases=cases)
+
     def test_playback_cases_keep_completed_work_and_only_replay_control_events(self):
         with (
             patch.object(socket.socket, 'connect', side_effect=AssertionError('network forbidden')),

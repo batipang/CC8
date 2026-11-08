@@ -50,13 +50,27 @@ PLAYBACK_CASES = tuple(
     for repeat in range(1, 4)
 )
 INTERRUPTION_CASES = (Case('interruption', 'timeout', 1),)
+STARTUP_CASES = tuple(
+    Case(point, kind, repeat)
+    for point, kind in (
+        ('text_begin', 'transport_or_io'),
+        ('text_queue', 'provider_or_runtime'),
+        ('text_queue_uncertain', 'transport_or_io'),
+        ('text_cancel', 'provider_or_runtime'),
+        ('announcement_queue', 'provider_or_runtime'),
+        ('announcement_prepare', 'transport_or_io'),
+        ('announcement_cancel', 'provider_or_runtime'),
+    )
+    for repeat in range(1, 4)
+)
 CASE_SETS = {
     'standard': CASES,
     'search': SEARCH_CASES,
     'playback': PLAYBACK_CASES,
     'interruption': INTERRUPTION_CASES,
+    'startup': STARTUP_CASES,
 }
-OFFLINE_OUTPUT_CASE_SETS = ('playback', 'interruption')
+OFFLINE_OUTPUT_CASE_SETS = ('playback', 'interruption', 'startup')
 
 
 def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
@@ -82,6 +96,12 @@ def generate(*, http_fixture='fake', dot_fixture='fake', cases=CASES):
         raise ValueError('Search QA requires loopback TLS and no Dot subprocess')
     if playback and (http_fixture != 'fake' or dot_fixture != 'fake'):
         raise ValueError('Output QA requires offline fixtures')
+    if allowed is STARTUP_CASES:
+        if http_fixture != 'fake' or dot_fixture != 'fake':
+            raise ValueError('Startup QA requires offline fixtures')
+        from tools.qa_startup import generate_startup
+
+        return generate_startup(cases)
     import numpy as np
     import requests
 
