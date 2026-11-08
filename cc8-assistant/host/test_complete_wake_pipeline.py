@@ -97,6 +97,21 @@ class CompletePipelineTests(unittest.TestCase):
                 self.assertEqual(b.metrics.get('voice_asr_attempts', 0), 0)
                 self.assertTrue(all(not np.any(pcm) for pcm in local.owned))
 
+    def test_model_change_while_collecting_cannot_enqueue_old_sentence(self):
+        f, b, local, asr, answered, order, _ = self.pipeline()
+        local.complete_recovery_generation = 1
+        f.frames(b, last=45)
+        self.assertTrue(b.capture.endpoint.complete_wake.vad.talking)
+        local.complete_recovery_generation = 2
+        f.frames(b, first=46, last=140)
+        self.assertTrue(b.recognition.queue.empty())
+        self.assertEqual(local.owned, [])
+        self.assertFalse(local.checked.is_set())
+        self.assertFalse(asr.is_set())
+        self.assertFalse(answered.is_set())
+        self.assertFalse(b.session.awake)
+        self.assertEqual(order, [])
+
     def test_idle_waits_for_owned_weak_chinese_candidate_then_can_sleep(self):
         f, b, local, asr, answered, order, _ = self.pipeline(False)
         f.frames(b, last=45)

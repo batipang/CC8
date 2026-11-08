@@ -3,7 +3,7 @@
 ## Backend 0.15.58 — capture-owned local wake recovery
 
 - Recover an exited or timed-out complete Chinese verifier only within the current active capture: at most three starts per failure burst, with two- and five-second backoff and budget renewal after thirty seconds of readiness. Never replay failed audio or rearm a stopped microphone.
-- Fence queued and in-flight Chinese candidates to their model generation through the final wake-state commit; keep route callbacks outside the short commit lease and process work outside session/native locks.
+- Fence collecting, queued and in-flight Chinese candidates to their original model generation through the final wake-state commit; keep route callbacks outside the short commit lease and process work outside session/native locks.
 - Publish bounded recovery state and safe waiting guidance without spawning from health polling. Preserve APK88, providers, decoder deadlines, voice and UI.
 - Carry the deployed backend57 four-case acoustic comparison, selected-mode QA/self-playback evidence and failed standby cleanup report into this functional batch. General human/room and full standby acceptance remain separate.
 

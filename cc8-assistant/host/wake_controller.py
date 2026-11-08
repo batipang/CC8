@@ -182,7 +182,12 @@ class WakeController:
                 or not self.hooks.capture_current(first_sample_ns)
             ):
                 return None
-            return WaitingUtterance(self.serial, self.hooks.generation(), first_sample_ns)
+            return WaitingUtterance(
+                self.serial,
+                self.hooks.generation(),
+                first_sample_ns,
+                model_generation=self._model_generation(),
+            )
 
     def pending_chinese_utterance(self, base):
         """Read-only busy evidence, never an audio/cloud authorization."""
@@ -192,6 +197,7 @@ class WakeController:
                 and isinstance(base, WaitingUtterance)
                 and base.serial == self.serial
                 and base.generation == self.hooks.generation()
+                and base.model_generation == self._model_generation()
                 and self.hooks.active()
                 and not self.hooks.awake()
                 and self.hooks.capture_current(base.first_sample_ns)
@@ -205,6 +211,7 @@ class WakeController:
                 or not isinstance(base, WaitingUtterance)
                 or base.serial != self.serial
                 or base.generation != self.hooks.generation()
+                or base.model_generation != self._model_generation()
                 or type(last_sample_ns) is not int
                 or last_sample_ns < base.first_sample_ns
                 or not self.hooks.active()
@@ -232,7 +239,7 @@ class WakeController:
                 base.generation,
                 base.first_sample_ns,
                 last_sample_ns,
-                self._model_generation(),
+                base.model_generation,
             )
             return replace(
                 base, keyword='大黄蜂', last_sample_ns=last_sample_ns, candidate_token=token
@@ -248,6 +255,7 @@ class WakeController:
                 if (
                     issued is None
                     or len(issued) != 5
+                    or issued[4] != ticket.model_generation
                     or issued[:4]
                     != (
                         ticket.serial,
