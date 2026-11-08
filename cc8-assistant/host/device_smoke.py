@@ -3354,13 +3354,18 @@ class SmokeRun:
 
 
 def planned_checks(options, *, stop_route='local', tool_comparison=False):
+    # The CLI's fixed local comparison always executes a latency run, even
+    # though latency_sample is not a user-facing flag in that individual plan.
     if tool_comparison:
-        return [*CHECKS[:2], CHECKS[4], TOOL_COMPARISON_CHECK, *CHECKS[5:7]]
-    if 'latency_sample' in options:
-        return [*CHECKS[:2], CHECKS[4], AWAKE_DIALOGUE_CHECK, *CHECKS[5:7]]
+        options = options | {'latency_sample'}
     interruption = {'synthetic_barge', 'synthetic_stop'} & options
     return (
-        [*CHECKS[:2], MULTI_CLAUSE_CHECK if 'multi_clause' in options else CHECKS[2], CHECKS[3]]
+        list(CHECKS[:2])
+        + (
+            []
+            if 'latency_sample' in options
+            else [MULTI_CLAUSE_CHECK if 'multi_clause' in options else CHECKS[2], CHECKS[3]]
+        )
         + (
             [CHECKS[4]]
             + ([CAPTURE_CLOCK_CHECK] if 'capture_clock_evidence' in options else [])
@@ -3370,7 +3375,13 @@ def planned_checks(options, *, stop_route='local', tool_comparison=False):
             + ([ACTIVE_HANDOVER_CHECK] if 'active_handover' in options else [])
             + ([WAKE_SELF_CHECK] if 'wake_self_playback' in options else [])
             + (
-                [BARGE_PRIME_CHECK if interruption else AWAKE_DIALOGUE_CHECK]
+                [
+                    TOOL_COMPARISON_CHECK
+                    if tool_comparison
+                    else BARGE_PRIME_CHECK
+                    if interruption
+                    else AWAKE_DIALOGUE_CHECK
+                ]
                 if interruption or 'awake_dialogue' in options
                 else []
             )
