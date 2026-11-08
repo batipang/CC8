@@ -38,6 +38,7 @@ from device_smoke import (
 from mac_voice import validate_prepared_speech
 from chinese_wake_evidence import valid_counter_delta
 from private_output import read_private_json
+from probe_idle import valid_evidence as valid_probe_idle_evidence
 from qa_speech import SCENARIO_DIGESTS
 from soak_background import valid_background
 from capture_frontend_evidence import (
@@ -70,6 +71,9 @@ def content_free_phase(report):
         and report.get('raw_audio_saved') is False
         and report.get('contains_conversation_content') is False
         and valid_capture_frontend_report(report)
+        and valid_probe_idle_evidence(
+            report.get('pre_probe_idle_evidence'), passed=report.get('state') == 'passed'
+        )
         and all(
             isinstance(report.get(key), str) and re.fullmatch(SOURCE_DIGEST, report[key])
             for key in SOURCE_FIELDS

@@ -1,5 +1,13 @@
 # 当前 CC8 部署与验收范围
 
+## 0.15.63／code90 Dot 通信边界与组合计划
+
+当前后台 **0.15.63**，源码 `efe406e`／原签名 **APK0.9.53（code90）**。Dot 通信职责拆分 [PR #428](https://github.com/batipang/CC8/pull/428) 与组合验收计划修复 [PR #429](https://github.com/batipang/CC8/pull/429) 分别通过受保护 CI 合入，[最终 main 八项 CI](https://github.com/batipang/CC8/actions/runs/42452903051)通过后，一次合并维护升级的五项检查在 22.374 秒完成，独立只读复核通过。原 profile、LaunchAgent、owner Codex 配置、两个 APK、默认单声道和显式 `sensevoice_complete` 保持；未重新安装 APK，维护过程未开始采集。
+
+一次同固定公开中文问句的六项自动检查在 70.613 秒完成，确认本地唤醒、主识别、Dot 回答、起播和播完各一次，播后观察 20.004 秒，零暂停。Home／维护重开和公开 WAV 删除通过；独立终审确认前台 USB 优先、Wi-Fi 就绪，双端停采、相机／播放／校准关闭、模型子进程退出、计数稳定。这是拆分后普通问答回归，不是完整真人、误打断或三轮待机验收。
+
+此前冻结后台61的待机组仅两轮完整通过，第三轮虽实际黑屏但在问句前因 pending 记录拒绝，整组保留失败。资源独立收尾已验证；[事实与新候选范围](PROBE_IDLE.md)。72小时未启动。
+
 ## 0.15.61／code90 中文输入探针
 
 当前后台 **0.15.61**，源码 `3ea3f19`／原签名 **APK0.9.53（code90）**。[PR #427](https://github.com/batipang/CC8/pull/427) 与 [main 八项 CI](https://github.com/batipang/CC8/actions/runs/42448887449) 通过。五项后台维护升级及独立只读终审通过，保留原 profile、LaunchAgent、owner Codex 配置、两个已装 APK 与默认单声道；本机显式选定 `sensevoice_complete`。没有重新安装 APK，维护过程没有启动采集。

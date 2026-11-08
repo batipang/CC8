@@ -1114,6 +1114,7 @@ class SmokeRun:
         self.prepared_input = None
         self.prepared_input_cleaned = None
         self.preparation_attempted = False
+        self.pre_probe_idle_evidence = None
 
     def health(self):
         if self.runtime_change_reason is not None:
@@ -1231,6 +1232,7 @@ class SmokeRun:
             'playback_probe_evidence': self.playback_probe_evidence,
             'capture_clock_evidence': self.capture_clock_evidence,
             'capture_start_failure': self.capture_start_failure,
+            'pre_probe_idle_evidence': self.pre_probe_idle_evidence,
         }
 
     def check(self, name, action, *, continue_if_unconfirmed=False):
@@ -2096,6 +2098,7 @@ class SmokeRun:
     def acoustic_probe(self, *, awake=False, quiet_seconds=POST_DIALOGUE_SECONDS):
         # A computer speaker is a synthetic source with unknown room geometry.
         # This can verify the live chain, never a human recall rate or dB level.
+        self.pre_probe_idle_evidence = None
         h = self.health()
         require(
             h.get('connected') is True
@@ -2107,9 +2110,25 @@ class SmokeRun:
             and h.get('local_wake_ready') is True,
             'acoustic_probe_requires_idle_capture',
         )
-        rows = self.diagnostic_requests()
+        from probe_idle import PendingWorkFailure, same_capture, settle_pending_voice
+
+        def snapshot(value):
+            self.pre_probe_idle_evidence = value
+            self.checkpoint(self.report('running'))
+
+        try:
+            rows, h = settle_pending_voice(
+                self.diagnostic_requests(),
+                h,
+                read_rows=self.diagnostic_requests,
+                read_health=self.health,
+                clock=self.clock,
+                sleep=self.sleep,
+                snapshot=snapshot,
+            )
+        except PendingWorkFailure:
+            raise CheckFailure('owner_request_pending') from None
         ids = {r['request_id'] for r in rows}
-        require(all(r.get('outcome') is not None for r in rows), 'owner_request_pending')
         d, ui = self.device.status()
         require(ui.get('screen_sleeping') is (not awake), 'acoustic_probe_screen_state_invalid')
         d = self.capture_status((d, ui))
@@ -2160,6 +2179,17 @@ class SmokeRun:
                 )
                 == {'status': 'ready'},
                 'tool_sample_guard_not_ready',
+            )
+        if self.pre_probe_idle_evidence is not None:
+            # Arming optional probes/native status may itself take time. A
+            # settled candidate is no permission to use a later capture or
+            # overlap work that appeared during those preparation calls.
+            current_rows = self.diagnostic_requests()
+            require(
+                {row['request_id'] for row in current_rows} == ids
+                and all(row.get('outcome') is not None for row in current_rows)
+                and same_capture(h, self.health()),
+                'acoustic_probe_work_changed_before_stimulus',
             )
         if self.chinese_fixture is not None:
             require(
