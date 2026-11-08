@@ -1,5 +1,13 @@
 # 当前 CC8 部署与验收范围
 
+## 0.15.64／code90 候选结束观察
+
+当前后台 **0.15.64**，源码 `1311736`／原签名 **APK0.9.53（code90）**。[PR #430](https://github.com/batipang/CC8/pull/430) 和 [main 八项 CI](https://github.com/batipang/CC8/actions/runs/42455933507) 通过后，一次五项维护升级及独立只读终审通过。原配置、LaunchAgent、owner Codex、两个 APK、默认单声道与显式 `sensevoice_complete` 保持，未重新安装 APK。
+
+一次73.835秒的定向实机检查中，先播放一条固定公开非唤醒句，在正式问句前实际看到一个未准入候选；新检查器观察1.7216秒、七次快照，确认其明确被 wake_closed 拒绝，期间唤醒／ASR／播放计数保持。随后唯一固定中文问题完整唤醒、识别、Dot 回答和播完各一次，零暂停，播后观察20秒。独立终审确认双端停采、相机／播放／校准关闭，USB优先、Wi-Fi就绪，公开音频与自有播放进程已清理。该结果证明这条输入的限时结束分支可用，不能认定后台61第三轮拒绝的唯一原因；原失败记录继续保留。
+
+后台0.15.65仅为资源证据工具候选；实际运行版本在待机组期间保持本段冻结。最终72小时未启动。
+
 ## 0.15.63／code90 Dot 通信边界与组合计划
 
 当前后台 **0.15.63**，源码 `efe406e`／原签名 **APK0.9.53（code90）**。Dot 通信职责拆分 [PR #428](https://github.com/batipang/CC8/pull/428) 与组合验收计划修复 [PR #429](https://github.com/batipang/CC8/pull/429) 分别通过受保护 CI 合入，[最终 main 八项 CI](https://github.com/batipang/CC8/actions/runs/42452903051)通过后，一次合并维护升级的五项检查在 22.374 秒完成，独立只读复核通过。原 profile、LaunchAgent、owner Codex 配置、两个 APK、默认单声道和显式 `sensevoice_complete` 保持；未重新安装 APK，维护过程未开始采集。

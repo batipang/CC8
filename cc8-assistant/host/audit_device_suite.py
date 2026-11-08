@@ -39,6 +39,7 @@ from mac_voice import validate_prepared_speech
 from chinese_wake_evidence import valid_counter_delta
 from private_output import read_private_json
 from probe_idle import valid_evidence as valid_probe_idle_evidence
+from smoke_resources import audit as audit_resources
 from qa_speech import SCENARIO_DIGESTS
 from soak_background import valid_background
 from capture_frontend_evidence import (
@@ -313,7 +314,7 @@ def audit_english_wake(data, expect_backend, expect_apk_code, expect_capture_fro
     return {**result, 'verified': True} if passed else {**result, 'reason': 'english_wake_miss'}
 
 
-def audit(
+def _audit(
     data,
     *,
     expect_backend=None,
@@ -727,6 +728,49 @@ def audit(
                 result['background_dispatch_guarded'] = True
     result['same_chinese_stimulus_verified'] = chinese_metadata is not None
     return {**result, 'verified': True}
+
+
+def audit(
+    data,
+    *,
+    expect_backend=None,
+    expect_apk_code=None,
+    expect_capture_frontend=None,
+    require_standby_quiet=False,
+    require_qa_fixture_binding=False,
+):
+    result = _audit(
+        data,
+        expect_backend=expect_backend,
+        expect_apk_code=expect_apk_code,
+        expect_capture_frontend=expect_capture_frontend,
+        require_standby_quiet=require_standby_quiet,
+        require_qa_fixture_binding=require_qa_fixture_binding,
+    )
+    # Old files stay auditable without inventing measurements. New evidence
+    # is checked even in a failed phase and cannot be hidden by saved totals.
+    resources = []
+    present = False
+    phases = data.get('phases')
+    if not isinstance(phases, list):
+        return result
+    for index, phase in enumerate(phases, start=1):
+        report = phase.get('report') if isinstance(phase, dict) else None
+        if not isinstance(report, dict) or 'runtime_resource_evidence' not in report:
+            resources.append({'phase_index': index, 'status': 'unavailable'})
+            continue
+        present = True
+        resources.append(
+            {
+                'phase_index': index,
+                **audit_resources(
+                    report['runtime_resource_evidence'], report.get('elapsed_seconds')
+                ),
+            }
+        )
+    if present:
+        result['runtime_resources'] = resources
+    return result
 
 
 def main(argv=None):
