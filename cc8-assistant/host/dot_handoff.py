@@ -53,6 +53,13 @@ class ChatCatalog:
         self.offered = {}
         self.cursors = {}
 
+    def report(self, selected, period, is_current=lambda: True):
+        from work_reports import ReportWindow, WorkReportReader
+
+        return WorkReportReader(self.rpc_factory).read(
+            selected, ReportWindow.period(period, time.time()), is_current=is_current
+        )
+
     def list(self, cursor=None, is_current=lambda: True):
         if not is_current():
             raise Cancelled('Chat listing cancelled')
