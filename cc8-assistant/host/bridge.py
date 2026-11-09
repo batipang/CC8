@@ -29,6 +29,7 @@ from diagnostics import TraceBook
 from connection_observation import connection_report
 from runtime_guard import RuntimeLease, RuntimeConflict
 from configuration import load_config
+from report_watch_store import ReportWatchStore
 from speech_providers import (
     LocalSpeech as LocalSpeech,
     DirectSpeech as DirectSpeech,
@@ -73,6 +74,7 @@ class Bridge:
         report_sources_store=None,
         report_archive_store=None,
         report_checkpoint_store=None,
+        report_watch_store=None,
     ):
         self.diagnostics = TraceBook()
         started_at = time.monotonic()
@@ -110,6 +112,7 @@ class Bridge:
             report_sources_store=report_sources_store,
             report_archive_store=report_archive_store,
             report_checkpoint_store=report_checkpoint_store,
+            report_watch_store=report_watch_store,
         )
         self.calibration = components.calibration
         self.visual = components.visual
@@ -206,7 +209,11 @@ class Bridge:
         return self.session.submit_text(text)
 
     def reminder_tick(self):
-        return self.reminders.tick()
+        result = self.reminders.tick()
+        scheduler = self.chats.watch_ui.scheduler
+        if scheduler is not None:
+            scheduler.tick()
+        return result
 
     def control_device(self, action, percent=None):
         return self.device.control(action, percent)
@@ -408,7 +415,11 @@ def run_backend():
             wake_detector=WakeDetector.load,
             brain_router=BrainRouter,
             minimax_brain=MiniMaxBrain,
-            bridge=Bridge,
+            bridge=lambda *args, **kwargs: Bridge(
+                *args,
+                **kwargs,
+                report_watch_store=ReportWatchStore(PRIVATE / 'work-report-watch.json'),
+            ),
             workspace=Workspace,
             transport_hub=TransportHub,
             pairing=Pairing,

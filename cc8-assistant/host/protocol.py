@@ -221,6 +221,17 @@ def validate_device_event(value: object) -> JsonObject:
             ACTIONS as PROGRESS_ACTIONS,
             validate_request as validate_progress,
         )
+        from report_watch_protocol import (
+            ACTIONS as WATCH_ACTIONS,
+            validate_request as validate_watch,
+        )
+
+        if (
+            name == 'dot_chat_request'
+            and isinstance(value['action'], str)
+            and value['action'] in WATCH_ACTIONS
+        ):
+            validate_watch(value)
 
         if name == 'dot_chat_request' and value['action'] == 'report_page':
             from report_display_protocol import validate_request as validate_page
@@ -257,6 +268,7 @@ def validate_device_event(value: object) -> JsonObject:
             *REGISTRY_ACTIONS,
             *ARCHIVE_ACTIONS,
             *PROGRESS_ACTIONS,
+            *WATCH_ACTIONS,
         ):
             raise ValueError('Invalid chat action')
         if (

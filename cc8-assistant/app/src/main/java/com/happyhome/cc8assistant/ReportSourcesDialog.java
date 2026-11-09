@@ -77,10 +77,12 @@ final class ReportSourcesDialog {
   private long route = -1, epoch;
   private Runnable timeout;
   private ReportTextPage.Copy copy;
+  private final ReportWatchDialog watch;
 
   ReportSourcesDialog(Activity activity, VoiceSession session) {
     this.activity = activity;
     this.session = session;
+    watch = new ReportWatchDialog(activity, session);
   }
 
   private static boolean label(String value) {
@@ -95,6 +97,7 @@ final class ReportSourcesDialog {
   }
 
   void close() {
+    watch.close();
     if (!pending.isEmpty() && session.currentRoute(route)) session.dotChatCancel(pending);
     pending = action = "";
     snapshot = null;
@@ -172,6 +175,7 @@ final class ReportSourcesDialog {
   }
 
   void accept(JSONObject data) {
+    if (watch.accept(data)) return;
     if (pending.isEmpty()
         || !pending.equals(data.optString("request_id"))
         || !session.currentRoute(route)) return;
@@ -254,10 +258,14 @@ final class ReportSourcesDialog {
     }
     snapshot = value;
     if ("source_candidates".equals(completed)) candidates(data, value);
-    else menu(value, data.optString("report_source_title"));
+    else
+      menu(
+          value,
+          data.optString("report_source_title"),
+          Boolean.TRUE.equals(data.opt("report_watch_supported")));
   }
 
-  private void menu(Snapshot value, String scope) {
+  private void menu(Snapshot value, String scope, boolean watchAvailable) {
     final long owner = epoch + 1;
     String[] labels = new String[value.sources.size()];
     for (int i = 0; i < labels.length; i++)
@@ -273,7 +281,7 @@ final class ReportSourcesDialog {
             .setNeutralButton(
                 "汇报选项",
                 (d, n) -> {
-                  if (live(owner, value)) options(value, scope);
+                  if (live(owner, value)) options(value, scope, watchAvailable);
                 })
             .setNegativeButton("关闭", null);
     if (labels.length == 0)
@@ -404,20 +412,23 @@ final class ReportSourcesDialog {
     show(builder.create());
   }
 
-  private void options(Snapshot value, String scope) {
+  private void options(Snapshot value, String scope, boolean watchAvailable) {
     final long owner = epoch + 1;
+    java.util.List<String> labels = new ArrayList<>();
+    Collections.addAll(
+        labels,
+        "使用全部登记来源",
+        "使用当前摘要聊天",
+        "读取当前范围：" + (scope.isEmpty() ? "未选择" : scope),
+        "清空来源登记",
+        "已保存汇报",
+        "补播进度：明确保存／恢复");
+    if (watchAvailable) labels.add("定时工作进展提示");
     show(
         new AlertDialog.Builder(activity)
             .setTitle("工作汇报范围")
             .setItems(
-                new String[] {
-                  "使用全部登记来源",
-                  "使用当前摘要聊天",
-                  "读取当前范围：" + (scope.isEmpty() ? "未选择" : scope),
-                  "清空来源登记",
-                  "已保存汇报",
-                  "补播进度：明确保存／恢复"
-                },
+                labels.toArray(new String[0]),
                 (d, n) -> {
                   if (!live(owner, value)) return;
                   if (n == 0) {
@@ -430,6 +441,9 @@ final class ReportSourcesDialog {
                   else if (n == 4) {
                     if (session.supportsReportArchive()) request(args("saved_reports"));
                     else toast("当前后台不支持汇报快照");
+                  } else if (n == 6 && watchAvailable) {
+                    close();
+                    watch.open();
                   } else if (session.supportsReportProgress())
                     request(args("progress_checkpoints"));
                   else toast("当前后台不支持保存补播进度");
