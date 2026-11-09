@@ -50,6 +50,7 @@ class ActivityCheck {
  interface Click {void click(Object dialog,int index);}
  static class AlertDialog {
   static Builder last;
+  void dismiss(){}
   static class Builder {
    String title="",message="",positiveLabel="";String[] items;
    Click positive,neutral,negative;
@@ -81,6 +82,7 @@ class ActivityCheck {
  final Session session=new Session();
  JSONArray tasksData=new JSONArray(),remindersData=new JSONArray();
  JSONObject reminderPolicyData;
+ AlertDialog reminderPolicyDialog;
  long workspaceRevision=-1,workspaceRoute=0;boolean linked=true,taskResultUnconfirmed;
  String brainProvider="dot";
  int taskActions;

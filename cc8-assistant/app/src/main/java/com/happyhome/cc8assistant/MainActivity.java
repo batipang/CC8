@@ -38,6 +38,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   private long workspaceRoute = -1;
   private JSONArray tasksData = new JSONArray(), remindersData = new JSONArray();
   private JSONObject reminderPolicyData;
+  private AlertDialog reminderPolicyDialog;
   // RAM-only notice: a lost connection cannot undo tool effects or prove failure.
   // Keep this separate from authoritative task receipts and never replay work.
   private boolean taskResultUnconfirmed;
@@ -874,6 +875,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     form.addView(minutes);
     ScrollView scroll = new ScrollView(this);
     scroll.addView(form);
+    // Opening switches/settings must not focus an editor and summon the IME.
+    form.setFocusableInTouchMode(true);
     AlertDialog dialog =
         new AlertDialog.Builder(this)
             .setTitle("提醒送达设置")
@@ -884,34 +887,48 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
                 (d, n) -> sendReminderPolicy(route, revision, false, "22:00", "07:00", false, 60))
             .setPositiveButton("应用", null)
             .create();
+    reminderPolicyDialog = dialog;
+    dialog.setOnDismissListener(
+        unused -> {
+          if (reminderPolicyDialog == dialog) reminderPolicyDialog = null;
+        });
+    Window policyWindow = dialog.getWindow();
+    if (policyWindow != null) {
+      policyWindow.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+      policyWindow.setSoftInputMode(
+          WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN
+              | WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+    }
     dialog.setOnShowListener(
-        unused ->
-            dialog
-                .getButton(AlertDialog.BUTTON_POSITIVE)
-                .setOnClickListener(
-                    v -> {
-                      String from = start.getText().toString().trim(),
-                          to = end.getText().toString().trim();
-                      String pattern = "(?:[01][0-9]|2[0-3]):[0-5][0-9]";
-                      int late;
-                      try {
-                        late = Integer.parseInt(minutes.getText().toString().trim());
-                      } catch (NumberFormatException error) {
-                        late = 0;
-                      }
-                      if (!from.matches(pattern)
-                          || !to.matches(pattern)
-                          || from.equals(to)
-                          || late < 1
-                          || late > 10080) {
-                        Toast.makeText(this, "请填写不同的 HH:MM 起止时间及有效分钟数", Toast.LENGTH_LONG).show();
-                        return;
-                      }
-                      dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
-                      sendReminderPolicy(
-                          route, revision, quiet.isChecked(), from, to, skip.isChecked(), late);
-                      dialog.dismiss();
-                    }));
+        unused -> {
+          form.requestFocus();
+          dialog
+              .getButton(AlertDialog.BUTTON_POSITIVE)
+              .setOnClickListener(
+                  v -> {
+                    String from = start.getText().toString().trim(),
+                        to = end.getText().toString().trim();
+                    String pattern = "(?:[01][0-9]|2[0-3]):[0-5][0-9]";
+                    int late;
+                    try {
+                      late = Integer.parseInt(minutes.getText().toString().trim());
+                    } catch (NumberFormatException error) {
+                      late = 0;
+                    }
+                    if (!from.matches(pattern)
+                        || !to.matches(pattern)
+                        || from.equals(to)
+                        || late < 1
+                        || late > 10080) {
+                      Toast.makeText(this, "请填写不同的 HH:MM 起止时间及有效分钟数", Toast.LENGTH_LONG).show();
+                      return;
+                    }
+                    dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
+                    sendReminderPolicy(
+                        route, revision, quiet.isChecked(), from, to, skip.isChecked(), late);
+                    dialog.dismiss();
+                  });
+        });
     dialog.show();
   }
 
@@ -1602,6 +1619,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
             savedTasks.close();
             resultDetails.close();
             if (correctionDialog != null) correctionDialog.close();
+            if (reminderPolicyDialog != null) reminderPolicyDialog.dismiss();
             tasksData = new JSONArray();
             remindersData = new JSONArray();
             reminderPolicyData = null;
@@ -1833,6 +1851,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   @Override
   protected void onPause() {
     if (correctionDialog != null) correctionDialog.close();
+    if (reminderPolicyDialog != null) reminderPolicyDialog.dismiss();
     if (connectionInfoDialog != null) connectionInfoDialog.dismiss();
     if (dotChats != null) dotChats.close();
     if (savedTasks != null) savedTasks.close();
@@ -1957,6 +1976,35 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     Wire.put(ui, "task_result_unconfirmed", taskResultUnconfirmed);
     Wire.put(ui, "task_count", tasksData.length());
     Wire.put(ui, "reminder_count", remindersData.length());
+    AlertDialog policyDialog = reminderPolicyDialog;
+    boolean policyVisible = policyDialog != null && policyDialog.isShowing();
+    boolean policyButtonsVisible = false, policyEditorFocused = false;
+    int policyVisibleBottom = 0;
+    if (policyVisible && policyDialog.getWindow() != null) {
+      Window window = policyDialog.getWindow();
+      android.graphics.Rect visible = new android.graphics.Rect();
+      window.getDecorView().getWindowVisibleDisplayFrame(visible);
+      policyVisibleBottom = visible.bottom;
+      policyEditorFocused = window.getCurrentFocus() instanceof EditText;
+      policyButtonsVisible = true;
+      for (int which :
+          new int[] {
+            AlertDialog.BUTTON_POSITIVE, AlertDialog.BUTTON_NEGATIVE, AlertDialog.BUTTON_NEUTRAL
+          }) {
+        Button button = policyDialog.getButton(which);
+        android.graphics.Rect bounds = new android.graphics.Rect();
+        policyButtonsVisible &=
+            button != null
+                && button.isShown()
+                && button.getGlobalVisibleRect(bounds)
+                && visible.contains(bounds);
+      }
+    }
+    // Geometry/focus only: never expose reminder text or edited field values.
+    Wire.put(ui, "reminder_policy_dialog_visible", policyVisible);
+    Wire.put(ui, "reminder_policy_buttons_visible", policyButtonsVisible);
+    Wire.put(ui, "reminder_policy_editor_focused", policyEditorFocused);
+    Wire.put(ui, "reminder_policy_visible_bottom", policyVisibleBottom);
     Wire.put(ui, "halo_status_overlap", overlaps(companion, stateText));
     Wire.put(
         ui,

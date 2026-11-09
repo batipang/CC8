@@ -101,6 +101,9 @@ public class ScrollView {public Object child;public ScrollView(Object owner){}pu
 package android.widget;
 public class LinearLayout {
  public static final int VERTICAL=1;
+ public boolean focusableInTouchMode,focused;
+ public void setFocusableInTouchMode(boolean value){focusableInTouchMode=value;}
+ public boolean requestFocus(){focused=true;return true;}
  public final java.util.List<Object> children=new java.util.ArrayList<>();
  public LinearLayout(Object owner){}public void setOrientation(int value){}
  public void setPadding(int a,int b,int c,int d){}public void addView(Object child){children.add(child);}
@@ -137,13 +140,16 @@ public class AlertDialog {
  public interface Event{void event(AlertDialog dialog);}
  public static AlertDialog last;
  public final Builder builder;public boolean dismissed;
- private Event onShow,onCancel;
+ private Event onShow,onCancel,onDismiss;
+ public final android.view.Window window=new android.view.Window();
+ public android.view.Window getWindow(){return window;}
+ public void setOnDismissListener(Event value){onDismiss=value;}
  private final java.util.Map<Integer,Button> buttons=new java.util.HashMap<>();
  public AlertDialog(Builder value){builder=value;}
  public void setOnShowListener(Event value){onShow=value;}
  public void setOnCancelListener(Event value){onCancel=value;}
  public void show(){last=this;if(onShow!=null)onShow.event(this);}
- public void dismiss(){dismissed=true;}
+ public void dismiss(){if(dismissed)return;dismissed=true;if(onDismiss!=null)onDismiss.event(this);}
  public Button getButton(int which){
   return buttons.computeIfAbsent(which,k->{Button b=new Button(this);Click c=k==BUTTON_POSITIVE?builder.positive:k==BUTTON_NEGATIVE?builder.negative:builder.neutral;
    b.setOnClickListener(v->{if(c!=null)c.click(this,k);dismiss();});return b;});
@@ -163,6 +169,20 @@ public class AlertDialog {
   public AlertDialog show(){AlertDialog d=create();d.show();return d;}
  }
 }
+""",
+    'android/view/Window.java': r"""
+package android.view;
+public class Window {
+ public int cleared,soft;
+ public void clearFlags(int value){cleared|=value;}
+ public void setSoftInputMode(int value){soft=value;}
+}
+""",
+    'android/view/WindowManager.java': r"""
+package android.view;
+public class WindowManager {public static class LayoutParams {
+ public static final int FLAG_FULLSCREEN=1024,SOFT_INPUT_STATE_HIDDEN=2,SOFT_INPUT_ADJUST_RESIZE=16;
+}}
 """,
     'android/app/DatePickerDialog.java': r"""
 package android.app;
@@ -210,7 +230,7 @@ public class ClipboardManager{public void setPrimaryClip(ClipData data){}}
 
 HARNESS = r"""
 package com.happyhome.cc8assistant;
-import android.app.*;import android.widget.*;import org.json.*;import java.util.*;import java.io.*;
+import android.app.*;import android.widget.*;import android.view.*;import org.json.*;import java.util.*;import java.io.*;
 class VoiceSession {
  final Object routeLock=new Object();boolean foreground=true,savedTasksSupported=true,resultProvenanceSupported=true,resultReadingSupported=true;
  long routeEpoch=1;int epoch,eventCalls;Link activeLink=new Link("original"),usbLink,wifiLink,backup;
@@ -258,6 +278,7 @@ class ActionCheck extends Activity {
  boolean linked=true;long workspaceRoute=1;
  JSONArray tasksData=new JSONArray(),remindersData=new JSONArray();
  JSONObject reminderPolicyData;
+ AlertDialog reminderPolicyDialog;
  static final int INK=1,MUTED=2;
  int dp(int value){return value;}TextView text(String value,int size,int color){TextView v=new TextView(this);v.setText(value);return v;}
  Button action(String value,int icon){Button b=new Button(this);b.setText(value);return b;}
@@ -422,11 +443,15 @@ class ActionCheck extends Activity {
     c.reminderPolicyData=new JSONObject("revision",7,"quiet_enabled",true,"quiet_start","21:00","quiet_end","08:00","late_policy","skip","max_late_minutes",30);
     c.reminderDeliverySettings(1);AlertDialog form=AlertDialog.last;
     LinearLayout content=(LinearLayout)((ScrollView)form.builder.view).child;
+    yes(content.focusableInTouchMode&&content.focused,"Settings opened with an automatically focused editor");
+    yes(form.window.soft==(WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN|WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE),"IME resize/initial visibility policy missing");
+    yes((form.window.cleared&WindowManager.LayoutParams.FLAG_FULLSCREEN)!=0,"Fullscreen flag still blocks IME resize");
     if(args[0].equals("policy_stale"))s.change();
     if(args[0].equals("policy_invalid"))((EditText)content.children.get(2)).setText("24:00");
     if(args[0].equals("policy_reset"))form.getButton(AlertDialog.BUTTON_NEUTRAL).performClick();
     else if(args[0].equals("policy_cancel"))form.negative();else {form.positive();form.positive();}
     boolean submit=args[0].equals("policy_apply")||args[0].equals("policy_reset");
+    if(args[0].equals("policy_cancel"))yes(form.dismissed&&c.reminderPolicyDialog==null,"Cancelled policy dialog retained stale window ownership");
     yes(s.sent.size()==(submit?1:0),"Policy cancelled, invalid, old-route or repeated tap crossed send ownership");
     if(submit){
      JSONObject policy=s.sent.get(0).optJSONObject("arguments").optJSONObject("policy");

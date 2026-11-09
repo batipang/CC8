@@ -168,6 +168,42 @@ os._exit(23)
         records = self.board.reminder({'action': 'history'})['reminders']
         self.assertEqual([r['id'] for r in records], [first['id'], second['id']])
 
+    def test_actual_notification_cannot_cancel_a_pending_correction_and_can_resume_after_resolution(
+        self,
+    ):
+        from test_speech_correction import CorrectionFlowTests
+
+        for resolution in ('withdraw', 'expire'):
+            with self.subTest(resolution=resolution):
+                fixture = CorrectionFlowTests()
+                b = fixture.session()
+                b.workspace = self.board
+                draft = fixture.draft(b)
+                self.create()
+                self.now += timedelta(minutes=2)
+                generation = b.generation
+                original_task = deepcopy(self.board.tasks[-1])
+                b.reminder_tick()
+                self.assertIs(b.response.corrections.draft, draft)
+                self.assertEqual(b.generation, generation)
+                self.assertIsNone(b.reminders.job)
+                self.assertTrue(b.response.queue.empty())
+                self.assertEqual(self.board.reminders[-1]['status'], 'pending')
+                if resolution == 'withdraw':
+                    b.response.clear_corrections(preserve_source=True)
+                else:
+                    b.response.corrections.now = lambda: draft.expires
+                    b.response.expire_corrections()
+                b.reminders.poll = 0
+                b.reminder_tick()
+                self.assertIsNotNone(b.reminders.job)
+                self.assertEqual(b.response.queue.qsize(), 1)
+                self.assertEqual(self.board.tasks[-1], original_task)
+                self.assertEqual(self.board.reminders[-1]['status'], 'delivering')
+                # Finish this inert receipt before the next subcase; no output worker runs.
+                b.reminders.job.done.set()
+                b.reminder_tick()
+
     def test_cancel_inflight_preserves_history_and_late_ack_cannot_revive_it(self):
         item = self.create()
         self.now += timedelta(minutes=2)
