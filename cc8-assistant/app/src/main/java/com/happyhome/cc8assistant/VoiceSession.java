@@ -115,7 +115,7 @@ final class VoiceSession {
   private volatile boolean resultProvenanceSupported;
   private volatile boolean resultReadingSupported;
   private volatile boolean visionModesSupported, photoFollowupSupported, macWindowSupported;
-  private volatile boolean vocabularySupported, reportSourcesSupported;
+  private volatile boolean vocabularySupported, reportSourcesSupported, reportArchiveSupported;
   private volatile JSONObject voicePreferences;
   private volatile JSONObject speechCorrection;
   private int speechCorrectionRevision = -1;
@@ -142,6 +142,10 @@ final class VoiceSession {
 
   boolean supportsReportSources() {
     return reportSourcesSupported;
+  }
+
+  boolean supportsReportArchive() {
+    return reportArchiveSupported;
   }
 
   PhotoFollowupWindow.Picture photoForFollowup() {
@@ -304,10 +308,12 @@ final class VoiceSession {
               macWindowSupported =
                   vocabularySupported =
                       reportSourcesSupported =
-                          dotChatSupported =
-                              savedTasksSupported =
-                                  preferenceMemorySupported =
-                                      resultProvenanceSupported = resultReadingSupported = false;
+                          reportArchiveSupported =
+                              dotChatSupported =
+                                  savedTasksSupported =
+                                      preferenceMemorySupported =
+                                          resultProvenanceSupported =
+                                              resultReadingSupported = false;
       voicePreferences = null;
       speechCorrection = null;
       speechCorrectionRevision = -1;
@@ -450,10 +456,12 @@ final class VoiceSession {
                 macWindowSupported =
                     vocabularySupported =
                         reportSourcesSupported =
-                            dotChatSupported =
-                                savedTasksSupported =
-                                    preferenceMemorySupported =
-                                        resultProvenanceSupported = resultReadingSupported = false;
+                            reportArchiveSupported =
+                                dotChatSupported =
+                                    savedTasksSupported =
+                                        preferenceMemorySupported =
+                                            resultProvenanceSupported =
+                                                resultReadingSupported = false;
         voicePreferences = null;
         speechCorrection = null;
         speechCorrectionRevision = -1;
@@ -575,10 +583,12 @@ final class VoiceSession {
               macWindowSupported =
                   vocabularySupported =
                       reportSourcesSupported =
-                          dotChatSupported =
-                              savedTasksSupported =
-                                  preferenceMemorySupported =
-                                      resultProvenanceSupported = resultReadingSupported = false;
+                          reportArchiveSupported =
+                              dotChatSupported =
+                                  savedTasksSupported =
+                                      preferenceMemorySupported =
+                                          resultProvenanceSupported =
+                                              resultReadingSupported = false;
       voicePreferences = null;
       speechCorrection = null;
       speechCorrectionRevision = -1;
@@ -784,6 +794,7 @@ final class VoiceSession {
             preferenceMemorySupported = Boolean.TRUE.equals(j.opt("supports_preference_memory"));
             vocabularySupported = Boolean.TRUE.equals(j.opt("supports_vocabulary"));
             reportSourcesSupported = Boolean.TRUE.equals(j.opt("supports_report_sources"));
+            reportArchiveSupported = Boolean.TRUE.equals(j.opt("supports_report_archive"));
             visionModesSupported = Boolean.TRUE.equals(j.opt("supports_vision_modes"));
             macWindowSupported = Boolean.TRUE.equals(j.opt("supports_mac_window"));
             photoFollowupSupported = Boolean.TRUE.equals(j.opt("supports_photo_followup"));
@@ -1460,6 +1471,13 @@ final class VoiceSession {
           || !foreground
           || !currentRoute(route)
           || !requestId.matches("[a-f0-9]{32}")) return false;
+      String reportAction = args.optString("action");
+      if (("saved_reports".equals(reportAction)
+              || "saved_report".equals(reportAction)
+              || "save_report".equals(reportAction)
+              || "delete_report".equals(reportAction)
+              || "clear_reports".equals(reportAction))
+          && !reportArchiveSupported) return false;
       JSONObject request = Wire.event("dot_chat_request");
       Wire.put(request, "request_id", requestId);
       java.util.Iterator<String> keys = args.keys();
@@ -1471,7 +1489,9 @@ final class VoiceSession {
             || "source_id".equals(key)
             || "registration_id".equals(key)
             || "cursor".equals(key)
-            || "period".equals(key))) return false;
+            || "period".equals(key)
+            || "snapshot_id".equals(key)
+            || "saved_id".equals(key))) return false;
         Wire.put(request, key, args.opt(key));
       }
       return sendWorkspace(request, route);

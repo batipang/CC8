@@ -5,6 +5,9 @@ import android.app.AlertDialog;
 import android.os.Handler;
 import android.os.Looper;
 import android.widget.Toast;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -176,12 +179,35 @@ final class ReportSourcesDialog {
         toast("未取得有效汇报");
         return;
       }
-      show(
+      AlertDialog.Builder builder =
           new AlertDialog.Builder(activity)
               .setTitle("工作汇报 · 当前范围只读快照")
               .setMessage(text)
-              .setNegativeButton("关闭", null)
-              .create());
+              .setNegativeButton("关闭", null);
+      JSONObject report = data.optJSONObject("report");
+      String snapshotId = report == null ? "" : report.optString("snapshot_id");
+      Object archiveRevision = data.opt("archive_revision");
+      final long owner = epoch + 1;
+      if (session.supportsReportArchive()
+          && snapshotId.matches("[a-f0-9]{32}")
+          && archiveRevision instanceof Integer
+          && (Integer) archiveRevision >= 0) {
+        final int revision = (Integer) archiveRevision;
+        builder.setPositiveButton(
+            "保存快照",
+            (d, n) -> {
+              if (live(owner, null)) confirmSave(snapshotId, revision);
+            });
+      }
+      show(builder.create());
+      return;
+    }
+    if ("saved_reports".equals(completed)
+        || "saved_report".equals(completed)
+        || "save_report".equals(completed)
+        || "delete_report".equals(completed)
+        || "clear_reports".equals(completed)) {
+      showArchive(data);
       return;
     }
     Snapshot value = Snapshot.parse(data.optJSONObject("registry"));
@@ -290,7 +316,7 @@ final class ReportSourcesDialog {
   }
 
   private String changeNotice() {
-    return "请先暂停语音。登记本身不执行任务；删除当前范围的来源或切换范围会清除对应的内存编号和待播账本，不撤销原任务。未确认时刷新查看，不自动重试。";
+    return "请先暂停语音。登记本身不执行任务；删除当前范围的来源或切换范围会清除对应的内存编号和待播账本，不撤销原任务。未确认时刷新查看，不自动重试。已另行保存的历史快照需在“已保存汇报”中单独删除。";
   }
 
   private void register(Snapshot value, Source item) {
@@ -338,7 +364,11 @@ final class ReportSourcesDialog {
             .setTitle("工作汇报范围")
             .setItems(
                 new String[] {
-                  "使用全部登记来源", "使用当前摘要聊天", "读取当前范围：" + (scope.isEmpty() ? "未选择" : scope), "清空来源登记"
+                  "使用全部登记来源",
+                  "使用当前摘要聊天",
+                  "读取当前范围：" + (scope.isEmpty() ? "未选择" : scope),
+                  "清空来源登记",
+                  "已保存汇报"
                 },
                 (d, n) -> {
                   if (!live(owner, value)) return;
@@ -348,7 +378,9 @@ final class ReportSourcesDialog {
                     request(args);
                   } else if (n == 1) request(args("use_selected_report"));
                   else if (n == 2) periods(value);
-                  else clear(value);
+                  else if (n == 3) clear(value);
+                  else if (session.supportsReportArchive()) request(args("saved_reports"));
+                  else toast("当前后台不支持汇报快照");
                 })
             .setNegativeButton("关闭", null)
             .create());
@@ -389,5 +421,141 @@ final class ReportSourcesDialog {
 
   private void toast(String message) {
     Toast.makeText(activity, message, Toast.LENGTH_LONG).show();
+  }
+
+  private void confirmSave(String id, int revision) {
+    final long owner = epoch + 1;
+    show(
+        new AlertDialog.Builder(activity)
+            .setTitle("保存本次工作汇报？")
+            .setMessage(
+                "只保存本次汇报的摘录、来源标识、完成时间和覆盖提示，不保存完整聊天或录音。最多16份、总计256KiB，保留至手动删除，不自动淘汰。重启只供查看，不恢复语音编号、已播账本、自动播报或原任务。请先暂停语音。")
+            .setPositiveButton(
+                "确认保存",
+                (d, n) -> {
+                  if (!live(owner, null) || !session.supportsReportArchive()) return;
+                  JSONObject value = args("save_report");
+                  Wire.put(value, "snapshot_id", id);
+                  Wire.put(value, "revision", revision);
+                  Wire.put(value, "confirmed", true);
+                  request(value);
+                })
+            .setNegativeButton("取消", null)
+            .create());
+  }
+
+  private void showArchive(JSONObject data) {
+    JSONObject state = data.optJSONObject("saved_reports");
+    if (state == null
+        || !(state.opt("revision") instanceof Integer)
+        || (Integer) state.opt("revision") < 0) {
+      toast("汇报快照格式不兼容");
+      return;
+    }
+    final int revision = (Integer) state.opt("revision");
+    JSONArray rows = state.optJSONArray("items");
+    if (rows == null || rows.length() > 16) {
+      toast("汇报快照格式不兼容");
+      return;
+    }
+    final List<String> ids = new ArrayList<>(), labels = new ArrayList<>();
+    HashSet<String> seen = new HashSet<>();
+    for (int i = 0; i < rows.length(); i++) {
+      JSONObject row = rows.optJSONObject(i);
+      if (row == null
+          || !(row.opt("id") instanceof String)
+          || !(row.opt("source_title") instanceof String)
+          || !row.optString("id").matches("[a-f0-9]{32}")
+          || !label(row.optString("source_title"))
+          || !seen.add(row.optString("id"))
+          || !(row.opt("saved_at") instanceof Integer || row.opt("saved_at") instanceof Long)
+          || !(row.opt("coverage_complete") instanceof Boolean)) {
+        toast("汇报快照格式不兼容");
+        return;
+      }
+      long savedAt = ((Number) row.opt("saved_at")).longValue();
+      if (savedAt < 0 || savedAt >= 253402300799L) {
+        toast("汇报快照时间无效");
+        return;
+      }
+      java.text.SimpleDateFormat format =
+          new java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.CHINA);
+      format.setTimeZone(java.util.TimeZone.getTimeZone("Asia/Shanghai"));
+      ids.add(row.optString("id"));
+      labels.add(
+          row.optString("source_title")
+              + " · "
+              + format.format(new java.util.Date(savedAt * 1000))
+              + (Boolean.TRUE.equals(row.opt("coverage_complete")) ? "" : " · 覆盖不完整"));
+    }
+    // Strings and revision copied now; later JSON mutation cannot retarget a confirmation.
+    final String savedId = data.optString("saved_id"), body = data.optString("saved_report_text");
+    final long owner = epoch + 1;
+    AlertDialog.Builder builder =
+        new AlertDialog.Builder(activity)
+            .setTitle("已保存汇报 · " + ids.size() + "/16")
+            .setNegativeButton("关闭", null);
+    if ("saved_report".equals(data.optString("action"))) {
+      if (!ids.contains(savedId) || body.isEmpty() || body.length() > 40000) {
+        toast("未取得有效快照");
+        return;
+      }
+      builder
+          .setTitle("历史快照 · 非实时结果")
+          .setMessage(body)
+          .setPositiveButton(
+              "复制",
+              (d, n) -> {
+                if (!live(owner, null)) return;
+                ClipboardManager clipboard =
+                    (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
+                if (clipboard != null)
+                  clipboard.setPrimaryClip(ClipData.newPlainText("工作汇报历史快照", body));
+              })
+          .setNeutralButton(
+              "删除快照",
+              (d, n) -> {
+                if (live(owner, null)) confirmArchiveDelete(savedId, revision);
+              });
+    } else {
+      if (ids.isEmpty())
+        builder.setMessage("尚未保存汇报。仅在本次汇报中明确确认后保存；保留至手动删除，不自动播报或执行。总计256KiB，不自动淘汰旧记录。");
+      else
+        builder
+            .setItems(
+                labels.toArray(new String[0]),
+                (d, n) -> {
+                  if (!live(owner, null)) return;
+                  JSONObject value = args("saved_report");
+                  Wire.put(value, "saved_id", ids.get(n));
+                  request(value);
+                })
+            .setNeutralButton(
+                "清空快照",
+                (d, n) -> {
+                  if (live(owner, null)) confirmArchiveDelete("", revision);
+                });
+    }
+    show(builder.create());
+  }
+
+  private void confirmArchiveDelete(String id, int revision) {
+    final long owner = epoch + 1;
+    show(
+        new AlertDialog.Builder(activity)
+            .setTitle(id.isEmpty() ? "清空已保存汇报？" : "删除本份汇报快照？")
+            .setMessage("只删除本机保存的汇报摘录和索引，不删除来源登记、原聊天或任务。请先暂停语音；未确认时刷新查看，不自动重试。")
+            .setPositiveButton(
+                "确认删除",
+                (d, n) -> {
+                  if (!live(owner, null) || !session.supportsReportArchive()) return;
+                  JSONObject value = args(id.isEmpty() ? "clear_reports" : "delete_report");
+                  Wire.put(value, "revision", revision);
+                  Wire.put(value, "confirmed", true);
+                  if (!id.isEmpty()) Wire.put(value, "saved_id", id);
+                  request(value);
+                })
+            .setNegativeButton("取消", null)
+            .create());
   }
 }
