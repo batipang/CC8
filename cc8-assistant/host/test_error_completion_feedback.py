@@ -488,7 +488,7 @@ class DeviceFeedbackTests(unittest.TestCase):
         methods = '\n'.join(
             'void '
             + event
-            + '(int gen, String next, String message){Packet p=new Packet(gen);Data j=new Data(next,message);j.startFailure=suppliedStartFailure;j.provenance=suppliedResultProvenance;j.memory=suppliedPreferenceMemory;j.listening=suppliedListeningState;j.captureId=suppliedCaptureId!=null?suppliedCaptureId:captureWindow==null?null:captureWindow.id;j.epoch=suppliedCaptureEpoch!=null?suppliedCaptureEpoch:Integer.valueOf(epoch);'
+            + '(int gen, String next, String message){Packet p=new Packet(gen);Data j=new Data(next,message);j.startFailure=suppliedStartFailure;j.provenance=suppliedResultProvenance;j.memory=suppliedPreferenceMemory;j.modes=suppliedVisionModes;j.listening=suppliedListeningState;j.captureId=suppliedCaptureId!=null?suppliedCaptureId:captureWindow==null?null:captureWindow.id;j.epoch=suppliedCaptureEpoch!=null?suppliedCaptureEpoch:Integer.valueOf(epoch);'
             + branch(source, event)
             + '}'
             for event in events
@@ -506,7 +506,7 @@ class FeedbackCheck {
  final Object routeLock=new Object();long route=5, activeRoute=5,routeEpoch=5;
  static class CaptureWindow{static int count;final String id="capture"+(++count);boolean startConfirmed=true;}
  CaptureWindow captureWindow=new CaptureWindow();
- boolean dotChatSupported,savedTasksSupported,preferenceMemorySupported,resultProvenanceSupported,resultReadingSupported;
+ boolean dotChatSupported,savedTasksSupported,preferenceMemorySupported,resultProvenanceSupported,resultReadingSupported,visionModesSupported;
  // The transport handshake itself is covered by the capture route tests.
  static class Link {}
  final Link source=new Link();
@@ -520,15 +520,16 @@ class FeedbackCheck {
  Object suppliedListeningState="unknown";
  Object suppliedCaptureId,suppliedCaptureEpoch;
  Object suppliedStartFailure;
- Object suppliedResultProvenance,suppliedPreferenceMemory;
+ Object suppliedResultProvenance,suppliedPreferenceMemory,suppliedVisionModes;
  String pendingVisionNonce="",desktopVisionNonce="";
  static class Packet{int generation;Packet(int g){generation=g;}}
- static class Data{String next,message;Object listening="unknown",captureId,epoch,startFailure,provenance,memory;Data(String n,String m){next=n;message=m;}
+ static class Data{String next,message;Object listening="unknown",captureId,epoch,startFailure,provenance,memory,modes;Data(String n,String m){next=n;message=m;}
   Object optJSONObject(String key){return null;}
   String optString(String k){return "phase".equals(k)?next:"listening_state".equals(k)?String.valueOf(listening):message;}
   String optString(String k,String fallback){return optString(k);}
   Object opt(String k){
    if("supports_preference_memory".equals(k))return memory;
+   if("supports_vision_modes".equals(k))return modes;
    if("supports_result_provenance".equals(k)||"supports_result_reading".equals(k))return provenance;
    if("request_start_failed".equals(k))return startFailure;
    if("listening_state".equals(k))return listening;
@@ -702,6 +703,15 @@ class FeedbackCheck {
  yes(!c.preferenceMemorySupported,"background enabled memory capability");
  c.foreground=true;c.activeRoute=6;c.hello(9,"","retired route");
  yes(!c.preferenceMemorySupported&&!c.recording,"retired route enabled memory or capture");""")
+
+    def test_ocr_capability_keeps_typed_current_generation_and_route(self):
+        self.compile_and_run("""c.suppliedVisionModes="true";c.hello(8,"","bad");
+ yes(!c.visionModesSupported,"string enabled OCR");
+ c.suppliedVisionModes=Boolean.TRUE;c.hello(8,"","current");yes(c.visionModesSupported,"current OCR capability missing");
+ c.minimumGeneration=9;c.suppliedVisionModes=Boolean.FALSE;c.hello(8,"","old");yes(c.visionModesSupported,"old generation changed OCR");
+ c.hello(9,"","off");yes(!c.visionModesSupported,"current OCR off ignored");
+ c.foreground=false;c.suppliedVisionModes=Boolean.TRUE;c.hello(9,"","background");yes(!c.visionModesSupported,"background enabled OCR");
+ c.foreground=true;c.activeRoute=6;c.hello(9,"","old route");yes(!c.visionModesSupported&&!c.recording,"old route enabled OCR/capture");""")
 
     def test_route_interruption_notice_survives_rebind_and_clears_for_new_work(self):
         self.compile_and_run("""c.recording=true;c.hello(8,"notice","连接切换中断播报");

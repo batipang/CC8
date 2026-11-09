@@ -83,7 +83,7 @@ class ActivityCheck {
  final Session session=new Session();
  JSONArray tasksData=new JSONArray(),remindersData=new JSONArray();
  JSONObject reminderPolicyData;
- AlertDialog reminderPolicyDialog,reminderEditorDialog,reminderHistoryDialog;
+ AlertDialog reminderPolicyDialog,reminderEditorDialog,reminderHistoryDialog,imageQualityDialog;
  JSONArray reminderHistoryData=new JSONArray();
  boolean reminderChannelsSupported;
  long workspaceRevision=-1,workspaceRoute=0;boolean linked=true,taskResultUnconfirmed;

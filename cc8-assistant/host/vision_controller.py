@@ -10,7 +10,7 @@ import re
 import threading
 from typing import Callable, ContextManager
 from reply_types import VisualReply
-from vision import CameraInbox, DesktopSnapshot, VisionError
+from vision import CameraInbox, DesktopSnapshot, VisionError, HD_IMAGE, LEGACY_IMAGE
 from session_ports import EventSink, AnswerSink, MetricSink
 from diagnostics import TraceBook, error_kind
 from failure_feedback import FailureSink
@@ -49,6 +49,8 @@ class VisionController:
         self.challenge = ''
         self.generation = None
         self.nonce = ''
+        self.image_policy = LEGACY_IMAGE
+        self.review_capable = False
 
     def invalidate(self):
         # Caller holds the shared session guard; inbox owns its inner lock.
@@ -64,8 +66,19 @@ class VisionController:
 
     def clear_challenge(self):
         self.challenge = ''
+        self.image_policy = LEGACY_IMAGE
+        self.review_capable = False
 
     def update_peer(self, event):
+        self.review_capable = (
+            type(event.get('vision_review_version')) is int and event['vision_review_version'] == 1
+        )
+        self.image_policy = (
+            HD_IMAGE
+            if type(event.get('vision_capture_version')) is int
+            and event['vision_capture_version'] == 2
+            else LEGACY_IMAGE
+        )
         challenge = event.get('desktop_camera_challenge')
         self.challenge = (
             challenge
@@ -97,8 +110,8 @@ class VisionController:
             ):
                 raise RuntimeError('Camera unavailable or busy')
             generation = self.hooks.cancel_session('desktop_snapshot')
-            capture = self.inbox.begin(generation)
-            job = DesktopSnapshot(generation, capture.ident)
+            capture = self.inbox.begin(generation, policy=self.image_policy)
+            job = DesktopSnapshot(generation, capture.ident, policy=capture.policy)
             self.snapshot_job = job
             self.generation = generation
             self.nonce = capture.ident
@@ -134,6 +147,9 @@ class VisionController:
                 request_id=capture.ident,
                 origin='desktop',
                 nonce=capture.ident,
+                **capture.policy.fields(),
+                review_allowed=False,
+                review_window_ms=0,
             )
             image = self.inbox.wait(capture, current)
             with self.hooks.lock:
@@ -210,7 +226,9 @@ class VisionController:
             with self.hooks.lock:
                 if not self.hooks.valid(generation):
                     return
-                capture = self.inbox.begin(generation)
+                capture = self.inbox.begin(
+                    generation, policy=self.image_policy, review=self.review_capable
+                )
             self.hooks.status('thinking', '正在打开摄像头 · 预览 5 秒后拍摄给 Dot')
             self.hooks.event(
                 'camera_capture',
@@ -218,6 +236,9 @@ class VisionController:
                 request_id=capture.ident,
                 origin=job.origin,
                 nonce=job.nonce,
+                **capture.policy.fields(),
+                review_allowed=capture.review_allowed,
+                review_window_ms=70000 if capture.review_allowed else 0,
             )
             image = self.inbox.wait(capture, lambda: self.hooks.valid(generation))
             if not self.hooks.valid(generation):

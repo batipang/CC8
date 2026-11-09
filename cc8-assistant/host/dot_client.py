@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 from voice_tools import VoiceTools, TOOLS
 from minimax_client import Cancelled
 from web_search import SpeechClauses, now, public_url
-from vision import jpeg_dimensions
+from vision import jpeg_dimensions, HD_IMAGE
 from dot_errors import GENERIC
 from lifecycle_cleanup import cleanup_all
 from dot_terminals import CommandScope, stop_owned_terminals
@@ -350,7 +350,7 @@ class DotBrain:
             if handoff is not None and not self.handoff_injected:
                 inputs.insert(0, {'type': 'text', 'text': handoff.input()})
             if image is not None:
-                jpeg_dimensions(image)
+                jpeg_dimensions(image, policy=HD_IMAGE)
                 inputs.append(
                     {
                         'type': 'image',

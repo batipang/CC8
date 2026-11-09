@@ -13,10 +13,10 @@ import stat
 import sys
 
 from announce import SOCKET
-from vision import MAX_IMAGE, jpeg_dimensions
+from vision import HD_IMAGE, image_policy, jpeg_dimensions
 
 PHOTOS = Path(__file__).resolve().parents[2] / 'device-access/private/photos'
-MAX_RESPONSE = MAX_IMAGE * 4 // 3 + 4096
+MAX_RESPONSE = HD_IMAGE.max_bytes * 4 // 3 + 4096
 
 
 def receive_photo(path=SOCKET):
@@ -50,24 +50,27 @@ def receive_photo(path=SOCKET):
     if value.get('request_id') != ident or value.get('media_type') != 'image/jpeg':
         raise ValueError('Camera response does not match request')
     raw = value.get('image_base64')
-    if not isinstance(raw, str) or len(raw) > MAX_IMAGE * 4 // 3:
+    policy = image_policy(value.get('capture_version', 1))
+    if not isinstance(raw, str) or len(raw) > policy.max_bytes * 4 // 3:
         raise ValueError('Invalid camera image size')
     image = base64.b64decode(raw, validate=True)
-    width, height = jpeg_dimensions(image)
+    width, height = jpeg_dimensions(image, policy=policy)
     if (
         len(image) != value.get('bytes')
         or hashlib.sha256(image).hexdigest() != value.get('sha256')
         or (width, height) != (value.get('width'), value.get('height'))
     ):
         raise ValueError('Camera image verification failed')
-    return {
+    result = {
         k: value[k]
         for k in ('status', 'request_id', 'media_type', 'width', 'height', 'bytes', 'sha256')
-    }, image
+    }
+    result['capture_version'] = policy.version
+    return result, image
 
 
-def save_photo(image, folder=PHOTOS):
-    jpeg_dimensions(image)
+def save_photo(image, folder=PHOTOS, *, capture_version=1):
+    jpeg_dimensions(image, policy=image_policy(capture_version))
     folder.mkdir(parents=True, exist_ok=True, mode=0o700)
     info = folder.lstat()
     if (
@@ -100,7 +103,7 @@ def main():
                 )
             )
             return 1
-        target = save_photo(image)
+        target = save_photo(image, capture_version=result['capture_version'])
         result['path'] = str(target)
         print(json.dumps(result, ensure_ascii=False))
         return 0
