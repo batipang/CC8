@@ -1520,6 +1520,7 @@ final class VoiceSession {
             || "period".equals(key)
             || "period_seconds".equals(key)
             || "channel".equals(key)
+            || "mode".equals(key)
             || "page".equals(key)
             || "snapshot_id".equals(key)
             || "saved_id".equals(key)

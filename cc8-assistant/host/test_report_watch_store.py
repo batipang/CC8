@@ -28,6 +28,77 @@ def item(number=1, text='known result version'):
 
 
 class WatchStoreTests(unittest.TestCase):
+    def test_summary_is_explicit_format_upgrade_and_count_or_clear_can_remove_it(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = ReportWatchStore(Path(folder) / 'watch.json', clock=lambda: 100)
+            legacy = store.configure(0, SOURCE, 300, 'cc8')
+            raw = store.path.read_bytes()
+            self.assertEqual(ReportWatchStore(store.path).snapshot(), legacy)
+            self.assertEqual(store.path.read_bytes(), raw)
+            self.assertEqual(legacy['schema'], 1)
+            self.assertNotIn('mode', legacy['watch'])
+            summary = store.configure(1, SOURCE, 300, 'cc8', mode='summary')
+            self.assertEqual(summary['schema'], 2)
+            self.assertEqual(ReportWatchStore(store.path).snapshot()['watch']['mode'], 'summary')
+            raw = store.path.read_bytes()
+            with self.assertRaises(ValueError):
+                store.configure(2, SOURCE, 300, 'desktop', mode='summary')
+            self.assertEqual(store.path.read_bytes(), raw)
+            count = store.configure(2, SOURCE, 300, 'desktop')
+            self.assertEqual(count['schema'], 1)
+            store.configure(3, SOURCE, 300, 'cc8', mode='summary')
+            cleared = store.clear(4)
+            self.assertEqual(cleared['schema'], 1)
+            self.assertIsNone(cleared['watch'])
+
+    def test_item_acknowledgements_are_exact_and_late_or_whole_job_receipts_cannot_promote_them(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as folder:
+            store = ReportWatchStore(Path(folder) / 'watch.json', clock=lambda: 200)
+            store.configure(0, SOURCE, 300, 'cc8', mode='summary')
+            # The frozen start is 200; this synthetic read ends later.
+            store.clock = lambda: 400
+            watch = store.claim(1, [item(1), item(2)], 300)['watch']
+            wid, aid = watch['id'], watch['attempt']['id']
+            confirmed = store.part(wid, aid, item(1))['watch']
+            self.assertEqual(confirmed['seen'], [item(1)])
+            self.assertEqual(confirmed['attempt']['items'], [item(2)])
+            raw = store.path.read_bytes()
+            for ident, attempt, row in (
+                (wid, aid, item(1)),
+                ('a' * 32, aid, item(2)),
+                (wid, 'b' * 32, item(2)),
+                (wid, aid, item(2, text='another version')),
+            ):
+                self.assertIsNone(store.part(ident, attempt, row))
+                self.assertEqual(store.path.read_bytes(), raw)
+            unknown = store.settle(wid, aid, True, detail='completed')['watch']
+            self.assertFalse(unknown['enabled'])
+            self.assertEqual(unknown['attempt']['status'], 'unconfirmed')
+            self.assertIsNone(store.part(wid, aid, item(2)))
+            self.assertEqual(store.snapshot()['watch']['seen'], [item(1)])
+
+    def test_format_two_remains_strict_and_unknown_format_is_never_overwritten(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = ReportWatchStore(Path(folder) / 'watch.json', clock=lambda: 200)
+            state = store.configure(0, SOURCE, 300, 'cc8', mode='summary')
+            for change in ('mode', 'channel', 'extra', 'schema'):
+                broken = deepcopy(state)
+                if change == 'mode':
+                    broken['watch']['mode'] = 'automatic'
+                elif change == 'channel':
+                    broken['watch']['channel'] = 'desktop'
+                elif change == 'extra':
+                    broken['watch']['text'] = 'PRIVATE'
+                else:
+                    broken['schema'] = 3
+                store.path.write_text(json.dumps(broken))
+                raw = store.path.read_bytes()
+                with self.assertRaises(ValueError):
+                    store.clear(1)
+                self.assertEqual(store.path.read_bytes(), raw)
+
     def test_absence_stays_absent_and_explicit_configuration_contains_no_chat_or_result_body(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'private' / 'watch.json'

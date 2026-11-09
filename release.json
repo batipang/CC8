@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "optional-work-notices-20261110.1",
+  "release_id": "scheduled-work-excerpts-20261110.1",
   "backend": {
-    "version": "0.16.23"
+    "version": "0.16.24"
   },
   "assistant": {
-    "version": "0.9.95",
-    "version_code": 132,
+    "version": "0.9.97",
+    "version_code": 134,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {

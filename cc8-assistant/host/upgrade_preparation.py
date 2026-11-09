@@ -128,6 +128,50 @@ def reminder_storage_gate(before_root, after_root):
     }
 
 
+def report_watch_storage_gate(before_root, after_root):
+    """Optional summary format may outgrow recovery; inspect metadata without exporting it."""
+    from reminder_store import ReminderStore
+
+    source = Path(after_root) / 'cc8-assistant/host/report_watch_store.py'
+    maximum = 1
+    if source.is_file():
+        for node in ast.parse(source.read_text()).body:
+            if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == 'READER_VERSION' for t in node.targets
+            ):
+                if (
+                    not isinstance(node.value, ast.Constant)
+                    or type(node.value.value) is not int
+                    or node.value.value not in (1, 2)
+                ):
+                    raise ValueError('Invalid scheduled report reader declaration')
+                maximum = node.value.value
+    disk = ReminderStore(
+        Path(before_root) / 'device-access/private/voice-runtime/work-report-watch.json'
+    )
+    value = disk.load()
+    present = disk.expected is not None
+    version = 1
+    if present:
+        # This stdlib CLI also runs on macOS Python 3.9. Do not import the
+        # voice runtime's report/provider graph just to inspect a format number.
+        if (
+            not isinstance(value, dict)
+            or set(value) != {'schema', 'revision', 'watch'}
+            or type(value.get('schema')) is not int
+            or value['schema'] not in (1, 2)
+        ):
+            raise ValueError('Invalid existing scheduled report store schema')
+        version = value['schema']
+    return dict(
+        present=present,
+        store_version=version,
+        reader_max_version=maximum,
+        compatible=version <= maximum,
+        report_content_exported=False,
+    )
+
+
 def plan(before_root, after_root, assistant_apk=None):
     before, after = load_release(Path(before_root)), load_release(Path(after_root))
     old_device_new_host = after.compatible(before.protocol_version)
@@ -155,8 +199,10 @@ def plan(before_root, after_root, assistant_apk=None):
             'configuration_backup',
             'physical_handover_validation',
             'reminder_store_compatibility',
+            'report_watch_store_compatibility',
         ],
         'reminder_storage': reminder_storage_gate(before_root, after_root),
+        'report_watch_storage': report_watch_storage_gate(before_root, after_root),
     }
     if assistant_apk is not None:
         # Reuse actual AAPT/API-27 signature checks; no adb or installation here.
@@ -213,6 +259,14 @@ def verify_assistant_transition(
         raise ValueError(
             'Reminder store is not readable by candidate/recovery; do not restore old data'
         )
+    watch_gates = {
+        name: report_watch_storage_gate(roots[0], target)
+        for name, target in (('candidate', roots[1]), ('recovery', roots[2]))
+    }
+    if not all(gate['compatible'] for gate in watch_gates.values()):
+        raise ValueError(
+            'Scheduled report store is not readable by candidate/recovery; keep it intact'
+        )
 
     apks = [Path(baseline_apk)]
     baseline = check_apk('assistant', apks[0], root=roots[0])
@@ -267,6 +321,7 @@ def verify_assistant_transition(
         'ready_for_installation': False,
         'device_acceptance': 'not_asserted',
         'reminder_storage': reminder_gates,
+        'report_watch_storage': watch_gates,
         'recovery_source': recovery_source,
         **observation,
     }
@@ -435,7 +490,9 @@ def main(argv=None):
             value = plan(args.from_root, args.to_root, args.assistant_apk)
         print(output(value, args.output))
         if args.action == 'plan' and (
-            not value['declared_protocol_compatible'] or not value['reminder_storage']['compatible']
+            not value['declared_protocol_compatible']
+            or not value['reminder_storage']['compatible']
+            or not value['report_watch_storage']['compatible']
         ):
             return 2
         if args.action == 'verify-transition' and args.observation_report is not None:

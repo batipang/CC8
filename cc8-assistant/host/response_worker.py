@@ -330,6 +330,7 @@ class ResponseWorker:
                 except queue.Empty:
                     continue
                 if isinstance(old, Announcement):
+                    old.discard_segments()
                     old.done.set()
 
     def work(self):

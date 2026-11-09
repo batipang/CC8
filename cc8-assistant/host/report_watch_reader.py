@@ -6,6 +6,7 @@ from report_checkpoint import source_from
 from report_progress import key, version
 from report_voice import ReportVoice
 from report_watch_store import MAX_NOTICE, MAX_SEEN, pair
+from report_watch_narration import segments
 from work_reports import ReportWindow
 from dot_client import Cancelled
 
@@ -19,6 +20,7 @@ class Notice:
     known_new: int
     partial: bool
     text: str
+    segments: tuple[str, ...] = ()
 
 
 class WatchReader:
@@ -28,9 +30,18 @@ class WatchReader:
     callback. The returned notice is a proposal, not a delivery or a send permission.
     """
 
-    def __init__(self, store, read, source_current, *, commit_lock=None):
+    def __init__(self, store, read, source_current, *, commit_lock=None, results=None):
         self.store, self.read, self.source_current = store, read, source_current
         self.commit_lock = commit_lock if commit_lock is not None else nullcontext()
+        self.results = results
+
+    def clear_results(self):
+        if self.results is not None:
+            self.results.clear()
+
+    def expire_results(self):
+        if self.results is not None:
+            self.results.expire()
 
     def prepare(self, read_end, current):
         state = self.store.snapshot()
@@ -66,6 +77,8 @@ class WatchReader:
 
         if not current():
             raise Cancelled('Report subscription cancelled')
+        with self.commit_lock:
+            self.clear_results()
         previous = watch['last_check']
         if (
             type(read_end) is not int
@@ -95,9 +108,19 @@ class WatchReader:
             report['window_end'],
         ) != (window.start, window.end):
             return stop('read_error')
+        with self.commit_lock:
+            if not owned():
+                raise Cancelled('Report subscription owner changed')
+            if self.results is not None:
+                self.results.remember(report)
         seen = {pair(row, watch['source']) for row in watch['seen']}
         rows = [dict(key=list(key(item)), fingerprint=version(item)) for item in report['items']]
-        unseen = [row for row in rows if pair(row, watch['source']) not in seen]
+        unseen_items = [
+            (row, item)
+            for row, item in zip(rows, report['items'])
+            if pair(row, watch['source']) not in seen
+        ]
+        unseen = [row for row, item in unseen_items]
         partial = not report['coverage_complete']
         if not unseen:
             with self.commit_lock:
@@ -129,6 +152,14 @@ class WatchReader:
             len(unseen),
             partial,
             text,
+            segments(
+                source.source_title,
+                [item for row, item in unseen_items[:MAX_NOTICE]],
+                partial=partial,
+                more=len(unseen) > MAX_NOTICE,
+            )
+            if watch.get('mode') == 'summary'
+            else (),
         )
 
     def claim(self, notice, current):

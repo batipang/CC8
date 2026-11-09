@@ -244,6 +244,36 @@ public class ReportSourcesCheck {
     watch(ui,s,watchPayload(s));AlertDialog.last.click(-1);AlertDialog.last.pick(0);AlertDialog.last.pick(0);AlertDialog.last.click(-1);Runnable timer=android.os.Handler.queued.get(android.os.Handler.queued.size()-1);count=s.requests.size();timer.run();
     ui.accept(watchPayload(s));yes(!AlertDialog.last.showing&&s.requests.size()==count,"watch timeout retried or accepted late receipt");break;
    }
+   case "watch_summary":{
+    JSONObject data=watchPayload(s).put("watch_summary_supported",true);watch(ui,s,data);int before=s.requests.size();AlertDialog.last.click(-1);AlertDialog.last.pick(0);AlertDialog.last.pick(0);AlertDialog.last.pick(1);
+    data.put("watch_summary_supported",false).put("watch_offer_id","b".repeat(32));data.optJSONObject("report_watch").put("revision",99);
+    yes(s.requests.size()==before,"summary enabled before final consent");AlertDialog.last.click(-1);JSONObject sent=s.requests.get(s.requests.size()-1);
+    yes("summary".equals(sent.opt("mode"))&&"cc8".equals(sent.opt("channel"))&&sent.optInt("revision")==4&&"a".repeat(32).equals(sent.opt("offer_id"))&&Boolean.TRUE.equals(sent.opt("confirmed")),"summary consent/source/mode changed");break;
+   }
+   case "watch_results":{
+    JSONObject data=watchPayload(s).put("watch_has_results",true);watch(ui,s,data);AlertDialog.last.click(-3);AlertDialog.last.pick(2);
+    JSONObject sent=s.requests.get(s.requests.size()-1);yes("watch_result".equals(sent.optString("action"))&&sent.opt("confirmed")==null,"recent read sent mutation");
+    JSONObject page=new JSONObject("request_id",s.lastId,"ok",true,"action","watch_result","watch_result",true,"watch_result_ttl_ms",1000,"snapshot_id","c".repeat(32),"report_text","【第1/2页；请翻页继续查看】\n\n第一页","report_page",0,"report_pages",2,"report_page_marker","【第1/2页；请翻页继续查看】\n\n");ui.accept(page);
+    AlertDialog retired=AlertDialog.last;page.put("snapshot_id","e".repeat(32));AlertDialog.last.click(-1);sent=s.requests.get(s.requests.size()-1);
+    yes("watch_result_page".equals(sent.optString("action"))&&"c".repeat(32).equals(sent.optString("snapshot_id"))&&sent.optInt("page")==1,"recent paging retargeted mutable response");
+    ui.accept(new JSONObject("request_id",s.lastId,"ok",true,"action","watch_result_page","watch_result",true,"watch_result_ttl_ms",1000,"snapshot_id","c".repeat(32),"report_text","【第2/2页；请翻页继续查看】\n\n第二页","report_page",1,"report_pages",2,"report_page_marker","【第2/2页；请翻页继续查看】\n\n"));
+    int count=s.requests.size();retired.builder.actions.get(-1).onClick(retired,-1);yes(s.requests.size()==count,"retired recent page sent request");
+    AlertDialog.last.click(-3);yes(s.requests.get(s.requests.size()-1).optInt("page")==0,"recent previous page missing");ui.close();ui.accept(page.put("request_id",s.lastId));yes(!AlertDialog.last.showing,"Home retained recent body");break;
+   }
+   case "watch_result_expiry":{
+    watch(ui,s,watchPayload(s).put("watch_has_results",true));AlertDialog.last.click(-3);AlertDialog.last.pick(2);
+    ui.accept(new JSONObject("request_id",s.lastId,"ok",true,"action","watch_result","watch_result",true,"watch_result_ttl_ms",1,"snapshot_id","c".repeat(32),"report_text","只读正文","report_page",0,"report_pages",1,"report_page_marker",""));
+    yes(AlertDialog.last.showing,"valid expiring result not visible");Runnable expiry=android.os.Handler.queued.get(android.os.Handler.queued.size()-1);int count=s.requests.size();expiry.run();yes(!AlertDialog.last.showing&&s.requests.size()==count,"result expiry retained body or queried history");
+    watch(ui,s,watchPayload(s));AlertDialog newer=AlertDialog.last;expiry.run();yes(newer.showing,"old result expiry closed a new owner");break;
+   }
+   case "watch_bad_result":{
+    for(String broken:new String[]{"snapshot","page","action","marker","ttl"}){
+     watch(ui,s,watchPayload(s).put("watch_has_results",true));AlertDialog.last.click(-3);AlertDialog.last.pick(2);
+     JSONObject page=new JSONObject("request_id",s.lastId,"ok",true,"action","watch_result","watch_result",true,"watch_result_ttl_ms",1000,"snapshot_id","c".repeat(32),"report_text","正文","report_page",0,"report_pages",1,"report_page_marker","");
+     if(broken.equals("ttl"))page.put("watch_result_ttl_ms",true);if(broken.equals("snapshot"))page.put("snapshot_id",42);if(broken.equals("page"))page.put("report_page",true);if(broken.equals("action"))page.put("action","report");if(broken.equals("marker"))page.put("report_page_marker","bad");
+     ui.accept(page);yes(!AlertDialog.last.showing,"malformed recent result accepted: "+broken);
+    }break;
+   }
    case "watch_invalid_unsupported":{
     master(ui,s);AlertDialog.last.click(-3);yes(AlertDialog.last.builder.labels.length==6,"old host offered subscription");
     JSONObject data=watchPayload(s);data.optJSONObject("report_watch").put("revision",true);watch(ui,s,data);yes(!AlertDialog.last.showing,"Boolean watch revision accepted");
@@ -410,3 +440,15 @@ class ReportSourcesUiTests(unittest.TestCase):
 
     def test_watch_malformed_state_and_older_host_do_not_offer_actions(self):
         self.scenario('watch_invalid_unsupported')
+
+    def test_recent_watch_pages_are_frozen_readonly_and_retired_on_home(self):
+        self.scenario('watch_results')
+
+    def test_recent_watch_results_require_typed_pages_and_expected_action(self):
+        self.scenario('watch_bad_result')
+
+    def test_watch_summary_needs_supported_channel_and_frozen_explicit_consent(self):
+        self.scenario('watch_summary')
+
+    def test_recent_body_expires_on_device_without_querying_or_closing_new_owner(self):
+        self.scenario('watch_result_expiry')

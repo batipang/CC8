@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import queue
 from typing import Callable, ContextManager
 from announce import Announcement, validate_text
+from request_text import validate_request_text
 from diagnostics import TraceBook, error_kind
 from failure_feedback import feedback
 from session_ports import EventSink, MetricSink
@@ -39,6 +40,24 @@ class AnnouncementController:
 
     def announce(self, text, *, prepare=None):
         text = validate_text(text)
+        return self._submit(text, prepare=prepare)
+
+    def announce_segments(self, segments, *, prepare, on_segment):
+        """Internal literal reports only; public owner IPC retains its 500-char limit."""
+        if (
+            not isinstance(segments, tuple)
+            or not 1 <= len(segments) <= 4
+            or not callable(on_segment)
+        ):
+            raise ValueError('Invalid segmented report')
+        segments = tuple(validate_request_text(text, 1200) for text in segments)
+        if sum(map(len, segments)) > 4000:
+            raise ValueError('Segmented report exceeds limit')
+        return self._submit(
+            ''.join(segments), prepare=prepare, segments=segments, on_segment=on_segment
+        )
+
+    def _submit(self, text, *, prepare, segments=(), on_segment=None):
         with self.hooks.lock:
             if (
                 not self.hooks.connected()
@@ -58,7 +77,7 @@ class AnnouncementController:
                         self._cleanup_error('diagnostics', secondary)
                 self._start_failure(previous + 1, error)
                 raise
-            job = Announcement(generation, text)
+            job = Announcement(generation, text, segments=segments, on_segment=on_segment)
 
             def current():
                 return (
@@ -72,6 +91,7 @@ class AnnouncementController:
                 except Exception as secondary:
                     self._cleanup_error('superseded', secondary)
                 finally:
+                    job.discard_segments()
                     job.done.set()
                 return job
 
@@ -110,6 +130,7 @@ class AnnouncementController:
                             self._cleanup_error('cancellation', secondary)
                     self._start_failure(generation + 1, error)
                 finally:
+                    job.discard_segments()
                     job.done.set()
                 if isinstance(error, queue.Full):
                     raise RuntimeError('Announcement queue busy') from None
@@ -149,10 +170,17 @@ class AnnouncementController:
                     return
                 self.hooks.status('thinking', '正在准备播报 · 麦克风状态保持不变')
             # Read user-provided text literally, without an LLM rewrite or lookup.
-            pieces = [job.text[i : i + 120] for i in range(0, len(job.text), 120)]
-            for text in pieces:
-                if not self.hooks.valid(generation) or not self.hooks.speak(text, generation):
-                    return
+            for index, segment in enumerate(job.segments or (job.text,)):
+                for begin in range(0, len(segment), 120):
+                    if not self.hooks.valid(generation) or not self.hooks.speak(
+                        segment[begin : begin + 120], generation
+                    ):
+                        return
+                if job.on_segment is not None:
+                    # Every chunk of this segment was confirmed by the device.
+                    # A later cancellation cannot erase an already played item.
+                    with self.hooks.lock:
+                        job.on_segment(index)
             if self.hooks.valid(generation):
                 job.result = 'completed'
         except Exception as error:
@@ -190,4 +218,5 @@ class AnnouncementController:
                             )
                             self.hooks.save_status()
             finally:
+                job.discard_segments()
                 job.done.set()

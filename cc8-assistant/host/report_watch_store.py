@@ -14,6 +14,7 @@ from source_identity import identifier
 from work_reports import ReportWindow
 
 PERIODS = (300, 900, 1800)
+READER_VERSION = 2
 MAX_SEEN = 256
 MAX_NOTICE = 3
 CHECK_STATES = frozenset(
@@ -65,7 +66,7 @@ def validate(value):
         not isinstance(value, dict)
         or set(value) != {'schema', 'revision', 'watch'}
         or type(value['schema']) is not int
-        or value['schema'] != 1
+        or value['schema'] not in (1, READER_VERSION)
         or type(value['revision']) is not int
         or not 0 <= value['revision'] <= REVISION_LIMIT
     ):
@@ -73,7 +74,7 @@ def validate(value):
     watch = value['watch']
     if watch is None:
         return value
-    if not isinstance(watch, dict) or set(watch) != {
+    expected = {
         'id',
         'source',
         'started_at',
@@ -83,7 +84,10 @@ def validate(value):
         'seen',
         'attempt',
         'last_check',
-    }:
+    }
+    if value['schema'] == 2:
+        expected.add('mode')
+    if not isinstance(watch, dict) or set(watch) != expected:
         raise ValueError('Invalid report subscription fields')
     token(watch['id'])
     source_from(watch['source'])
@@ -93,6 +97,12 @@ def validate(value):
         or type(watch['period_seconds']) is not int
         or watch['period_seconds'] not in PERIODS
         or watch['channel'] not in ('cc8', 'desktop')
+        or value['schema'] == 2
+        and (
+            watch['mode'] not in ('count', 'summary')
+            or watch['mode'] == 'summary'
+            and watch['channel'] != 'cc8'
+        )
     ):
         raise ValueError('Invalid report subscription settings')
     seen = watch['seen']
@@ -197,12 +207,17 @@ class ReportWatchStore:
                 disk.save(value)
                 return deepcopy(value)
 
-    def configure(self, revision, source, period_seconds, channel, *, current=lambda: True):
+    def configure(
+        self, revision, source, period_seconds, channel, *, mode='count', current=lambda: True
+    ):
         source_from(source)
         if (
             type(period_seconds) is not int
             or period_seconds not in PERIODS
             or channel not in ('cc8', 'desktop')
+            or mode not in ('count', 'summary')
+            or mode == 'summary'
+            and channel != 'cc8'
         ):
             raise ValueError('Invalid report subscription interval or channel')
         watch = dict(
@@ -219,8 +234,37 @@ class ReportWatchStore:
 
         def change(value):
             value['watch'] = deepcopy(watch)
+            # Legacy count-only stores remain byte-format compatible. Upgrade
+            # only on explicit summary consent, never as a read/startup migration.
+            value['schema'] = 2 if mode == 'summary' else 1
+            if value['schema'] == 2:
+                value['watch']['mode'] = mode
 
         return self._change(revision, change, current)
+
+    def part(self, watch_id, attempt_id, item):
+        """A whole literal item received playback ACKs; never infer it from job completion."""
+        token(watch_id)
+        token(attempt_id)
+
+        def change(value):
+            watch = value['watch']
+            if watch is None or watch['id'] != watch_id or watch.get('mode') != 'summary':
+                return False
+            attempt = watch['attempt']
+            if attempt is None or attempt['id'] != attempt_id or attempt['status'] != 'claimed':
+                return False
+            identity = pair(item, watch['source'])
+            matches = [row for row in attempt['items'] if pair(row, watch['source']) == identity]
+            if not matches:
+                return False
+            watch['seen'].append(deepcopy(matches[0]))
+            attempt['items'].remove(matches[0])
+            if not attempt['items']:
+                watch['attempt'] = None
+                watch['last_check'].update(at=int(self.clock()), status='delivered')
+
+        return self._change(None, change, lambda: True, allow_any_revision=True)
 
     def pause(self, revision, *, current=lambda: True):
         def change(value):
@@ -233,6 +277,9 @@ class ReportWatchStore:
     def clear(self, revision, *, current=lambda: True):
         def change(value):
             value['watch'] = None
+            # Explicit deletion removes every summary index/claim as requested;
+            # an empty legacy document is safe for the original reader again.
+            value['schema'] = 1
 
         return self._change(revision, change, current)
 
@@ -290,15 +337,23 @@ class ReportWatchStore:
                 'completed' if watch['channel'] == 'cc8' else 'notification_center'
             ):
                 raise ValueError('Report notice lacks a matching channel delivery receipt')
-            if completed:
+            if completed and watch.get('mode') == 'summary':
+                # Only part() may mark summary items heard. An apparently
+                # successful job with missing item ACKs is still uncertain.
+                completed_receipt = False
+                receipt_detail = 'unconfirmed'
+            else:
+                completed_receipt = completed
+                receipt_detail = detail
+            if completed_receipt:
                 watch['seen'].extend(deepcopy(attempt['items']))
                 watch['attempt'] = None
             else:
-                attempt.update(status='unconfirmed', detail=detail)
+                attempt.update(status='unconfirmed', detail=receipt_detail)
                 watch['enabled'] = False
             watch['last_check'] = dict(
                 at=int(self.clock()),
-                status='delivered' if completed else 'delivery_unconfirmed',
+                status='delivered' if completed_receipt else 'delivery_unconfirmed',
                 confirmed_new=len(attempt['items']),
             )
 
