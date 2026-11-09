@@ -220,7 +220,93 @@ class UpgradeTests(unittest.TestCase):
             self.assertFalse(report['installed_signer_checked'])
             self.assertFalse(report['ready_for_installation'])
             self.assertEqual(list(report['stages']), ['baseline', 'candidate', 'recovery'])
+            self.assertEqual(report['recovery_source']['candidate_matching_build_support'], [])
             self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+
+    def test_transition_accepts_only_candidate_identical_build_support_and_reports_it(self):
+        with tempfile.TemporaryDirectory() as folder:
+            roots, apks, checked, git = self.transition_fixture(folder)
+            for root, apk in zip(roots[1:], apks[1:]):
+                for name in upgrade.RECOVERY_BUILD_SUPPORT:
+                    path = root / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text('fixed CI download support\n')
+                git(root, 'add', '.')
+                git(root, 'commit', '-qm', 'reviewed build support')
+                receipt = apk.with_suffix('.apk.build.json')
+                value = json.loads(receipt.read_bytes())
+                value['source_commit'] = git(root, 'rev-parse', 'HEAD')
+                receipt.write_text(json.dumps(value))
+            pin = hashlib.sha256(apks[0].read_bytes()).hexdigest()
+            with patch('tools.release.check_apk', side_effect=checked):
+                report = upgrade.verify_assistant_transition(*roots, apks[0], pin)
+            self.assertEqual(
+                report['recovery_source']['candidate_matching_build_support'],
+                sorted(upgrade.RECOVERY_BUILD_SUPPORT),
+            )
+            self.assertFalse(report['ready_for_installation'])
+
+    def test_transition_rejects_divergent_missing_linked_executable_or_unknown_support(self):
+        for variant in ('divergent', 'missing', 'link', 'executable', 'unknown', 'deleted'):
+            with self.subTest(variant=variant), tempfile.TemporaryDirectory() as folder:
+                roots, apks, _, git = self.transition_fixture(folder)
+                name = '.github/workflows/ci.yml'
+                if variant == 'unknown':
+                    name = 'tools/other-download.py'
+                if variant == 'deleted':
+                    # Start from a shared tracked CI file, then delete it in recovery.
+                    for root in roots:
+                        path = root / name
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_text('original CI\n')
+                        git(root, 'add', '.')
+                        git(root, 'commit', '-qm', 'shared CI fixture')
+                    (roots[2] / name).unlink()
+                    git(roots[2], 'commit', '-qam', 'deleted recovery CI')
+                else:
+                    for index, root in enumerate(roots[1:]):
+                        if variant == 'missing' and index == 0:
+                            continue
+                        path = root / name
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        if variant == 'link':
+                            path.symlink_to('release.json')
+                        else:
+                            path.write_text(f'CI {index if variant == "divergent" else 0}\n')
+                            if variant == 'executable':
+                                path.chmod(0o755)
+                        git(root, 'add', '.')
+                        git(root, 'commit', '-qm', 'invalid recovery support')
+                pin = hashlib.sha256(apks[0].read_bytes()).hexdigest()
+                with patch('tools.release.check_apk') as probe:
+                    with self.assertRaisesRegex(ValueError, 'Recovery'):
+                        upgrade.verify_assistant_transition(*roots, apks[0], pin)
+                    probe.assert_not_called()
+
+    def test_recovery_cannot_hide_runtime_deletion_as_a_rename_to_allowed_support(self):
+        with tempfile.TemporaryDirectory() as folder:
+            roots, apks, _, git = self.transition_fixture(folder)
+            runtime = 'cc8-assistant/host/baseline_behavior.py'
+            support = '.github/workflows/ci.yml'
+            for root in roots:
+                path = root / runtime
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('same bytes to induce Git rename detection\n')
+                git(root, 'add', '.')
+                git(root, 'commit', '-qm', 'baseline runtime fixture')
+            for root in roots[1:]:
+                path = root / support
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes((root / runtime).read_bytes())
+                if root == roots[2]:
+                    (root / runtime).unlink()
+                git(root, 'add', '.')
+                git(root, 'commit', '-qm', 'support and runtime deletion')
+            pin = hashlib.sha256(apks[0].read_bytes()).hexdigest()
+            with patch('tools.release.check_apk') as probe:
+                with self.assertRaisesRegex(ValueError, 'only release.json'):
+                    upgrade.verify_assistant_transition(*roots, apks[0], pin)
+                probe.assert_not_called()
 
     def test_optional_observation_gate_reaudits_private_report_against_the_baseline(self):
         with tempfile.TemporaryDirectory() as folder:
