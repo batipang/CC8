@@ -314,6 +314,12 @@ class TraceBook:
             if field:
                 row[field] = reused
 
+    def confirmed_playback_count(self, generation):
+        """Only matched device completions increment this generation-owned counter."""
+        with self.lock:
+            row = self._row(generation)
+            return row.get('confirmed_playback_clauses', 0) if row else 0
+
     def playback_done(self, generation, *, confirmed_ack_ms):
         with self.lock:
             completed_ms = self.mark(generation, 'playback_done')

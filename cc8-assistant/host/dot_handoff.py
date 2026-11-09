@@ -57,7 +57,11 @@ class ChatCatalog:
         from work_reports import ReportWindow, WorkReportReader
 
         return WorkReportReader(self.rpc_factory).read(
-            selected, ReportWindow.period(period, time.time()), is_current=is_current
+            selected,
+            period
+            if isinstance(period, ReportWindow)
+            else ReportWindow.period(period, time.time()),
+            is_current=is_current,
         )
 
     def list(self, cursor=None, is_current=lambda: True):

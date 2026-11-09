@@ -175,7 +175,7 @@ class ChatController:
                         return
                     self.hooks.select(selected)
                     self.selection = selected
-                    self.voice.forget()
+                    self.voice.clear()
                     self.hooks.event('brain_provider', provider='dot')
                 self.publish(request_id, ok=True, action=action, **result)
                 if action == 'report':
