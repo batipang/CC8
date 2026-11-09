@@ -64,6 +64,7 @@ class MandarinRecognizer:
             else selected_engine()
         )
         self.last_metrics = {}
+        self.language_hint = 'auto'
         if self.engine == 'sensevoice':
             if recognizer is None:
                 verify_model()
@@ -106,6 +107,11 @@ class MandarinRecognizer:
         if self.engine == 'minimax':
             self.recognizer.cancel()
 
+    def set_language_hint(self, language):
+        if self.engine != 'minimax' or language not in ('auto', 'zh', 'en'):
+            raise ValueError('Recognition language is not supported')
+        self.language_hint = language
+
     def recognize(self, samples, *, is_current=None):
         # 云端仅接收当前单句的内存 WAV；持续音频、AEC 和即时插话仍在 Mac 本地处理。
         start = time.monotonic()
@@ -120,10 +126,13 @@ class MandarinRecognizer:
                 output.setframerate(16000)
                 output.writeframes(np.rint(pcm * 32768).astype('<i2').tobytes())
             wav = buffer.getvalue()
+            # Keep injected/legacy automatic clients compatible; explicit hints
+            # go only to the selected MiniMax recognizer, never local wake/AEC.
+            kwargs = {} if self.language_hint == 'auto' else {'language': self.language_hint}
             text = (
-                self.recognizer.transcribe(wav)
+                self.recognizer.transcribe(wav, **kwargs)
                 if is_current is None
-                else self.recognizer.transcribe(wav, is_current)
+                else self.recognizer.transcribe(wav, is_current, **kwargs)
             )
         elif self.engine == 'sensevoice':
             stream = self.recognizer.create_stream()

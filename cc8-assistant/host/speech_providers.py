@@ -99,6 +99,13 @@ class DirectSpeech(LocalSpeech):
         # Relative to the owner's configured speed; normal restores it exactly.
         self.voice.speed = max(0.5, min(2.0, self.default_voice_speed * RATES[rate]))
 
+    @property
+    def recognition_language_supported(self):
+        return self.recognizer.engine == 'minimax'
+
+    def set_recognition_language(self, language):
+        self.recognizer.set_language_hint(language)
+
     def cancel(self):
         self.voice.cancel()
         self.recognizer.cancel()

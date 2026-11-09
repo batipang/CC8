@@ -48,6 +48,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   private VoiceSession session;
   private DotChatsDialog dotChats;
   private PreferenceMemoryDialog preferenceMemory;
+  private RecognitionLanguageDialog recognitionLanguage;
   private SpeechCorrectionDialog correctionDialog;
   private SavedTasksDialog savedTasks;
   private ResultDetailsDialog resultDetails;
@@ -164,6 +165,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     correctionDialog = new SpeechCorrectionDialog(this, session);
     dotChats = new DotChatsDialog(this, session);
     preferenceMemory = new PreferenceMemoryDialog(this, session);
+    recognitionLanguage = new RecognitionLanguageDialog(this, session);
     resultDetails = new ResultDetailsDialog(this, session);
     savedTasks = new SavedTasksDialog(this, session, resultDetails);
     requestOpenVoice(getIntent());
@@ -1245,7 +1247,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
               "Dot 聊天接续",
               "声音与自然插话",
               "提醒送达记录",
-              "偏好记忆"
+              "偏好记忆",
+              "识别语言"
             },
             (d, n) -> {
               if (n == 0) {
@@ -1292,6 +1295,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
               else if (n == 8) dotChats.open();
               else if (n == 9) showVoicePreferences();
               else if (n == 11) preferenceMemory.open();
+              else if (n == 12) recognitionLanguage.open();
               else showReminderHistory();
             })
         .setNegativeButton("关闭", null)
@@ -1764,6 +1768,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
             taskResultUnconfirmed |= hasRunningTask(tasksData);
             dotChats.close();
             preferenceMemory.close();
+            recognitionLanguage.close();
             savedTasks.close();
             resultDetails.close();
             if (correctionDialog != null) correctionDialog.close();
@@ -2009,6 +2014,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     if (connectionInfoDialog != null) connectionInfoDialog.dismiss();
     if (dotChats != null) dotChats.close();
     if (preferenceMemory != null) preferenceMemory.close();
+    if (recognitionLanguage != null) recognitionLanguage.close();
     if (savedTasks != null) savedTasks.close();
     if (resultDetails != null) resultDetails.close();
     screen(false);

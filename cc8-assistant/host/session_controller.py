@@ -514,7 +514,36 @@ class SessionController:
 
     def voice_preferences_state(self):
         supported = callable(getattr(self.hooks.speech(), 'set_voice_rate', None))
-        return self.voice_preferences.snapshot(supported)
+        speech = self.hooks.speech()
+        recognition_supported = getattr(
+            speech, 'recognition_language_supported', False
+        ) is True and callable(getattr(speech, 'set_recognition_language', None))
+        return self.voice_preferences.snapshot(supported, recognition_supported)
+
+    def set_recognition_language(self, request):
+        # Share the voice-setting revision, session lock and full idle gate.
+        # This changes only future utterances; it never captures or retries one.
+        with self.guard:
+            preferences = self.voice_preferences
+            ok = False
+            if not self.voice_preferences_state()['recognition_language_supported']:
+                message = '当前识别提供方不支持语言提示'
+            elif request['revision'] != preferences.revision:
+                message = '设置已变化，请重新打开识别语言'
+            elif self.active or self.text_generation is not None or self.hooks.voice_busy():
+                message = '请先暂停语音，并等待当前任务和播报结束，再修改识别语言'
+            else:
+                self.hooks.speech().set_recognition_language(request['language'])
+                preferences.recognition_language = request['language']
+                preferences.revision += 1
+                ok = True
+                message = '识别语言已应用 · 麦克风保持关闭'
+            self.hooks.event(
+                'voice_preferences',
+                voice_preferences=self.voice_preferences_state(),
+                ok=ok,
+                message=message,
+            )
 
     def set_voice_preferences(self, request):
         # Serialize with text/vision/announcement admission, not just the device

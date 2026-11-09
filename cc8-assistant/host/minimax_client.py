@@ -307,10 +307,17 @@ class Transport:
                 break
         return 'transport_or_io'
 
-    def transcribe(self, wav, is_current=lambda: True):
+    def transcribe(self, wav, is_current=lambda: True, *, language='auto'):
         """Bounded in-memory WAV upload, only for explicitly selected cloud ASR."""
+        if not isinstance(language, str) or language not in ('auto', 'zh', 'en'):
+            raise ValueError('Invalid ASR language hint')
         if len(wav) > 16000 * 2 * 14:
             raise ValueError('ASR audio exceeds the utterance bound')
+        headers = {'Authorization': 'Bearer ' + self.key}
+        # The official CLI/SDK sends this as a request HEADER; a multipart
+        # language field is accepted but ignored. Omission preserves auto mode.
+        if language != 'auto':
+            headers['language'] = language
         slot = self.request_slot()
         try:
             slot.check(is_current)
@@ -318,7 +325,7 @@ class Transport:
                 self.base + '/v1/speech_to_text',
                 data={'model': self.config.asr_model, 'response_format': 'json', 'stream': 'false'},
                 files={'file': ('utterance.wav', wav, 'audio/wav')},
-                headers={'Authorization': 'Bearer ' + self.key},
+                headers=headers,
                 stream=True,
                 allow_redirects=False,
                 timeout=self.timeout,
