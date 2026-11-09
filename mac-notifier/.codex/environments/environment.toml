@@ -1,0 +1,7 @@
+version = 1
+name = "CC8 native notifier"
+
+[[actions]]
+name = "Run"
+icon = "run"
+command = "./script/build_and_run.sh"

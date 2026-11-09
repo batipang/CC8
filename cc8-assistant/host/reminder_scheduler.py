@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import time
 from typing import Callable, ContextManager
 from announce import Announcement
+from desktop_notifications import DesktopDelivery
 from workspace import Workspace
 
 
@@ -17,6 +18,7 @@ class ReminderHooks:
     touch: Callable[[], None]
     announce: Callable[[str], Announcement]
     delivery_owner: Callable[[], object] = lambda: None
+    desktop_notify: Callable[[str, str, Callable[[], bool]], DesktopDelivery] | None = None
 
 
 class ReminderScheduler:
@@ -26,6 +28,7 @@ class ReminderScheduler:
         self.claims = []
         self.pending_finish = None
         self.poll = 0
+        self.channel = 'cc8'
 
     def action(self, args, is_current=lambda: True):
         with self.hooks.lock:
@@ -42,12 +45,20 @@ class ReminderScheduler:
                 if not job.done.is_set():
                     return
                 # A failed disk commit retries only the same receipt, never TTS.
-                self.hooks.workspace().finish_reminders(self.claims, job.result == 'completed')
+                self.hooks.workspace().finish_reminders(
+                    self.claims,
+                    job.result
+                    == ('notification_center' if self.channel == 'desktop' else 'completed'),
+                    channel=self.channel,
+                    detail=getattr(job, 'detail', 'unconfirmed'),
+                )
                 self.job = None
                 self.claims = []
                 self.hooks.publish_workspace()
             if self.pending_finish is not None:
-                self.hooks.workspace().finish_reminders(self.pending_finish, False)
+                self.hooks.workspace().finish_reminders(
+                    self.pending_finish, False, channel=self.channel
+                )
                 self.pending_finish = None
                 self.hooks.publish_workspace()
             if time.monotonic() < self.poll:
@@ -64,6 +75,7 @@ class ReminderScheduler:
             # From here, a crash or ambiguous send freezes these occurrences.
             # Only explicit rescheduling can offer them again; do not replay
             # a possibly heard reminder after a lost playback receipt.
+            self.channel = claims[0].get('channel', 'cc8')
             self.pending_finish = claims
             try:
                 self.hooks.touch()
@@ -72,7 +84,7 @@ class ReminderScheduler:
                     or self.hooks.delivery_owner() != owner
                     or not self.hooks.workspace().reminder_claims_current(claims)
                 ):
-                    self.hooks.workspace().finish_reminders(claims, False)
+                    self.hooks.workspace().finish_reminders(claims, False, channel=self.channel)
                     self.pending_finish = None
                     self.hooks.publish_workspace()
                     return
@@ -81,9 +93,23 @@ class ReminderScheduler:
                     if len(claims) == 1
                     else '；'.join(f'{i + 1}，{item["title"]}' for i, item in enumerate(claims))
                 )
-                job = self.hooks.announce(text)
+                if self.channel == 'desktop':
+                    if self.hooks.desktop_notify is None:
+                        raise RuntimeError('Desktop notification service unavailable')
+
+                    def current():
+                        with self.hooks.lock:
+                            return (
+                                self.hooks.can_deliver()
+                                and self.hooks.delivery_owner() == owner
+                                and self.hooks.workspace().reminder_claims_current(claims)
+                            )
+
+                    job = self.hooks.desktop_notify(claims[0]['attempt_id'], text, current)
+                else:
+                    job = self.hooks.announce(text)
             except Exception:
-                self.hooks.workspace().finish_reminders(claims, False)
+                self.hooks.workspace().finish_reminders(claims, False, channel=self.channel)
                 self.pending_finish = None
                 self.hooks.publish_workspace()
                 raise

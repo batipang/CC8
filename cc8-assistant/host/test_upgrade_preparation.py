@@ -98,6 +98,23 @@ class UpgradeTests(unittest.TestCase):
             self.assertTrue(upgrade.plan(before, after)['reminder_storage']['compatible'])
             self.assertEqual(path.read_bytes(), raw)
 
+    def test_desktop_schema_three_refuses_reader_two_and_preserves_original_bytes(self):
+        from reminder_policy import defaults
+        from reminder_store import ReminderStore
+
+        with tempfile.TemporaryDirectory() as folder:
+            before, after = self.manifests(folder)
+            path = before / 'device-access/private/voice-runtime/reminders.json'
+            ReminderStore(path).save({'version': 3, 'policy': defaults(), 'reminders': []})
+            raw = path.read_bytes()
+            source = after / 'cc8-assistant/host/workspace.py'
+            source.parent.mkdir(parents=True)
+            source.write_text('REMINDER_STORE_VERSION = 2\n')
+            self.assertFalse(upgrade.plan(before, after)['reminder_storage']['compatible'])
+            source.write_text('REMINDER_STORE_VERSION = 3\n')
+            self.assertTrue(upgrade.plan(before, after)['reminder_storage']['compatible'])
+            self.assertEqual(path.read_bytes(), raw)
+
     def transition_fixture(self, folder):
         base, candidate, recovery = (Path(folder) / x for x in ('base', 'candidate', 'recovery'))
 

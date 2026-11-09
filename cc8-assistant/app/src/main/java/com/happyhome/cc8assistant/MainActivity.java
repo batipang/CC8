@@ -38,7 +38,9 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   private long workspaceRoute = -1;
   private JSONArray tasksData = new JSONArray(), remindersData = new JSONArray();
   private JSONObject reminderPolicyData;
-  private AlertDialog reminderPolicyDialog;
+  private AlertDialog reminderPolicyDialog, reminderEditorDialog, reminderHistoryDialog;
+  private JSONArray reminderHistoryData = new JSONArray();
+  private boolean reminderChannelsSupported;
   // RAM-only notice: a lost connection cannot undo tool effects or prove failure.
   // Keep this separate from authoritative task receipts and never replay work.
   private boolean taskResultUnconfirmed;
@@ -586,6 +588,10 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
           tasksData = tasks;
           remindersData = reminders;
           reminderPolicyData = data.optJSONObject("reminder_policy");
+          reminderChannelsSupported = data.optInt("reminder_channels_version", 0) == 1;
+          JSONArray history = data.optJSONArray("reminder_history");
+          reminderHistoryData =
+              history != null && history.length() <= 12 ? history : new JSONArray();
           renderWorkspace();
         });
   }
@@ -815,9 +821,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
               + item.optString("title")
               + "\n"
               + repeatLabel(item.optString("repeat"))
-              + ("unconfirmed".equals(item.optString("status"))
-                  ? " · 送达未确认，需重新安排"
-                  : "delivering".equals(item.optString("status")) ? " · 等待播完回执" : "");
+              + " · "
+              + reminderDeliveryLabel(item);
     }
     AlertDialog.Builder dialog =
         new AlertDialog.Builder(this).setTitle("提醒 · 北京时间").setNegativeButton("关闭", null);
@@ -828,6 +833,95 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     if (linked) dialog.setPositiveButton("添加提醒", (d, n) -> editReminder(null, route));
     if (linked && reminderPolicyData != null)
       dialog.setNeutralButton("送达设置", (d, n) -> reminderDeliverySettings(route));
+    dialog.show();
+  }
+
+  private static String reminderDeliveryLabel(JSONObject item) {
+    boolean desktop = "desktop".equals(item.optString("channel"));
+    String prefix = desktop ? "Mac 桌面 · " : "CC8 · ";
+    String status = item.optString("status");
+    JSONObject attempt = item.optJSONObject("delivery_attempt");
+    if ("cancelled".equals(status)) return prefix + "已取消";
+    if ("missed".equals(status)) return prefix + "已错过";
+    if ("delivering".equals(status)) return prefix + (desktop ? "等待通知回执" : "等待播完回执");
+    if ("unconfirmed".equals(status)) {
+      String detail = attempt == null ? "" : attempt.optString("detail");
+      String reason =
+          "permission_denied".equals(detail)
+              ? "，请检查 Mac 通知授权"
+              : "not_installed".equals(detail)
+                  ? "，请先安装 Mac 通知辅助程序"
+                  : "unsupported".equals(detail)
+                      ? "，当前主机不支持"
+                      : "submitted_unconfirmed".equals(detail) ? "，已提交系统但未确认显示" : "，需重新安排";
+      return prefix + "送达未确认" + reason;
+    }
+    if ("pending".equals(status)) return prefix + "等待到期";
+    if ("delivered".equals(status) && attempt == null) return prefix + "历史已送达标记，未保留尝试回执";
+    if (attempt != null && "notified".equals(attempt.optString("result")))
+      return "Mac 桌面 · 已进入通知中心，未确认阅读";
+    if (attempt != null && "played".equals(attempt.optString("result"))) return "CC8 · 已播完";
+    return prefix + "等待到期";
+  }
+
+  private static String reminderHistoryLabel(JSONObject item) {
+    JSONObject attempt = item.optJSONObject("delivery_attempt");
+    if (attempt == null) return reminderDeliveryLabel(item);
+    String result = attempt.optString("result");
+    String status =
+        "notified".equals(result) || "played".equals(result)
+            ? "delivered"
+            : "unconfirmed".equals(result)
+                ? "unconfirmed"
+                : "missed".equals(result)
+                    ? "missed"
+                    : "pending_ack".equals(result) ? "delivering" : "";
+    if (status.isEmpty()) return "尝试状态不可用";
+    JSONObject receipt = new JSONObject();
+    Wire.put(
+        receipt, "channel", "desktop".equals(attempt.optString("channel")) ? "desktop" : "cc8");
+    Wire.put(receipt, "status", status);
+    Wire.put(receipt, "delivery_attempt", attempt);
+    return reminderDeliveryLabel(receipt);
+  }
+
+  private void showReminderHistory() {
+    AlertDialog.Builder builder = new AlertDialog.Builder(this).setTitle("提醒送达记录 · 北京时间");
+    if (reminderHistoryData.length() == 0) {
+      builder.setMessage("暂无记录。这里只显示最近保存的送达状态，不代表用户已听到或已阅读。");
+    } else {
+      String[] rows = new String[reminderHistoryData.length()];
+      for (int i = 0; i < rows.length; i++) {
+        JSONObject item = reminderHistoryData.optJSONObject(i);
+        if (item == null) {
+          rows[i] = "记录不可用";
+          continue;
+        }
+        JSONObject attempt = item.optJSONObject("delivery_attempt");
+        String due = attempt == null ? item.optString("due") : attempt.optString("due");
+        rows[i] =
+            "当前事项："
+                + item.optString("title")
+                + "\n原定："
+                + dateLabel(due)
+                + "\n"
+                + reminderHistoryLabel(item)
+                + ("pending".equals(item.optString("status"))
+                    ? "\n下一次："
+                        + dateLabel(item.optString("due"))
+                        + " · "
+                        + reminderDeliveryLabel(item)
+                    : "cancelled".equals(item.optString("status")) ? " · 后续已取消" : "");
+      }
+      builder.setItems(rows, null);
+    }
+    if (reminderHistoryDialog != null) reminderHistoryDialog.dismiss();
+    AlertDialog dialog = builder.setNegativeButton("关闭", null).create();
+    reminderHistoryDialog = dialog;
+    dialog.setOnDismissListener(
+        unused -> {
+          if (reminderHistoryDialog == dialog) reminderHistoryDialog = null;
+        });
     dialog.show();
   }
 
@@ -992,6 +1086,11 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   private void editReminder(JSONObject item, long route) {
     if (!requireWorkspaceRoute(route)) return;
+    final boolean channelSupported = reminderChannelsSupported;
+    if (!channelSupported && item != null && "desktop".equals(item.optString("channel"))) {
+      Toast.makeText(this, "请连接支持桌面通知的后台后修改", Toast.LENGTH_LONG).show();
+      return;
+    }
     LinearLayout form = new LinearLayout(this);
     form.setOrientation(LinearLayout.VERTICAL);
     form.setPadding(dp(24), dp(16), dp(24), dp(8));
@@ -1054,43 +1153,77 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
       for (int i = 0; i < keys.length; i++)
         if (keys[i].equals(item.optString("repeat"))) repeat.setSelection(i);
     form.addView(repeat, new LinearLayout.LayoutParams(-1, dp(54)));
-    TextView note = text("Mac 服务运行、CC8 前台连接时播报。修改仅在收到 Mac 保存回执后生效。", 19, INK);
+    Spinner channel = new Spinner(this);
+    String[] channels = {"cc8", "desktop"};
+    channel.setAdapter(
+        new ArrayAdapter<>(
+            this,
+            android.R.layout.simple_spinner_dropdown_item,
+            channelSupported
+                ? new String[] {"CC8 语音播报", "Mac 桌面静默通知"}
+                : new String[] {"CC8 语音播报"}));
+    if (item != null && "desktop".equals(item.optString("channel"))) channel.setSelection(1);
+    form.addView(channel, new LinearLayout.LayoutParams(-1, dp(54)));
+    TextView note =
+        text(
+            "两种渠道都需 Mac 运行、CC8 前台连接且空闲。桌面通知需先在 Mac 完成安装和授权；未授权时显示未确认，不自动改成播报。修改收到 Mac 保存回执后生效。",
+            19,
+            INK);
     form.addView(note);
+    ScrollView scroll = new ScrollView(this);
+    scroll.addView(form);
+    form.setFocusableInTouchMode(true);
     AlertDialog dialog =
         new AlertDialog.Builder(this)
             .setTitle(item == null ? "添加提醒" : "修改提醒")
-            .setView(form)
+            .setView(scroll)
             .setPositiveButton("保存", null)
             .setNegativeButton("取消", null)
             .create();
+    reminderEditorDialog = dialog;
+    dialog.setOnDismissListener(
+        unused -> {
+          if (reminderEditorDialog == dialog) reminderEditorDialog = null;
+        });
+    Window editorWindow = dialog.getWindow();
+    if (editorWindow != null) {
+      editorWindow.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+      editorWindow.setSoftInputMode(
+          WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN
+              | WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+    }
     dialog.setOnShowListener(
-        d ->
-            dialog
-                .getButton(AlertDialog.BUTTON_POSITIVE)
-                .setOnClickListener(
-                    v -> {
-                      String value = title.getText().toString().trim();
-                      if (value.isEmpty()) {
-                        title.setError("请输入提醒内容");
-                        return;
-                      }
-                      if (date.getTimeInMillis() <= System.currentTimeMillis()) {
-                        Toast.makeText(this, "请选择将来的时间", Toast.LENGTH_LONG).show();
-                        return;
-                      }
-                      if (!requireWorkspaceRoute(route)) return;
-                      JSONObject args = new JSONObject();
-                      Wire.put(args, "action", item == null ? "create" : "update");
-                      if (item != null) Wire.put(args, "id", item.optString("id"));
-                      Wire.put(args, "title", value);
-                      Wire.put(args, "due", formatDue(date.getTimeInMillis()));
-                      Wire.put(args, "repeat", keys[repeat.getSelectedItemPosition()]);
-                      if (!session.reminderAction(args, route)) {
-                        workspaceNotSent();
-                        return;
-                      }
-                      dialog.dismiss();
-                    }));
+        d -> {
+          form.requestFocus();
+          dialog
+              .getButton(AlertDialog.BUTTON_POSITIVE)
+              .setOnClickListener(
+                  v -> {
+                    String value = title.getText().toString().trim();
+                    if (value.isEmpty()) {
+                      title.setError("请输入提醒内容");
+                      return;
+                    }
+                    if (date.getTimeInMillis() <= System.currentTimeMillis()) {
+                      Toast.makeText(this, "请选择将来的时间", Toast.LENGTH_LONG).show();
+                      return;
+                    }
+                    if (!requireWorkspaceRoute(route)) return;
+                    JSONObject args = new JSONObject();
+                    Wire.put(args, "action", item == null ? "create" : "update");
+                    if (item != null) Wire.put(args, "id", item.optString("id"));
+                    Wire.put(args, "title", value);
+                    Wire.put(args, "due", formatDue(date.getTimeInMillis()));
+                    Wire.put(args, "repeat", keys[repeat.getSelectedItemPosition()]);
+                    if (channelSupported)
+                      Wire.put(args, "channel", channels[channel.getSelectedItemPosition()]);
+                    if (!session.reminderAction(args, route)) {
+                      workspaceNotSent();
+                      return;
+                    }
+                    dialog.dismiss();
+                  });
+        });
     dialog.show();
   }
 
@@ -1108,7 +1241,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
               "隐私与语音说明",
               "立即打断播报",
               "Dot 聊天接续",
-              "声音与自然插话"
+              "声音与自然插话",
+              "提醒送达记录"
             },
             (d, n) -> {
               if (n == 0) {
@@ -1153,7 +1287,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
                     .show();
               } else if (n == 7) session.interrupt();
               else if (n == 8) dotChats.open();
-              else showVoicePreferences();
+              else if (n == 9) showVoicePreferences();
+              else showReminderHistory();
             })
         .setNegativeButton("关闭", null)
         .show();
@@ -1620,9 +1755,13 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
             resultDetails.close();
             if (correctionDialog != null) correctionDialog.close();
             if (reminderPolicyDialog != null) reminderPolicyDialog.dismiss();
+            if (reminderEditorDialog != null) reminderEditorDialog.dismiss();
+            if (reminderHistoryDialog != null) reminderHistoryDialog.dismiss();
             tasksData = new JSONArray();
             remindersData = new JSONArray();
             reminderPolicyData = null;
+            reminderHistoryData = new JSONArray();
+            reminderChannelsSupported = false;
             renderWorkspace();
           }
           brainText.setText(
@@ -1852,6 +1991,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   protected void onPause() {
     if (correctionDialog != null) correctionDialog.close();
     if (reminderPolicyDialog != null) reminderPolicyDialog.dismiss();
+    if (reminderEditorDialog != null) reminderEditorDialog.dismiss();
+    if (reminderHistoryDialog != null) reminderHistoryDialog.dismiss();
     if (connectionInfoDialog != null) connectionInfoDialog.dismiss();
     if (dotChats != null) dotChats.close();
     if (savedTasks != null) savedTasks.close();

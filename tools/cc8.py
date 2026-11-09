@@ -477,6 +477,16 @@ def main():
         from audit_device_suite import main as device_audit_main
 
         return device_audit_main(sys.argv[2:])
+    if sys.argv[1:2] == ['notifications']:
+        if sys.version_info < (3, 11):
+            print(
+                'Native notifier requires Python 3.11+; use the configured dev or voice interpreter.',
+                file=sys.stderr,
+            )
+            return 2
+        from desktop_notifications_cli import main as notifications_main
+
+        return notifications_main(sys.argv[2:])
     if sys.argv[1:2] == ['upgrade']:
         from upgrade_preparation import main as upgrade_main
 
@@ -519,6 +529,9 @@ def main():
     group = start.add_mutually_exclusive_group()
     group.add_argument('--foreground', action='store_true')
     group.add_argument('--stop', action='store_true')
+    commands.add_parser(
+        'notifications', help='Explicit native notification setup/permission/status; no capture'
+    )
     commands.add_parser('measure', help='Collect content-free host receipts without capture')
     commands.add_parser('audit-measure', help='Recompute voice playback coverage from a saved run')
     commands.add_parser(

@@ -114,8 +114,9 @@ public class LinearLayout {
     'android/widget/Spinner.java': r"""
 package android.widget;
 public class Spinner {
+ public static final java.util.List<Spinner> all=new java.util.ArrayList<>();
  int selected;
- public Spinner(Object owner){}public void setAdapter(Object adapter){}
+ public Spinner(Object owner){all.add(this);}public void setAdapter(Object adapter){}
  public void setSelection(int value){selected=value;}public int getSelectedItemPosition(){return selected;}
 }
 """,
@@ -278,7 +279,9 @@ class ActionCheck extends Activity {
  boolean linked=true;long workspaceRoute=1;
  JSONArray tasksData=new JSONArray(),remindersData=new JSONArray();
  JSONObject reminderPolicyData;
- AlertDialog reminderPolicyDialog;
+ JSONArray reminderHistoryData=new JSONArray();
+ boolean reminderChannelsSupported=true;
+ AlertDialog reminderPolicyDialog,reminderEditorDialog,reminderHistoryDialog;
  static final int INK=1,MUTED=2;
  int dp(int value){return value;}TextView text(String value,int size,int color){TextView v=new TextView(this);v.setText(value);return v;}
  Button action(String value,int icon){Button b=new Button(this);b.setText(value);return b;}
@@ -304,6 +307,37 @@ class ActionCheck extends Activity {
  public static void main(String[] args)throws Exception{
   ActionCheck c=new ActionCheck();VoiceSession s=c.session;
   switch(args[0]){
+   case "reminder_old_backend":{
+    c.reminderChannelsSupported=false;c.editReminder(null,s.routeEpoch);EditText.last.setText("公开固定旧后台提醒");
+    AlertDialog.last.positive();yes(s.sent.size()==1&&!s.sent.get(0).optJSONObject("arguments").values.containsKey("channel"),"Old backend must receive its original CC8 shape");
+    int before=Spinner.all.size();c.editReminder(new JSONObject("channel","desktop"),s.routeEpoch);
+    yes(Spinner.all.size()==before&&s.sent.size()==1,"Unsupported desktop edit must not silently convert to speech");break;
+   }
+   case "reminder_channel_save":{
+    JSONObject item=new JSONObject("id","public-reminder","title","公开固定提醒","due",c.formatDue(System.currentTimeMillis()+3600000),"repeat","none","channel","desktop");
+    c.editReminder(item,s.routeEpoch);yes(Spinner.all.get(1).getSelectedItemPosition()==1,"Editing lost the original desktop choice");
+    AlertDialog.last.positive();yes("desktop".equals(s.sent.get(0).optJSONObject("arguments").optString("channel")),"Native save must preserve explicit desktop channel");
+    c.editReminder(null,s.routeEpoch);yes(Spinner.all.get(3).getSelectedItemPosition()==0,"New reminders must default to CC8");
+    Spinner.all.get(3).setSelection(1);EditText.last.setText("另一个公开固定提醒");AlertDialog.last.positive();
+    yes(s.sent.size()==2&&"desktop".equals(s.sent.get(1).optJSONObject("arguments").optString("channel")),"An explicit new channel selection was not sent");break;
+   }
+   case "reminder_channel_labels":{
+    JSONObject item=new JSONObject("status","delivering","channel","desktop");
+    yes(c.reminderDeliveryLabel(item).contains("等待通知回执")&&!c.reminderDeliveryLabel(item).contains("播完"),"Desktop pending was mislabeled playback");
+    item.values.put("status","delivered");item.values.put("delivery_attempt",new JSONObject("result","notified","channel","desktop"));
+    yes(c.reminderDeliveryLabel(item).contains("已进入通知中心，未确认阅读"),"Delivery does not prove read");
+    c.reminderHistoryData=new JSONArray(item);c.showReminderHistory();
+    yes(AlertDialog.last.builder.labels.length==1&&AlertDialog.last.builder.labels[0].contains("未确认阅读")&&s.sent.isEmpty(),"History is actual and read-only");
+    item.values.put("status","pending");item.values.put("channel","cc8");
+    yes(c.reminderDeliveryLabel(item).equals("CC8 · 等待到期"),"Future occurrence must use its chosen channel");
+    yes(c.reminderHistoryLabel(item).contains("Mac 桌面")&&c.reminderHistoryLabel(item).contains("通知中心"),"Editing channel must not rewrite the prior notification receipt");
+    JSONObject legacy=new JSONObject("status","delivered");
+    yes(c.reminderHistoryLabel(legacy).contains("历史已送达标记，未保留尝试回执"),"Legacy metadata must not fabricate a completed playback attempt");
+    item.values.put("channel","desktop");
+    item.values.put("status","unconfirmed");item.values.put("delivery_attempt",new JSONObject("detail","permission_denied"));
+    yes(c.reminderDeliveryLabel(item).contains("Mac 通知授权"),"Missing actionable permission reason");
+    item.values.remove("channel");item.values.put("status","delivering");yes(c.reminderDeliveryLabel(item).contains("等待播完回执"),"Legacy reminders remain CC8");break;
+   }
    case "reading_controls":{
     c.detail("completed");LinearLayout content=(LinearLayout)((ScrollView)AlertDialog.last.builder.view).child;
     ((Button)content.children.get(1)).performClick();((Button)content.children.get(1)).performClick();
@@ -488,6 +522,9 @@ class WorkspaceActionTests(unittest.TestCase):
                 'private String taskStatus(',
                 'private void reminderDeliverySettings(',
                 'private void sendReminderPolicy(',
+                'private static String reminderDeliveryLabel(',
+                'private static String reminderHistoryLabel(',
+                'private void showReminderHistory(',
             )
         ]
         for signature in (
@@ -585,6 +622,15 @@ boolean savedTaskRequest(String requestId,String action,String id,long ignored){
 
     def test_old_reminder_snooze_is_rejected(self):
         self.scenario('reminder_snooze')
+
+    def test_new_device_keeps_old_backend_cc8_reminder_shape(self):
+        self.scenario('reminder_old_backend')
+
+    def test_actual_native_create_and_edit_preserve_explicit_channel(self):
+        self.scenario('reminder_channel_save')
+
+    def test_actual_native_channel_and_history_labels_do_not_claim_playback_or_reading(self):
+        self.scenario('reminder_channel_labels')
 
     def test_old_reminder_cancel_is_rejected(self):
         self.scenario('reminder_cancel')

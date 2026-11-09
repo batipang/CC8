@@ -44,6 +44,10 @@ jobs:
           python -m pip check
           python tools/test_all.py
 
+      - name: Compile and sign the native notifier (no install, authorization or notification)
+        if: runner.os == 'macOS'
+        run: python cc8 notifications build
+
   quality:
     name: Python, Java and workflow checks
     runs-on: ubuntu-24.04

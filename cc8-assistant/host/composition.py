@@ -27,6 +27,7 @@ from status_reporter import StatusReporter, ReportingHooks
 from wake_controller import WakeController, WakeHooks, Detector as WakeDetectorPort
 from announcement_controller import AnnouncementController, AnnouncementHooks
 from reminder_scheduler import ReminderScheduler, ReminderHooks
+from desktop_notifications import DesktopNotifier, DesktopDelivery
 from device_controller import DeviceController, DeviceControlHooks
 from device_event_router import DeviceEventRouter
 from chat_controller import ChatController, ChatHooks
@@ -212,6 +213,9 @@ def build_components(
             ),
             touch=lambda: host.touch_activity(),
             announce=lambda text: host.announce(text),
+            desktop_notify=lambda ident, text, current: DesktopDelivery(
+                DesktopNotifier(), ident, text, current
+            ),
             delivery_owner=lambda: (
                 host.session.connection,
                 host.session.bound_route_token,

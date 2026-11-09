@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "reminder-interaction-20261109.1",
+  "release_id": "desktop-reminders-20261109.1",
   "backend": {
-    "version": "0.16.9"
+    "version": "0.16.10"
   },
   "assistant": {
-    "version": "0.9.67",
-    "version_code": 104,
+    "version": "0.9.69",
+    "version_code": 106,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {
