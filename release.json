@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "reminder-delivery-20261109.1",
+  "release_id": "reminder-interaction-forward-recovery-20261109",
   "backend": {
     "version": "0.16.8"
   },
   "assistant": {
-    "version": "0.9.65",
-    "version_code": 102,
+    "version": "0.9.68",
+    "version_code": 105,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {
