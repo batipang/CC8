@@ -478,6 +478,38 @@ SCENARIOS = r"""
     yes(Toast.shows==0,"Old operation result cannot show in the new activation");
     s.deliver(result,next);c.drain();yes(Toast.shows==1,"Current operation result remains visible");break;
    }
+   case "recognition_language":{
+    long route=s.routeEpoch;
+    JSONObject state=new JSONObject("version",1,"revision",4,"speech_rate","slow","natural_barge",false,"supported",true,
+      "recognition_language_supported",true,"recognition_language","zh");
+    Wire.Packet receipt=new Wire.Packet(new JSONObject("event","voice_preferences","voice_preferences",state,"ok",true));
+    s.minimumGeneration=8;s.deliver(receipt,old);
+    yes(!s.setRecognitionLanguage("en",4,route),"stale generation enabled language controls");
+    s.minimumGeneration=7;s.deliver(receipt,old);c.drain();
+    int count=old.events.size();yes(s.setRecognitionLanguage("en",4,route),"current language not submitted");
+    yes(old.events.size()==count+1,"language submitted more than once");
+    JSONObject sent=old.events.get(count);
+    yes("recognition_language_set".equals(sent.optString("event"))&&"en".equals(sent.optString("language"))&&sent.optInt("revision",-1)==4,"language request fields changed");
+    yes(!s.recording,"language change enabled capture");
+    yes(!s.setRecognitionLanguage("fr",4,route),"unsupported language submitted");
+    Link next=new Link("wifi");activate(c,next);
+    yes(!s.setRecognitionLanguage("zh",4,route),"stale language dialog crossed handover");
+    s.deliver(receipt,old);yes(s.voicePreferences(s.routeEpoch)==null,"old language receipt restored capability");
+    s.deliver(receipt,next);s.pause();yes(!s.setRecognitionLanguage("zh",4,s.routeEpoch),"Home retained language controls");
+    s.foreground=true;activate(c,old); // explicit visible reopen after Home
+    for(Object bad:new Object[]{true,1,"zh",new Object()}){
+      s.acceptVoicePreferences(new JSONObject("version",1,"revision",0,"speech_rate","normal","natural_barge",true,"supported",true,"recognition_language_supported",bad,"recognition_language","zh"));
+      if(bad==Boolean.TRUE)yes(s.voicePreferences(s.routeEpoch)!=null,"typed supported language missing");
+      else yes(s.voicePreferences(s.routeEpoch)==null,"malformed language capability accepted");
+    }
+    for(String bad:new String[]{"fr","ZH",""}){
+      s.acceptVoicePreferences(new JSONObject("version",1,"revision",0,"speech_rate","normal","natural_barge",true,"supported",true,"recognition_language_supported",true,"recognition_language",bad));
+      yes(s.voicePreferences(s.routeEpoch)==null,"invalid language state accepted");
+    }
+    s.acceptVoicePreferences(new JSONObject("version",1,"revision",0,"speech_rate","normal","natural_barge",true,"supported",true));
+    yes(!s.setRecognitionLanguage("zh",0,s.routeEpoch),"old server enabled new setting");
+    break;
+   }
    case "voice_controls":{
     long route=s.routeEpoch;
     JSONObject state=new JSONObject("version",1,"revision",0,"speech_rate","normal","natural_barge",true,"supported",true);
@@ -592,6 +624,7 @@ class WorkspaceRouteTests(unittest.TestCase):
                 'private void acceptVoicePreferences(',
                 'JSONObject voicePreferences(',
                 'boolean setVoicePreferences(',
+                'boolean setRecognitionLanguage(',
                 'boolean preferenceRequest(',
                 'private boolean sendWorkspace(',
                 'private boolean acceptSpeechCorrection(',
@@ -736,6 +769,9 @@ class WorkspaceRouteTests(unittest.TestCase):
 
     def test_preference_receipts_are_retired_on_handover_and_home(self):
         self.scenario('preference_receipts')
+
+    def test_language_controls_keep_capability_generation_route_and_home_ownership(self):
+        self.scenario('recognition_language')
 
     def test_voice_controls_require_typed_supported_state(self):
         self.scenario('voice_controls_invalid')

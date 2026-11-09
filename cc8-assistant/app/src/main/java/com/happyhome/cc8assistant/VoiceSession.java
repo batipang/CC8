@@ -1116,6 +1116,12 @@ final class VoiceSession {
         || !(data.opt("natural_barge") instanceof Boolean)
         || !Boolean.TRUE.equals(data.opt("supported"))) return;
     String rate = data.optString("speech_rate");
+    if (data.opt("recognition_language_supported") != null
+        && (!(data.opt("recognition_language_supported") instanceof Boolean)
+            || !(data.opt("recognition_language") instanceof String)
+            || !("auto".equals(data.optString("recognition_language"))
+                || "zh".equals(data.optString("recognition_language"))
+                || "en".equals(data.optString("recognition_language"))))) return;
     if ("slow".equals(rate) || "normal".equals(rate) || "fast".equals(rate))
       voicePreferences = data;
   }
@@ -1180,6 +1186,20 @@ final class VoiceSession {
       JSONObject j = Wire.event("voice_preferences_set");
       Wire.put(j, "speech_rate", rate);
       Wire.put(j, "natural_barge", naturalBarge);
+      Wire.put(j, "revision", revision);
+      return sendWorkspace(j, route);
+    }
+  }
+
+  boolean setRecognitionLanguage(String language, int revision, long route) {
+    synchronized (routeLock) {
+      JSONObject current = voicePreferences(route);
+      if (current == null
+          || !Boolean.TRUE.equals(current.opt("recognition_language_supported"))
+          || !("auto".equals(language) || "zh".equals(language) || "en".equals(language)))
+        return false;
+      JSONObject j = Wire.event("recognition_language_set");
+      Wire.put(j, "language", language);
       Wire.put(j, "revision", revision);
       return sendWorkspace(j, route);
     }
