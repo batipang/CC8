@@ -1,6 +1,7 @@
 """Strict saved-report wire fields; deliberately independent of readers and providers."""
 
 import re
+from report_display_protocol import page_number
 
 REVISION_LIMIT = 2**31 - 1
 ACTIONS = frozenset(
@@ -34,6 +35,11 @@ def validate_request(value: object) -> None:
     if action in ('saved_report', 'delete_report'):
         fields.add('saved_id')
         token(value.get('saved_id'))
+    if action == 'saved_report' and ('page' in value or 'revision' in value):
+        fields |= {'page', 'revision'}
+        page_number(value.get('page'))
+        if type(value.get('revision')) is not int or not 0 <= value['revision'] < REVISION_LIMIT:
+            raise ValueError('Current saved report revision required for paging')
     if action == 'save_report':
         fields.add('snapshot_id')
         token(value.get('snapshot_id'))

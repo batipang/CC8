@@ -162,6 +162,8 @@ final class DotChatsDialog {
         .append("；读到仍进行中：")
         .append(report.optInt("active_turns_seen"))
         .append("\n");
+    if (report.optBoolean("display_preview_truncated"))
+      text.append("\n本窗口为简短预览；可在工作汇报来源页面翻页查看完整汇报。\n");
     JSONArray items = report.optJSONArray("items");
     if (report.optBoolean("empty_confirmed")) text.append("\n已读取范围内没有本窗口的已完成答复。\n");
     if (items != null) {

@@ -76,6 +76,7 @@ final class ReportSourcesDialog {
   private String pending = "", action = "";
   private long route = -1, epoch;
   private Runnable timeout;
+  private ReportTextPage.Copy copy;
 
   ReportSourcesDialog(Activity activity, VoiceSession session) {
     this.activity = activity;
@@ -97,6 +98,7 @@ final class ReportSourcesDialog {
     if (!pending.isEmpty() && session.currentRoute(route)) session.dotChatCancel(pending);
     pending = action = "";
     snapshot = null;
+    copy = null;
     epoch++;
     if (timeout != null) handler.removeCallbacks(timeout);
     timeout = null;
@@ -133,12 +135,19 @@ final class ReportSourcesDialog {
   }
 
   private void request(JSONObject arguments) {
+    request(arguments, null);
+  }
+
+  private void request(JSONObject arguments, ReportTextPage.Copy job) {
     close();
     route = session.connectedRoute();
-    if (!session.currentRoute(route) || !session.supportsReportSources()) {
+    if (!session.currentRoute(route)
+        || !session.supportsReportSources()
+        || (job != null && (job.route != route || !job.alive()))) {
       toast("请连接支持工作汇报来源的后台");
       return;
     }
+    copy = job;
     pending = UUID.randomUUID().toString().replace("-", "");
     action = arguments.optString("action");
     final String ident = pending;
@@ -167,10 +176,21 @@ final class ReportSourcesDialog {
         || !pending.equals(data.optString("request_id"))
         || !session.currentRoute(route)) return;
     String completed = action;
+    ReportTextPage.Copy job = copy;
     pending = "";
     close();
     if (!Boolean.TRUE.equals(data.opt("ok"))) {
       toast(data.optString("message", "未确认来源状态，请刷新查看"));
+      return;
+    }
+    if (job != null) {
+      if (!completed.equals("saved_report") || !job.append(data)) {
+        toast("快照或连接已变化，没有复制不完整的文本；请重新查看");
+        return;
+      }
+      String text = job.completed();
+      if (text != null) copyText(text);
+      else requestArchivePage(job.id, job.revision, job.next, job);
       return;
     }
     if (completed.equals("restore_progress")) {
@@ -215,33 +235,8 @@ final class ReportSourcesDialog {
               .create());
       return;
     }
-    if ("report".equals(completed)) {
-      String text = data.optString("report_text");
-      if (text.isEmpty() || text.length() > 48000) {
-        toast("未取得有效汇报");
-        return;
-      }
-      AlertDialog.Builder builder =
-          new AlertDialog.Builder(activity)
-              .setTitle("工作汇报 · 当前范围只读快照")
-              .setMessage(text)
-              .setNegativeButton("关闭", null);
-      JSONObject report = data.optJSONObject("report");
-      String snapshotId = report == null ? "" : report.optString("snapshot_id");
-      Object archiveRevision = data.opt("archive_revision");
-      final long owner = epoch + 1;
-      if (session.supportsReportArchive()
-          && snapshotId.matches("[a-f0-9]{32}")
-          && archiveRevision instanceof Integer
-          && (Integer) archiveRevision >= 0) {
-        final int revision = (Integer) archiveRevision;
-        builder.setPositiveButton(
-            "保存快照",
-            (d, n) -> {
-              if (live(owner, null)) confirmSave(snapshotId, revision);
-            });
-      }
-      show(builder.create());
+    if ("report".equals(completed) || "report_page".equals(completed)) {
+      showReport(data);
       return;
     }
     if ("saved_reports".equals(completed)
@@ -480,6 +475,87 @@ final class ReportSourcesDialog {
     Toast.makeText(activity, message, Toast.LENGTH_LONG).show();
   }
 
+  private void copyText(String text) {
+    ClipboardManager clipboard =
+        (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
+    if (clipboard != null) clipboard.setPrimaryClip(ClipData.newPlainText("工作汇报历史快照", text));
+  }
+
+  private void requestReportPage(String id, int page) {
+    JSONObject value = args("report_page");
+    Wire.put(value, "snapshot_id", id);
+    Wire.put(value, "page", page);
+    request(value);
+  }
+
+  private void requestArchivePage(String id, int revision, int page, ReportTextPage.Copy job) {
+    JSONObject value = args("saved_report");
+    Wire.put(value, "saved_id", id);
+    Wire.put(value, "revision", revision);
+    Wire.put(value, "page", page);
+    request(value, job);
+  }
+
+  private void showReport(JSONObject data) {
+    final ReportTextPage page = ReportTextPage.parse(data, "report_text");
+    JSONObject report = data.optJSONObject("report");
+    final String id = report == null ? "" : report.optString("snapshot_id");
+    if (page == null || (page.count > 1 && !id.matches("[a-f0-9]{32}"))) {
+      toast("未取得有效汇报页面");
+      return;
+    }
+    Object revision = data.opt("archive_revision");
+    final int saveRevision =
+        session.supportsReportArchive()
+                && id.matches("[a-f0-9]{32}")
+                && revision instanceof Integer
+                && (Integer) revision >= 0
+            ? (Integer) revision
+            : -1;
+    final long owner = epoch + 1;
+    AlertDialog.Builder builder =
+        new AlertDialog.Builder(activity)
+            .setTitle("工作汇报 · 当前范围只读快照")
+            .setMessage(page.text)
+            .setNegativeButton("关闭", null);
+    if (page.count == 1) {
+      if (saveRevision >= 0)
+        builder.setPositiveButton(
+            "保存快照",
+            (d, n) -> {
+              if (live(owner, null)) confirmSave(id, saveRevision);
+            });
+    } else {
+      builder.setTitle("工作汇报 · " + (page.index + 1) + "/" + page.count);
+      if (page.index + 1 < page.count)
+        builder.setPositiveButton(
+            "下一页",
+            (d, n) -> {
+              if (live(owner, null)) requestReportPage(id, page.index + 1);
+            });
+      builder.setNeutralButton(
+          "页面／保存",
+          (d, n) -> {
+            if (!live(owner, null)) return;
+            final long menu = epoch + 1;
+            show(
+                new AlertDialog.Builder(activity)
+                    .setTitle("汇报页面操作")
+                    .setItems(
+                        new String[] {"上一页", "保存完整快照"},
+                        (w, choice) -> {
+                          if (!live(menu, null)) return;
+                          if (choice == 0 && page.index > 0) requestReportPage(id, page.index - 1);
+                          else if (choice == 1 && saveRevision >= 0) confirmSave(id, saveRevision);
+                          else toast("当前没有上一页或不可保存，请重新读取后再试");
+                        })
+                    .setNegativeButton("关闭", null)
+                    .create());
+          });
+    }
+    show(builder.create());
+  }
+
   private void confirmSave(String id, int revision) {
     final long owner = epoch + 1;
     show(
@@ -546,34 +622,68 @@ final class ReportSourcesDialog {
               + (Boolean.TRUE.equals(row.opt("coverage_complete")) ? "" : " · 覆盖不完整"));
     }
     // Strings and revision copied now; later JSON mutation cannot retarget a confirmation.
-    final String savedId = data.optString("saved_id"), body = data.optString("saved_report_text");
+    final String savedId = data.optString("saved_id");
     final long owner = epoch + 1;
     AlertDialog.Builder builder =
         new AlertDialog.Builder(activity)
             .setTitle("已保存汇报 · " + ids.size() + "/16")
             .setNegativeButton("关闭", null);
     if ("saved_report".equals(data.optString("action"))) {
-      if (!ids.contains(savedId) || body.isEmpty() || body.length() > 40000) {
+      final ReportTextPage page = ReportTextPage.parse(data, "saved_report_text");
+      if (!ids.contains(savedId) || page == null) {
         toast("未取得有效快照");
         return;
       }
       builder
           .setTitle("历史快照 · 非实时结果")
-          .setMessage(body)
+          .setMessage(page.text)
           .setPositiveButton(
               "复制",
               (d, n) -> {
                 if (!live(owner, null)) return;
-                ClipboardManager clipboard =
-                    (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
-                if (clipboard != null)
-                  clipboard.setPrimaryClip(ClipData.newPlainText("工作汇报历史快照", body));
+                copyText(page.body());
               })
           .setNeutralButton(
               "删除快照",
               (d, n) -> {
                 if (live(owner, null)) confirmArchiveDelete(savedId, revision);
               });
+      if (page.count > 1) {
+        builder.setTitle("历史快照 · 非实时 · " + (page.index + 1) + "/" + page.count);
+        builder.setPositiveButton(
+            page.index + 1 < page.count ? "下一页" : "第一页",
+            (d, n) -> {
+              if (live(owner, null))
+                requestArchivePage(savedId, revision, (page.index + 1) % page.count, null);
+            });
+        builder.setNeutralButton(
+            "页面／复制／删除",
+            (d, n) -> {
+              if (!live(owner, null)) return;
+              final long menu = epoch + 1;
+              show(
+                  new AlertDialog.Builder(activity)
+                      .setTitle("历史快照操作")
+                      .setItems(
+                          new String[] {"上一页", "复制本页", "复制完整快照", "删除快照"},
+                          (w, choice) -> {
+                            if (!live(menu, null)) return;
+                            if (choice == 0 && page.index > 0)
+                              requestArchivePage(savedId, revision, page.index - 1, null);
+                            else if (choice == 1) copyText(page.body());
+                            else if (choice == 2)
+                              requestArchivePage(
+                                  savedId,
+                                  revision,
+                                  0,
+                                  new ReportTextPage.Copy(savedId, revision, page.count, route));
+                            else if (choice == 3) confirmArchiveDelete(savedId, revision);
+                            else toast("当前已是第一页");
+                          })
+                      .setNegativeButton("关闭", null)
+                      .create());
+            });
+      }
     } else {
       if (ids.isEmpty())
         builder.setMessage("尚未保存汇报。仅在本次汇报中明确确认后保存；保留至手动删除，不自动播报或执行。总计256KiB，不自动淘汰旧记录。");

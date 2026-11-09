@@ -222,6 +222,11 @@ def validate_device_event(value: object) -> JsonObject:
             validate_request as validate_progress,
         )
 
+        if name == 'dot_chat_request' and value['action'] == 'report_page':
+            from report_display_protocol import validate_request as validate_page
+
+            validate_page(value)
+
         if (
             name == 'dot_chat_request'
             and isinstance(value['action'], str)
@@ -248,6 +253,7 @@ def validate_device_event(value: object) -> JsonObject:
             'select',
             'clear',
             'report',
+            'report_page',
             *REGISTRY_ACTIONS,
             *ARCHIVE_ACTIONS,
             *PROGRESS_ACTIONS,
