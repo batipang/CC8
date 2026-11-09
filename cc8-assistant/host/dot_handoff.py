@@ -42,11 +42,19 @@ class ChatCatalog:
         self.lock = threading.Lock()
         self.offered = {}
         self.cursors = {}
+        self.registration_offers = {}
 
     def report(self, selected, period, is_current=lambda: True):
         from work_reports import ReportWindow, WorkReportReader
+        from report_sources import ReportScope
+        from group_work_reports import GroupWorkReports
 
-        return WorkReportReader(self.rpc_factory).read(
+        reader = (
+            GroupWorkReports(self.rpc_factory)
+            if isinstance(selected, ReportScope)
+            else WorkReportReader(self.rpc_factory)
+        )
+        return reader.read(
             selected,
             period
             if isinstance(period, ReportWindow)
@@ -106,15 +114,35 @@ class ChatCatalog:
                     self.offered.clear()
                     self.cursors.clear()
                 self.offered = {k: v for k, v in self.offered.items() if v[1] > now}
+                self.registration_offers = {
+                    k: v for k, v in self.registration_offers.items() if k in self.offered
+                }
                 self.cursors = {k: v for k, v in self.cursors.items() if v > now}
                 if len(self.offered) + len(result) > 100:
                     raise ValueError('Refresh the chat list')
                 self.offered.update({r['id']: (r['title'], now + 300) for r in result})
+                self.registration_offers.update({r['id']: dict(r) for r in result})
                 if next_cursor is not None:
                     self.cursors[next_cursor] = now + 300
             return {'items': result, 'next_cursor': next_cursor}
         finally:
             rpc.close()
+
+    def registration(self, source_id):
+        """Return offered metadata only; registration never reads history or resumes a chat."""
+        identifier(source_id)
+        with self.lock:
+            offered = self.offered.get(source_id)
+            row = self.registration_offers.get(source_id)
+            if not offered or offered[1] <= self.clock() or row is None:
+                raise ValueError('Select a current listed report source')
+            return dict(
+                provider='codex',
+                host='local',
+                thread_id=source_id,
+                title=row['title'],
+                project=row['project'],
+            )
 
     def select(self, source_id, is_current=lambda: True):
         if not is_current():

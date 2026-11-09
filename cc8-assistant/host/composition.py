@@ -31,6 +31,7 @@ from desktop_notifications import DesktopNotifier, DesktopDelivery
 from device_controller import DeviceController, DeviceControlHooks
 from device_event_router import DeviceEventRouter
 from chat_controller import ChatController, ChatHooks
+from report_sources import ReportSources
 from saved_tasks import SavedTasks
 from saved_task_controller import SavedTaskController, SavedTaskHooks
 from preference_memory import PreferenceMemory
@@ -93,6 +94,7 @@ def build_components(
     dot_runtime: Callable[[], dict[str, object]],
     preference_memory: PreferenceMemory | None = None,
     vocabulary_store: VocabularyStore | None = None,
+    report_sources_store: ReportSources | None = None,
 ) -> Components:
     calibration = CalibrationController(
         CalibrationHooks(
@@ -294,12 +296,18 @@ def build_components(
                     or host.visual.generation is not None
                     or host.announcements.generation is not None
                     or host.capture.endpoint.vad.talking
+                    or host.capture.endpoint.waiting_chinese_busy
+                    or host.session.text_generation is not None
                 )
             ),
             select=select_chat,
             event=lambda name, **fields: host.event(name, **fields),
             transport_revision=lambda: host.metrics.get('transport_changes', 0),
-        )
+            capture_stopped=lambda: not host.session.active,
+        ),
+        sources=report_sources_store
+        if report_sources_store is not None
+        else ReportSources(private_directory() / 'work-report-sources.json'),
     )
     saved_tasks = SavedTaskController(
         SavedTaskHooks(

@@ -1,5 +1,14 @@
 # Changelog
 
+## Backend 0.16.18 / Assistant 0.9.85 — explicitly registered multi-chat work reports
+
+- Register up to eight current catalog offerings with explicit metadata consent, private atomic storage, revision/lock checks and deletion controls. Persist only names, project basenames and local Codex thread identifiers. Registration does not read history, run a model, change the summary handoff or activate a report scope on restart.
+- Explicitly choose a frozen registered scope and one completion-time range. Read sources with a shared deadline, keep unavailable/unread/partial coverage visible, namespace result and delivery identities by actual chat, and keep old unheard results labeled when a later read cannot verify that source. Adding an unrelated registration preserves the current frozen scope and ledger; removing a member or explicitly changing scope revokes that context.
+- Add route/request/window/snapshot-fenced native consent, removal, scope and report dialogs. Close private result UI on Home/handover; uncertain mutations are queried rather than retried. Per-card detail carries its actual original thread, while an aggregate is not represented as a fictitious original chat. Capture and original-chat writing remain separate.
+- Recheck the existing local CLI shared proxy with initialization only: CLI 0.166.0 still cannot initialize this shared path. Preserve that limit; original-chat continuation, persistent result indexing, ChatGPT integration and optional notifications remain open. Final human/environment acceptance and the final 72-hour run remain separate.
+- Refresh the environment status cache immediately after a successful paused-state apply, and expose the actual immutable gate preset through live health. Keep cache I/O failure isolated from setting success; reject busy/stale changes without writes. Preserve the real code120 UI failure (8 of 13 checks completed), actual normal-preset restoration and initial checker error; neither installation nor offline checks imply full UI/environment acceptance.
+- Carry the completed 0.16.17/code120 grouped installation and independent paused-state audit with this functional batch. Independently restore and verify the original background context after the partial UI run, preserving the same instance, configuration, private stores and idle resources without reinstalling; do not treat this closure as full UI acceptance.
+
 ## Backend 0.16.17 / Assistant 0.9.83 — explicit listening environments and spelling references
 
 - Add normal, quiet and stricter television-background local speech gates. Normal preserves the deployed floor, margin and votes. Share the existing revision/full-idle admission rule, clear old vote/partial-utterance state, and report the applied thresholds. Keep wake, AEC, transcript text, TTS and microphone ownership unchanged; synthetic gate checks do not establish real room/ASR performance.

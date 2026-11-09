@@ -78,6 +78,7 @@ class StatusReporter:
         state = self.hooks.session()
         playback = self.hooks.playback()
         endpoint = self.hooks.capture().endpoint
+        environment = endpoint.near_speech.environment
         stop = endpoint.fast_stop_observation
         metrics = self.hooks.metrics()
         # 白名单输出就绪位，不导出 metrics 内可能存在的自检文字和用户内容。
@@ -88,6 +89,11 @@ class StatusReporter:
             'protocol_version': RELEASE.protocol_version,
             'capture_frontend': state.capture_frontend if state.active else 'none',
             'input_quality': self.hooks.capture().input_quality.snapshot(),
+            # Read the live immutable preset, not the optional on-disk cache.
+            'listening_environment': environment.name,
+            'speech_energy_floor_dbfs': environment.minimum_dbfs,
+            'speech_noise_margin_db': environment.noise_margin_db,
+            'barge_confirm_min_ms': environment.confirmation_frames * 10,
             'uptime_seconds': round(time.monotonic() - self.started_at, 1),
             'runtime_instance': self.instance,
             'health_owner_version': 1,

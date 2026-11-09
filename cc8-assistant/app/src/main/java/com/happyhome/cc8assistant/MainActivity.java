@@ -47,6 +47,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   private String lastStateMessage = "系统待命";
   private VoiceSession session;
   private DotChatsDialog dotChats;
+  private ReportSourcesDialog reportSources;
   private PreferenceMemoryDialog preferenceMemory;
   private RecognitionLanguageDialog recognitionLanguage;
   private RecognitionEnvironmentDialog recognitionEnvironment;
@@ -170,6 +171,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     session = new VoiceSession(this, this);
     correctionDialog = new SpeechCorrectionDialog(this, session);
     dotChats = new DotChatsDialog(this, session);
+    reportSources = new ReportSourcesDialog(this, session);
     preferenceMemory = new PreferenceMemoryDialog(this, session);
     recognitionLanguage = new RecognitionLanguageDialog(this, session);
     recognitionEnvironment = new RecognitionEnvironmentDialog(this, session);
@@ -1275,7 +1277,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
               "识别图片文字",
               "追问最近照片",
               "听音环境",
-              "用户词表／选词纠错"
+              "用户词表／选词纠错",
+              "工作汇报来源"
             },
             (d, n) -> {
               if (n == 0) {
@@ -1328,6 +1331,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
               else if (n == 15) showPhotoQuestion();
               else if (n == 16) recognitionEnvironment.open();
               else if (n == 17) vocabulary.open();
+              else if (n == 18) reportSources.open();
               else showReminderHistory();
             })
         .setNegativeButton("关闭", null)
@@ -1788,7 +1792,12 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   public void dotChats(JSONObject data) {
-    runOnUiThread(() -> dotChats.accept(data));
+    runOnUiThread(
+        () -> {
+          if (!foreground) return;
+          dotChats.accept(data);
+          if (reportSources != null) reportSources.accept(data);
+        });
   }
 
   @Override
@@ -2007,6 +2016,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
             workspaceRevision = -1;
             taskResultUnconfirmed |= hasRunningTask(tasksData);
             dotChats.close();
+            reportSources.close();
             preferenceMemory.close();
             recognitionLanguage.close();
             recognitionEnvironment.close();
@@ -2267,6 +2277,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     if (reminderHistoryDialog != null) reminderHistoryDialog.dismiss();
     if (connectionInfoDialog != null) connectionInfoDialog.dismiss();
     if (dotChats != null) dotChats.close();
+    if (reportSources != null) reportSources.close();
     if (preferenceMemory != null) preferenceMemory.close();
     if (recognitionLanguage != null) recognitionLanguage.close();
     if (recognitionEnvironment != null) recognitionEnvironment.close();

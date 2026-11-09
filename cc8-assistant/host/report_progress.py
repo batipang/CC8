@@ -32,7 +32,12 @@ class ReportCapacityError(ValueError):
 
 
 def key(item):
-    return identifier(item['turn_id']), identifier(item['item_id'])
+    local = identifier(item['turn_id']), identifier(item['item_id'])
+    if 'source_thread_id' in item:
+        if item.get('source_host') != 'local' or item.get('source_provider') != 'codex':
+            raise ValueError('Invalid report source namespace')
+        return ('local', identifier(item['source_thread_id']), *local)
+    return local
 
 
 def version(item):

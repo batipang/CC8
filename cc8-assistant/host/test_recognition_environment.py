@@ -1,6 +1,9 @@
 """Synthetic PCM checks measure gate behavior, not real-world ASR accuracy."""
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
+import json
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -89,6 +92,60 @@ class RecognitionEnvironmentTests(unittest.TestCase):
 
 
 class EnvironmentSettingTests(unittest.TestCase):
+    def test_applied_profiles_refresh_cache_and_live_health_without_capture(self):
+        bridge = settings_fixture.VoicePreferencesTests().session()
+        with tempfile.TemporaryDirectory() as directory:
+            bridge.reporting.hooks = replace(
+                bridge.reporting.hooks, private_directory=lambda: Path(directory)
+            )
+            bridge.save_status = bridge.reporting.save_status
+            bridge.save_status()
+            generation = bridge.generation
+            for revision, name in enumerate(('quiet', 'television', 'normal')):
+                bridge.on_event(
+                    dict(event='environment_profile_set', revision=revision, profile=name)
+                )
+                cached = json.loads((Path(directory) / 'status.json').read_text())
+                live = bridge.health()
+                expected = profile(name)
+                for state in (cached, live):
+                    self.assertEqual(state['listening_environment'], name)
+                    self.assertEqual(state['speech_energy_floor_dbfs'], expected.minimum_dbfs)
+                    self.assertEqual(state['speech_noise_margin_db'], expected.noise_margin_db)
+                    self.assertEqual(
+                        state['barge_confirm_min_ms'], expected.confirmation_frames * 10
+                    )
+                self.assertTrue(bridge.events[-1][1]['ok'])
+                self.assertEqual(bridge.generation, generation)
+                self.assertFalse(bridge.session.active)
+
+    def test_cache_write_failure_keeps_applied_profile_and_live_health(self):
+        bridge = settings_fixture.VoicePreferencesTests().session()
+        bridge.save_status = bridge.reporting.save_status
+        with patch(
+            'status_reporter.Path.mkdir', side_effect=OSError('PRIVATE-CACHE-PATH')
+        ) as write:
+            bridge.on_event(dict(event='environment_profile_set', revision=0, profile='quiet'))
+        self.assertEqual(write.call_count, 1)
+        self.assertTrue(bridge.events[-1][1]['ok'])
+        self.assertEqual(bridge.session.voice_preferences.revision, 1)
+        self.assertEqual(bridge.health()['listening_environment'], 'quiet')
+        self.assertEqual(bridge.logs[-1], ('status_cache_write_failed', {'error_type': 'OSError'}))
+        self.assertNotIn('PRIVATE-CACHE-PATH', json.dumps([bridge.logs, bridge.events]))
+        self.assertFalse(bridge.session.active)
+
+    def test_rejected_profiles_do_not_write_status_or_mutate_revision(self):
+        for active, revision in ((True, 0), (False, 1)):
+            bridge = settings_fixture.VoicePreferencesTests().session()
+            bridge.session.active = active
+            with patch.object(bridge, 'save_status') as save:
+                bridge.on_event(
+                    dict(event='environment_profile_set', revision=revision, profile='quiet')
+                )
+                save.assert_not_called()
+            self.assertFalse(bridge.events[-1][1]['ok'])
+            self.assertEqual(bridge.session.voice_preferences.revision, 0)
+
     def test_explicit_idle_apply_restore_and_revision_leave_capture_and_provider_unchanged(self):
         bridge = settings_fixture.VoicePreferencesTests().session()
         generation = bridge.generation

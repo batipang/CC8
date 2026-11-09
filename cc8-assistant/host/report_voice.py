@@ -19,6 +19,7 @@ from report_progress import (
     version,
 )
 from result_provenance import validate as validate_provenance
+from report_sources import ReportScope
 
 PERIOD_NAMES = {
     '上次汇报后': 'since_last',
@@ -164,7 +165,17 @@ class ReportReply:
     provenance: dict | None = None
 
 
-def report_source(source, turn_id: str | None = None):
+def report_source(source, turn_id: str | None = None, item=None):
+    if isinstance(source, ReportScope):
+        # A collection is not an original chat. Individual cards retain their real thread.
+        if item is None:
+            return None
+        member = next((m for m in source.members if m.thread_id == item['source_thread_id']), None)
+        if member is None:
+            raise ValueError('Report item is outside registered scope')
+        from dot_handoff import Handoff
+
+        source = Handoff(member.thread_id, member.title, (), False)
     return validate_provenance(
         dict(
             version=1,
@@ -188,6 +199,11 @@ def item_text(item, number):
         '已记录完成时间（北京时间）：' + completed,
         item['excerpt'],
     ]
+    if 'source_thread_id' in item:
+        lines.insert(1, f'来源：{item["source_title"]} · {item["source_project"]} · 本机 Codex')
+        lines.append(
+            f'原聊天：{item["source_thread_id"]}；回合：{item["turn_id"]}；结果：{item["item_id"]}'
+        )
     if item.get('since_status') in SINCE_NOTES:
         lines.insert(1, SINCE_NOTES[item['since_status']])
     if item['excerpt_truncated']:
@@ -212,7 +228,24 @@ def report_text(report):
         '来源：' + report['source_title'],
         f'北京时间：{date(report["window_start"])} 至 {date(report["window_end"])}（含起点，不含终点）',
     ]
+    if report.get('source') == 'codex_registered':
+        lines.append(
+            '登记来源覆盖：\n'
+            + '\n'.join(
+                f'{row["title"]} · {row["project"]}：'
+                + (
+                    ('已读取' if row['coverage_complete'] else '已读取（覆盖不完整）')
+                    if row['status'] == 'read'
+                    else '未读取（总期限）'
+                    if row['status'] == 'not_read_budget'
+                    else '不可读取，不能视为零成果'
+                )
+                for row in report['sources']
+            )
+        )
     since = report.get('view') == 'since_last_unheard'
+    if report.get('items_truncated'):
+        lines.append(f'本页结果卡达到{MAX_CARDS}项上限，仍有未展示结果。')
     if since:
         lines.append(
             f'上次读取截止：{date(report["since_last_end"])}；重新检查原范围以收集迟到结果。'
@@ -281,6 +314,42 @@ class ReportVoice:
                     return False
             if report['empty_confirmed'] != (report['coverage_complete'] and not report['items']):
                 return False
+            if isinstance(source, ReportScope):
+                expected = {m.thread_id: m for m in source.members}
+                rows = report.get('sources')
+                if (
+                    report.get('source') != 'codex_registered'
+                    or report.get('registry_revision') != source.revision
+                    or not isinstance(rows, list)
+                    or len(rows) != len(expected)
+                    or {r.get('thread_id') for r in rows} != set(expected)
+                ):
+                    return False
+                for row in rows:
+                    member = expected[row['thread_id']]
+                    if (
+                        row.get('provider') != 'codex'
+                        or row.get('host') != 'local'
+                        or row.get('title') != member.title
+                        or row.get('project') != member.project
+                        or row.get('status') not in ('read', 'unavailable', 'not_read_budget')
+                        or row['status'] == 'read'
+                        and type(row.get('coverage_complete')) is not bool
+                    ):
+                        return False
+                unavailable = sum(r['status'] != 'read' for r in rows)
+                if (
+                    type(report.get('unavailable_sources')) is not int
+                    or report['unavailable_sources'] != unavailable
+                    or type(report.get('items_truncated')) is not bool
+                    or report['coverage_complete']
+                    and (
+                        unavailable
+                        or report['items_truncated']
+                        or any(not r['coverage_complete'] for r in rows)
+                    )
+                ):
+                    return False
             for name in (
                 'unknown_completion_time',
                 'missing_final_answer',
@@ -292,6 +361,26 @@ class ReportVoice:
                     return False
             seen = set()
             for item in report['items']:
+                if isinstance(source, ReportScope):
+                    member = expected.get(item.get('source_thread_id'))
+                    cached = (
+                        report.get('view') == 'since_last_unheard'
+                        and item.get('since_status') == 'cached_unheard'
+                        and not report['coverage_complete']
+                    )
+                    if (
+                        member is None
+                        or item.get('source_host') != 'local'
+                        or item.get('source_provider') != 'codex'
+                        or item.get('source_title') != member.title
+                        or item.get('source_project') != member.project
+                        or not cached
+                        and not any(
+                            r['thread_id'] == member.thread_id and r['status'] == 'read'
+                            for r in rows
+                        )
+                    ):
+                        return False
                 ident = key(item)
                 if ident in seen:
                     return False
@@ -447,7 +536,7 @@ class ReportVoice:
                     'item',
                     1,
                     self.delivery(messages, requirements),
-                    report_source(context[0], item['turn_id']),
+                    report_source(context[0], item['turn_id'], item),
                 )
         if command.kind not in ('report', 'custom'):
             raise ValueError('Invalid report command')
@@ -503,6 +592,10 @@ class ReportVoice:
                 messages.append('重新检查原汇报范围，保留未确认播完的摘要，并收集迟到结果。')
             if not report['coverage_complete']:
                 messages.append('读取覆盖不完整，不能据此判断其他成果。')
+            if report.get('source') == 'codex_registered':
+                messages.append(
+                    f'本次明确登记{len(report["sources"])}个聊天，其中{report["unavailable_sources"]}个未能读取。'
+                )
             if report['empty_confirmed']:
                 messages.append(
                     '本次没有新增或待补播结果。'
@@ -526,6 +619,7 @@ class ReportVoice:
                 requirements[key(item), version(item)] = indices
                 messages.append(
                     f'第{number}项，原答复摘录：'
+                    + (f'来自{item["source_title"]}。' if 'source_thread_id' in item else '')
                     + item['excerpt'][:80]
                     + (
                         '。摘录已截短。'
