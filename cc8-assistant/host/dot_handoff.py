@@ -144,6 +144,11 @@ class ChatCatalog:
                 project=row['project'],
             )
 
+    def queue(self, source, is_current=lambda: True):
+        from thread_queue import ThreadQueueReader
+
+        return ThreadQueueReader(self.rpc_factory).read(source, is_current=is_current)
+
     def select(self, source_id, is_current=lambda: True):
         if not is_current():
             raise Cancelled('Chat selection cancelled')

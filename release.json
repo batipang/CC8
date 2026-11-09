@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "saved-work-reports-20261110.1",
+  "release_id": "source-queue-inspection-20261110.1",
   "backend": {
-    "version": "0.16.19"
+    "version": "0.16.20"
   },
   "assistant": {
-    "version": "0.9.87",
-    "version_code": 124,
+    "version": "0.9.89",
+    "version_code": 126,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {

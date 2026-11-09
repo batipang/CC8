@@ -1,5 +1,11 @@
 # Changelog
 
+## Backend 0.16.20 / Assistant 0.9.89 — explicit source-queue inspection
+
+- Inspect only an explicitly selected registered Codex source through `thread/queue/list`. Fence registration/revision and current request/route ownership; bound four eight-item pages with a shared 25-second budget, preserve unavailable/partial coverage and sanitize bounded previews without reading attachments. Queue reads never change handoff, voice context or task state, and are not persisted or sent to a model.
+- Add a capability-gated native read/copy window using immutable source IDs and revision. Retire old menus and responses on close/handover; an empty queue is explicitly not proof of task completion or safe restart. Enqueue/resume/start/delete/reorder remain unavailable pending original desktop integration and receipt validation.
+- Record official CLI help and actual 0.166.0 queue schemas, plus successful read-only current-development-chat queue discovery without writes or model turns. Carry the completed 0.16.19/code124 grouped deployment, 15 actual UI checks and independent background/resource restoration; preserve the original code120 cache failure. Full P0/P1 and final 72-hour acceptance remain open.
+
 ## Backend 0.16.19 / Assistant 0.9.87 — explicitly saved work-report snapshots
 
 - Save only an explicitly confirmed current server-held report, with source identities, completion-time result indexes and bounded excerpts. Keep up to 16 snapshots within a total 256 KiB quota, without silent eviction; browse by save time, copy, delete or clear through native dialogs. Normal reports stay in RAM.

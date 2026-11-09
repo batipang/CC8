@@ -115,7 +115,10 @@ final class VoiceSession {
   private volatile boolean resultProvenanceSupported;
   private volatile boolean resultReadingSupported;
   private volatile boolean visionModesSupported, photoFollowupSupported, macWindowSupported;
-  private volatile boolean vocabularySupported, reportSourcesSupported, reportArchiveSupported;
+  private volatile boolean vocabularySupported,
+      reportSourcesSupported,
+      reportArchiveSupported,
+      threadQueueSupported;
   private volatile JSONObject voicePreferences;
   private volatile JSONObject speechCorrection;
   private int speechCorrectionRevision = -1;
@@ -146,6 +149,10 @@ final class VoiceSession {
 
   boolean supportsReportArchive() {
     return reportArchiveSupported;
+  }
+
+  boolean supportsThreadQueue() {
+    return threadQueueSupported;
   }
 
   PhotoFollowupWindow.Picture photoForFollowup() {
@@ -309,11 +316,12 @@ final class VoiceSession {
                   vocabularySupported =
                       reportSourcesSupported =
                           reportArchiveSupported =
-                              dotChatSupported =
-                                  savedTasksSupported =
-                                      preferenceMemorySupported =
-                                          resultProvenanceSupported =
-                                              resultReadingSupported = false;
+                              threadQueueSupported =
+                                  dotChatSupported =
+                                      savedTasksSupported =
+                                          preferenceMemorySupported =
+                                              resultProvenanceSupported =
+                                                  resultReadingSupported = false;
       voicePreferences = null;
       speechCorrection = null;
       speechCorrectionRevision = -1;
@@ -457,11 +465,12 @@ final class VoiceSession {
                     vocabularySupported =
                         reportSourcesSupported =
                             reportArchiveSupported =
-                                dotChatSupported =
-                                    savedTasksSupported =
-                                        preferenceMemorySupported =
-                                            resultProvenanceSupported =
-                                                resultReadingSupported = false;
+                                threadQueueSupported =
+                                    dotChatSupported =
+                                        savedTasksSupported =
+                                            preferenceMemorySupported =
+                                                resultProvenanceSupported =
+                                                    resultReadingSupported = false;
         voicePreferences = null;
         speechCorrection = null;
         speechCorrectionRevision = -1;
@@ -584,11 +593,12 @@ final class VoiceSession {
                   vocabularySupported =
                       reportSourcesSupported =
                           reportArchiveSupported =
-                              dotChatSupported =
-                                  savedTasksSupported =
-                                      preferenceMemorySupported =
-                                          resultProvenanceSupported =
-                                              resultReadingSupported = false;
+                              threadQueueSupported =
+                                  dotChatSupported =
+                                      savedTasksSupported =
+                                          preferenceMemorySupported =
+                                              resultProvenanceSupported =
+                                                  resultReadingSupported = false;
       voicePreferences = null;
       speechCorrection = null;
       speechCorrectionRevision = -1;
@@ -795,6 +805,7 @@ final class VoiceSession {
             vocabularySupported = Boolean.TRUE.equals(j.opt("supports_vocabulary"));
             reportSourcesSupported = Boolean.TRUE.equals(j.opt("supports_report_sources"));
             reportArchiveSupported = Boolean.TRUE.equals(j.opt("supports_report_archive"));
+            threadQueueSupported = Boolean.TRUE.equals(j.opt("supports_thread_queue"));
             visionModesSupported = Boolean.TRUE.equals(j.opt("supports_vision_modes"));
             macWindowSupported = Boolean.TRUE.equals(j.opt("supports_mac_window"));
             photoFollowupSupported = Boolean.TRUE.equals(j.opt("supports_photo_followup"));
@@ -1472,6 +1483,7 @@ final class VoiceSession {
           || !currentRoute(route)
           || !requestId.matches("[a-f0-9]{32}")) return false;
       String reportAction = args.optString("action");
+      if ("source_queue".equals(reportAction) && !threadQueueSupported) return false;
       if (("saved_reports".equals(reportAction)
               || "saved_report".equals(reportAction)
               || "save_report".equals(reportAction)

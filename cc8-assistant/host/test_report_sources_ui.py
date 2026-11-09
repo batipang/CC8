@@ -119,6 +119,23 @@ public class ReportSourcesCheck {
    case "archive_capability":{
     s.archive=false;report(ui,s,reportPayload());yes(!AlertDialog.last.builder.actions.containsKey(-1),"old host offered save");break;
    }
+   case "source_queue":{
+    ui.open();JSONObject mutable=row(),registry=state(mutable);ui.accept(result(s,registry));
+    mutable.put("id","b".repeat(16));registry.put("revision",8);AlertDialog.last.pick(0);AlertDialog.last.click(-3);
+    JSONObject sent=s.requests.get(s.requests.size()-1);
+    yes("source_queue".equals(sent.optString("action"))&&"a".repeat(16).equals(sent.optString("registration_id"))&&sent.optInt("revision")==1,"queue read retargeted mutable source");
+    yes(sent.opt("thread_id")==null&&sent.opt("confirmed")==null,"queue read supplied arbitrary target or mutation consent");
+    int count=s.requests.size();JSONObject reply=new JSONObject("request_id",s.lastId,"ok",true,"queue_text","原聊天待办 · 只读");ui.accept(reply);
+    reply.put("queue_text","changed body");AlertDialog.last.click(-1);
+    yes("原聊天待办 · 只读".equals(android.content.ClipboardManager.text)&&s.requests.size()==count,"queue copy changed snapshot or sent work");break;
+   }
+   case "source_queue_stale":{
+    master(ui,s);AlertDialog.last.pick(0);AlertDialog retired=AlertDialog.last;int count=s.requests.size();ui.close();s.route++;
+    retired.builder.actions.get(-3).onClick(retired,-3);yes(s.requests.size()==count,"old source menu read another queue");break;
+   }
+   case "source_queue_capability":{
+    s.threadQueue=false;master(ui,s);AlertDialog.last.pick(0);yes(!AlertDialog.last.builder.actions.containsKey(-3),"old host offered queue inspection");break;
+   }
    default:throw new AssertionError("unknown case");
   }
  }
@@ -140,7 +157,7 @@ class ReportSourcesUiTests(unittest.TestCase):
             'com/happyhome/cc8assistant/VoiceSession.java'
         ].replace(
             'boolean supportsVocabulary()',
-            'boolean supportsReportSources(){return true;}boolean archive=true;boolean supportsReportArchive(){return archive;}void dotChatCancel(String id){}'
+            'boolean supportsReportSources(){return true;}boolean archive=true,threadQueue=true;boolean supportsThreadQueue(){return threadQueue;}boolean supportsReportArchive(){return archive;}void dotChatCancel(String id){}'
             'boolean reportSourcesRequest(String id,JSONObject args,long r){if(!currentRoute(r))return false;lastId=id;requests.add(args);return true;}'
             'boolean supportsVocabulary()',
         )
@@ -231,3 +248,10 @@ class ReportSourcesUiTests(unittest.TestCase):
 
     def test_older_host_cannot_offer_persistent_save(self):
         self.scenario('archive_capability')
+
+    def test_source_queue_uses_frozen_registration_and_only_copies_current_readonly_body(self):
+        self.scenario('source_queue')
+
+    def test_source_queue_cannot_use_an_old_window_or_unsupported_host(self):
+        self.scenario('source_queue_stale')
+        self.scenario('source_queue_capability')

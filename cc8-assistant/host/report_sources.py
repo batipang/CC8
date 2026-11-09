@@ -29,6 +29,7 @@ REGISTRY_ACTIONS = frozenset(
         'clear_sources',
         'use_sources',
         'use_selected_report',
+        'source_queue',
     )
 )
 MUTATIONS = frozenset(('register_source', 'delete_source', 'clear_sources'))
@@ -49,7 +50,7 @@ def validate_request(value: object) -> None:
             not isinstance(value['cursor'], str) or not 0 < len(value['cursor']) <= 2048
         ):
             raise ValueError('Invalid report sources cursor')
-    if action in MUTATIONS or action == 'use_sources':
+    if action in MUTATIONS or action in ('use_sources', 'source_queue'):
         fields |= {'revision'}
         if type(value.get('revision')) is not int or not 0 <= value['revision'] < REVISION_LIMIT:
             raise ValueError('Invalid report sources revision')
@@ -60,7 +61,7 @@ def validate_request(value: object) -> None:
     if action == 'register_source':
         fields |= {'source_id'}
         identifier(value.get('source_id'))
-    if action == 'delete_source':
+    if action in ('delete_source', 'source_queue'):
         fields |= {'registration_id'}
         if not isinstance(value.get('registration_id'), str) or not re.fullmatch(
             '[a-f0-9]{16}', value['registration_id']

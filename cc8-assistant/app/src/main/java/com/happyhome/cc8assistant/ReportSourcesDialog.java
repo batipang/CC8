@@ -173,6 +173,33 @@ final class ReportSourcesDialog {
       toast(data.optString("message", "未确认来源状态，请刷新查看"));
       return;
     }
+    if ("source_queue".equals(completed)) {
+      Object body = data.opt("queue_text");
+      if (!(body instanceof String)
+          || ((String) body).isEmpty()
+          || ((String) body).length() > 24000) {
+        toast("未取得有效的原聊天队列状态");
+        return;
+      }
+      final String text = (String) body;
+      final long owner = epoch + 1;
+      show(
+          new AlertDialog.Builder(activity)
+              .setTitle("原聊天待办 · 只读")
+              .setMessage(text)
+              .setNegativeButton("关闭", null)
+              .setPositiveButton(
+                  "复制",
+                  (d, n) -> {
+                    if (!live(owner, null)) return;
+                    ClipboardManager clipboard =
+                        (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
+                    if (clipboard != null)
+                      clipboard.setPrimaryClip(ClipData.newPlainText("原聊天待办队列", text));
+                  })
+              .create());
+      return;
+    }
     if ("report".equals(completed)) {
       String text = data.optString("report_text");
       if (text.isEmpty() || text.length() > 48000) {
@@ -325,7 +352,7 @@ final class ReportSourcesDialog {
         new AlertDialog.Builder(activity)
             .setTitle("登记：" + item.title)
             .setMessage(
-                "仅保存名称、项目简称和聊天标识，最多8个，保留至手动删除。不会读取正文、启动模型或追加原聊天；只有明确请求汇报才读取已登记聊天。\n\n"
+                "仅保存名称、项目简称和聊天标识，最多8个，保留至手动删除。不会读取正文、启动模型或追加原聊天；只有明确请求汇报或查看待办队列才读取所选来源。\n\n"
                     + changeNotice())
             .setPositiveButton(
                 "确认登记",
@@ -341,7 +368,7 @@ final class ReportSourcesDialog {
 
   private void remove(Snapshot value, Source item) {
     final long owner = epoch + 1;
-    show(
+    AlertDialog.Builder builder =
         new AlertDialog.Builder(activity)
             .setTitle(item.title + " · 本机 Codex")
             .setMessage("项目：" + item.project + "\n只删除本机来源登记，不删除原聊天。\n\n" + changeNotice())
@@ -353,8 +380,18 @@ final class ReportSourcesDialog {
                   Wire.put(args, "registration_id", item.id);
                   request(args);
                 })
-            .setNegativeButton("取消", null)
-            .create());
+            .setNegativeButton("取消", null);
+    if (session.supportsThreadQueue())
+      builder.setNeutralButton(
+          "查看待办队列",
+          (d, n) -> {
+            if (!live(owner, value) || !session.supportsThreadQueue()) return;
+            JSONObject args = args("source_queue");
+            Wire.put(args, "revision", value.revision);
+            Wire.put(args, "registration_id", item.id);
+            request(args);
+          });
+    show(builder.create());
   }
 
   private void options(Snapshot value, String scope) {
