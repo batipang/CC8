@@ -33,6 +33,8 @@ from device_event_router import DeviceEventRouter
 from chat_controller import ChatController, ChatHooks
 from saved_tasks import SavedTasks
 from saved_task_controller import SavedTaskController, SavedTaskHooks
+from preference_memory import PreferenceMemory
+from preference_controller import PreferenceController, PreferenceHooks
 
 if TYPE_CHECKING:
     from bridge import Bridge
@@ -53,6 +55,7 @@ class Components:
     wake: WakeController
     chats: ChatController
     saved_tasks: SavedTaskController
+    preferences: PreferenceController
 
 
 def voice_busy(host: Bridge) -> bool:
@@ -85,6 +88,7 @@ def build_components(
     private_directory: Callable[[], Path],
     wake_word: str,
     dot_runtime: Callable[[], dict[str, object]],
+    preference_memory: PreferenceMemory | None = None,
 ) -> Components:
     calibration = CalibrationController(
         CalibrationHooks(
@@ -301,6 +305,19 @@ def build_components(
         ),
         SavedTasks(private_directory() / 'saved-task-results.json'),
     )
+    preferences = PreferenceController(
+        PreferenceHooks(
+            lock=host.session.guard,
+            connection=lambda: host.session.connection,
+            busy=lambda: (
+                host.session.active or host.session.text_generation is not None or voice_busy(host)
+            ),
+            event=lambda name, **fields: host.event(name, **fields),
+        ),
+        preference_memory
+        if preference_memory is not None
+        else PreferenceMemory(private_directory() / 'preference-memory.json'),
+    )
     reporting = StatusReporter(
         ReportingHooks(
             session=lambda: host.session.snapshot(),
@@ -341,6 +358,7 @@ def build_components(
         wake,
         chats,
         saved_tasks,
+        preferences,
     )
 
 
@@ -365,6 +383,7 @@ def build_device_events(host: Bridge) -> DeviceEventRouter:
         log=lambda name, **fields: host.log(name, **fields),
         read_result=lambda data: host.response.request_read(data),
         correction_action=lambda data: host.response.request_correction(data),
+        preference_action=lambda data: host.preferences.request(data),
     )
 
 

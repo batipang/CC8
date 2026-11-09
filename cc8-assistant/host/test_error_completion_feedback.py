@@ -1,6 +1,7 @@
 """Real response dispatch and extracted Java event branches preserve terminal errors."""
 
 from pathlib import Path
+from test_memory_fixture import isolated_memory
 import subprocess
 import tempfile
 import threading
@@ -24,7 +25,7 @@ JAVA = ROOT / 'cc8-assistant/app/src/main/java/com/happyhome/cc8assistant'
 class TextFailureTests(unittest.TestCase):
     def bridge(self, brain):
         with patch('threading.Thread.start'):
-            b = Bridge(None, brain)
+            b = Bridge(None, brain, preference_memory=isolated_memory())
         b.session.connection = object()
         b.save_status = lambda: None
         b.events, b.logs = [], []
@@ -487,7 +488,7 @@ class DeviceFeedbackTests(unittest.TestCase):
         methods = '\n'.join(
             'void '
             + event
-            + '(int gen, String next, String message){Packet p=new Packet(gen);Data j=new Data(next,message);j.startFailure=suppliedStartFailure;j.provenance=suppliedResultProvenance;j.listening=suppliedListeningState;j.captureId=suppliedCaptureId!=null?suppliedCaptureId:captureWindow==null?null:captureWindow.id;j.epoch=suppliedCaptureEpoch!=null?suppliedCaptureEpoch:Integer.valueOf(epoch);'
+            + '(int gen, String next, String message){Packet p=new Packet(gen);Data j=new Data(next,message);j.startFailure=suppliedStartFailure;j.provenance=suppliedResultProvenance;j.memory=suppliedPreferenceMemory;j.listening=suppliedListeningState;j.captureId=suppliedCaptureId!=null?suppliedCaptureId:captureWindow==null?null:captureWindow.id;j.epoch=suppliedCaptureEpoch!=null?suppliedCaptureEpoch:Integer.valueOf(epoch);'
             + branch(source, event)
             + '}'
             for event in events
@@ -505,7 +506,7 @@ class FeedbackCheck {
  final Object routeLock=new Object();long route=5, activeRoute=5,routeEpoch=5;
  static class CaptureWindow{static int count;final String id="capture"+(++count);boolean startConfirmed=true;}
  CaptureWindow captureWindow=new CaptureWindow();
- boolean dotChatSupported,savedTasksSupported,resultProvenanceSupported,resultReadingSupported;
+ boolean dotChatSupported,savedTasksSupported,preferenceMemorySupported,resultProvenanceSupported,resultReadingSupported;
  // The transport handshake itself is covered by the capture route tests.
  static class Link {}
  final Link source=new Link();
@@ -519,14 +520,15 @@ class FeedbackCheck {
  Object suppliedListeningState="unknown";
  Object suppliedCaptureId,suppliedCaptureEpoch;
  Object suppliedStartFailure;
- Object suppliedResultProvenance;
+ Object suppliedResultProvenance,suppliedPreferenceMemory;
  String pendingVisionNonce="",desktopVisionNonce="";
  static class Packet{int generation;Packet(int g){generation=g;}}
- static class Data{String next,message;Object listening="unknown",captureId,epoch,startFailure,provenance;Data(String n,String m){next=n;message=m;}
+ static class Data{String next,message;Object listening="unknown",captureId,epoch,startFailure,provenance,memory;Data(String n,String m){next=n;message=m;}
   Object optJSONObject(String key){return null;}
   String optString(String k){return "phase".equals(k)?next:"listening_state".equals(k)?String.valueOf(listening):message;}
   String optString(String k,String fallback){return optString(k);}
   Object opt(String k){
+   if("supports_preference_memory".equals(k))return memory;
    if("supports_result_provenance".equals(k)||"supports_result_reading".equals(k))return provenance;
    if("request_start_failed".equals(k))return startFailure;
    if("listening_state".equals(k))return listening;
@@ -685,6 +687,21 @@ class FeedbackCheck {
  yes(!c.resultProvenanceSupported&&!c.resultReadingSupported,"background enabled file control");
  c.foreground=true;c.activeRoute=6;c.hello(9,"","stale route");
  yes(!c.resultProvenanceSupported&&!c.resultReadingSupported,"old route enabled file control");""")
+
+    def test_preference_capability_requires_current_generation_route_and_boolean(self):
+        self.compile_and_run("""c.suppliedPreferenceMemory="true";c.hello(8,"","string");
+ yes(!c.preferenceMemorySupported,"string advertised memory capability");
+ c.suppliedPreferenceMemory=Integer.valueOf(1);c.hello(8,"","number");
+ yes(!c.preferenceMemorySupported,"number advertised memory capability");
+ c.suppliedPreferenceMemory=Boolean.TRUE;c.hello(8,"","current");
+ yes(c.preferenceMemorySupported,"current capability missing");
+ c.minimumGeneration=9;c.suppliedPreferenceMemory=Boolean.FALSE;c.hello(8,"","old");
+ yes(c.preferenceMemorySupported,"old generation disabled current memory capability");
+ c.hello(9,"","current off");yes(!c.preferenceMemorySupported,"current disable ignored");
+ c.foreground=false;c.suppliedPreferenceMemory=Boolean.TRUE;c.hello(9,"","background");
+ yes(!c.preferenceMemorySupported,"background enabled memory capability");
+ c.foreground=true;c.activeRoute=6;c.hello(9,"","retired route");
+ yes(!c.preferenceMemorySupported&&!c.recording,"retired route enabled memory or capture");""")
 
     def test_route_interruption_notice_survives_rebind_and_clears_for_new_work(self):
         self.compile_and_run("""c.recording=true;c.hello(8,"notice","连接切换中断播报");

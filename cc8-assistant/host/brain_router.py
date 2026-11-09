@@ -21,6 +21,8 @@ class BrainRouter:
         self.minimax = minimax
         self.dot = dot or DotBrain()
         self.work_reports = None
+        self.preferences = None
+        self.preference_context = ''
         self.current_report_delivery = None
         self.select(selected)
         self.last_metrics = {}
@@ -60,6 +62,19 @@ class BrainRouter:
 
         return update
 
+    def apply_preferences(self, history, target):
+        context = self.preferences.context() if self.preferences else ''
+        if context != self.preference_context:
+            # Our RAM conversation can contain a previously personalized answer.
+            # Start fresh rather than re-inject it after deletion or disable.
+            clear = getattr(history, 'clear', None)
+            if callable(clear):
+                clear()
+            history = []
+            self.preference_context = context
+        target.preference_context = context
+        return history
+
     def vision_clauses(self, text, image, history, is_current=lambda: True, on_web=None):
         self.current_report_delivery = None
         if self.work_reports:
@@ -67,6 +82,7 @@ class BrainRouter:
         self.last_metrics = {'provider': 'dot', 'vision': True}
         # Camera input always goes to Dot, regardless of the text-chat selector.
         try:
+            history = self.apply_preferences(history, self.dot)
             yield from self.dot.clauses(
                 text,
                 history,
@@ -106,6 +122,20 @@ class BrainRouter:
             raise Cancelled('Turn cancelled')
         match = DELEGATE.match(text)
         prompt = text[match.end() :].strip() if match else text
+        if self.preferences:
+            answer = self.preferences.voice(prompt, is_current)
+            if answer is not None:
+                self.last_metrics = {'provider': 'preference_memory', 'completed': True}
+                if on_web:
+                    on_web('clear', {})
+                    on_web(
+                        'dot_result',
+                        {'text': answer, 'truncated': False, 'handoff_source_title': ''},
+                    )
+                if not is_current():
+                    raise Cancelled('Memory answer cancelled')
+                yield answer
+                return
         command = self.work_reports.command(prompt) if self.work_reports else None
         if command is not None:
             self.last_metrics = {'provider': 'work_report', 'completed': False}
@@ -159,6 +189,7 @@ class BrainRouter:
             yield '你想让 Dot 帮你查询或分析什么？'
             return
         try:
+            history = self.apply_preferences(history, target)
             yield from target.clauses(
                 prompt, history, is_current, self.updates(target, provider, on_web)
             )

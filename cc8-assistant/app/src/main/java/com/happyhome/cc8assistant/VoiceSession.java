@@ -65,6 +65,8 @@ final class VoiceSession {
     void workspaceResult(boolean ok, String message, long route);
 
     default void speechCorrection(JSONObject state, long route) {}
+
+    default void preferenceResult(JSONObject data, long route) {}
   }
 
   private final Context context;
@@ -104,7 +106,7 @@ final class VoiceSession {
   private final StatusFeedback statusFeedback = new StatusFeedback();
   private final HostActivation hostActivation = new HostActivation();
   private final ConnectionAvailability availability = new ConnectionAvailability();
-  private volatile boolean dotChatSupported, savedTasksSupported;
+  private volatile boolean dotChatSupported, savedTasksSupported, preferenceMemorySupported;
   private volatile boolean resultProvenanceSupported;
   private volatile boolean resultReadingSupported;
   private volatile JSONObject voicePreferences;
@@ -113,6 +115,10 @@ final class VoiceSession {
 
   boolean supportsDotChatHandoff() {
     return dotChatSupported;
+  }
+
+  boolean supportsPreferenceMemory() {
+    return preferenceMemorySupported;
   }
 
   boolean supportsSavedTaskResults() {
@@ -245,7 +251,9 @@ final class VoiceSession {
       activeLink = null;
       route = routeEpoch;
       dotChatSupported =
-          savedTasksSupported = resultProvenanceSupported = resultReadingSupported = false;
+          savedTasksSupported =
+              preferenceMemorySupported =
+                  resultProvenanceSupported = resultReadingSupported = false;
       voicePreferences = null;
       speechCorrection = null;
       speechCorrectionRevision = -1;
@@ -381,7 +389,9 @@ final class VoiceSession {
         next.captureStartToken = null;
         next.pairedCaptureRequested = false;
         dotChatSupported =
-            savedTasksSupported = resultProvenanceSupported = resultReadingSupported = false;
+            savedTasksSupported =
+                preferenceMemorySupported =
+                    resultProvenanceSupported = resultReadingSupported = false;
         voicePreferences = null;
         speechCorrection = null;
         speechCorrectionRevision = -1;
@@ -493,7 +503,9 @@ final class VoiceSession {
       activeLink = null;
       routeEpoch++;
       dotChatSupported =
-          savedTasksSupported = resultProvenanceSupported = resultReadingSupported = false;
+          savedTasksSupported =
+              preferenceMemorySupported =
+                  resultProvenanceSupported = resultReadingSupported = false;
       voicePreferences = null;
       speechCorrection = null;
       speechCorrectionRevision = -1;
@@ -696,6 +708,7 @@ final class VoiceSession {
           listener.recognition(j.optString("asr_engine", "sensevoice"));
           synchronized (routeLock) {
             if (!foreground || !currentRoute(route) || p.generation < minimumGeneration) return;
+            preferenceMemorySupported = Boolean.TRUE.equals(j.opt("supports_preference_memory"));
             resultProvenanceSupported = Boolean.TRUE.equals(j.opt("supports_result_provenance"));
             resultReadingSupported = Boolean.TRUE.equals(j.opt("supports_result_reading"));
             acceptVoicePreferences(j.optJSONObject("voice_preferences"));
@@ -948,6 +961,8 @@ final class VoiceSession {
         } else if ("dot_chat_state".equals(event)) {
           dotChatSupported = true;
           if (foreground) listener.dotChats(j);
+        } else if ("preference_result".equals(event)) {
+          if (foreground) listener.preferenceResult(j, route);
         } else if ("saved_task_result".equals(event)) {
           if (foreground) listener.savedTasks(j);
         } else if ("web_sources".equals(event)) {
@@ -1166,6 +1181,25 @@ final class VoiceSession {
       Wire.put(j, "speech_rate", rate);
       Wire.put(j, "natural_barge", naturalBarge);
       Wire.put(j, "revision", revision);
+      return sendWorkspace(j, route);
+    }
+  }
+
+  boolean preferenceRequest(String requestId, JSONObject args, long route) {
+    synchronized (routeLock) {
+      if (!preferenceMemorySupported || !foreground || !currentRoute(route)) return false;
+      JSONObject j = Wire.event("preference_request");
+      Wire.put(j, "request_id", requestId);
+      java.util.Iterator<String> keys = args.keys();
+      while (keys.hasNext()) {
+        String key = keys.next();
+        if (!"action".equals(key)
+            && !"revision".equals(key)
+            && !"key".equals(key)
+            && !"value".equals(key)
+            && !"enabled".equals(key)) return false;
+        Wire.put(j, key, args.opt(key));
+      }
       return sendWorkspace(j, route);
     }
   }

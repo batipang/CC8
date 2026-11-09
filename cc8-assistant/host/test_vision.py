@@ -1,4 +1,5 @@
 import base64
+from test_memory_fixture import isolated_memory
 import hashlib
 import time
 import unittest
@@ -203,7 +204,11 @@ class DotImageTests(unittest.TestCase):
 
 class BridgeVisionTests(unittest.TestCase):
     def bridge(self):
-        b = Bridge(None, BrainRouter(StubBrain('mini'), StubBrain('dot')))
+        b = Bridge(
+            None,
+            BrainRouter(StubBrain('mini'), StubBrain('dot')),
+            preference_memory=isolated_memory(),
+        )
         b.session.connection = object()
         b.save_status = lambda: None
         b.events = []

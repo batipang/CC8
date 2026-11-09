@@ -47,6 +47,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   private String lastStateMessage = "系统待命";
   private VoiceSession session;
   private DotChatsDialog dotChats;
+  private PreferenceMemoryDialog preferenceMemory;
   private SpeechCorrectionDialog correctionDialog;
   private SavedTasksDialog savedTasks;
   private ResultDetailsDialog resultDetails;
@@ -162,6 +163,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     session = new VoiceSession(this, this);
     correctionDialog = new SpeechCorrectionDialog(this, session);
     dotChats = new DotChatsDialog(this, session);
+    preferenceMemory = new PreferenceMemoryDialog(this, session);
     resultDetails = new ResultDetailsDialog(this, session);
     savedTasks = new SavedTasksDialog(this, session, resultDetails);
     requestOpenVoice(getIntent());
@@ -1242,7 +1244,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
               "立即打断播报",
               "Dot 聊天接续",
               "声音与自然插话",
-              "提醒送达记录"
+              "提醒送达记录",
+              "偏好记忆"
             },
             (d, n) -> {
               if (n == 0) {
@@ -1288,6 +1291,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
               } else if (n == 7) session.interrupt();
               else if (n == 8) dotChats.open();
               else if (n == 9) showVoicePreferences();
+              else if (n == 11) preferenceMemory.open();
               else showReminderHistory();
             })
         .setNegativeButton("关闭", null)
@@ -1563,6 +1567,14 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   }
 
   @Override
+  public void preferenceResult(JSONObject data, long route) {
+    runOnUiThread(
+        () -> {
+          if (foreground && preferenceMemory != null) preferenceMemory.accept(data, route);
+        });
+  }
+
+  @Override
   public void speechCorrection(JSONObject data, long route) {
     runOnUiThread(
         () -> {
@@ -1751,6 +1763,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
             workspaceRevision = -1;
             taskResultUnconfirmed |= hasRunningTask(tasksData);
             dotChats.close();
+            preferenceMemory.close();
             savedTasks.close();
             resultDetails.close();
             if (correctionDialog != null) correctionDialog.close();
@@ -1995,6 +2008,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     if (reminderHistoryDialog != null) reminderHistoryDialog.dismiss();
     if (connectionInfoDialog != null) connectionInfoDialog.dismiss();
     if (dotChats != null) dotChats.close();
+    if (preferenceMemory != null) preferenceMemory.close();
     if (savedTasks != null) savedTasks.close();
     if (resultDetails != null) resultDetails.close();
     screen(false);

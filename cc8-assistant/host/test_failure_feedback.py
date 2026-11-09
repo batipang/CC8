@@ -1,5 +1,6 @@
 """Injected failures exercise real owners, without providers, devices or capture."""
 
+from test_memory_fixture import isolated_memory
 import json
 import threading
 import unittest
@@ -39,7 +40,7 @@ class Brain:
 class FailureFeedbackTests(unittest.TestCase):
     def session(self, speech=None, brain=None):
         with patch('threading.Thread.start'):
-            bridge = Bridge(speech, brain)
+            bridge = Bridge(speech, brain, preference_memory=isolated_memory())
         bridge.session.active = True
         bridge.session.awake = True
         bridge.session.connection = object()

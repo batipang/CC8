@@ -446,6 +446,7 @@ class MiniMaxBrain:
         self.last_metrics = {}
         self.web_context = False
         self.pending_web = None
+        self.preference_context = ''
 
     def cancel(self):
         self.transport.cancel()
@@ -582,6 +583,11 @@ class MiniMaxBrain:
         )
         messages = [
             {'role': 'system', 'content': system},
+            *(
+                [{'role': 'user', 'content': self.preference_context}]
+                if self.preference_context
+                else []
+            ),
             *list(history),
             {'role': 'user', 'content': text},
         ]

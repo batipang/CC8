@@ -1,4 +1,5 @@
 import queue
+from test_memory_fixture import isolated_memory
 import threading
 import time
 import unittest
@@ -288,7 +289,11 @@ class RouterTests(unittest.TestCase):
 
 class ProviderSettingsTests(unittest.TestCase):
     def bridge(self):
-        b = Bridge(None, BrainRouter(StubBrain('mini'), StubBrain('dot')))
+        b = Bridge(
+            None,
+            BrainRouter(StubBrain('mini'), StubBrain('dot')),
+            preference_memory=isolated_memory(),
+        )
         b.save_status = lambda: None
         b.event = lambda *args, **kwargs: None
         b.session.wake = True

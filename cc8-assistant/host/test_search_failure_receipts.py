@@ -1,5 +1,6 @@
 """The actual MiniMax search path must propagate failures, never narrate success."""
 
+from test_memory_fixture import isolated_memory
 import json
 import unittest
 from unittest.mock import patch
@@ -17,7 +18,7 @@ SECRET = 'PRIVATE-search-error-body'
 class SearchFailureReceipts(unittest.TestCase):
     def execute(self, brain):
         with patch('threading.Thread.start'):
-            b = Bridge(None, brain)
+            b = Bridge(None, brain, preference_memory=isolated_memory())
         b.session.active = True
         b.session.awake = True
         b.session.connection = object()
