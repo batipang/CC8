@@ -121,6 +121,18 @@ def validate_device_event(value: object) -> JsonObject:
             or type(value.get('natural_barge')) is not bool
         ):
             raise ValueError('Invalid voice preferences')
+    if name == 'speech_correction_action':
+        correction_request_id = value.get('request_id')
+        correction_draft_id = value.get('draft_id')
+        if (
+            set(value) != {'event', 'request_id', 'draft_id', 'action'}
+            or not isinstance(correction_request_id, str)
+            or not re.fullmatch('[a-f0-9]{32}', correction_request_id)
+            or not isinstance(correction_draft_id, str)
+            or not re.fullmatch('[a-f0-9]{32}', correction_draft_id)
+            or value.get('action') not in ('confirm', 'cancel')
+        ):
+            raise ValueError('Invalid speech correction action')
     if name == 'result_read_request':
         if (
             set(value) != {'event', 'request_id', 'id', 'restart'}

@@ -190,3 +190,38 @@ def write_build_receipt(
         os.replace(temporary, apk.with_suffix('.apk.build.json'))
     finally:
         Path(temporary).unlink(missing_ok=True)
+
+
+def check_artifact_replacement(apk: Path, built: Path, stamp: SourceStamp) -> bool:
+    """Protect existing clean APK bytes; return whether to write a fresh receipt."""
+    if not apk.exists():
+        return True
+
+    def digest(path: Path) -> str:
+        value = hashlib.sha256()
+        with path.open('rb') as source:
+            for block in iter(lambda: source.read(65536), b''):
+                value.update(block)
+        return value.hexdigest()
+
+    original, proposed = digest(apk), digest(built)
+    receipt = apk.with_suffix('.apk.build.json')
+    if receipt.exists():
+        if receipt.stat().st_size > 16384:
+            raise ValueError('Existing APK build receipt is oversized; preserve it for inspection')
+        data = json.loads(receipt.read_text())
+        if (
+            not isinstance(data, dict)
+            or type(data.get('source_dirty')) is not bool
+            or data.get('apk_sha256') != original
+        ):
+            raise ValueError('Existing APK does not match its receipt; refusing to overwrite')
+        if data['source_dirty']:
+            return True
+    # Missing provenance cannot authorize overwriting an unknown baseline.
+    if proposed != original:
+        raise ValueError(
+            'A protected APK already uses this version; bump the version before publishing new bytes'
+        )
+    # A dirty rebuild of identical bytes must not replace clean provenance.
+    return not stamp.dirty

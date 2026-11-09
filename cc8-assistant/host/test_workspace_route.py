@@ -19,7 +19,8 @@ SESSION_INTERFACES = r"""
   final Object routeLock=new Object();
   boolean foreground=true,recording,visual,announcement,textSession,receiverRegistered;
   boolean dotChatSupported,savedTasksSupported,resultProvenanceSupported,resultReadingSupported;
-  JSONObject voicePreferences;
+  JSONObject voicePreferences,speechCorrection;
+  int speechCorrectionRevision=-1;
   int epoch,minimumGeneration,lifecycle,requests,announcementGeneration,textGeneration;
   CaptureWindow captureWindow;
   int visualGeneration;String visionRequestId="",pendingVisionNonce="",desktopVisionNonce="";
@@ -110,6 +111,7 @@ SESSION_INTERFACES = r"""
  JSONObject cameraRequest;
  void cameraCapture(JSONObject value){cameraRequest=value;}
  void vision(boolean active,String message,boolean preserve){}
+ void speechCorrection(JSONObject state,long route){}
  void announcement(){}
  void captureRejected(int stoppedEpoch){}
  void playback(boolean active){}void caption(String value,String mood){}void state(String value,String message){}
@@ -485,6 +487,21 @@ SCENARIOS = r"""
     s.acceptVoicePreferences(null);yes(s.voicePreferences(s.routeEpoch)==null,"missing capability retained state");
     break;
    }
+   case "correction_receipts":{
+    JSONObject draft=new JSONObject("event","speech_correction","revision",1,"pending",true,
+      "draft_id","a".repeat(32),"original","旧问题","proposed","新问题");
+    Wire.Packet packet=new Wire.Packet(draft);s.minimumGeneration=8;s.deliver(packet,old);
+    yes(s.speechCorrection==null,"old generation exposed correction draft");
+    s.minimumGeneration=7;s.deliver(packet,old);
+    yes(s.currentSpeechCorrection(draft,s.routeEpoch),"current correction receipt missing");
+    JSONObject clear=new JSONObject("event","speech_correction","revision",2,"pending",false);
+    s.deliver(new Wire.Packet(clear),old);s.deliver(packet,old);
+    yes(s.speechCorrection==clear,"old revision restored cleared draft");
+    Link next=new Link("wifi");activate(c,next);s.deliver(packet,old);
+    yes(s.speechCorrection==null&&s.speechCorrectionRevision==-1,"old source restored route capability");
+    s.deliver(packet,next);s.pause();
+    yes(s.speechCorrection==null,"Home retained correction data");break;
+   }
    case "current_order":{
     c.snapshot(5,task("completed"));c.drain();long route=s.routeEpoch;
     s.select(old);c.drain();c.snapshot(4,task("running"));c.drain();
@@ -549,6 +566,8 @@ class WorkspaceRouteTests(unittest.TestCase):
                 'JSONObject voicePreferences(',
                 'boolean setVoicePreferences(',
                 'private boolean sendWorkspace(',
+                'private boolean acceptSpeechCorrection(',
+                'boolean currentSpeechCorrection(',
             )
         ]
         camera_route_bound = 'private void sendCameraEvent(' in session
@@ -596,6 +615,8 @@ class WorkspaceRouteTests(unittest.TestCase):
             + branch(session, 'workspace_result')
             + '}else if("voice_preferences".equals(event)){'
             + branch(session, 'voice_preferences')
+            + '}else if("speech_correction".equals(event)){'
+            + branch(session, 'speech_correction')
             + '}else if("announcement_begin".equals(event)){'
             + branch(session, 'announcement_begin')
             + '}else if("camera_capture".equals(event)){'
@@ -682,6 +703,9 @@ class WorkspaceRouteTests(unittest.TestCase):
 
     def test_voice_controls_require_typed_supported_state(self):
         self.scenario('voice_controls_invalid')
+
+    def test_correction_receipts_keep_generation_revision_route_and_home_ownership(self):
+        self.scenario('correction_receipts')
 
     def test_camera_transfer_is_bound_to_the_current_request_and_activation(self):
         for scenario in ('camera_stale_id', 'camera_stale_activation', 'camera_current'):

@@ -77,6 +77,7 @@ class SessionHooks:
     wake_tick: Callable[[], None]
     prepare_brain: Callable[[int], None]
     cancel_observation: Callable[[], None] = lambda: None
+    discard_corrections: Callable[[bool], bool] = lambda _: False
 
 
 class FailureSink(Protocol):
@@ -129,3 +130,4 @@ class RecognitionHooks:
     recheck_wake: Callable[[WaitingUtterance, Samples, int], bool | None] = lambda *_: None
     tool_sample_asr_rejection: Callable[[bool, float | None], str | None] = lambda *_: None
     natural_barge_enabled: Callable[[], bool] = lambda: True
+    clear_correction_draft: Callable[[], None] = lambda: None

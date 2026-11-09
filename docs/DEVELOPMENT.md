@@ -87,6 +87,8 @@ python3 device-access/cc8_install.py --check
 
 两个 Android 构建默认同时运行 `assembleRelease` 和 `lintRelease`。输出在 `artifacts/`，组件独立版本统一来自根目录 `release.json`；当前检测器 1.0.1，助手候选 0.8.7。构建脚本写 `local.properties` 和产物回执，所有生成内容均忽略。版本、tag 与清单验证见 [RELEASES.md](RELEASES.md)。
 
+构建产物保护：发布到 `artifacts/` 前再次核对源码戳，并验证已有APK与构建回执。已有干净产物或没有来源证明的同版本APK不允许被不同字节覆盖，应先递增版本；同字节的未提交重建保留原干净回执。旧回执损坏／摘要不匹配时拒绝覆盖，保留现场供核对，不自动删除。应用内的临时Gradle输出不等于可用于覆盖安装的已验证发行包。
+
 首次 APK 构建用 JDK keytool 生成 `cc8-diagnostics/signing/cc8-diagnostics-debug.jks`；仅用于个人开发，别名 `cc8-diagnostics`、开发密码 `android`。语音助手也使用这份本地开发签名。**现有设备签名私钥没有收录；新生成的证书不具备覆盖旧签名安装包的能力。** 自行保存长期更新所需的证书，勿提交到 Git。
 
 ## 离线检查

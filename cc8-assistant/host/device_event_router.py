@@ -42,6 +42,7 @@ class DeviceEventRouter:
     touch_activity: Callable[[], None]
     log: EventSink
     read_result: Callable[[dict], None] = lambda data: None
+    correction_action: Callable[[dict], None] = lambda data: None
 
     def on_event(self, j):
         validate_device_event(j)
@@ -77,6 +78,8 @@ class DeviceEventRouter:
             self.saved_tasks.request(j)
         elif event == 'result_read_request':
             self.read_result(j)
+        elif event == 'speech_correction_action':
+            self.correction_action(j)
         elif event == 'workspace_get':
             self.publish_workspace()
         elif event == 'text_request':

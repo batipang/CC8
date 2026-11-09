@@ -10,7 +10,7 @@ project = Path(__file__).resolve().parents[1]
 workspace = project.parent
 sys.path.insert(0, str(workspace / 'cc8-assistant/host'))
 from configuration import load_config  # noqa: E402 - standalone build entry
-from release_info import RELEASE, source_stamp, write_build_receipt  # noqa: E402
+from release_info import RELEASE, source_stamp, write_build_receipt, check_artifact_replacement  # noqa: E402
 
 config = load_config(root=workspace)
 tools = workspace / '.toolchains/cc8'
@@ -67,9 +67,13 @@ if apk.exists() and '--prepare' not in sys.argv:
     output.mkdir(exist_ok=True)
     version = RELEASE.diagnostics.version
     final = output / ('cc8-diagnostics-' + version + '.apk')
+    if source_stamp(workspace) != stamp:
+        raise RuntimeError('Source changed during build; original artifact was not replaced')
+    record_receipt = check_artifact_replacement(final, apk, stamp)
     shutil.copy2(apk, final)
     digest = hashlib.sha256(final.read_bytes()).hexdigest()
     final.with_suffix(final.suffix + '.sha256').write_text(digest + '  ' + final.name + '\n')
-    write_build_receipt(final, 'diagnostics', stamp, workspace)
+    if record_receipt:
+        write_build_receipt(final, 'diagnostics', stamp, workspace)
     print('APK: ' + str(final))
     print('SHA-256: ' + digest)

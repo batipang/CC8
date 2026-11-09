@@ -165,6 +165,7 @@ class Bridge:
 
     def heartbeat_tick(self):
         try:
+            self.response.expire_corrections()
             if self.session.connection is not None:
                 self.idle_tick()
                 self.event('ping')

@@ -31,6 +31,11 @@ class TextReply(Reply):
 
 
 @dataclass
+class CorrectedReply(TextReply):
+    """An explicitly confirmed replacement, never a replay of the original task."""
+
+
+@dataclass
 class ResultRead(TextReply):
     result_id: str = ''
     restart: bool = False

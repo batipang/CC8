@@ -43,6 +43,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   private String lastStateMessage = "系统待命";
   private VoiceSession session;
   private DotChatsDialog dotChats;
+  private SpeechCorrectionDialog correctionDialog;
   private SavedTasksDialog savedTasks;
   private ResultDetailsDialog resultDetails;
   private String dotResultSource = "";
@@ -155,6 +156,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
                 | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                 | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
     session = new VoiceSession(this, this);
+    correctionDialog = new SpeechCorrectionDialog(this, session);
     dotChats = new DotChatsDialog(this, session);
     resultDetails = new ResultDetailsDialog(this, session);
     savedTasks = new SavedTasksDialog(this, session, resultDetails);
@@ -1294,6 +1296,14 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
         });
   }
 
+  @Override
+  public void speechCorrection(JSONObject data, long route) {
+    runOnUiThread(
+        () -> {
+          if (foreground && correctionDialog != null) correctionDialog.accept(data, route);
+        });
+  }
+
   private void traceAuto(String event) {
     long now = SystemClock.elapsedRealtime();
     String value =
@@ -1477,6 +1487,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
             dotChats.close();
             savedTasks.close();
             resultDetails.close();
+            if (correctionDialog != null) correctionDialog.close();
             tasksData = new JSONArray();
             remindersData = new JSONArray();
             renderWorkspace();
@@ -1706,6 +1717,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   protected void onPause() {
+    if (correctionDialog != null) correctionDialog.close();
     if (connectionInfoDialog != null) connectionInfoDialog.dismiss();
     if (dotChats != null) dotChats.close();
     if (savedTasks != null) savedTasks.close();

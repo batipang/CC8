@@ -16,7 +16,8 @@ from diagnostics import ROUTE_COMPLETION_STAGES, TraceBook, error_kind
 from failure_feedback import FailureSink, feedback
 from dot_receipt import UnconfirmedTurnStart
 from operation_failure import OperationFailure, KINDS
-from reply_types import Reply, TextReply, VisualReply, BrainPreparation, ResultRead
+from reply_types import Reply, TextReply, VisualReply, BrainPreparation, ResultRead, CorrectedReply
+from speech_correction import SpeechCorrection, CorrectionUnavailable, command as correction_command
 from result_reading import ResultReading, ReadingUnavailable, reading_command
 from saved_tasks import ident as result_ident
 from session_ports import EventSink, MetricSink
@@ -46,6 +47,9 @@ class ResponseHooks:
     speak: Callable[[str, int], bool]
     can_read_result: Callable[[], bool] = lambda: False
     submit_read: Callable[[str, bool], object] | None = None
+    correction_owner: Callable[[], tuple | None] = lambda: None
+    submit_corrected: Callable[[str], object] | None = None
+    cancel_correction: Callable[[], object] = lambda: None
 
 
 class ResponseWorker:
@@ -58,6 +62,106 @@ class ResponseWorker:
         self.start_lock = threading.Lock()
         self.reading = ResultReading()
         self.read_requests = deque(maxlen=64)
+        self.corrections = SpeechCorrection()
+        self.correction_requests = deque(maxlen=64)
+
+    def publish_corrections(self):
+        self.hooks.event(
+            'speech_correction', **self.corrections.state(self.hooks.correction_owner())
+        )
+
+    def clear_corrections(self, preserve_source=False, *, publish=True):
+        with self.hooks.lock:
+            changed = self.corrections.clear(preserve_source)
+            if changed and publish:
+                try:
+                    self.publish_corrections()
+                except (OSError, EOFError):
+                    # Context is already erased. Optional UI cleanup cannot
+                    # prevent cancellation of tools, capture or old playback.
+                    pass
+            return changed
+
+    def expire_corrections(self):
+        with self.hooks.lock:
+            if (
+                self.corrections.draft is None
+                and self.corrections.source is not None
+                and self.corrections.now() >= self.corrections.source[2]
+            ):
+                self.clear_corrections()
+            if self.corrections.draft is not None:
+                try:
+                    self.corrections.current(self.hooks.correction_owner())
+                except CorrectionUnavailable:
+                    self.clear_corrections()
+
+    def request_correction(self, data):
+        with self.hooks.lock:
+            try:
+                if data['request_id'] in self.correction_requests:
+                    raise CorrectionUnavailable('这个更正请求已处理，不会重复提交。')
+                owner = self.hooks.correction_owner()
+                draft = self.corrections.current(owner, data['draft_id'])
+            except CorrectionUnavailable as error:
+                self.hooks.event('workspace_result', ok=False, message=str(error))
+                return
+            self.correction_requests.append(data['request_id'])
+            if data['action'] == 'cancel':
+                self.hooks.cancel_correction()
+                if self.corrections.draft is draft:
+                    self.clear_corrections(preserve_source=True)
+                return
+            self.submit_correction(owner, data['draft_id'])
+
+    def submit_correction(self, owner, ident):
+        if self.hooks.submit_corrected is None:
+            raise CorrectionUnavailable('当前后台暂不能提交更正，请直接说完整的新问题。')
+        text = self.corrections.consume(owner, ident)
+        try:
+            self.hooks.submit_corrected(text)
+        except (OSError, RuntimeError, ValueError, queue.Full):
+            # Existing text admission owns startup failure feedback and any
+            # superseding generation. Consumed drafts are never retried.
+            return
+        finally:
+            # Publish the current state only after admission. Display I/O
+            # must not admit newer work that this submission then cancels.
+            try:
+                self.publish_corrections()
+            except (OSError, EOFError):
+                pass
+
+    def handle_correction_voice(self, job):
+        action = correction_command(job.text)
+        if action is None:
+            return False
+        with self.hooks.lock:
+            if not self.hooks.valid(job.generation):
+                return True
+            self.hooks.diagnostics().ensure(job.generation, 'text')
+            owner = self.hooks.correction_owner()
+            try:
+                if action[0] == 'draft':
+                    self.corrections.prepare(action[1], owner)
+                    message = '更正已准备，请核对屏幕中的完整问题。'
+                else:
+                    draft = self.corrections.current(owner)
+                    if action[0] == 'confirm':
+                        self.submit_correction(owner, draft.ident)
+                        return True
+                    if action[0] == 'cancel':
+                        self.clear_corrections(preserve_source=True)
+                        message = '已撤回未提交的更正；原来已经执行的操作不会撤销。'
+                    else:
+                        message = '屏幕上是尚未提交的更正，请核对完整问题。'
+            except CorrectionUnavailable as error:
+                message = str(error)
+            self.publish_corrections()
+        played = self.hooks.speak(message, job.generation)
+        with self.hooks.lock:
+            self.hooks.diagnostics().finish(job.generation, 'completed' if played else 'cancelled')
+        return True
 
     def result_task(self, ident):
         task = next(
@@ -184,6 +288,19 @@ class ResponseWorker:
             return
 
     def enqueue(self, job):
+        with self.hooks.lock:
+            if self.hooks.valid(job.generation):
+                if type(job) is Reply and correction_command(job.text) is not None:
+                    pass
+                else:
+                    text = job.text if type(job) is Reply or isinstance(job, CorrectedReply) else ''
+                    owner = self.hooks.correction_owner() if text else None
+                    changed = self.corrections.note(text, owner)
+                    if changed or owner is not None:
+                        try:
+                            self.publish_corrections()
+                        except (OSError, EOFError):
+                            pass
         while True:
             try:
                 self.queue.put_nowait(job)
@@ -245,7 +362,9 @@ class ResponseWorker:
             return
         self.busy = True
         try:
-            if isinstance(job, ResultRead):
+            if type(job) is Reply and self.handle_correction_voice(job):
+                pass
+            elif isinstance(job, ResultRead):
                 self.read_result(job.result_id, job.restart, job.generation)
             elif isinstance(job, VisualReply):
                 self.hooks.answer_visual(job)
