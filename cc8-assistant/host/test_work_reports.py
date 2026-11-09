@@ -285,7 +285,8 @@ class ReportControllerTests(unittest.TestCase):
         helper, b = self.harness()
         selected = Handoff('selected-chat', '明确来源', (), False)
         b.chats.selection = selected
-        with patch.object(b.chats.catalog, 'report', return_value={'items': []}) as read:
+        report = WorkReportReader(Fixture().factory).read(selected, ReportWindow(100, 200))
+        with patch.object(b.chats.catalog, 'report', return_value=report) as read:
             helper.request(b, 'report', period='half_hour', source_id='unrelated-source')
             helper.join(b)
         self.assertIs(read.call_args.args[0], selected)

@@ -70,6 +70,7 @@ class Bridge:
         capture_frontend='mono',
         preference_memory=None,
         vocabulary_store=None,
+        report_sources_store=None,
     ):
         self.diagnostics = TraceBook()
         started_at = time.monotonic()
@@ -104,6 +105,7 @@ class Bridge:
             dot_runtime=lambda: dot_runtime_status(),
             preference_memory=preference_memory,
             vocabulary_store=vocabulary_store,
+            report_sources_store=report_sources_store,
         )
         self.calibration = components.calibration
         self.visual = components.visual

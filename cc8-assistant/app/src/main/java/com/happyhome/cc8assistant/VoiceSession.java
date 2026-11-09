@@ -115,7 +115,7 @@ final class VoiceSession {
   private volatile boolean resultProvenanceSupported;
   private volatile boolean resultReadingSupported;
   private volatile boolean visionModesSupported, photoFollowupSupported, macWindowSupported;
-  private volatile boolean vocabularySupported;
+  private volatile boolean vocabularySupported, reportSourcesSupported;
   private volatile JSONObject voicePreferences;
   private volatile JSONObject speechCorrection;
   private int speechCorrectionRevision = -1;
@@ -138,6 +138,10 @@ final class VoiceSession {
 
   boolean supportsVocabulary() {
     return vocabularySupported;
+  }
+
+  boolean supportsReportSources() {
+    return reportSourcesSupported;
   }
 
   PhotoFollowupWindow.Picture photoForFollowup() {
@@ -299,10 +303,11 @@ final class VoiceSession {
           visionModesSupported =
               macWindowSupported =
                   vocabularySupported =
-                      dotChatSupported =
-                          savedTasksSupported =
-                              preferenceMemorySupported =
-                                  resultProvenanceSupported = resultReadingSupported = false;
+                      reportSourcesSupported =
+                          dotChatSupported =
+                              savedTasksSupported =
+                                  preferenceMemorySupported =
+                                      resultProvenanceSupported = resultReadingSupported = false;
       voicePreferences = null;
       speechCorrection = null;
       speechCorrectionRevision = -1;
@@ -444,10 +449,11 @@ final class VoiceSession {
             visionModesSupported =
                 macWindowSupported =
                     vocabularySupported =
-                        dotChatSupported =
-                            savedTasksSupported =
-                                preferenceMemorySupported =
-                                    resultProvenanceSupported = resultReadingSupported = false;
+                        reportSourcesSupported =
+                            dotChatSupported =
+                                savedTasksSupported =
+                                    preferenceMemorySupported =
+                                        resultProvenanceSupported = resultReadingSupported = false;
         voicePreferences = null;
         speechCorrection = null;
         speechCorrectionRevision = -1;
@@ -568,10 +574,11 @@ final class VoiceSession {
           visionModesSupported =
               macWindowSupported =
                   vocabularySupported =
-                      dotChatSupported =
-                          savedTasksSupported =
-                              preferenceMemorySupported =
-                                  resultProvenanceSupported = resultReadingSupported = false;
+                      reportSourcesSupported =
+                          dotChatSupported =
+                              savedTasksSupported =
+                                  preferenceMemorySupported =
+                                      resultProvenanceSupported = resultReadingSupported = false;
       voicePreferences = null;
       speechCorrection = null;
       speechCorrectionRevision = -1;
@@ -776,6 +783,7 @@ final class VoiceSession {
             if (!foreground || !currentRoute(route) || p.generation < minimumGeneration) return;
             preferenceMemorySupported = Boolean.TRUE.equals(j.opt("supports_preference_memory"));
             vocabularySupported = Boolean.TRUE.equals(j.opt("supports_vocabulary"));
+            reportSourcesSupported = Boolean.TRUE.equals(j.opt("supports_report_sources"));
             visionModesSupported = Boolean.TRUE.equals(j.opt("supports_vision_modes"));
             macWindowSupported = Boolean.TRUE.equals(j.opt("supports_mac_window"));
             photoFollowupSupported = Boolean.TRUE.equals(j.opt("supports_photo_followup"));
@@ -1440,6 +1448,30 @@ final class VoiceSession {
             || "aliases".equals(key)
             || "alias".equals(key)
             || "source_id".equals(key))) return false;
+        Wire.put(request, key, args.opt(key));
+      }
+      return sendWorkspace(request, route);
+    }
+  }
+
+  boolean reportSourcesRequest(String requestId, JSONObject args, long route) {
+    synchronized (routeLock) {
+      if (!reportSourcesSupported
+          || !foreground
+          || !currentRoute(route)
+          || !requestId.matches("[a-f0-9]{32}")) return false;
+      JSONObject request = Wire.event("dot_chat_request");
+      Wire.put(request, "request_id", requestId);
+      java.util.Iterator<String> keys = args.keys();
+      while (keys.hasNext()) {
+        String key = keys.next();
+        if (!("action".equals(key)
+            || "revision".equals(key)
+            || "confirmed".equals(key)
+            || "source_id".equals(key)
+            || "registration_id".equals(key)
+            || "cursor".equals(key)
+            || "period".equals(key))) return false;
         Wire.put(request, key, args.opt(key));
       }
       return sendWorkspace(request, route);

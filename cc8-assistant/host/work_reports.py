@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import math
 import time
 import uuid
 from dot_handoff import Handoff, identifier
@@ -58,12 +59,16 @@ class WorkReportReader:
     def __init__(self, rpc_factory, *, clock=time.monotonic):
         self.rpc_factory, self.clock = rpc_factory, clock
 
-    def read(self, source, window, *, is_current=lambda: True):
+    def read(self, source, window, *, is_current=lambda: True, deadline=None):
         if not isinstance(source, Handoff) or not isinstance(window, ReportWindow):
             raise ValueError('Select a source before requesting a work report')
         identifier(source.source_id)
+        if deadline is not None and (
+            type(deadline) not in (int, float) or not math.isfinite(deadline)
+        ):
+            raise ValueError('Invalid work report deadline')
         rpc = self.rpc_factory()
-        deadline = self.clock() + 30
+        deadline = min(self.clock() + 30, deadline) if deadline is not None else self.clock() + 30
 
         def current():
             if not is_current():
@@ -100,6 +105,8 @@ class WorkReportReader:
         }
         try:
             current()
+            if self.clock() >= deadline:
+                raise DotError('Work report read deadline exceeded', kind='timeout')
             rpc.start()
             current()
             turns, page_cursor, seen_cursors = {}, None, set()

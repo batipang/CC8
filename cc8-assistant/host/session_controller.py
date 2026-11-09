@@ -549,6 +549,10 @@ class SessionController:
                 self.hooks.capture().endpoint.set_environment(request['profile'])
                 preferences.environment_profile = request['profile']
                 preferences.revision += 1
+                # Publish diagnostics for the same applied gate while ownership
+                # is held. Cache I/O failures are isolated by StatusReporter;
+                # they cannot undo or misreport a successful live setting.
+                self.hooks.save_status()
                 ok = True
                 message = '听音环境已应用 · 麦克风保持关闭'
             self.hooks.event(

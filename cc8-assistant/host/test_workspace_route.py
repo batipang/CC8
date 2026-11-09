@@ -19,7 +19,7 @@ SESSION_INTERFACES = r"""
   final Object routeLock=new Object();
   SourcesPresentation sourcesPresentation;
   boolean foreground=true,recording,visual,announcement,textSession,receiverRegistered;
-  boolean dotChatSupported,savedTasksSupported,preferenceMemorySupported,resultProvenanceSupported,resultReadingSupported,visionModesSupported,photoFollowupSupported,macWindowSupported,vocabularySupported;
+  boolean dotChatSupported,savedTasksSupported,preferenceMemorySupported,resultProvenanceSupported,resultReadingSupported,visionModesSupported,photoFollowupSupported,macWindowSupported,vocabularySupported,reportSourcesSupported;
   final PhotoFollowupWindow photoFollowup=new PhotoFollowupWindow();
   String pendingPhotoId="",pendingPhotoForgetId="";
   JSONObject voicePreferences,speechCorrection;
@@ -597,6 +597,16 @@ SCENARIOS = r"""
     s.deliver(new Wire.Packet(new JSONObject("event","vocabulary_result")),old);yes(c.vocabularyReceipts==1,"old route receipt reached wordlist");
     s.vocabularySupported=true;s.pause();yes(!s.vocabularySupported&&!s.recording&&!s.visual,"Home retained wordlist capability or capture");break;
    }
+   case "report_sources_request":{
+    long route=s.routeEpoch;JSONObject argsValue=new JSONObject("action","sources");int count=old.events.size();
+    yes(!s.reportSourcesRequest("a".repeat(32),argsValue,route),"unsupported sources accepted");s.reportSourcesSupported=true;
+    yes(s.reportSourcesRequest("a".repeat(32),argsValue,route)&&old.events.size()==count+1,"current source request missing");
+    JSONObject sent=old.events.get(count);yes("dot_chat_request".equals(sent.optString("event")),"source request event changed");
+    argsValue.values.put("event","session_start");yes(!s.reportSourcesRequest("b".repeat(32),argsValue,route)&&old.events.size()==count+1,"source request overrode event");
+    argsValue.values.remove("event");argsValue.values.put("request_id","c".repeat(32));yes(!s.reportSourcesRequest("b".repeat(32),argsValue,route),"source request overrode nonce");argsValue.values.remove("request_id");
+    Link next=new Link("wifi");activate(c,next);yes(!s.reportSourcesSupported&&!s.reportSourcesRequest("d".repeat(32),argsValue,route),"handover retained source capability or old route");
+    s.reportSourcesSupported=true;s.pause();yes(!s.reportSourcesSupported&&!s.recording&&!s.visual,"Home retained sources or opened capture");break;
+   }
    case "recognition_language":{
     long route=s.routeEpoch;
     JSONObject state=new JSONObject("version",1,"revision",4,"speech_rate","slow","natural_barge",false,"supported",true,
@@ -786,6 +796,7 @@ class WorkspaceRouteTests(unittest.TestCase):
                 'boolean setRecognitionLanguage(',
                 'boolean setEnvironmentProfile(',
                 'boolean vocabularyRequest(',
+                'boolean reportSourcesRequest(',
                 'boolean preferenceRequest(',
                 'private boolean sendWorkspace(',
                 'private boolean acceptSpeechCorrection(',
@@ -1021,6 +1032,9 @@ class WorkspaceRouteTests(unittest.TestCase):
 
     def test_vocabulary_requests_cannot_override_events_or_cross_route_and_home(self):
         self.scenario('vocabulary_request')
+
+    def test_report_sources_requests_cannot_override_nonce_or_event_or_cross_route_and_home(self):
+        self.scenario('report_sources_request')
 
     def test_mac_window_uses_current_capability_nonce_and_never_camera_capture(self):
         self.scenario('mac_window_request')

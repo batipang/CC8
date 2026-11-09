@@ -209,12 +209,24 @@ def validate_device_event(value: object) -> JsonObject:
         request_id = value['request_id']
         if not isinstance(request_id, str) or not re.fullmatch('[a-f0-9]{32}', request_id):
             raise ValueError('Invalid chat request ID')
+        from report_sources import (
+            REGISTRY_ACTIONS,
+            validate_request as validate_report_sources_request,
+        )
+
+        if (
+            name == 'dot_chat_request'
+            and isinstance(value['action'], str)
+            and value['action'] in REGISTRY_ACTIONS
+        ):
+            validate_report_sources_request(value)
         if name == 'dot_chat_request' and value['action'] not in (
             'state',
             'list',
             'select',
             'clear',
             'report',
+            *REGISTRY_ACTIONS,
         ):
             raise ValueError('Invalid chat action')
         if (
