@@ -670,10 +670,10 @@ final class VoiceSession {
           boolean keepVoiceStatus = captureHello(source, j);
           dotChatSupported = Boolean.TRUE.equals(j.opt("supports_dot_chat_handoff"));
           savedTasksSupported = Boolean.TRUE.equals(j.opt("supports_saved_task_results"));
-          resultProvenanceSupported = Boolean.TRUE.equals(j.opt("supports_result_provenance"));
           listener.recognition(j.optString("asr_engine", "sensevoice"));
           synchronized (routeLock) {
             if (!foreground || !currentRoute(route) || p.generation < minimumGeneration) return;
+            resultProvenanceSupported = Boolean.TRUE.equals(j.opt("supports_result_provenance"));
             if (Boolean.TRUE.equals(j.opt("playback_interrupted_by_transport"))) {
               if (!statusFeedback.transportInterruption(p.generation)) return;
               phase = "error";
