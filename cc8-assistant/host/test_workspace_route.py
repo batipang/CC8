@@ -615,6 +615,7 @@ SCENARIOS = r"""
     yes(!s.reportSourcesRequest("a".repeat(32),progressArgs,route),"restore accepted without progress capability");s.reportProgressSupported=true;
     yes(s.reportSourcesRequest("a".repeat(32),progressArgs,route),"explicit current progress request not sent");
     yes("b".repeat(32).equals(old.events.get(old.events.size()-1).optString("checkpoint_id")),"progress target lost");
+    JSONObject pageArgs=new JSONObject("action","report_page","snapshot_id","b".repeat(32),"page",1);yes(s.reportSourcesRequest("a".repeat(32),pageArgs,route),"page blocked by actual transport field filter");yes(old.events.get(old.events.size()-1).optInt("page",-1)==1,"page index not sent");
     Link next=new Link("wifi");activate(c,next);yes(!s.threadQueueSupported&&!s.reportArchiveSupported&&!s.reportSourcesSupported&&!s.reportSourcesRequest("d".repeat(32),argsValue,route),"handover retained source capability or old route");
     yes(!s.reportProgressSupported,"handover retained progress capability");
     s.reportSourcesSupported=s.reportArchiveSupported=s.threadQueueSupported=s.reportProgressSupported=true;s.pause();yes(!s.reportProgressSupported&&!s.threadQueueSupported&&!s.reportArchiveSupported&&!s.reportSourcesSupported&&!s.recording&&!s.visual,"Home retained sources or opened capture");break;

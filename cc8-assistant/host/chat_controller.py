@@ -23,6 +23,9 @@ from report_checkpoint_protocol import (
     validate_request as validate_progress_request,
 )
 from report_checkpoint_controller import CheckpointController
+from report_display import display_fields, paged_text
+from report_display_protocol import validate_request as validate_page
+from report_display_snapshot import DisplaySnapshot
 
 
 @dataclass(frozen=True)
@@ -52,6 +55,15 @@ class ChatController:
         self.archive_offer = None
         self.report_scope = None
         self.source_requests = deque(maxlen=64)
+        self.display_snapshot = DisplaySnapshot(
+            lambda: (
+                self.report_context_source(),
+                hooks.generation(),
+                hooks.connection(),
+                hooks.transport_revision(),
+                self.voice.revision,
+            )
+        )
         self.voice = ReportVoice(
             ReportVoiceHooks(
                 lock=hooks.lock,
@@ -61,6 +73,7 @@ class ChatController:
                     hooks.transport_revision(),
                 ),
                 read=self.read_voice_report,
+                revoked=self.display_snapshot.clear,
             )
         )
         self.progress_ui = CheckpointController(self, checkpoints)
@@ -177,6 +190,7 @@ class ChatController:
             'select',
             'clear',
             'report',
+            'report_page',
             *REGISTRY_ACTIONS,
             *ARCHIVE_ACTIONS,
             *PROGRESS_ACTIONS,
@@ -188,6 +202,8 @@ class ChatController:
             validate_archive_request(data)
         if action in PROGRESS_ACTIONS:
             validate_progress_request(data)
+        if action == 'report_page':
+            validate_page(data)
         if action == 'report' and data.get('period') not in ('half_hour', 'two_hours', 'today'):
             raise ValueError('Invalid report period')
         with self.hooks.lock:
@@ -427,7 +443,23 @@ class ChatController:
                         )
                         if item is None:
                             raise ValueError('Saved report no longer exists')
-                        result.update(saved_id=item['id'], saved_report_text=historical_text(item))
+                        if 'revision' in data and data['revision'] != state['revision']:
+                            raise ValueError('Saved report revision changed')
+                        result['saved_id'] = item['id']
+                        result.update(
+                            paged_text(
+                                historical_text(item),
+                                dict(
+                                    request_id=request_id,
+                                    ok=True,
+                                    action=action,
+                                    **self.state(),
+                                    **result,
+                                ),
+                                page=data.get('page', 0),
+                                field='saved_report_text',
+                            )
+                        )
                 if action in PROGRESS_ACTIONS:
                     result = self.progress_ui.run(action, data, current)
                 if action == 'report':
@@ -439,6 +471,7 @@ class ChatController:
                         report_owner, result['report'], report_revision
                     )
                     result['report_text'] = report_text(result['report'])
+                    self.display_snapshot.remember(result['report'])
                     # A broken archive must not prevent an otherwise valid live
                     # read. It only removes the save affordance until repaired.
                     if result['report_snapshot_adopted'] and self.archive is not None:
@@ -453,6 +486,31 @@ class ChatController:
                             )
                         except (OSError, ValueError):
                             pass
+                if action == 'report_page':
+                    value = self.display_snapshot.read(data['snapshot_id'])
+                    result = dict(report=value, report_text=report_text(value))
+                    if self.archive is not None and self.archive_offer_current(data['snapshot_id']):
+                        try:
+                            self.voice.snapshot_for_save(data['snapshot_id'])
+                            result['archive_revision'] = self.archive.snapshot()['revision']
+                        except (OSError, ValueError):
+                            pass
+                if action in ('report', 'report_page'):
+                    value, text = result.pop('report'), result.pop('report_text')
+                    result.update(
+                        display_fields(
+                            value,
+                            text,
+                            dict(
+                                request_id=request_id,
+                                ok=True,
+                                action=action,
+                                **self.state(),
+                                **result,
+                            ),
+                            page=data.get('page', 0),
+                        )
+                    )
                 self.publish(request_id, ok=True, action=action, **result)
         except Exception:
             with self.hooks.lock:

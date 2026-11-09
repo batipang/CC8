@@ -175,6 +175,51 @@ public class ReportSourcesCheck {
     JSONObject payload=progressPayload();payload.optJSONObject("progress_checkpoints").optJSONArray("items").optJSONObject(0).put("delivered",5);
     checkpoints(ui,s,payload);yes(!AlertDialog.last.showing,"malformed progress offered mutations");break;
    }
+
+   case "live_pages":{
+    JSONObject data=reportPayload().put("report_page",0).put("report_pages",2).put("report_page_marker","【第1/2页；请翻页继续查看】\n\n").put("report_text","【第1/2页；请翻页继续查看】\n\n第一页");
+    report(ui,s,data);data.optJSONObject("report").put("snapshot_id","e".repeat(32));AlertDialog retired=AlertDialog.last;AlertDialog.last.click(-1);
+    JSONObject sent=s.requests.get(s.requests.size()-1);yes("report_page".equals(sent.optString("action"))&&"c".repeat(32).equals(sent.optString("snapshot_id"))&&sent.optInt("page")==1,"paging retargeted mutable report");
+    JSONObject reply=reportPayload().put("request_id",s.lastId).put("action","report_page").put("report_page",1).put("report_pages",2).put("report_page_marker","【第2/2页；请翻页继续查看】\n\n").put("report_text","【第2/2页；请翻页继续查看】\n\n第二页");ui.accept(reply);
+    int before=s.requests.size();retired.builder.actions.get(-1).onClick(retired,-1);yes(s.requests.size()==before,"retired page sent request");
+    AlertDialog.last.click(-3);AlertDialog.last.pick(0);sent=s.requests.get(s.requests.size()-1);yes(sent.optInt("page")==0,"previous page unavailable");break;
+   }
+   case "archive_pages_copy":{
+    JSONObject state=archiveState(archiveRow());archives(ui,s,state);AlertDialog.last.pick(0);
+    JSONObject data=new JSONObject("request_id",s.lastId,"ok",true,"action","saved_report","saved_reports",state,"saved_id","d".repeat(32),"saved_report_text","【第1/2页；请翻页继续查看】\n\n第一页😀","report_page",0,"report_pages",2,"report_page_marker","【第1/2页；请翻页继续查看】\n\n");
+    ui.accept(data);AlertDialog.last.click(-3);AlertDialog.last.pick(2);JSONObject sent=s.requests.get(s.requests.size()-1);
+    yes(sent.optInt("page")==0&&sent.optInt("revision")==3&&"d".repeat(32).equals(sent.optString("saved_id")),"copy did not freeze record/revision");
+    android.content.ClipboardManager.text="原剪贴板";ui.accept(data.put("request_id",s.lastId));yes("原剪贴板".equals(android.content.ClipboardManager.text),"partial page copied");
+    sent=s.requests.get(s.requests.size()-1);yes(sent.optInt("page")==1&&sent.optInt("revision")==3,"copy did not request next revision-bound page");
+    ui.accept(new JSONObject("request_id",s.lastId,"ok",true,"action","saved_report","saved_reports",state,"saved_id","d".repeat(32),"saved_report_text","【第2/2页；请翻页继续查看】\n\n第二页","report_page",1,"report_pages",2,"report_page_marker","【第2/2页；请翻页继续查看】\n\n"));
+    yes("第一页😀第二页".equals(android.content.ClipboardManager.text),"full clipboard not lossless or includes page markers");break;
+   }
+   case "copy_cancel_revision":{
+    for(int mode=0;mode<4;mode++){
+     JSONObject state=archiveState(archiveRow());archives(ui,s,state);AlertDialog.last.pick(0);
+     JSONObject data=new JSONObject("request_id",s.lastId,"ok",true,"action","saved_report","saved_reports",state,"saved_id","d".repeat(32),"saved_report_text","【第1/2页；请翻页继续查看】\n\n第一页","report_page",0,"report_pages",2,"report_page_marker","【第1/2页；请翻页继续查看】\n\n");
+     ui.accept(data);AlertDialog.last.click(-3);AlertDialog.last.pick(2);android.content.ClipboardManager.text="保留";
+     if(mode==0)ui.close();if(mode==1)s.route++;if(mode==2)state.put("revision",4);if(mode==3)android.os.Handler.queued.get(android.os.Handler.queued.size()-1).run();
+     int before=s.requests.size();ui.accept(data.put("request_id",s.lastId));yes("保留".equals(android.content.ClipboardManager.text)&&before==s.requests.size(),"canceled/revised copy continued or modified clipboard");
+    }break;
+   }
+   case "bad_page":{
+    JSONObject[] bad={reportPayload().put("report_page",true).put("report_pages",2).put("report_page_marker",""),reportPayload().put("report_page",0).put("report_pages",17).put("report_page_marker",""),reportPayload().put("report_page",0).put("report_pages",2).put("report_page_marker","wrong")};
+    for(JSONObject data:bad){report(ui,s,data);yes(!AlertDialog.last.showing,"malformed pages offered actions");}break;
+   }
+
+   case "copy_bounds":{
+    JSONObject state=archiveState(archiveRow());
+    ReportTextPage.Copy job=new ReportTextPage.Copy("d".repeat(32),3,16,s.route);
+    for(int i=0;i<16;i++){
+     String marker="【第"+(i+1)+"/16页；请翻页继续查看】\n\n";
+     JSONObject data=new JSONObject("saved_reports",state,"saved_id","d".repeat(32),"saved_report_text",marker+"a".repeat(5000),"report_page",i,"report_pages",16,"report_page_marker",marker);
+     if(i==13){yes(!job.append(data)&&job.completed()==null,"oversized copy escaped capacity bound");break;}yes(job.append(data),"valid page rejected");
+    }
+    job=new ReportTextPage.Copy("d".repeat(32),3,2,s.route);
+    try{java.lang.reflect.Field deadline=ReportTextPage.Copy.class.getDeclaredField("deadline");deadline.setAccessible(true);deadline.setLong(job,0);}catch(Exception e){throw new AssertionError(e);}
+    yes(!job.alive()&&job.completed()==null,"expired copy remained usable");break;
+   }
    default:throw new AssertionError("unknown case");
   }
  }
@@ -223,6 +268,7 @@ class ReportSourcesUiTests(unittest.TestCase):
             path.write_text(source)
             files.append(str(path))
         files.append(str(widgets.JAVA / 'ReportSourcesDialog.java'))
+        files.append(str(widgets.JAVA / 'ReportTextPage.java'))
         cls.java = java_bin()
         result = subprocess.run(
             [str(cls.java / 'javac'), '-encoding', 'UTF-8', '-d', str(cls.folder), *files],
@@ -307,3 +353,18 @@ class ReportSourcesUiTests(unittest.TestCase):
         self.scenario('progress_stale')
         self.scenario('progress_capability')
         self.scenario('progress_invalid')
+
+    def test_live_pages_use_frozen_snapshot_and_retire_old_navigation(self):
+        self.scenario('live_pages')
+
+    def test_full_copy_assembles_every_revision_bound_page_before_clipboard_write(self):
+        self.scenario('archive_pages_copy')
+
+    def test_home_route_revision_and_timeout_cancel_copy_without_partial_clipboard(self):
+        self.scenario('copy_cancel_revision')
+
+    def test_malformed_page_metadata_has_no_actions(self):
+        self.scenario('bad_page')
+
+    def test_complete_copy_capacity_and_whole_job_deadline_are_enforced(self):
+        self.scenario('copy_bounds')

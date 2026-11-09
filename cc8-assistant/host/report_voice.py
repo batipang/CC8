@@ -152,6 +152,7 @@ class ReportVoiceHooks:
     lock: ContextManager[object]
     context: Callable[[], tuple]
     read: Callable
+    revoked: Callable[[], None] = lambda: None
 
 
 @dataclass(frozen=True)
@@ -281,6 +282,7 @@ class ReportVoice:
 
     def forget(self):
         with self.hooks.lock:
+            self.hooks.revoked()
             self.snapshot, self.followup = None, False
             self.delivery_plan = None
             self.revision += 1
@@ -293,6 +295,7 @@ class ReportVoice:
 
     def begin(self):
         with self.hooks.lock:
+            self.hooks.revoked()
             self.snapshot, self.followup = None, True
             self.delivery_plan = None
             self.revision += 1
