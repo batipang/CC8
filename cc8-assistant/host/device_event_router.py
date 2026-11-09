@@ -103,7 +103,9 @@ class DeviceEventRouter:
                 self.event('workspace_result', ok=True, message='提醒已更新')
             except (ValueError, OSError):
                 self.event(
-                    'workspace_result', ok=False, message='提醒未保存，请检查时间、内容及 Mac 存储'
+                    'workspace_result',
+                    ok=False,
+                    message='提醒更新未确认，请重新查询核对时间、内容及存储；勿重复提交',
                 )
         elif event == 'task_cancel':
             # The owner-local text IPC can replace this generation while the

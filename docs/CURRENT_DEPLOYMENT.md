@@ -1,5 +1,15 @@
 # 当前 CC8 部署与验收范围
 
+## 0.16.7／code100 明确的识别更正
+
+当前已部署后台0.16.7／原签名助手0.9.63（code100），源码`db7e931`。[PR #455](https://github.com/batipang/CC8/pull/455)、[main八项CI](https://github.com/batipang/CC8/actions/runs/42571622864)与原167之前功能的code101前向恢复包独立CI通过。九项组合维护52.179秒完成；原配置、完整LaunchAgent／ENV、Interactive策略、owner Dot、MiniMax、两个APK身份与USB优先／Wi-Fi就绪，双端停采，由独立检查复核。
+
+捕获权限被移除的隔离包在实体CC8执行三项更正界面检查，66.051秒完成：实际撤回按钮不产生新请求、确认按钮只产生一个更正请求、受控时钟到期关闭草稿，原任务不变。输入为固定文字、模拟大脑，未调用真实ASR／Dot／TTS；不把受控到期当作两分钟物理等待或语音准确率验收。测试包已清理，正式助手前台和关麦状态独立复核。
+
+本机和CI覆盖1979项后台测试（原4项私人录音显式选择规则保持）、24项安装器、166项工具与76项Java检查。原APK98本机构建产物曾被同号脏源码构建覆盖，错误产物已隔离，按安装中的原哈希只读取回恢复，设备没有安装错误产物；新增构建器保护禁止覆盖同号已验证的不同字节。原失败记录均保留。[明确纠错](SPEECH_CORRECTION.md)。
+
+下一候选0.16.8／code102推进[提醒送达策略](REMINDER_DELIVERY.md)，尚未据此声明部署或完整P0／P1验收；72小时未启动。
+
 ## 0.16.6／code98 声音与自然插话
 
 当前部署后台0.16.6／原签名助手0.9.61（code98），源码`a35f2ff`。[PR #454](https://github.com/batipang/CC8/pull/454)、[main八项CI](https://github.com/batipang/CC8/actions/runs/42565269982)与code99前向恢复包独立CI通过。九项组合维护51.085秒完成，独立终审核对原配置、完整LaunchAgent／ENV、Interactive策略、owner Dot、MiniMax、两个APK身份与前台USB优先／Wi-Fi就绪，双端停采。

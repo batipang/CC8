@@ -34,6 +34,7 @@ class ActivityCheck {
   String optString(String key){Object v=values.get(key);return v==null?"":String.valueOf(v);}
   long optLong(String key,long fallback){Object v=values.get(key);return v instanceof Number?((Number)v).longValue():fallback;}
   JSONArray optJSONArray(String key){Object v=values.get(key);return v instanceof JSONArray?(JSONArray)v:null;}
+  JSONObject optJSONObject(String key){Object v=values.get(key);return v instanceof JSONObject?(JSONObject)v:null;}
  }
  static class JSONArray {
   final List<Object> values=new ArrayList<>();
@@ -79,6 +80,7 @@ class ActivityCheck {
  final Companion companion=new Companion();final Steps taskSteps=new Steps();
  final Session session=new Session();
  JSONArray tasksData=new JSONArray(),remindersData=new JSONArray();
+ JSONObject reminderPolicyData;
  long workspaceRevision=-1,workspaceRoute=0;boolean linked=true,taskResultUnconfirmed;
  String brainProvider="dot";
  int taskActions;

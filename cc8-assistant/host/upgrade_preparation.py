@@ -1,6 +1,7 @@
 """Offline upgrade planning and explicit non-secret settings backup; never deploy."""
 
 import argparse
+import ast
 from dataclasses import asdict, replace
 from datetime import datetime
 import hashlib
@@ -40,6 +41,45 @@ def fingerprint(value):
     ).hexdigest()
 
 
+def reminder_storage_gate(before_root, after_root):
+    """Read schema numbers only; never export reminders or overwrite their store."""
+    from reminder_store import ReminderStore
+
+    source = Path(after_root) / 'cc8-assistant/host/workspace.py'
+    maximum = 1
+    if source.is_file():
+        for node in ast.parse(source.read_text()).body:
+            if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == 'REMINDER_STORE_VERSION' for t in node.targets
+            ):
+                if (
+                    not isinstance(node.value, ast.Constant)
+                    or type(node.value.value) is not int
+                    or node.value.value not in (1, 2)
+                ):
+                    raise ValueError('Invalid reminder reader declaration')
+                maximum = node.value.value
+    store = ReminderStore(Path(before_root) / 'device-access/private/voice-runtime/reminders.json')
+    value = store.load()
+    present = store.expected is not None
+    version = 1
+    if present:
+        if (
+            not isinstance(value, dict)
+            or type(value.get('version')) is not int
+            or value['version'] not in (1, 2)
+        ):
+            raise ValueError('Invalid existing reminder store schema')
+        version = value['version']
+    return {
+        'present': present,
+        'store_version': version,
+        'reader_max_version': maximum,
+        'compatible': version <= maximum,
+        'reminder_content_exported': False,
+    }
+
+
 def plan(before_root, after_root, assistant_apk=None):
     before, after = load_release(Path(before_root)), load_release(Path(after_root))
     old_device_new_host = after.compatible(before.protocol_version)
@@ -66,7 +106,9 @@ def plan(before_root, after_root, assistant_apk=None):
             'service_ownership',
             'configuration_backup',
             'physical_handover_validation',
+            'reminder_store_compatibility',
         ],
+        'reminder_storage': reminder_storage_gate(before_root, after_root),
     }
     if assistant_apk is not None:
         # Reuse actual AAPT/API-27 signature checks; no adb or installation here.
@@ -131,6 +173,14 @@ def verify_assistant_transition(
     ).splitlines()
     if changed != ['release.json']:
         raise ValueError('Recovery source may change only release.json')
+    reminder_gates = {
+        name: reminder_storage_gate(roots[0], target)
+        for name, target in (('candidate', roots[1]), ('recovery', roots[2]))
+    }
+    if not all(gate['compatible'] for gate in reminder_gates.values()):
+        raise ValueError(
+            'Reminder store is not readable by candidate/recovery; do not restore old data'
+        )
 
     apks = [Path(baseline_apk)]
     baseline = check_apk('assistant', apks[0], root=roots[0])
@@ -184,6 +234,7 @@ def verify_assistant_transition(
         'installed_signer_checked': False,
         'ready_for_installation': False,
         'device_acceptance': 'not_asserted',
+        'reminder_storage': reminder_gates,
         **observation,
     }
 
@@ -350,7 +401,9 @@ def main(argv=None):
         else:
             value = plan(args.from_root, args.to_root, args.assistant_apk)
         print(output(value, args.output))
-        if args.action == 'plan' and not value['declared_protocol_compatible']:
+        if args.action == 'plan' and (
+            not value['declared_protocol_compatible'] or not value['reminder_storage']['compatible']
+        ):
             return 2
         if args.action == 'verify-transition' and args.observation_report is not None:
             return 0 if value['observation_gate']['window_verified'] else 2

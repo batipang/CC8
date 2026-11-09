@@ -25,6 +25,7 @@ public class JSONObject {
  public String optString(String k){return optString(k,"");}
  public String optString(String k,String fallback){Object v=values.get(k);return v==null?fallback:String.valueOf(v);}
  public boolean optBoolean(String k){return Boolean.TRUE.equals(values.get(k));}
+ public int optInt(String k,int fallback){Object v=values.get(k);return v instanceof Integer?(Integer)v:fallback;}
  public JSONArray optJSONArray(String k){Object v=values.get(k);return v instanceof JSONArray?(JSONArray)v:null;}
  public JSONObject optJSONObject(String k){Object v=values.get(k);return v instanceof JSONObject?(JSONObject)v:null;}
  public Object remove(String k){return values.remove(k);}
@@ -76,8 +77,21 @@ public class EditText extends TextView {
  public EditText(Object owner){super(owner);last=this;}
  public void setHintTextColor(int value){}public void setHint(String value){}
  public void setSingleLine(boolean value){}public void setFilters(android.text.InputFilter[] values){}
+ public void setInputType(int value){}
  public void setError(String value){}
 }
+""",
+    'android/widget/Switch.java': r"""
+package android.widget;
+public class Switch extends TextView {
+ boolean checked;
+ public Switch(Object owner){super(owner);}
+ public void setChecked(boolean value){checked=value;}public boolean isChecked(){return checked;}
+}
+""",
+    'android/text/InputType.java': r"""
+package android.text;
+public class InputType {public static final int TYPE_CLASS_NUMBER=2;}
 """,
     'android/widget/ScrollView.java': r"""
 package android.widget;
@@ -243,6 +257,7 @@ class ActionCheck extends Activity {
  final SavedTasksDialog savedTasks=new SavedTasksDialog(this,session,resultDetails);
  boolean linked=true;long workspaceRoute=1;
  JSONArray tasksData=new JSONArray(),remindersData=new JSONArray();
+ JSONObject reminderPolicyData;
  static final int INK=1,MUTED=2;
  int dp(int value){return value;}TextView text(String value,int size,int color){TextView v=new TextView(this);v.setText(value);return v;}
  Button action(String value,int icon){Button b=new Button(this);b.setText(value);return b;}
@@ -403,6 +418,23 @@ class ActionCheck extends Activity {
     yes("update".equals(s.sent.get(1).optJSONObject("arguments").optString("action")),"Current snooze preserved");
     yes("save".equals(s.sent.get(3).optString("action")),"Current explicit result save preserved");break;
    }
+   case "policy_apply":case "policy_reset":case "policy_stale":case "policy_invalid":case "policy_cancel":{
+    c.reminderPolicyData=new JSONObject("revision",7,"quiet_enabled",true,"quiet_start","21:00","quiet_end","08:00","late_policy","skip","max_late_minutes",30);
+    c.reminderDeliverySettings(1);AlertDialog form=AlertDialog.last;
+    LinearLayout content=(LinearLayout)((ScrollView)form.builder.view).child;
+    if(args[0].equals("policy_stale"))s.change();
+    if(args[0].equals("policy_invalid"))((EditText)content.children.get(2)).setText("24:00");
+    if(args[0].equals("policy_reset"))form.getButton(AlertDialog.BUTTON_NEUTRAL).performClick();
+    else if(args[0].equals("policy_cancel"))form.negative();else {form.positive();form.positive();}
+    boolean submit=args[0].equals("policy_apply")||args[0].equals("policy_reset");
+    yes(s.sent.size()==(submit?1:0),"Policy cancelled, invalid, old-route or repeated tap crossed send ownership");
+    if(submit){
+     JSONObject policy=s.sent.get(0).optJSONObject("arguments").optJSONObject("policy");
+     yes(policy.optInt("revision",-1)==7,"Policy lost original CAS revision");
+     yes(policy.optBoolean("quiet_enabled")==args[0].equals("policy_apply"),"Wrong explicit quiet mode");
+     yes(policy.optString("quiet_start").equals(args[0].equals("policy_apply")?"21:00":"22:00"),"Defaults or original time wrong");
+    }break;
+   }
    case "current_saved_delete":{
     c.savedTasks.open();c.answer("items",new JSONArray(task("completed")));AlertDialog.last.item(0);c.answer("item",task("completed"));
     AlertDialog.last.negative();AlertDialog.last.positive();yes(s.sent.size()==3&&"delete".equals(s.sent.get(2).optString("action")),"Current confirmed delete remains exactly once");break;
@@ -429,6 +461,8 @@ class WorkspaceActionTests(unittest.TestCase):
                 'private String formatDue(',
                 'private String repeatLabel(',
                 'private String taskStatus(',
+                'private void reminderDeliverySettings(',
+                'private void sendReminderPolicy(',
             )
         ]
         for signature in (
@@ -562,6 +596,17 @@ boolean savedTaskRequest(String requestId,String action,String id,long ignored){
 
     def test_current_saved_delete_remains_usable(self):
         self.scenario('current_saved_delete')
+
+    def test_actual_reminder_policy_apply_reset_and_ownership(self):
+        for case in (
+            'policy_apply',
+            'policy_reset',
+            'policy_stale',
+            'policy_invalid',
+            'policy_cancel',
+        ):
+            with self.subTest(case=case):
+                self.scenario(case)
 
     def test_reading_controls_send_identity_once_and_explicit_restart(self):
         self.scenario('reading_controls')
