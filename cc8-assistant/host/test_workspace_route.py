@@ -18,7 +18,9 @@ SESSION_INTERFACES = r"""
  static class Session {
   final Object routeLock=new Object();
   boolean foreground=true,recording,visual,announcement,textSession,receiverRegistered;
-  boolean dotChatSupported,savedTasksSupported,preferenceMemorySupported,resultProvenanceSupported,resultReadingSupported,visionModesSupported;
+  boolean dotChatSupported,savedTasksSupported,preferenceMemorySupported,resultProvenanceSupported,resultReadingSupported,visionModesSupported,photoFollowupSupported;
+  final PhotoFollowupWindow photoFollowup=new PhotoFollowupWindow();
+  String pendingPhotoId="",pendingPhotoForgetId="";
   JSONObject voicePreferences,speechCorrection;
   int speechCorrectionRevision=-1;
   int epoch,minimumGeneration,lifecycle,requests,announcementGeneration,textGeneration;
@@ -41,7 +43,7 @@ SESSION_INTERFACES = r"""
     public int write(short[] data,int offset,int count){try{Thread.sleep(1);}catch(InterruptedException e){Thread.currentThread().interrupt();return 0;}return count;}
    };
   },()->foreground);
-  void cancelVision(){visual=false;}void stopMicrophone(){recording=false;captureWindow=null;}
+  void stopMicrophone(){recording=false;captureWindow=null;}
   boolean stopMicrophone(CaptureWindow expected){
    if(captureWindow!=expected)return false;stopMicrophone();return true;
   }
@@ -59,7 +61,7 @@ SESSION_INTERFACES = r"""
   ROUTE_METHODS
  }
  static class Context{void unregisterReceiver(Object receiver){}}
- static class Lan{int configurations;void cancelPending(){}void release(){}void acquire(){}void configure(JSONObject data){configurations++;}}
+  static class Lan{int configurations;void cancelPending(){}void release(){}void acquire(){}void configure(JSONObject data){configurations++;}boolean authorizeDesktopCamera(Auth auth,String nonce,int gen,String signature){return false;}}
  static class Auth{void reset(){}String challenge(){return "public-test-challenge";}}
  static class BuildConfig{static final int CC8_PROTOCOL=2;}
  static class SystemClock{static long now;static long elapsedRealtime(){return now;}}
@@ -117,6 +119,7 @@ SESSION_INTERFACES = r"""
  void announcement(){}
  void captureRejected(int stoppedEpoch){}
  void playback(boolean active){}void caption(String value,String mood){}void state(String value,String message){}
+ void dotResult(String text,boolean truncated,String source){}
  final Queue<Runnable> ui=new java.util.concurrent.ConcurrentLinkedQueue<>();
  void drain(){Runnable r;while((r=ui.poll())!=null)r.run();}
  static Wire.Packet oldWorkspace(){return new Wire.Packet(new JSONObject("event","workspace","revision",99,"tasks",new JSONArray(task("completed")),"reminders",new JSONArray()));}
@@ -478,6 +481,62 @@ SCENARIOS = r"""
     yes(Toast.shows==0,"Old operation result cannot show in the new activation");
     s.deliver(result,next);c.drain();yes(Toast.shows==1,"Current operation result remains visible");break;
    }
+   case "photo_request":{
+    s.minimumGeneration=7;s.photoFollowupSupported=true;
+    String id="a".repeat(32);
+    Wire.Packet ready=new Wire.Packet(new JSONObject("event","photo_followup_ready","photo_id",id,"width",640,"height",480,"ttl_ms",120000));
+    s.deliver(ready,old);PhotoFollowupWindow.Picture picture=s.photoForFollowup();
+    yes(picture!=null,"typed current photo not available");
+    yes(!s.requestPhotoFollowup(picture," "),"blank question submitted");
+    int count=old.events.size();yes(s.requestPhotoFollowup(picture,"这张图是什么意思？"),"current photo question refused");
+    yes(old.events.size()==count+1&&!s.recording&&s.nativeOpens.get()==0,"photo request duplicated or opened media");
+    JSONObject sent=old.events.get(count);String nonce=sent.optString("nonce");
+    yes("photo_followup_request".equals(sent.optString("event"))&&id.equals(sent.optString("photo_id"))&&nonce.matches("[a-f0-9]{32}"),"photo identity/nonce lost");
+    yes(!s.requestPhotoFollowup(picture,"重复问题")&&s.photoForFollowup()==null,"consumed picture reused");
+    s.minimumGeneration=8;s.photoFollowup.clear();
+    Wire.Packet begin=new Wire.Packet(new JSONObject("event","vision_begin","origin","followup","nonce","bad","photo_id",id));begin.generation=8;
+    s.deliver(begin,old);yes(!s.visual,"unrequested followup began");
+    ((JSONObject)begin.data).values.put("nonce",nonce);s.deliver(begin,old);
+    yes(s.visual&&s.visualGeneration==8&&id.equals(s.visionRequestId)&&c.cameraRequest==null,"same photo began a camera request or lost ownership");
+    yes(s.pendingPhotoId.isEmpty()&&s.pendingVisionNonce.isEmpty(),"accepted followup kept reusable nonce");
+    Link next=new Link("wifi");activate(c,next);yes(!s.photoFollowupSupported&&s.photoForFollowup()==null,"handover retained photo");
+    break;
+   }
+   case "photo_voice":{
+    s.minimumGeneration=8;s.photoFollowupSupported=true;String id="e".repeat(32);
+    Wire.Packet begin=new Wire.Packet(new JSONObject("event","vision_begin","origin","followup_voice","nonce","f".repeat(32),"photo_id",id));begin.generation=8;
+    s.deliver(begin,old);yes(!s.visual&&!s.recording,"voice followup enabled microphone");
+    s.recording=true;s.photoFollowupSupported=false;s.deliver(begin,old);yes(!s.visual,"unnegotiated voice followup accepted");
+    s.photoFollowupSupported=true;((JSONObject)begin.data).values.put("photo_id","invalid");s.deliver(begin,old);yes(!s.visual,"malformed photo identity accepted");
+    ((JSONObject)begin.data).values.put("photo_id",id);begin.generation=7;s.deliver(begin,old);yes(!s.visual,"old voice followup accepted");
+    begin.generation=8;s.deliver(begin,old);
+    yes(s.visual&&id.equals(s.visionRequestId)&&s.recording&&s.nativeOpens.get()==0&&c.cameraRequest==null,"voice followup lost ownership or opened media");
+    Wire.Packet capture=new Wire.Packet(new JSONObject("event","camera_capture","origin","voice","request_id","a".repeat(32)));capture.generation=8;s.deliver(capture,old);
+    yes(c.cameraRequest==null,"followup camera guard reopened sensor");
+    Link next=new Link("wifi");activate(c,next);s.deliver(begin,old);yes(!s.visual&&s.recording&&!s.photoFollowupSupported,"old route revived voice followup or changed microphone state");break;
+   }
+   case "photo_forget":{
+    s.minimumGeneration=7;s.photoFollowupSupported=true;String id="b".repeat(32);
+    yes(s.photoFollowup.offer(id,7,640,480,120000,s.routeEpoch,SystemClock.now),"fixture photo unavailable");
+    int count=old.events.size();yes(s.forgetPhotoForFollowup(),"forget not offered");
+    yes(s.photoForFollowup()==null&&!s.visual&&!s.recording&&old.events.size()==count+1,"forget changed capture or reused image");
+    yes("photo_followup_forget".equals(old.events.get(count).optString("event")),"forget started a task");
+    Wire.Packet ack=new Wire.Packet(new JSONObject("event","photo_followup_expired","photo_id",id));
+    int toasts=Toast.shows;s.deliver(ack,old);c.drain();yes(Toast.shows==toasts+1&&s.pendingPhotoForgetId.isEmpty(),"authoritative forget receipt missing");
+    s.deliver(ack,old);c.drain();yes(Toast.shows==toasts+1,"duplicate forget receipt repeated");
+    break;
+   }
+   case "photo_offer_owner":{
+    s.minimumGeneration=7;s.photoFollowupSupported=true;String id="c".repeat(32);
+    JSONObject data=new JSONObject("event","photo_followup_ready","photo_id",id,"width","640","height",480,"ttl_ms",120000);
+    Wire.Packet ready=new Wire.Packet(data);s.deliver(ready,old);yes(s.photoForFollowup()==null,"string dimensions accepted");
+    data.values.put("width",640);ready.generation=8;s.deliver(ready,old);yes(s.photoForFollowup()==null,"future-generation photo accepted");
+    ready.generation=7;s.deliver(ready,old);PhotoFollowupWindow.Picture picture=s.photoForFollowup();yes(picture!=null,"current photo absent");
+    SystemClock.now+=1000;s.deliver(ready,old);yes(s.photoForFollowup()==picture,"duplicate renewed photo window");
+    Link next=new Link("wifi");activate(c,next);s.photoFollowupSupported=true;s.minimumGeneration=7;s.deliver(ready,old);yes(s.photoForFollowup()==null,"old photo crossed route");
+    yes(s.photoFollowup.offer("d".repeat(32),7,640,480,120000,s.routeEpoch,SystemClock.now),"new route offer failed");
+    s.pause();yes(!s.photoFollowupSupported&&s.photoForFollowup()==null,"Home kept photo state");break;
+   }
    case "ocr_request":{
     int count=old.events.size();
     yes(!s.requestVision("ocr")&&old.events.size()==count,"old server accepted OCR");
@@ -633,6 +692,10 @@ class WorkspaceRouteTests(unittest.TestCase):
                 'private boolean captureRegistered(',
                 'boolean isVisionRequestCurrent(',
                 'boolean requestVision(String mode)',
+                'PhotoFollowupWindow.Picture photoForFollowup(',
+                'boolean requestPhotoFollowup(',
+                'boolean forgetPhotoForFollowup(',
+                'void cancelVision(',
                 'boolean isConnected()',
                 'void cameraFailed(',
                 'private void lost(',
@@ -701,6 +764,16 @@ class WorkspaceRouteTests(unittest.TestCase):
             + branch(session, 'announcement_begin')
             + '}else if("camera_capture".equals(event)){'
             + branch(session, 'camera_capture')
+            + '}else if("photo_followup_ready".equals(event)){'
+            + branch(session, 'photo_followup_ready')
+            + '}else if("photo_followup_expired".equals(event)){'
+            + branch(session, 'photo_followup_expired')
+            + '}else if("photo_followup_rejected".equals(event)){'
+            + branch(session, 'photo_followup_rejected')
+            + '}else if("photo_followup_forget_rejected".equals(event)){'
+            + branch(session, 'photo_followup_forget_rejected')
+            + '}else if("vision_begin".equals(event)){'
+            + branch(session, 'vision_begin')
             + '}' * (session[start:end].count('{') - session[start:end].count('}') + 2)
         )
         if bound:
@@ -718,7 +791,7 @@ class WorkspaceRouteTests(unittest.TestCase):
         )
         harness = harness.replace(
             'String optString(String key)',
-            'java.util.Iterator<String> keys(){return values.keySet().iterator();}Object opt(String key){return values.get(key);}JSONObject getJSONObject(String key){return (JSONObject)values.get(key);}boolean optBoolean(String key){return Boolean.TRUE.equals(values.get(key));}String optString(String key)',
+            'java.util.Iterator<String> keys(){return values.keySet().iterator();}Object opt(String key){return values.get(key);}JSONObject getJSONObject(String key){return (JSONObject)values.get(key);}boolean optBoolean(String key){return Boolean.TRUE.equals(values.get(key));}String optString(String key,String fallback){String value=optString(key);return value.isEmpty()?fallback:value;}String optString(String key)',
         )
         harness = harness.replace(method(harness, 'static class Session'), SESSION_INTERFACES)
         harness = harness.replace(
@@ -762,6 +835,7 @@ class WorkspaceRouteTests(unittest.TestCase):
                 str(JAVA / 'ConnectionAvailability.java'),
                 str(JAVA / 'SpeakerOwner.java'),
                 str(JAVA / 'SpeakerSession.java'),
+                str(JAVA / 'PhotoFollowupWindow.java'),
                 str(test),
                 str(handler),
                 str(looper),
@@ -799,6 +873,18 @@ class WorkspaceRouteTests(unittest.TestCase):
 
     def test_explicit_ocr_request_has_current_capability_nonce_and_one_route(self):
         self.scenario('ocr_request')
+
+    def test_photo_followup_uses_owned_metadata_nonce_and_no_camera(self):
+        self.scenario('photo_request')
+
+    def test_photo_voice_followup_needs_existing_microphone_current_route_and_no_new_camera(self):
+        self.scenario('photo_voice')
+
+    def test_photo_forget_waits_for_one_authoritative_receipt(self):
+        self.scenario('photo_forget')
+
+    def test_photo_offers_keep_typed_current_generation_route_and_home(self):
+        self.scenario('photo_offer_owner')
 
     def test_language_controls_keep_capability_generation_route_and_home_ownership(self):
         self.scenario('recognition_language')

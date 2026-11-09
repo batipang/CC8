@@ -1,5 +1,11 @@
 # 当前 CC8 部署与验收范围
 
+## 待组合更新：高清看图与本图追问
+
+0.16.13／code112 的 [PR #461](https://github.com/batipang/CC8/pull/461) 与 [main 八项 CI](https://github.com/batipang/CC8/actions/runs/42628032290) 已通过。主分支检测器下载 pinned Gradle asset 的首次 HTTP 403 失败保留，终态后仅重试该失败 job 及依赖门禁，未重跑其余已通过任务。原签名干净主分支 APK 已构建；这不代表已安装。
+
+首次维护在空闲预检阶段停止，未停服务或构造设备操作；之后有界观察未取得维护窗口，正式代码／APK 未替换。下一候选 0.16.14／code114 将高清、拍后核对与明确同图追问合并交付，恢复准备必须基于实际运行的 0.16.12／code110，而不是未安装的中间版本。未启动 72 小时验收，完整镜头质量／OCR 和 P0／P1 仍开放。
+
 ## 0.16.12／code110 识别语言提示
 
 源码 `ad103e9` 经 [PR #460](https://github.com/batipang/CC8/pull/460)、[main 八项 CI](https://github.com/batipang/CC8/actions/runs/42615828238)及 code111 恢复包独立八项 CI 通过，已部署后台 0.16.12／原签名助手 0.9.73（code110）。正式安装 SHA-256 为 `bff486af5c2a32d909f98823fc77a82176bb1704f05f57b080ecf45de1f60b13`。九步维护 54.355 秒、六项正式语言界面检查 150.919 秒，整组准备与收尾 269.552 秒。实际应用中文、英文提示并恢复自动，取消不写入；提示通过 MiniMax 官方 SDK 对应的 HTTP `language` 头发送，自动模式不加提示。

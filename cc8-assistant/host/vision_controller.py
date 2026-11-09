@@ -8,8 +8,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 import threading
+import time
+import secrets
 from typing import Callable, ContextManager
-from reply_types import VisualReply
+from reply_types import VisualReply, PhotoReply
+from photo_followup import PhotoFollowup, spoken_photo_question
 from vision import CameraInbox, DesktopSnapshot, VisionError, HD_IMAGE, LEGACY_IMAGE
 from session_ports import EventSink, AnswerSink, MetricSink
 from diagnostics import TraceBook, error_kind
@@ -39,6 +42,7 @@ class VisionHooks:
     log: EventSink
     diagnostics: Callable[[], TraceBook]
     failure: FailureSink
+    capture_owner: Callable[[], object | None] = lambda: None
 
 
 class VisionController:
@@ -51,12 +55,32 @@ class VisionController:
         self.nonce = ''
         self.image_policy = LEGACY_IMAGE
         self.review_capable = False
+        self.followup_capable = False
+        self.followup = PhotoFollowup(self.photo_expired)
+        self.followup_job = None
+        self.followup_job_timer = None
+        self.followup_capture_owner = None
 
-    def invalidate(self):
+    def invalidate(self, reason=None, new_generation=None, capture_owner=None):
         # Caller holds the shared session guard; inbox owns its inner lock.
         self.generation = None
         self.nonce = ''
         self.inbox.cancel()
+        preserved = None
+        if (
+            reason in ('voice', 'verified_voice')
+            and type(new_generation) is int
+            and self.followup_capture_owner is not None
+            and capture_owner == self.followup_capture_owner
+        ):
+            try:
+                preserved = self.followup.advance_voice(new_generation - 1, new_generation)
+            except Exception:
+                pass
+        if preserved is None:
+            self.followup.clear()
+            self.followup_capture_owner = None
+        self.release_queued_photo()
         job = self.snapshot_job
         self.snapshot_job = None
         if job is not None:
@@ -68,8 +92,31 @@ class VisionController:
         self.challenge = ''
         self.image_policy = LEGACY_IMAGE
         self.review_capable = False
+        self.followup_capable = False
+
+    def release_queued_photo(self):
+        # Caller holds the session guard. A blocked response worker must not
+        # extend retention simply because it has not dequeued this request.
+        if self.followup_job is not None:
+            self.followup_job.image = None
+            self.followup_job = None
+        timer, self.followup_job_timer = self.followup_job_timer, None
+        if timer is not None:
+            timer.cancel()
+
+    def expire_queued_photo(self, job):
+        with self.hooks.lock:
+            if self.followup_job is job:
+                job.image = None
+                self.followup_job_timer = None
 
     def update_peer(self, event):
+        self.followup_capable = (
+            type(event.get('vision_followup_version')) is int
+            and event['vision_followup_version'] == 1
+        )
+        if not self.followup_capable:
+            self.followup.clear()
         self.review_capable = (
             type(event.get('vision_review_version')) is int and event['vision_review_version'] == 1
         )
@@ -90,6 +137,146 @@ class VisionController:
 
     def feed(self, event):
         return self.inbox.feed(event)
+
+    def photo_expired(self, ident, generation):
+        with self.hooks.lock:
+            if self.hooks.connected() and self.hooks.session_generation() == generation:
+                self.hooks.event('photo_followup_expired', generation=generation, photo_id=ident)
+
+    def publish_followup(self, generation):
+        with self.hooks.lock:
+            if (
+                not self.followup_capable
+                or not self.hooks.connected()
+                or self.hooks.session_generation() != generation
+            ):
+                return
+            state = self.followup.metadata(generation)
+            if state is not None:
+                self.hooks.event('photo_followup_ready', **state)
+
+    def voice_followup(self, text, generation, command=False):
+        question = spoken_photo_question(text) if not command else None
+        with self.hooks.lock:
+            if not self.hooks.valid(generation):
+                return True
+            if question is None:
+                self.followup.clear()
+                self.followup_capture_owner = None
+                return False
+            state = self.followup.metadata(generation)
+            if (
+                not self.followup_capable
+                or state is None
+                or self.followup_capture_owner is None
+                or self.hooks.capture_owner() != self.followup_capture_owner
+            ):
+                self.followup.clear()
+                self.followup_capture_owner = None
+                self.hooks.status('error', '没有可追问的照片，请明确允许保留并重新拍摄。')
+                self.hooks.diagnostics().finish(generation, 'rejected')
+                return True
+            if not question:
+                self.hooks.status('listening', '请说“追问这张照片”，并在后面附上问题。')
+                self.hooks.diagnostics().finish(generation, 'rejected')
+                return True
+            self.begin_followup(
+                dict(photo_id=state['photo_id'], nonce=secrets.token_hex(16), text=question),
+                origin='followup_voice',
+            )
+            return True
+
+    def forget_photo(self, request):
+        with self.hooks.lock:
+            generation = self.hooks.session_generation()
+            state = self.followup.metadata(generation)
+            if state is None or state['photo_id'] == request['photo_id']:
+                if state is not None:
+                    self.followup.clear()
+                    self.followup_capture_owner = None
+                self.hooks.event(
+                    'photo_followup_expired', generation=generation, photo_id=request['photo_id']
+                )
+            else:
+                self.hooks.event(
+                    'photo_followup_forget_rejected',
+                    generation=generation,
+                    photo_id=request['photo_id'],
+                )
+
+    def begin_followup(self, request, origin='followup'):
+        """Only the typed foreground request enters; never re-open a camera on failure."""
+        with self.hooks.lock:
+            photo = None
+            if (
+                self.followup_capable
+                and self.hooks.connected()
+                and not self.hooks.calibrating()
+                and self.hooks.brain_ready()
+                and self.generation is None
+            ):
+                photo = self.followup.consume(request['photo_id'], self.hooks.session_generation())
+            if photo is None:
+                self.hooks.event(
+                    'photo_followup_rejected',
+                    nonce=request['nonce'],
+                    photo_id=request['photo_id'],
+                    message='这张照片已不可追问，请明确重新拍摄。',
+                )
+                return
+            photo_id = photo.ident
+            job = PhotoReply(
+                0,
+                request['text'].strip(),
+                origin,
+                request['nonce'],
+                photo.image,
+                photo.policy,
+                photo.expires,
+            )
+            photo = None
+            generation = None
+            try:
+                generation = self.hooks.cancel_session('photo_followup')
+                if not self.hooks.connected() or self.hooks.session_generation() != generation:
+                    job.image = None
+                    return
+                job.generation = generation
+                self.generation = generation
+                self.nonce = request['nonce']
+                self.followup_job = job
+                self.hooks.diagnostics().begin('vision', generation)
+                self.hooks.touch()
+                self.hooks.event(
+                    'vision_begin',
+                    generation=generation,
+                    origin=origin,
+                    nonce=request['nonce'],
+                    photo_id=photo_id,
+                )
+                if not self.hooks.valid(generation):
+                    job.image = None
+                    return
+                timer = threading.Timer(
+                    max(0, job.expires - time.monotonic()), self.expire_queued_photo, args=(job,)
+                )
+                timer.daemon = True
+                self.followup_job_timer = timer
+                timer.start()
+                self.hooks.enqueue(job)
+            except BaseException:
+                job.image = None
+                if self.followup_job is job:
+                    self.release_queued_photo()
+                # Ambiguous queue admission cannot carry pixels into a later
+                # job, even if cancellation itself encounters a transport error.
+                if generation is not None and self.hooks.session_generation() == generation:
+                    try:
+                        self.hooks.cancel_session('photo_followup_start_failed')
+                    except Exception:
+                        pass
+                raise
+        self.hooks.save_status()
 
     def matches_cancel(self, event):
         return self.generation is not None and (
@@ -222,38 +409,71 @@ class VisionController:
         outcome = 'cancelled'
         image = None
         capture = None
+        retained = isinstance(job, PhotoReply)
         try:
             with self.hooks.lock:
                 if not self.hooks.valid(generation):
+                    if retained:
+                        job.image = None
                     return
-                capture = self.inbox.begin(
-                    generation, policy=self.image_policy, review=self.review_capable
+                if retained:
+                    image, job.image = job.image, None
+                    if self.followup_job is job:
+                        self.release_queued_photo()
+                    if image is None or time.monotonic() >= job.expires:
+                        raise VisionError('capture_timeout')
+                else:
+                    capture = self.inbox.begin(
+                        generation,
+                        policy=self.image_policy,
+                        review=self.review_capable,
+                        followup=self.followup_capable,
+                    )
+            if not retained:
+                self.hooks.status('thinking', '正在打开摄像头 · 预览 5 秒后拍摄给 Dot')
+                self.hooks.event(
+                    'camera_capture',
+                    generation=generation,
+                    request_id=capture.ident,
+                    origin=job.origin,
+                    nonce=job.nonce,
+                    **capture.policy.fields(),
+                    review_allowed=capture.review_allowed,
+                    review_window_ms=70000 if capture.review_allowed else 0,
+                    followup_allowed=capture.followup_allowed,
                 )
-            self.hooks.status('thinking', '正在打开摄像头 · 预览 5 秒后拍摄给 Dot')
-            self.hooks.event(
-                'camera_capture',
-                generation=generation,
-                request_id=capture.ident,
-                origin=job.origin,
-                nonce=job.nonce,
-                **capture.policy.fields(),
-                review_allowed=capture.review_allowed,
-                review_window_ms=70000 if capture.review_allowed else 0,
-            )
-            image = self.inbox.wait(capture, lambda: self.hooks.valid(generation))
+                image = self.inbox.wait(capture, lambda: self.hooks.valid(generation))
             if not self.hooks.valid(generation):
                 return
-            self.hooks.metric('vision_frames_received', increment=True)
-            self.hooks.log(
-                'vision_frame_received',
-                bytes=len(image),
-                width=capture.width,
-                height=capture.height,
-            )
+            if not retained:
+                self.hooks.metric('vision_frames_received', increment=True)
+                self.hooks.log(
+                    'vision_frame_received',
+                    bytes=len(image),
+                    width=capture.width,
+                    height=capture.height,
+                )
             self.hooks.answer(job.text, generation, image=image)
             outcome = 'failed' if self.hooks.answer_completed() is False else 'completed'
-            if outcome == 'completed' and self.hooks.valid(generation):
-                self.hooks.metric('vision_dot_completed', increment=True)
+            with self.hooks.lock:
+                if outcome == 'completed' and self.hooks.valid(generation):
+                    self.hooks.metric('vision_dot_completed', increment=True)
+                    if self.followup_capable and (retained or capture.followup_requested):
+                        expires = job.expires if retained else None
+                        if expires is None or time.monotonic() < expires:
+                            try:
+                                self.followup.arm(
+                                    generation,
+                                    image,
+                                    job.policy if retained else capture.policy,
+                                    consent=True,
+                                    expires=expires,
+                                )
+                                self.followup_capture_owner = self.hooks.capture_owner()
+                            except Exception:
+                                # Image analysis is already complete. A failed
+                                # optional retention cannot rewrite that receipt.
+                                self.hooks.metric('photo_followup_retention_failed', increment=True)
         except Exception as error:
             outcome = 'failed'
             with self.hooks.lock:
@@ -275,14 +495,21 @@ class VisionController:
                     self.hooks.failure('这次看图没有完成', failure, trace_key=generation)
         finally:
             image = None
+            if retained:
+                job.image = None
             if capture is not None:
                 self.inbox.cancel_capture(capture)
             with self.hooks.lock:
+                if self.followup_job is job:
+                    self.release_queued_photo()
                 if self.generation == generation:
                     self.generation = None
                     self.nonce = ''
                     self.hooks.metric('vision_last_result', outcome)
                     if self.hooks.connected():
                         self.hooks.event('vision_done', generation=generation, result=outcome)
+                        state = self.followup.metadata(generation)
+                        if state is not None and self.hooks.session_generation() == generation:
+                            self.hooks.event('photo_followup_ready', **state)
                 self.hooks.diagnostics().finish(generation, outcome)
             self.hooks.save_status()

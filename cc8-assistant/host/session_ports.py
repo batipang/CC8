@@ -131,3 +131,4 @@ class RecognitionHooks:
     tool_sample_asr_rejection: Callable[[bool, float | None], str | None] = lambda *_: None
     natural_barge_enabled: Callable[[], bool] = lambda: True
     clear_correction_draft: Callable[[], None] = lambda: None
+    photo_voice: Callable[[str, int, bool], bool] = lambda *_: False

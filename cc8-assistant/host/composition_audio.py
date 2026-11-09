@@ -127,6 +127,9 @@ def build_audio_pipeline(
             log=lambda name, **fields: host.log(name, **fields),
             cancel_session=lambda reason: host.cancel(reason),
             begin_visual=lambda text, origin: host.begin_visual(text, origin),
+            photo_voice=lambda text, generation, command: host.visual.voice_followup(
+                text, generation, command
+            ),
             enqueue_response=lambda job: host.enqueue_response(job),
             failure=lambda message, error, **fields: host.failure(message, error, **fields),
             resume_rejected=lambda token, generation: host.resume_after_rejection(

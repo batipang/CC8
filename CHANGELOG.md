@@ -1,5 +1,12 @@
 # Changelog
 
+## Backend 0.16.14 / Assistant 0.9.77 — explicit same-photo follow-up
+
+- Add default-off consent in Look settings to retain one successfully analyzed JPEG in Mac RAM for up to two minutes. The device receives only its bounded ID, dimensions and remaining lifetime. No image files, recordings or automatic camera retries are added; desktop photo export keeps its separate explicit grant.
+- Add “追问最近照片” with an editable question, a single-use photo/nonce request and an acknowledged clear action. An already active voice session may say “追问这张照片，…” after the existing wake, echo, near-speech and tool-sample admission checks. Neither entry starts a microphone or camera. Follow-up keeps the original retention expiry, and ordinary accepted conversation, Stop, Home, capture-owner changes and transport invalidation revoke the picture.
+- Cover real RecognitionWorker admission and the actual native dispatch/cancellation methods. The integration regression found ordinary speech was incorrectly treated as a stop because the parser returns an empty string; the new photo dispatch now uses its Boolean value. Reject queued expired/cancelled images, stale voice callbacks, duplicate nonces, old-route receipts and uncertain queue admission without retry or cross-picture reuse.
+- Carry the preceding camera release's passing protected PR/main CI and preserve its failed preflight and idle-window observations. Camera and follow-up remain candidates for one grouped update from the actual 0.16.12/code110 installation; no idle-only retries or intermediate camera deployment are required. Real 20-sample image/OCR acceptance remains open and the final 72-hour run has not started.
+
 ## Backend 0.16.13 / Assistant 0.9.75 — bounded HD and photo review
 
 - Negotiate fixed image limits per capture. Keep standard automatic five-second framing as the default; optionally choose a supported Camera1 HD preview up to 1280 pixels per edge, 1280×960 pixels and 768 KiB JPEG. Show actual dimensions and explicit fallback. Desktop photos retain automatic return without review.

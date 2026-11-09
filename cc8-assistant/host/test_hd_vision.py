@@ -167,6 +167,12 @@ public class ImageCheck {
  yes(CaptureProfile.fromRequest(new JSONObject()).version==1);
  CaptureProfile hd=CaptureProfile.fromRequest(new JSONObject("capture_version",2,"max_image_edge",1280,"max_image_pixels",1280*960,"max_image_bytes",768*1024));
  yes(hd.version==2&&hd.maxBytes==768*1024&&!hd.reviewAllowed);
+ yes(!hd.followupAllowed&&!CaptureProfile.legacy().followupAllowed);
+ yes(CaptureProfile.fromRequest(new JSONObject("capture_version",2,"max_image_edge",1280,"max_image_pixels",1280*960,"max_image_bytes",768*1024,"followup_allowed",true)).followupAllowed);
+ yes(!CaptureProfile.fromRequest(new JSONObject("followup_allowed",true)).followupAllowed);
+ for(Object consent:new Object[]{"true",1,new Object()}){
+  try{CaptureProfile.fromRequest(new JSONObject("capture_version",2,"max_image_edge",1280,"max_image_pixels",1280*960,"max_image_bytes",768*1024,"followup_allowed",consent));throw new AssertionError();}catch(IllegalArgumentException expected){}
+ }
  yes(hd.acceptsFrame(1280,960,1280*960*3/2));yes(hd.acceptsFrame(960,1280,1280*960*3/2));
  yes(!CaptureProfile.legacy().acceptsFrame(1280,960,1280*960*3/2));
  yes(!hd.acceptsFrame(1280,960,1280*960*3/2-1));yes(!hd.acceptsFrame(1280,960,1280*960*3/2+1));

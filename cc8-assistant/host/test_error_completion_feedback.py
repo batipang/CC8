@@ -488,7 +488,7 @@ class DeviceFeedbackTests(unittest.TestCase):
         methods = '\n'.join(
             'void '
             + event
-            + '(int gen, String next, String message){Packet p=new Packet(gen);Data j=new Data(next,message);j.startFailure=suppliedStartFailure;j.provenance=suppliedResultProvenance;j.memory=suppliedPreferenceMemory;j.modes=suppliedVisionModes;j.listening=suppliedListeningState;j.captureId=suppliedCaptureId!=null?suppliedCaptureId:captureWindow==null?null:captureWindow.id;j.epoch=suppliedCaptureEpoch!=null?suppliedCaptureEpoch:Integer.valueOf(epoch);'
+            + '(int gen, String next, String message){Packet p=new Packet(gen);Data j=new Data(next,message);j.startFailure=suppliedStartFailure;j.provenance=suppliedResultProvenance;j.memory=suppliedPreferenceMemory;j.modes=suppliedVisionModes;j.photos=suppliedPhotoFollowup;j.listening=suppliedListeningState;j.captureId=suppliedCaptureId!=null?suppliedCaptureId:captureWindow==null?null:captureWindow.id;j.epoch=suppliedCaptureEpoch!=null?suppliedCaptureEpoch:Integer.valueOf(epoch);'
             + branch(source, event)
             + '}'
             for event in events
@@ -506,7 +506,9 @@ class FeedbackCheck {
  final Object routeLock=new Object();long route=5, activeRoute=5,routeEpoch=5;
  static class CaptureWindow{static int count;final String id="capture"+(++count);boolean startConfirmed=true;}
  CaptureWindow captureWindow=new CaptureWindow();
- boolean dotChatSupported,savedTasksSupported,preferenceMemorySupported,resultProvenanceSupported,resultReadingSupported,visionModesSupported;
+ boolean dotChatSupported,savedTasksSupported,preferenceMemorySupported,resultProvenanceSupported,resultReadingSupported,visionModesSupported,photoFollowupSupported;
+ final PhotoFollowupWindow photoFollowup=new PhotoFollowupWindow();
+ String pendingPhotoId="",pendingPhotoForgetId="";
  // The transport handshake itself is covered by the capture route tests.
  static class Link {}
  final Link source=new Link();
@@ -520,16 +522,17 @@ class FeedbackCheck {
  Object suppliedListeningState="unknown";
  Object suppliedCaptureId,suppliedCaptureEpoch;
  Object suppliedStartFailure;
- Object suppliedResultProvenance,suppliedPreferenceMemory,suppliedVisionModes;
+ Object suppliedResultProvenance,suppliedPreferenceMemory,suppliedVisionModes,suppliedPhotoFollowup;
  String pendingVisionNonce="",desktopVisionNonce="";
  static class Packet{int generation;Packet(int g){generation=g;}}
- static class Data{String next,message;Object listening="unknown",captureId,epoch,startFailure,provenance,memory,modes;Data(String n,String m){next=n;message=m;}
+ static class Data{String next,message;Object listening="unknown",captureId,epoch,startFailure,provenance,memory,modes,photos;Data(String n,String m){next=n;message=m;}
   Object optJSONObject(String key){return null;}
   String optString(String k){return "phase".equals(k)?next:"listening_state".equals(k)?String.valueOf(listening):message;}
   String optString(String k,String fallback){return optString(k);}
   Object opt(String k){
    if("supports_preference_memory".equals(k))return memory;
    if("supports_vision_modes".equals(k))return modes;
+   if("supports_photo_followup".equals(k))return photos;
    if("supports_result_provenance".equals(k)||"supports_result_reading".equals(k))return provenance;
    if("request_start_failed".equals(k))return startFailure;
    if("listening_state".equals(k))return listening;
@@ -572,6 +575,7 @@ class FeedbackCheck {
                 command.append(str(helper))
             command.append(str(JAVA / 'ListeningState.java'))
             command.append(str(JAVA / 'StatusPresentation.java'))
+            command.append(str(JAVA / 'PhotoFollowupWindow.java'))
             compiled = subprocess.run(command, capture_output=True, text=True, timeout=30)
             self.assertEqual(compiled.returncode, 0, compiled.stderr)
             result = subprocess.run(
@@ -712,6 +716,22 @@ class FeedbackCheck {
  c.hello(9,"","off");yes(!c.visionModesSupported,"current OCR off ignored");
  c.foreground=false;c.suppliedVisionModes=Boolean.TRUE;c.hello(9,"","background");yes(!c.visionModesSupported,"background enabled OCR");
  c.foreground=true;c.activeRoute=6;c.hello(9,"","old route");yes(!c.visionModesSupported&&!c.recording,"old route enabled OCR/capture");""")
+
+    def test_photo_capability_cannot_be_revived_by_old_or_background_hello(self):
+        self.compile_and_run("""c.suppliedPhotoFollowup="true";c.hello(8,"","bad");
+ yes(!c.photoFollowupSupported,"string enabled photo follow-up");
+ c.suppliedPhotoFollowup=Boolean.TRUE;c.hello(8,"","on");yes(c.photoFollowupSupported,"typed capability missing");
+ c.minimumGeneration=9;c.suppliedPhotoFollowup=Boolean.FALSE;c.hello(8,"","old");yes(c.photoFollowupSupported,"old hello changed capability");
+ c.hello(9,"","off");yes(!c.photoFollowupSupported,"current revoke ignored");
+ c.foreground=false;c.suppliedPhotoFollowup=Boolean.TRUE;c.hello(9,"","background");yes(!c.photoFollowupSupported,"background enabled photo follow-up");
+ c.foreground=true;c.activeRoute=6;c.hello(9,"","old route");yes(!c.photoFollowupSupported&&!c.recording,"old route enabled photo or microphone");""")
+
+    def test_cancel_revokes_picture_but_preserves_the_inflight_explicit_request_nonce(self):
+        self.compile_and_run("""String id="a".repeat(32);c.pendingPhotoId=id;c.pendingVisionNonce="b".repeat(32);
+ c.pendingPhotoForgetId="c".repeat(32);yes(c.photoFollowup.offer(id,8,640,480,120000,5,0),"fixture offer failed");
+ c.cancel(9,"","cancel before begin");
+ yes(c.photoFollowup.current(5,8,1)==null&&c.pendingPhotoForgetId.isEmpty(),"cancel kept photo or stale delete receipt");
+ yes(c.pendingPhotoId.equals(id)&&!c.pendingVisionNonce.isEmpty(),"host cancellation successor lost explicit photo request");""")
 
     def test_route_interruption_notice_survives_rebind_and_clears_for_new_work(self):
         self.compile_and_run("""c.recording=true;c.hello(8,"notice","连接切换中断播报");

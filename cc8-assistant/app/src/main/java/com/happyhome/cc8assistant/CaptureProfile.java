@@ -5,18 +5,24 @@ import org.json.JSONObject;
 /** A fixed host grant for this exact capture. Never widen limits from a UI preference. */
 final class CaptureProfile {
   final int version, maxEdge, maxPixels, maxBytes;
-  final boolean reviewAllowed;
+  final boolean reviewAllowed, followupAllowed;
 
   private CaptureProfile(int version, int edge, int pixels, int bytes) {
     this(version, edge, pixels, bytes, false);
   }
 
   private CaptureProfile(int version, int edge, int pixels, int bytes, boolean review) {
+    this(version, edge, pixels, bytes, review, false);
+  }
+
+  private CaptureProfile(
+      int version, int edge, int pixels, int bytes, boolean review, boolean followup) {
     this.version = version;
     maxEdge = edge;
     maxPixels = pixels;
     maxBytes = bytes;
     reviewAllowed = review;
+    followupAllowed = followup;
   }
 
   boolean acceptsFrame(int width, int height, int bytes) {
@@ -45,15 +51,19 @@ final class CaptureProfile {
         || !Integer.valueOf(profile.maxBytes).equals(request.opt("max_image_bytes")))
       throw new IllegalArgumentException("Invalid capture limits");
     Object review = request.opt("review_allowed"), window = request.opt("review_window_ms");
-    if (review == null && window == null) return profile;
-    if (!(review instanceof Boolean)
-        || !Integer.valueOf(Boolean.TRUE.equals(review) ? 70000 : 0).equals(window))
+    if ((review != null || window != null)
+        && (!(review instanceof Boolean)
+            || !Integer.valueOf(Boolean.TRUE.equals(review) ? 70000 : 0).equals(window)))
       throw new IllegalArgumentException("Invalid review grant");
+    Object followup = request.opt("followup_allowed");
+    if (followup != null && !(followup instanceof Boolean))
+      throw new IllegalArgumentException("Invalid photo retention grant");
     return new CaptureProfile(
         profile.version,
         profile.maxEdge,
         profile.maxPixels,
         profile.maxBytes,
-        Boolean.TRUE.equals(review));
+        Boolean.TRUE.equals(review),
+        Boolean.TRUE.equals(followup));
   }
 }

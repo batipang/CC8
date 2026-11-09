@@ -197,6 +197,8 @@ class Capture:
     generation: int
     policy: ImagePolicy = LEGACY_IMAGE
     review_allowed: bool = False
+    followup_allowed: bool = False
+    followup_requested: bool = False
     ident: str = field(default_factory=lambda: secrets.token_hex(16))
     expires: float = field(default_factory=lambda: time.monotonic() + 16)
     done: threading.Event = field(default_factory=threading.Event)
@@ -228,8 +230,12 @@ class CameraInbox:
         self.lock = threading.Lock()
         self.pending = None
 
-    def begin(self, generation, *, policy=LEGACY_IMAGE, review=False):
-        if policy not in (LEGACY_IMAGE, HD_IMAGE) or type(review) is not bool:
+    def begin(self, generation, *, policy=LEGACY_IMAGE, review=False, followup=False):
+        if (
+            policy not in (LEGACY_IMAGE, HD_IMAGE)
+            or type(review) is not bool
+            or type(followup) is not bool
+        ):
             raise ValueError('Invalid capture grant')
         with self.lock:
             self._cancel()
@@ -237,6 +243,7 @@ class CameraInbox:
                 generation,
                 policy=policy,
                 review_allowed=review,
+                followup_allowed=followup,
                 expires=time.monotonic() + (75 if review else 16),
             )
             return self.pending
@@ -277,6 +284,9 @@ class CameraInbox:
                 if event == 'camera_image_begin':
                     if c.size:
                         raise VisionError('duplicate_image_begin')
+                    retain = value.get('retain_for_followup', False)
+                    if type(retain) is not bool or (retain and not c.followup_allowed):
+                        raise VisionError('request_not_authorized')
                     size = value.get('bytes')
                     width = value.get('width')
                     height = value.get('height')
@@ -288,6 +298,7 @@ class CameraInbox:
                     if not isinstance(digest, str) or not re.fullmatch('[a-f0-9]{64}', digest):
                         raise VisionError('invalid_image_hash')
                     c.size = size
+                    c.followup_requested = retain
                     c.width = width
                     c.height = height
                     c.digest = digest

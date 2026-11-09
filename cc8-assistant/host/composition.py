@@ -140,6 +140,7 @@ def build_components(
             log=lambda name, **fields: host.log(name, **fields),
             diagnostics=lambda: host.diagnostics,
             failure=lambda message, error, **fields: host.failure(message, error, **fields),
+            capture_owner=lambda: host.session.capture_owner(),
         )
     )
     playback = PlaybackController(
