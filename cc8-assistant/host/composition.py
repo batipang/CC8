@@ -208,6 +208,7 @@ def build_components(
                 host.session.connection is not None
                 and not voice_busy(host)
                 and host.session.text_generation is None
+                and host.response.corrections.draft is None
             ),
             touch=lambda: host.touch_activity(),
             announce=lambda text: host.announce(text),
