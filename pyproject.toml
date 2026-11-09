@@ -19,6 +19,7 @@ python_version = "3.11"
 strict = true
 files = [
     "cc8-assistant/host/protocol.py",
+    "cc8-assistant/host/preference_protocol.py",
     "cc8-assistant/host/route_output.py",
     "cc8-assistant/host/wake_utterance.py",
     "cc8-assistant/host/lifecycle_cleanup.py",

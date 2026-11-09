@@ -18,7 +18,7 @@ SESSION_INTERFACES = r"""
  static class Session {
   final Object routeLock=new Object();
   boolean foreground=true,recording,visual,announcement,textSession,receiverRegistered;
-  boolean dotChatSupported,savedTasksSupported,resultProvenanceSupported,resultReadingSupported;
+  boolean dotChatSupported,savedTasksSupported,preferenceMemorySupported,resultProvenanceSupported,resultReadingSupported;
   JSONObject voicePreferences,speechCorrection;
   int speechCorrectionRevision=-1;
   int epoch,minimumGeneration,lifecycle,requests,announcementGeneration,textGeneration;
@@ -112,6 +112,8 @@ SESSION_INTERFACES = r"""
  void cameraCapture(JSONObject value){cameraRequest=value;}
  void vision(boolean active,String message,boolean preserve){}
  void speechCorrection(JSONObject state,long route){}
+ int preferenceReceipts;
+ void preferenceResult(JSONObject data,long route){preferenceReceipts++;}
  void announcement(){}
  void captureRejected(int stoppedEpoch){}
  void playback(boolean active){}void caption(String value,String mood){}void state(String value,String message){}
@@ -135,6 +137,31 @@ SCENARIOS = r"""
   Link old=new Link("usb");activate(c,old);c.drain();
   c.snapshot(1,task("running"));c.drain();
   try{switch(args[0]){
+   case "preference_requests":{
+    long route=s.routeEpoch;int sent=old.events.size();
+    JSONObject argsValue=new JSONObject("action","put","revision",0,"key","称呼","value","固定公开值");
+    yes(!s.preferenceRequest("a".repeat(32),argsValue,route)&&old.events.size()==sent,"unsupported peer accepted memory write");
+    s.preferenceMemorySupported=true;
+    yes(s.preferenceRequest("a".repeat(32),argsValue,route),"supported current request not sent");
+    JSONObject offered=old.events.get(old.events.size()-1);
+    yes("preference_request".equals(offered.optString("event"))&&"a".repeat(32).equals(offered.optString("request_id"))&&"put".equals(offered.optString("action")),"memory request envelope changed");
+    int count=old.events.size();argsValue.values.put("event","session_start");
+    yes(!s.preferenceRequest("b".repeat(32),argsValue,route)&&old.events.size()==count,"reserved event override was sent");
+    argsValue.values.remove("event");Link wifi=new Link("wifi");activate(c,wifi);s.preferenceMemorySupported=true;int nextCount=wifi.events.size();
+    yes(!s.preferenceRequest("c".repeat(32),argsValue,route)&&wifi.events.size()==nextCount,"old editor wrote through new route");
+    yes(!s.recording&&!s.visual&&!s.announcement,"memory request started resources");break;
+   }
+   case "preference_receipts":{
+    s.deliver(new Wire.Packet(new JSONObject("event","preference_result","request_id","a".repeat(32))),old);
+    yes(c.preferenceReceipts==1,"current preference receipt lost");
+    Link wifi=new Link("wifi");activate(c,wifi);
+    s.deliver(new Wire.Packet(new JSONObject("event","preference_result","request_id","a".repeat(32))),old);
+    yes(c.preferenceReceipts==1,"inactive link retagged old memory receipt");
+    s.deliver(new Wire.Packet(new JSONObject("event","preference_result","request_id","b".repeat(32))),wifi);
+    yes(c.preferenceReceipts==2,"new route cannot receive own memory receipt");
+    s.pause();s.deliver(new Wire.Packet(new JSONObject("event","preference_result","request_id","c".repeat(32))),wifi);
+    yes(c.preferenceReceipts==2&&!s.preferenceMemorySupported,"Home retained preference capability/receipt");break;
+   }
    case "availability_handover":{
     s.availability.begin(0);s.select(old);Link wifi=new Link("wifi");wifi.ready=true;s.wifiLink=wifi;
     SystemClock.now=1000;s.lost(old);
@@ -565,6 +592,7 @@ class WorkspaceRouteTests(unittest.TestCase):
                 'private void acceptVoicePreferences(',
                 'JSONObject voicePreferences(',
                 'boolean setVoicePreferences(',
+                'boolean preferenceRequest(',
                 'private boolean sendWorkspace(',
                 'private boolean acceptSpeechCorrection(',
                 'boolean currentSpeechCorrection(',
@@ -615,6 +643,8 @@ class WorkspaceRouteTests(unittest.TestCase):
             + branch(session, 'workspace_result')
             + '}else if("voice_preferences".equals(event)){'
             + branch(session, 'voice_preferences')
+            + '}else if("preference_result".equals(event)){'
+            + branch(session, 'preference_result')
             + '}else if("speech_correction".equals(event)){'
             + branch(session, 'speech_correction')
             + '}else if("announcement_begin".equals(event)){'
@@ -638,7 +668,7 @@ class WorkspaceRouteTests(unittest.TestCase):
         )
         harness = harness.replace(
             'String optString(String key)',
-            'Object opt(String key){return values.get(key);}JSONObject getJSONObject(String key){return (JSONObject)values.get(key);}boolean optBoolean(String key){return Boolean.TRUE.equals(values.get(key));}String optString(String key)',
+            'java.util.Iterator<String> keys(){return values.keySet().iterator();}Object opt(String key){return values.get(key);}JSONObject getJSONObject(String key){return (JSONObject)values.get(key);}boolean optBoolean(String key){return Boolean.TRUE.equals(values.get(key));}String optString(String key)',
         )
         harness = harness.replace(method(harness, 'static class Session'), SESSION_INTERFACES)
         harness = harness.replace(
@@ -700,6 +730,12 @@ class WorkspaceRouteTests(unittest.TestCase):
 
     def test_voice_controls_keep_receipts_dialogs_and_queued_writes_on_their_route(self):
         self.scenario('voice_controls')
+
+    def test_preference_requests_require_current_capability_and_preserve_reserved_fields(self):
+        self.scenario('preference_requests')
+
+    def test_preference_receipts_are_retired_on_handover_and_home(self):
+        self.scenario('preference_receipts')
 
     def test_voice_controls_require_typed_supported_state(self):
         self.scenario('voice_controls_invalid')

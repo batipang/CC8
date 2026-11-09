@@ -1,5 +1,6 @@
 """Selected metadata/history boundaries, context isolation and real async cancellation."""
 
+from test_memory_fixture import isolated_memory
 import json
 import threading
 import tempfile
@@ -249,7 +250,9 @@ class ControllerTests(unittest.TestCase):
                 pass
 
         with patch('threading.Thread.start'):
-            b = Bridge(None, BrainRouter(Mini(), DotBrain(FakeRpc())))
+            b = Bridge(
+                None, BrainRouter(Mini(), DotBrain(FakeRpc())), preference_memory=isolated_memory()
+            )
         b.session.connection = object()
         b.save_status = lambda: None
         b.log = lambda *a, **k: None

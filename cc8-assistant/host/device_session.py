@@ -64,6 +64,7 @@ def complete_handshake(session: SessionController, j):
         playback_interrupted_by_transport=interrupted,
         supports_dot_chat_handoff=True,
         supports_saved_task_results=True,
+        supports_preference_memory=True,
         supports_result_provenance=True,
         supports_result_reading=True,
         voice_preferences=session.voice_preferences_state(),

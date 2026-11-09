@@ -625,9 +625,9 @@ class ResponseWorker:
             answer = ''.join(spoken)
             # Local report excerpts are not automatic context for a later model
             # request. Follow-up binds the separate, fixed RAM snapshot instead.
-            if (
-                not self.hooks.brain()
-                or self.hooks.brain().last_metrics.get('provider') != 'work_report'
+            if not self.hooks.brain() or self.hooks.brain().last_metrics.get('provider') not in (
+                'work_report',
+                'preference_memory',
             ):
                 self.history.extend(
                     [{'role': 'user', 'content': text}, {'role': 'assistant', 'content': answer}]

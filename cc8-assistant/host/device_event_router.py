@@ -43,6 +43,7 @@ class DeviceEventRouter:
     log: EventSink
     read_result: Callable[[dict], None] = lambda data: None
     correction_action: Callable[[dict], None] = lambda data: None
+    preference_action: Callable[[dict], None] = lambda data: None
 
     def on_event(self, j):
         validate_device_event(j)
@@ -76,6 +77,8 @@ class DeviceEventRouter:
             self.chats.cancel(j['request_id'])
         elif event == 'saved_task_request':
             self.saved_tasks.request(j)
+        elif event == 'preference_request':
+            self.preference_action(j)
         elif event == 'result_read_request':
             self.read_result(j)
         elif event == 'speech_correction_action':

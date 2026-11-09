@@ -68,6 +68,7 @@ class Bridge:
         wake_detector=None,
         wake_window_seconds=60,
         capture_frontend='mono',
+        preference_memory=None,
     ):
         self.diagnostics = TraceBook()
         started_at = time.monotonic()
@@ -100,6 +101,7 @@ class Bridge:
             private_directory=lambda: PRIVATE,
             wake_word=WAKE_WORD,
             dot_runtime=lambda: dot_runtime_status(),
+            preference_memory=preference_memory,
         )
         self.calibration = components.calibration
         self.visual = components.visual
@@ -114,7 +116,9 @@ class Bridge:
         self.wake = components.wake
         self.chats = components.chats
         self.saved_tasks = components.saved_tasks
+        self.preferences = components.preferences
         if isinstance(self.brain, BrainRouter):
+            self.brain.preferences = self.preferences
             self.brain.work_reports = self.chats.voice
         self.probes = AcousticProbes(
             session=self.session,

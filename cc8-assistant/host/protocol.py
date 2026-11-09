@@ -111,6 +111,10 @@ def validate_device_event(value: object) -> JsonObject:
     for key in required:
         if key not in value:
             raise ValueError('Missing device event field: ' + key)
+    if name == 'preference_request':
+        from preference_protocol import validate_request
+
+        validate_request(value)
     if name == 'voice_preferences_set':
         revision = value.get('revision')
         if (
