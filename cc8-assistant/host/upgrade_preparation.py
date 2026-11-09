@@ -55,7 +55,7 @@ def reminder_storage_gate(before_root, after_root):
                 if (
                     not isinstance(node.value, ast.Constant)
                     or type(node.value.value) is not int
-                    or node.value.value not in (1, 2)
+                    or node.value.value not in (1, 2, 3)
                 ):
                     raise ValueError('Invalid reminder reader declaration')
                 maximum = node.value.value
@@ -67,7 +67,7 @@ def reminder_storage_gate(before_root, after_root):
         if (
             not isinstance(value, dict)
             or type(value.get('version')) is not int
-            or value['version'] not in (1, 2)
+            or value['version'] not in (1, 2, 3)
         ):
             raise ValueError('Invalid existing reminder store schema')
         version = value['version']

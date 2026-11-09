@@ -509,5 +509,5 @@ class PolicyAndStorageTests(unittest.TestCase):
             self.assertEqual(b.reminder_policy, defaults())
             self.assertEqual(p.read_bytes(), original)
             b.reminder({'action': 'set_policy', 'policy': {**defaults(), 'quiet_enabled': True}})
-            self.assertEqual(json.loads(p.read_text())['version'], 2)
+            self.assertEqual(json.loads(p.read_text())['version'], 3)
             self.assertTrue(Workspace(p).reminder_policy['quiet_enabled'])

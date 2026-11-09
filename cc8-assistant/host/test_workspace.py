@@ -300,6 +300,7 @@ class WorkspaceTests(unittest.TestCase):
         item = self.create()
         item.pop('revision')
         item.pop('updated_at')
+        item.pop('channel')
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'r.json'
             path.write_text(json.dumps({'version': 1, 'reminders': [item]}))

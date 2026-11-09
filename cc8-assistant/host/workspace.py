@@ -23,7 +23,7 @@ from reminder_policy import (
 from reminder_store import ReminderStore, ReminderCommitUncertain
 
 ZONE = ZoneInfo('Asia/Shanghai')
-REMINDER_STORE_VERSION = 2
+REMINDER_STORE_VERSION = 3
 
 
 class TaskStep(TypedDict):
@@ -52,6 +52,7 @@ class ReminderRecord(TypedDict):
     repeat: str
     status: str
     revision: int
+    channel: str
     retry_after: NotRequired[str]
     updated_at: NotRequired[str]
     delivery_attempt: NotRequired[DeliveryAttempt]
@@ -62,6 +63,8 @@ class DeliveryAttempt(TypedDict):
     due: str
     started_at: str
     result: str
+    channel: NotRequired[str]
+    detail: NotRequired[str]
     finished_at: NotRequired[str]
 
 
@@ -70,6 +73,7 @@ class ReminderClaim(TypedDict):
     revision: int
     attempt_id: str
     title: str
+    channel: str
 
 
 class Snapshot(TypedDict):
@@ -79,6 +83,8 @@ class Snapshot(TypedDict):
     timezone: str
     server_time: str
     reminder_policy: ReminderPolicy
+    reminder_history: list[ReminderRecord]
+    reminder_channels_version: int
 
 
 class ReminderResult(TypedDict):
@@ -133,7 +139,7 @@ class Workspace:
             if (
                 not isinstance(data, dict)
                 or type(data.get('version')) is not int
-                or data.get('version') not in (1, 2)
+                or data.get('version') not in (1, 2, 3)
                 or not isinstance(data.get('reminders'), list)
                 or len(data['reminders']) > 64
                 or set(data)
@@ -144,15 +150,28 @@ class Workspace:
                 )
             ):
                 raise ValueError('Invalid reminder store')
-            if data['version'] == 2:
+            if data['version'] in (2, 3):
                 self.reminder_policy = validate_policy(data.get('policy'))
             for raw_item in data['reminders']:
+                if (
+                    data['version'] < 3
+                    and isinstance(raw_item, dict)
+                    and (
+                        'channel' in raw_item
+                        or (
+                            isinstance(raw_item.get('delivery_attempt'), dict)
+                            and set(raw_item['delivery_attempt']) & {'channel', 'detail'}
+                        )
+                    )
+                ):
+                    raise ValueError('New reminder channel fields require schema3')
                 self._validate(raw_item, existing=True)
                 # The private JSON store is untyped until _validate establishes all
                 # record fields; normalize the two legacy defaults at that boundary.
                 item = cast(ReminderRecord, raw_item)
                 item.setdefault('revision', 0)
                 item.setdefault('repeat', 'none')
+                item.setdefault('channel', 'cc8')
                 if item['status'] == 'delivering':
                     # A previous process cannot prove physical playback completed.
                     # Keep the attempt, freeze automatic delivery, invalidate old ACKs.
@@ -174,7 +193,7 @@ class Workspace:
         if self.store:
             try:
                 self.store.save(
-                    {'version': 2, 'reminders': self.reminders, 'policy': self.reminder_policy}
+                    {'version': 3, 'reminders': self.reminders, 'policy': self.reminder_policy}
                 )
             except ReminderCommitUncertain:
                 self.revision += 1
@@ -209,6 +228,7 @@ class Workspace:
             'retry_after',
             'updated_at',
             'delivery_attempt',
+            'channel',
         }:
             raise ValueError('Unknown reminder fields')
         title = item.get('title')
@@ -224,6 +244,8 @@ class Workspace:
         except UnicodeError:
             raise ValueError('提醒内容含无效字符') from None
         due = self._date(item.get('due'))
+        if item.get('channel', 'cc8') not in ('cc8', 'desktop'):
+            raise ValueError('提醒渠道需要选择 CC8 或 Mac 桌面')
         if item.get('repeat', 'none') not in ('none', 'daily', 'weekdays', 'weekly'):
             raise ValueError('不支持的重复方式')
         if not existing and item.get('repeat') == 'weekdays':
@@ -248,14 +270,31 @@ class Workspace:
         if attempt is not None:
             if (
                 not isinstance(attempt, dict)
-                or set(attempt) - {'id', 'due', 'started_at', 'result', 'finished_at'}
+                or set(attempt)
+                - {'id', 'due', 'started_at', 'result', 'finished_at', 'channel', 'detail'}
                 or not {'id', 'due', 'started_at', 'result'} <= set(attempt)
                 or not isinstance(attempt['id'], str)
                 or len(attempt['id']) != 32
                 or any(c not in '0123456789abcdef' for c in attempt['id'])
-                or attempt['result'] not in ('pending_ack', 'played', 'unconfirmed', 'missed')
+                or attempt['result']
+                not in ('pending_ack', 'played', 'notified', 'unconfirmed', 'missed')
             ):
                 raise ValueError('Invalid reminder delivery attempt')
+            if attempt.get('channel', 'cc8') not in ('cc8', 'desktop') or attempt.get(
+                'detail', 'unconfirmed'
+            ) not in (
+                'unconfirmed',
+                'permission_denied',
+                'not_installed',
+                'unsupported',
+                'submitted_unconfirmed',
+                'rejected',
+            ):
+                raise ValueError('Invalid reminder channel receipt')
+            if attempt['result'] == 'notified' and attempt.get('channel') != 'desktop':
+                raise ValueError('Desktop notification receipt missing channel')
+            if attempt['result'] == 'played' and attempt.get('channel', 'cc8') != 'cc8':
+                raise ValueError('Playback receipt cannot confirm desktop delivery')
             self._date(attempt['due'])
             self._date(attempt['started_at'])
             if 'finished_at' in attempt:
@@ -283,10 +322,19 @@ class Workspace:
                 'timezone': 'Asia/Shanghai',
                 'server_time': self.now().isoformat(timespec='seconds'),
                 'reminder_policy': deepcopy(self.reminder_policy),
+                'reminder_channels_version': 1,
+                'reminder_history': cast(ReminderHistory, self.reminder({'action': 'history'}))[
+                    'reminders'
+                ],
             }
             data = deepcopy(snapshot)
             # The authenticated audio protocol has a 64 KiB packet ceiling.
             # Preserve current work/reminders, omit oldest receipts if needed.
+            while (
+                len(json.dumps(data, ensure_ascii=False).encode()) > 58000
+                and data['reminder_history']
+            ):
+                data['reminder_history'].pop()
             while (
                 len(json.dumps(data, ensure_ascii=False).encode()) > 58000
                 and len(data['tasks']) > 1
@@ -382,6 +430,7 @@ class Workspace:
             'due',
             'repeat',
             'policy',
+            'channel',
         }:
             raise ValueError('提醒参数不正确')
         action = args.get('action')
@@ -452,6 +501,7 @@ class Workspace:
                     'title': args.get('title'),
                     'due': args.get('due'),
                     'repeat': args.get('repeat', 'none'),
+                    'channel': args.get('channel', 'cc8'),
                     'status': 'pending',
                     'revision': 1,
                     'updated_at': self.now().isoformat(timespec='seconds'),
@@ -491,7 +541,11 @@ class Workspace:
                 else:
                     candidate: dict[str, object] = {
                         **item,
-                        **{k: v for k, v in args.items() if k in ('title', 'due', 'repeat')},
+                        **{
+                            k: v
+                            for k, v in args.items()
+                            if k in ('title', 'due', 'repeat', 'channel')
+                        },
                     }
                     candidate['due'] = self._validate(candidate).isoformat(timespec='seconds')
                     item.update(cast(ReminderRecord, candidate))
@@ -579,10 +633,15 @@ class Workspace:
             before = self.reminders
             working = deepcopy(self.reminders)
             claims: list[ReminderClaim] = []
+            channel = None
             for item in sorted(working, key=lambda r: r['due']):
                 if item['status'] != 'pending' or self._date(item['due']) > self.now():
                     continue
                 if item.get('retry_after') and self._date(item['retry_after']) > self.now():
+                    continue
+                if channel is None:
+                    channel = item.get('channel', 'cc8')
+                if item.get('channel', 'cc8') != channel:
                     continue
                 ident = uuid.uuid4().hex
                 item['status'] = 'delivering'
@@ -593,6 +652,7 @@ class Workspace:
                     'due': item['due'],
                     'started_at': self.now().isoformat(timespec='seconds'),
                     'result': 'pending_ack',
+                    'channel': channel,
                 }
                 claims.append(
                     {
@@ -600,6 +660,7 @@ class Workspace:
                         'revision': item['revision'],
                         'attempt_id': ident,
                         'title': item['title'],
+                        'channel': channel,
                     }
                 )
                 if len(claims) == limit:
@@ -621,8 +682,24 @@ class Workspace:
                     raise
             return claims
 
-    def finish_reminders(self, claims: list[ReminderClaim], completed: bool) -> bool:
-        """Only the claimed occurrence's terminal playback ACK can mark it played."""
+    def finish_reminders(
+        self,
+        claims: list[ReminderClaim],
+        completed: bool,
+        *,
+        channel: str = 'cc8',
+        detail: str = 'unconfirmed',
+    ) -> bool:
+        """Bind each terminal receipt to the claimed channel and exact occurrence."""
+        if channel not in ('cc8', 'desktop') or detail not in (
+            'unconfirmed',
+            'permission_denied',
+            'not_installed',
+            'unsupported',
+            'submitted_unconfirmed',
+            'rejected',
+        ):
+            raise ValueError('Invalid reminder channel receipt')
         with self.lock:
             before = self.reminders
             working = deepcopy(self.reminders)
@@ -634,9 +711,18 @@ class Workspace:
                     or item['status'] != 'delivering'
                     or item['revision'] != claim['revision']
                     or item['delivery_attempt']['id'] != claim['attempt_id']
+                    or item.get('channel', 'cc8') != channel
+                    or claim.get('channel', 'cc8') != channel
                 ):
                     continue
-                item['delivery_attempt']['result'] = 'played' if completed else 'unconfirmed'
+                item['delivery_attempt']['result'] = (
+                    ('notified' if channel == 'desktop' else 'played')
+                    if completed
+                    else 'unconfirmed'
+                )
+                item['delivery_attempt']['channel'] = channel
+                if not completed:
+                    item['delivery_attempt']['detail'] = detail
                 item['delivery_attempt']['finished_at'] = self.now().isoformat(timespec='seconds')
                 if not completed:
                     item['status'] = 'unconfirmed'
@@ -693,7 +779,14 @@ class Workspace:
         # 旧回执不能结束编辑/稍后提醒后的新版本，也不能推进下一次重复提醒。
         with self.lock:
             item = next(
-                (r for r in self.reminders if r['id'] == ident and r['status'] == 'pending'), None
+                (
+                    r
+                    for r in self.reminders
+                    if r['id'] == ident
+                    and r['status'] == 'pending'
+                    and r.get('channel', 'cc8') == 'cc8'
+                ),
+                None,
             )
             # Bind playback receipts to the exact scheduled occurrence. Editing,
             # snoozing or advancing a repeat invalidates all older receipts.

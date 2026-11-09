@@ -72,3 +72,7 @@ setup 可加 `--dry-run` 输出 argv 计划，不创建环境、不下载、不�
 ## 离线升级准备
 
 `./cc8 upgrade --help` 提供源码版本规划、显式非密钥配置备份、只读校验及新恢复文件预生成；不安装或替换配置。入口与界限见 [UPGRADE_PREPARATION](UPGRADE_PREPARATION.md)。
+
+## Mac 桌面提醒通知
+
+`python3.13 cc8 notifications build / setup / status / authorize`分别构建、明确安装、只读查权限、明确请求通知授权。构建／安装／查询不弹授权框或发通知，不开麦；旧系统Python会提示使用3.11以上解释器。第一次选择桌面渠道前完成准备，范围与通知回执见[桌面通知](DESKTOP_NOTIFICATIONS.md)。

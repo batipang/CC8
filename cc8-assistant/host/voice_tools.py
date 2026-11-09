@@ -42,7 +42,7 @@ TOOLS = [
     ),
     spec(
         'cc8_reminder',
-        '仅按用户要求管理提醒及送达策略。due 必须带时区，默认北京时间。Mac运行且CC8前台空闲时才播报，最多合并3条，不是系统闹钟。list查询待处理提醒，history查询最近送达/未确认/错过记录；修改/取消须使用真实id。送达未确认不会自动重播，可明确update到未来时间或cancel。policy读取安静时段与迟到规则，只有用户明确要求才set_policy，提交完整policy并保留读取的revision；安静时段不影响已开始的播报，skip按原到期时间计算迟到，可能跳过安静时段内的提醒。',
+        '仅按用户要求管理提醒及送达策略。due 必须带时区，默认北京时间。channel默认cc8；仅用户明确要求Mac桌面通知时选desktop，须先在Mac运行./cc8 notifications setup和authorize。两种渠道都需要Mac运行及CC8前台空闲，最多合并3条同渠道事项；桌面静默通知不朗读，已进入通知中心不代表已阅读。授权或送达未确认不会自动重投。不是系统闹钟。list查询待处理提醒，history查询最近送达/未确认/错过记录；修改/取消须使用真实id。送达未确认不会自动重播，可明确update到未来时间或cancel。policy读取安静时段与迟到规则，只有用户明确要求才set_policy，提交完整policy并保留读取的revision；安静时段不影响已开始的播报，skip按原到期时间计算迟到，可能跳过安静时段内的提醒。',
         {
             'action': {
                 'type': 'string',
@@ -51,6 +51,7 @@ TOOLS = [
             'id': {'type': 'string', 'maxLength': 16},
             'title': {'type': 'string', 'maxLength': 120},
             'due': {'type': 'string', 'maxLength': 40},
+            'channel': {'type': 'string', 'enum': ['cc8', 'desktop']},
             'repeat': {'type': 'string', 'enum': ['none', 'daily', 'weekdays', 'weekly']},
             'policy': {
                 'type': 'object',

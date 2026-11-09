@@ -12,7 +12,7 @@
 
 ## 文档
 
-[当前部署：后台0.15.55／原签名APK0.9.49（code86），以及自动验收范围](docs/CURRENT_DEPLOYMENT.md)。[原P0软件交接](docs/P0_SOFTWARE_HANDOFF.md)保留历史快照。
+[当前部署与自动验收范围](docs/CURRENT_DEPLOYMENT.md)。[原P0软件交接](docs/P0_SOFTWARE_HANDOFF.md)保留历史快照。
 
 - [从准备设备到安装 APK 的完整步骤](docs/APK_INSTALL.md)
 - [构建、签名与测试](docs/DEVELOPMENT.md)
@@ -29,6 +29,8 @@
 - [独立版本、兼容性与构建回执](docs/RELEASES.md)
 - [语音助手配置与使用](cc8-assistant/README.md)
 - [方案一界面、任务与提醒](docs/WORKSPACE.md)
+- [提醒送达与安静时段](docs/REMINDER_DELIVERY.md)
+- [Mac 桌面通知与明确授权](docs/DESKTOP_NOTIFICATIONS.md)
 - [功能迭代列表](docs/ROADMAP.md)
 - [统一 TODO：功能、工程质量与验收条件](docs/TODO.md)
 - [ToFix 合并说明](docs/ToFix.md)

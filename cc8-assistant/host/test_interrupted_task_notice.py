@@ -32,6 +32,7 @@ class ActivityCheck {
   final Map<String,Object> values=new HashMap<>();
   JSONObject(Object... pairs){for(int i=0;i<pairs.length;i+=2)values.put((String)pairs[i],pairs[i+1]);}
   String optString(String key){Object v=values.get(key);return v==null?"":String.valueOf(v);}
+  int optInt(String key,int fallback){Object v=values.get(key);return v instanceof Integer?(Integer)v:fallback;}
   long optLong(String key,long fallback){Object v=values.get(key);return v instanceof Number?((Number)v).longValue():fallback;}
   JSONArray optJSONArray(String key){Object v=values.get(key);return v instanceof JSONArray?(JSONArray)v:null;}
   JSONObject optJSONObject(String key){Object v=values.get(key);return v instanceof JSONObject?(JSONObject)v:null;}
@@ -82,7 +83,9 @@ class ActivityCheck {
  final Session session=new Session();
  JSONArray tasksData=new JSONArray(),remindersData=new JSONArray();
  JSONObject reminderPolicyData;
- AlertDialog reminderPolicyDialog;
+ AlertDialog reminderPolicyDialog,reminderEditorDialog,reminderHistoryDialog;
+ JSONArray reminderHistoryData=new JSONArray();
+ boolean reminderChannelsSupported;
  long workspaceRevision=-1,workspaceRoute=0;boolean linked=true,taskResultUnconfirmed;
  String brainProvider="dot";
  int taskActions;
