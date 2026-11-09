@@ -1,5 +1,13 @@
 # Changelog
 
+## Backend 0.16.0 / Assistant 0.9.55 — selected-chat work reports
+
+- Add an explicit read-only work report for the selected Dot chat: past half hour, past two hours or today in Beijing time. Use recorded turn completion timestamps with an inclusive start and exclusive end; never substitute thread update time. Read bounded turn metadata before fetching result items, without resuming or writing the source chat.
+- Show final-answer excerpts separately from successful, failed and unconfirmed command/file-change receipts. Keep missing timestamps, missing final answers, pagination limits and incomplete evidence visible; a completed turn or model claim is not independently verified work.
+- Bind asynchronous reports to the original selected source, request, connection and generation. Cancellation or disconnect drops late reports. Keep history in RAM, preserve current provider/capture behavior, and hide the report entry on older backends without its capability.
+- Apply the owner's November 9 scheduling change: available automated verification accompanies affected features; unavailable environment and final human checks do not block independent development. Keep all acceptance criteria and the final 72-hour run pending.
+- This is a software candidate until deployment and applicable device verification are recorded. Original deployed backend 0.15.76 / APK code91 is unchanged during implementation.
+
 ## Backend 0.15.72 / Assistant 0.9.54 — visible startup failure and explicit recovery
 
 - Publish fixed, classified startup failure guidance for text and literal announcements after rollback. Bind feedback and diagnostics to the original cancellation successor, preserve primary errors and never overwrite newer work or retry a request.

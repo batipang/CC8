@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "p0-acoustic-window-pair-20261109.1",
+  "release_id": "desktop-work-reports-20261109.1",
   "backend": {
-    "version": "0.15.76"
+    "version": "0.16.0"
   },
   "assistant": {
-    "version": "0.9.54",
-    "version_code": 91,
+    "version": "0.9.55",
+    "version_code": 92,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {

@@ -1003,12 +1003,18 @@ final class VoiceSession {
   }
 
   void dotChatRequest(String requestId, String action, String sourceId, String cursor) {
+    dotChatRequest(requestId, action, sourceId, cursor, null);
+  }
+
+  void dotChatRequest(
+      String requestId, String action, String sourceId, String cursor, String period) {
     if (!foreground || !isConnected()) return;
     JSONObject j = Wire.event("dot_chat_request");
     Wire.put(j, "request_id", requestId);
     Wire.put(j, "action", action);
     if (sourceId != null) Wire.put(j, "source_id", sourceId);
     if (cursor != null) Wire.put(j, "cursor", cursor);
+    if (period != null) Wire.put(j, "period", period);
     send(j);
   }
 

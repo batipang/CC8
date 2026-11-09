@@ -119,8 +119,15 @@ def validate_device_event(value: object) -> JsonObject:
             'list',
             'select',
             'clear',
+            'report',
         ):
             raise ValueError('Invalid chat action')
+        if (
+            name == 'dot_chat_request'
+            and value['action'] == 'report'
+            and value.get('period') not in ('half_hour', 'two_hours', 'today')
+        ):
+            raise ValueError('Invalid work report period')
         if name == 'saved_task_request':
             if value['action'] not in ('list', 'get', 'save', 'delete'):
                 raise ValueError('Invalid saved result action')

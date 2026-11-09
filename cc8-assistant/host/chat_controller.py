@@ -40,6 +40,7 @@ class ChatController:
             'source_title': self.selection.source_title if self.selection else '',
             'shared_chat': False,
             'history_persisted': False,
+            'work_reports_supported': True,
             'local_project_available': bool(self.selection and self.selection.cwd),
         }
 
@@ -51,14 +52,19 @@ class ChatController:
         if not isinstance(request_id, str) or not re.fullmatch('[a-f0-9]{32}', request_id):
             raise ValueError('Invalid chat request ID')
         action = data.get('action')
-        if action not in ('state', 'list', 'select', 'clear'):
+        if action not in ('state', 'list', 'select', 'clear', 'report'):
             raise ValueError('Invalid chat action')
+        if action == 'report' and data.get('period') not in ('half_hour', 'two_hours', 'today'):
+            raise ValueError('Invalid report period')
         with self.hooks.lock:
             if not self.hooks.available() or self.hooks.connection() is None:
                 self.publish(request_id, ok=False, message='Dot 聊天入口不可用')
                 return
             if action == 'state':
                 self.publish(request_id, ok=True)
+                return
+            if action == 'report' and self.selection is None:
+                self.publish(request_id, ok=False, message='请先选择一个 Dot 聊天作为汇报来源')
                 return
             if not self.hooks.idle():
                 self.publish(
@@ -104,6 +110,12 @@ class ChatController:
                 result = self.catalog.list(data.get('cursor'), is_current=current)
             elif action == 'select':
                 selected = self.catalog.select(data.get('source_id'), is_current=current)
+            elif action == 'report':
+                result = {
+                    'report': self.catalog.report(
+                        self.selection, data['period'], is_current=current
+                    )
+                }
             with self.hooks.lock:
                 with self.lock:
                     if self.active_request != request_id:
