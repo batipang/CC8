@@ -45,6 +45,7 @@ class WorkspaceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             p = Path(folder) / 'r.json'
             p.write_text('{broken')
+            p.chmod(0o600)
             with self.assertRaises(ValueError):
                 Workspace(p)
             self.assertEqual(p.read_text(), '{broken')
@@ -90,14 +91,23 @@ class WorkspaceTests(unittest.TestCase):
         result = VoiceTools(reminders=self.board.reminder).call('cc8_reminder', {'action': 'list'})
         self.assertTrue(result['ok'])
 
-    def test_completed_once_and_failed_delivery_retry(self):
+    def test_completed_once_and_failed_delivery_requires_explicit_rescheduling(self):
         item = self.create()
         self.time += timedelta(hours=2)
         self.assertEqual(self.board.due()['id'], item['id'])
         self.board.delivered(item['id'], False, revision=item['revision'])
         self.assertIsNone(self.board.due())
         self.time += timedelta(minutes=5)
-        self.assertIsNotNone(self.board.due())
+        self.assertIsNone(self.board.due())
+        self.assertEqual(self.board.snapshot()['reminders'][0]['status'], 'unconfirmed')
+        self.board.reminder(
+            {
+                'action': 'update',
+                'id': item['id'],
+                'due': (self.time + timedelta(minutes=10)).isoformat(),
+            }
+        )
+        self.time += timedelta(minutes=11)
         self.board.delivered(item['id'], True, revision=self.board.due()['revision'])
         self.assertIsNone(self.board.due())
         self.assertEqual(self.board.snapshot()['reminders'], [])
@@ -289,9 +299,11 @@ class WorkspaceTests(unittest.TestCase):
     def test_legacy_store_loads_without_revision_and_invalid_metadata_is_rejected(self):
         item = self.create()
         item.pop('revision')
+        item.pop('updated_at')
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'r.json'
             path.write_text(json.dumps({'version': 1, 'reminders': [item]}))
+            path.chmod(0o600)
             b = Workspace(path, now=lambda: self.time)
             self.assertEqual(b.snapshot()['reminders'][0]['revision'], 0)
             self.time += timedelta(hours=2)

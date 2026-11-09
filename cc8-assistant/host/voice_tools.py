@@ -42,13 +42,39 @@ TOOLS = [
     ),
     spec(
         'cc8_reminder',
-        '仅按用户要求创建、查询、修改或取消大黄蜂提醒。due 必须是带时区的 ISO8601 时间，默认北京时间。提醒由当前 Mac 保存，Mac 服务与 CC8 前台连接时才可播报；不可声称已创建系统闹钟。修改/取消须先 list 获取真实 id。',
+        '仅按用户要求管理提醒及送达策略。due 必须带时区，默认北京时间。Mac运行且CC8前台空闲时才播报，最多合并3条，不是系统闹钟。list查询待处理提醒，history查询最近送达/未确认/错过记录；修改/取消须使用真实id。送达未确认不会自动重播，可明确update到未来时间或cancel。policy读取安静时段与迟到规则，只有用户明确要求才set_policy，提交完整policy并保留读取的revision；安静时段不影响已开始的播报，skip按原到期时间计算迟到，可能跳过安静时段内的提醒。',
         {
-            'action': {'type': 'string', 'enum': ['create', 'list', 'update', 'cancel']},
+            'action': {
+                'type': 'string',
+                'enum': ['create', 'list', 'update', 'cancel', 'history', 'policy', 'set_policy'],
+            },
             'id': {'type': 'string', 'maxLength': 16},
             'title': {'type': 'string', 'maxLength': 120},
             'due': {'type': 'string', 'maxLength': 40},
             'repeat': {'type': 'string', 'enum': ['none', 'daily', 'weekdays', 'weekly']},
+            'policy': {
+                'type': 'object',
+                'properties': {
+                    'revision': {'type': 'integer', 'minimum': 0, 'maximum': 2147483645},
+                    'quiet_enabled': {'type': 'boolean'},
+                    'quiet_start': {
+                        'type': 'string',
+                        'pattern': '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$',
+                    },
+                    'quiet_end': {'type': 'string', 'pattern': '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$'},
+                    'late_policy': {'type': 'string', 'enum': ['deliver', 'skip']},
+                    'max_late_minutes': {'type': 'integer', 'minimum': 1, 'maximum': 10080},
+                },
+                'required': [
+                    'revision',
+                    'quiet_enabled',
+                    'quiet_start',
+                    'quiet_end',
+                    'late_policy',
+                    'max_late_minutes',
+                ],
+                'additionalProperties': False,
+            },
         },
         ['action'],
     ),

@@ -78,6 +78,26 @@ class UpgradeTests(unittest.TestCase):
             self.assertFalse(result['installed_signer_checked'])
             self.assertFalse(result['ready_for_installation'])
 
+    def test_reminder_schema_gate_blocks_old_reader_without_exporting_or_rewriting_content(self):
+        from reminder_policy import defaults
+        from reminder_store import ReminderStore
+
+        with tempfile.TemporaryDirectory() as folder:
+            before, after = self.manifests(folder)
+            path = before / 'device-access/private/voice-runtime/reminders.json'
+            ReminderStore(path).save({'version': 2, 'policy': defaults(), 'reminders': []})
+            raw = path.read_bytes()
+            gate = upgrade.plan(before, after)['reminder_storage']
+            self.assertFalse(gate['compatible'])
+            self.assertFalse(gate['reminder_content_exported'])
+            code, _, _ = self.invoke(['plan', '--from-root', str(before), '--to-root', str(after)])
+            self.assertEqual(code, 2)
+            source = after / 'cc8-assistant/host/workspace.py'
+            source.parent.mkdir(parents=True)
+            source.write_text('REMINDER_STORE_VERSION = 2\n')
+            self.assertTrue(upgrade.plan(before, after)['reminder_storage']['compatible'])
+            self.assertEqual(path.read_bytes(), raw)
+
     def transition_fixture(self, folder):
         base, candidate, recovery = (Path(folder) / x for x in ('base', 'candidate', 'recovery'))
 

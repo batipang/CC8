@@ -28,6 +28,8 @@ files = [
     "cc8-assistant/host/transport_pairing.py",
     "cc8-assistant/host/tls_stream.py",
     "cc8-assistant/host/workspace.py",
+    "cc8-assistant/host/reminder_policy.py",
+    "cc8-assistant/host/reminder_store.py",
     "cc8-assistant/host/config_schema.py",
     "cc8-assistant/host/configuration.py",
     "cc8-assistant/host/release_info.py",

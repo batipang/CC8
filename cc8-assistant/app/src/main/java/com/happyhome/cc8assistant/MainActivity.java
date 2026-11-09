@@ -37,6 +37,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   private long workspaceRevision = -1;
   private long workspaceRoute = -1;
   private JSONArray tasksData = new JSONArray(), remindersData = new JSONArray();
+  private JSONObject reminderPolicyData;
   // RAM-only notice: a lost connection cannot undo tool effects or prove failure.
   // Keep this separate from authoritative task receipts and never replay work.
   private boolean taskResultUnconfirmed;
@@ -583,6 +584,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
           workspaceRevision = revision;
           tasksData = tasks;
           remindersData = reminders;
+          reminderPolicyData = data.optJSONObject("reminder_policy");
           renderWorkspace();
         });
   }
@@ -811,7 +813,10 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
               + " · "
               + item.optString("title")
               + "\n"
-              + repeatLabel(item.optString("repeat"));
+              + repeatLabel(item.optString("repeat"))
+              + ("unconfirmed".equals(item.optString("status"))
+                  ? " · 送达未确认，需重新安排"
+                  : "delivering".equals(item.optString("status")) ? " · 等待播完回执" : "");
     }
     AlertDialog.Builder dialog =
         new AlertDialog.Builder(this).setTitle("提醒 · 北京时间").setNegativeButton("关闭", null);
@@ -820,7 +825,116 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     else
       dialog.setMessage(linked ? "暂无提醒。Mac 服务运行、CC8 前台连接时可到时播报；离线期间不会开启设备或麦克风。" : "连接 Mac 后可管理提醒。");
     if (linked) dialog.setPositiveButton("添加提醒", (d, n) -> editReminder(null, route));
+    if (linked && reminderPolicyData != null)
+      dialog.setNeutralButton("送达设置", (d, n) -> reminderDeliverySettings(route));
     dialog.show();
+  }
+
+  private void reminderDeliverySettings(long route) {
+    if (!requireWorkspaceRoute(route) || reminderPolicyData == null) return;
+    final JSONObject current = reminderPolicyData;
+    final int revision = current.optInt("revision", -1);
+    if (revision < 0) return;
+    LinearLayout form = new LinearLayout(this);
+    form.setOrientation(LinearLayout.VERTICAL);
+    form.setPadding(dp(24), dp(12), dp(24), dp(12));
+    TextView help = new TextView(this);
+    help.setText(
+        "设置保存在 Mac。安静时段限制新提醒，不中断已经开始的播报。\n"
+            + "迟到从原定时间计算；选择跳过后，安静时段中的提醒也可能错过。送达未确认不会自动重播，可重新安排或取消。");
+    help.setTextSize(22);
+    form.addView(help);
+    Switch quiet = new Switch(this);
+    quiet.setText("启用安静时段（北京时间）");
+    quiet.setTextSize(22);
+    quiet.setChecked(current.optBoolean("quiet_enabled"));
+    form.addView(quiet);
+    EditText start = new EditText(this), end = new EditText(this);
+    start.setHint("开始 HH:MM");
+    end.setHint("结束 HH:MM");
+    start.setSingleLine(true);
+    end.setSingleLine(true);
+    start.setText(current.optString("quiet_start"));
+    end.setText(current.optString("quiet_end"));
+    start.setTextSize(24);
+    end.setTextSize(24);
+    form.addView(start);
+    form.addView(end);
+    Switch skip = new Switch(this);
+    skip.setText("超过迟到时限则跳过（关闭为补报）");
+    skip.setTextSize(22);
+    skip.setChecked("skip".equals(current.optString("late_policy")));
+    form.addView(skip);
+    EditText minutes = new EditText(this);
+    minutes.setHint("迟到时限：1～10080 分钟");
+    minutes.setSingleLine(true);
+    minutes.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+    minutes.setText(String.valueOf(current.optInt("max_late_minutes", 60)));
+    minutes.setTextSize(24);
+    form.addView(minutes);
+    ScrollView scroll = new ScrollView(this);
+    scroll.addView(form);
+    AlertDialog dialog =
+        new AlertDialog.Builder(this)
+            .setTitle("提醒送达设置")
+            .setView(scroll)
+            .setNegativeButton("取消", null)
+            .setNeutralButton(
+                "恢复默认",
+                (d, n) -> sendReminderPolicy(route, revision, false, "22:00", "07:00", false, 60))
+            .setPositiveButton("应用", null)
+            .create();
+    dialog.setOnShowListener(
+        unused ->
+            dialog
+                .getButton(AlertDialog.BUTTON_POSITIVE)
+                .setOnClickListener(
+                    v -> {
+                      String from = start.getText().toString().trim(),
+                          to = end.getText().toString().trim();
+                      String pattern = "(?:[01][0-9]|2[0-3]):[0-5][0-9]";
+                      int late;
+                      try {
+                        late = Integer.parseInt(minutes.getText().toString().trim());
+                      } catch (NumberFormatException error) {
+                        late = 0;
+                      }
+                      if (!from.matches(pattern)
+                          || !to.matches(pattern)
+                          || from.equals(to)
+                          || late < 1
+                          || late > 10080) {
+                        Toast.makeText(this, "请填写不同的 HH:MM 起止时间及有效分钟数", Toast.LENGTH_LONG).show();
+                        return;
+                      }
+                      dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
+                      sendReminderPolicy(
+                          route, revision, quiet.isChecked(), from, to, skip.isChecked(), late);
+                      dialog.dismiss();
+                    }));
+    dialog.show();
+  }
+
+  private void sendReminderPolicy(
+      long route,
+      int revision,
+      boolean quiet,
+      String start,
+      String end,
+      boolean skip,
+      int minutes) {
+    if (!requireWorkspaceRoute(route)) return;
+    JSONObject policy = new JSONObject();
+    Wire.put(policy, "revision", revision);
+    Wire.put(policy, "quiet_enabled", quiet);
+    Wire.put(policy, "quiet_start", start);
+    Wire.put(policy, "quiet_end", end);
+    Wire.put(policy, "late_policy", skip ? "skip" : "deliver");
+    Wire.put(policy, "max_late_minutes", minutes);
+    JSONObject args = new JSONObject();
+    Wire.put(args, "action", "set_policy");
+    Wire.put(args, "policy", policy);
+    if (!session.reminderAction(args, route)) workspaceNotSent();
   }
 
   private String repeatLabel(String value) {
@@ -1490,6 +1604,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
             if (correctionDialog != null) correctionDialog.close();
             tasksData = new JSONArray();
             remindersData = new JSONArray();
+            reminderPolicyData = null;
             renderWorkspace();
           }
           brainText.setText(

@@ -8,15 +8,22 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime, timedelta
 import json
-import os
 from pathlib import Path
 import threading
 import uuid
 from zoneinfo import ZoneInfo
 from typing import Callable, Literal, NotRequired, TypeAlias, TypedDict, cast
 from result_provenance import Provenance, validate as validate_provenance
+from reminder_policy import (
+    ReminderPolicy,
+    defaults as default_policy,
+    quiet,
+    validate as validate_policy,
+)
+from reminder_store import ReminderStore, ReminderCommitUncertain
 
 ZONE = ZoneInfo('Asia/Shanghai')
+REMINDER_STORE_VERSION = 2
 
 
 class TaskStep(TypedDict):
@@ -46,6 +53,23 @@ class ReminderRecord(TypedDict):
     status: str
     revision: int
     retry_after: NotRequired[str]
+    updated_at: NotRequired[str]
+    delivery_attempt: NotRequired[DeliveryAttempt]
+
+
+class DeliveryAttempt(TypedDict):
+    id: str
+    due: str
+    started_at: str
+    result: str
+    finished_at: NotRequired[str]
+
+
+class ReminderClaim(TypedDict):
+    id: str
+    revision: int
+    attempt_id: str
+    title: str
 
 
 class Snapshot(TypedDict):
@@ -54,6 +78,7 @@ class Snapshot(TypedDict):
     reminders: list[ReminderRecord]
     timezone: str
     server_time: str
+    reminder_policy: ReminderPolicy
 
 
 class ReminderResult(TypedDict):
@@ -70,7 +95,20 @@ class CancelledResult(TypedDict):
     error: Literal['turn_cancelled']
 
 
-WorkspaceResult: TypeAlias = ReminderResult | ListResult | CancelledResult
+class PolicyResult(TypedDict):
+    ok: Literal[True]
+    policy: ReminderPolicy
+
+
+class ReminderHistory(TypedDict):
+    ok: Literal[True]
+    reminders: list[ReminderRecord]
+    timezone: str
+
+
+WorkspaceResult: TypeAlias = (
+    ReminderResult | ListResult | CancelledResult | PolicyResult | ReminderHistory
+)
 
 
 def clock() -> datetime:
@@ -82,21 +120,32 @@ class Workspace:
     # self.revision 刷新整个界面，提醒自身的 revision 绑定某次播报，二者用途不同。
     def __init__(self, path: str | Path | None = None, now: Callable[[], datetime] = clock) -> None:
         self.path = Path(path) if path else None
+        self.store = ReminderStore(self.path) if self.path else None
         self.now = now
         self.lock = threading.RLock()
         self.tasks: list[TaskRecord] = []
         self.reminders: list[ReminderRecord] = []
+        self.reminder_policy = default_policy()
         self.revision = 0
-        if self.path and self.path.exists():
+        data = self.store.load() if self.store else None
+        if self.store is not None and self.store.expected is not None:
             # Do not silently replace a corrupt reminder store with an empty one.
-            data: object = json.loads(self.path.read_text())
             if (
                 not isinstance(data, dict)
-                or data.get('version') != 1
+                or type(data.get('version')) is not int
+                or data.get('version') not in (1, 2)
                 or not isinstance(data.get('reminders'), list)
                 or len(data['reminders']) > 64
+                or set(data)
+                != (
+                    {'version', 'reminders'}
+                    if data.get('version') == 1
+                    else {'version', 'reminders', 'policy'}
+                )
             ):
                 raise ValueError('Invalid reminder store')
+            if data['version'] == 2:
+                self.reminder_policy = validate_policy(data.get('policy'))
             for raw_item in data['reminders']:
                 self._validate(raw_item, existing=True)
                 # The private JSON store is untyped until _validate establishes all
@@ -104,27 +153,32 @@ class Workspace:
                 item = cast(ReminderRecord, raw_item)
                 item.setdefault('revision', 0)
                 item.setdefault('repeat', 'none')
+                if item['status'] == 'delivering':
+                    # A previous process cannot prove physical playback completed.
+                    # Keep the attempt, freeze automatic delivery, invalidate old ACKs.
+                    item['status'] = 'unconfirmed'
+                    item['revision'] += 1
+                    item['delivery_attempt']['result'] = 'unconfirmed'
+                    item['updated_at'] = self.now().isoformat(timespec='seconds')
                 self.reminders.append(item)
             if len({r['id'] for r in self.reminders}) != len(self.reminders):
                 raise ValueError('Duplicate reminder ID')
-            if sum(r['status'] == 'pending' for r in self.reminders) > 32:
+            if (
+                sum(r['status'] in ('pending', 'delivering', 'unconfirmed') for r in self.reminders)
+                > 32
+            ):
                 raise ValueError('Too many pending reminders')
 
     def _save(self) -> None:
         # 同目录临时文件写完后原子替换，避免半份 JSON；调用方负责失败时回滚内存。
-        if self.path:
-            self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            os.chmod(self.path.parent, 0o700)
-            temporary = self.path.with_name(self.path.name + '.' + uuid.uuid4().hex + '.tmp')
+        if self.store:
             try:
-                with temporary.open('x', encoding='utf-8') as f:
-                    os.chmod(temporary, 0o600)
-                    json.dump({'version': 1, 'reminders': self.reminders}, f, ensure_ascii=False)
-                    f.flush()
-                    os.fsync(f.fileno())
-                temporary.replace(self.path)
-            finally:
-                temporary.unlink(missing_ok=True)
+                self.store.save(
+                    {'version': 2, 'reminders': self.reminders, 'policy': self.reminder_policy}
+                )
+            except ReminderCommitUncertain:
+                self.revision += 1
+                raise
         self.revision += 1
 
     @staticmethod
@@ -145,6 +199,18 @@ class Workspace:
     def _validate(self, item: object, existing: bool = False) -> datetime:
         if not isinstance(item, dict):
             raise ValueError('Invalid reminder')
+        if set(item) - {
+            'id',
+            'title',
+            'due',
+            'repeat',
+            'status',
+            'revision',
+            'retry_after',
+            'updated_at',
+            'delivery_attempt',
+        }:
+            raise ValueError('Unknown reminder fields')
         title = item.get('title')
         if (
             not isinstance(title, str)
@@ -153,6 +219,10 @@ class Workspace:
             or any(ord(c) < 32 for c in title)
         ):
             raise ValueError('提醒内容应为 1 至 120 字')
+        try:
+            title.encode('utf-8')
+        except UnicodeError:
+            raise ValueError('提醒内容含无效字符') from None
         due = self._date(item.get('due'))
         if item.get('repeat', 'none') not in ('none', 'daily', 'weekdays', 'weekly'):
             raise ValueError('不支持的重复方式')
@@ -164,19 +234,47 @@ class Workspace:
         if existing and (
             not isinstance(item.get('id'), str)
             or len(item['id']) != 16
-            or item.get('status') not in ('pending', 'delivered', 'cancelled')
+            or item.get('status')
+            not in ('pending', 'delivering', 'unconfirmed', 'delivered', 'cancelled', 'missed')
         ):
             raise ValueError('Invalid reminder record')
         if type(item.get('revision', 0)) is not int or item.get('revision', 0) < 0:
             raise ValueError('Invalid reminder revision')
         if 'retry_after' in item:
             self._date(item['retry_after'])
+        if 'updated_at' in item:
+            self._date(item['updated_at'])
+        attempt = item.get('delivery_attempt')
+        if attempt is not None:
+            if (
+                not isinstance(attempt, dict)
+                or set(attempt) - {'id', 'due', 'started_at', 'result', 'finished_at'}
+                or not {'id', 'due', 'started_at', 'result'} <= set(attempt)
+                or not isinstance(attempt['id'], str)
+                or len(attempt['id']) != 32
+                or any(c not in '0123456789abcdef' for c in attempt['id'])
+                or attempt['result'] not in ('pending_ack', 'played', 'unconfirmed', 'missed')
+            ):
+                raise ValueError('Invalid reminder delivery attempt')
+            self._date(attempt['due'])
+            self._date(attempt['started_at'])
+            if 'finished_at' in attempt:
+                self._date(attempt['finished_at'])
+        if item.get('status') in ('delivering', 'unconfirmed') and (
+            not isinstance(attempt, dict) or attempt['result'] not in ('pending_ack', 'unconfirmed')
+        ):
+            raise ValueError('Reminder attempt missing')
         return due
 
     def snapshot(self) -> Snapshot:
         with self.lock:
             reminders = sorted(
-                (r for r in self.reminders if r['status'] == 'pending'), key=lambda r: r['due']
+                (
+                    r
+                    for r in self.reminders
+                    if r['status'] in ('pending', 'delivering', 'unconfirmed')
+                ),
+                key=lambda r: r['due'],
             )
             snapshot: Snapshot = {
                 'revision': self.revision,
@@ -184,6 +282,7 @@ class Workspace:
                 'reminders': reminders,
                 'timezone': 'Asia/Shanghai',
                 'server_time': self.now().isoformat(timespec='seconds'),
+                'reminder_policy': deepcopy(self.reminder_policy),
             }
             data = deepcopy(snapshot)
             # The authenticated audio protocol has a 64 KiB packet ceiling.
@@ -276,7 +375,14 @@ class Workspace:
     def reminder(
         self, args: object, is_current: Callable[[], bool] = lambda: True
     ) -> WorkspaceResult:
-        if not isinstance(args, dict) or set(args) - {'action', 'id', 'title', 'due', 'repeat'}:
+        if not isinstance(args, dict) or set(args) - {
+            'action',
+            'id',
+            'title',
+            'due',
+            'repeat',
+            'policy',
+        }:
             raise ValueError('提醒参数不正确')
         action = args.get('action')
         with self.lock:
@@ -284,9 +390,62 @@ class Workspace:
                 return {'ok': False, 'error': 'turn_cancelled'}
             if action == 'list':
                 return {'ok': True, **self.snapshot()}
+            if action in ('policy', 'set_policy'):
+                if set(args) != ({'action'} if action == 'policy' else {'action', 'policy'}):
+                    raise ValueError('提醒策略参数不正确')
+                if action == 'set_policy':
+                    candidate_policy = validate_policy(args['policy'])
+                    if (
+                        candidate_policy['revision'] != self.reminder_policy['revision']
+                        or candidate_policy['revision'] >= 2**31 - 2
+                    ):
+                        raise ValueError('提醒策略已更新，请重新读取后修改')
+                    candidate_policy['revision'] += 1
+                    before_policy = self.reminder_policy
+                    self.reminder_policy = candidate_policy
+                    try:
+                        self._save()
+                    except ReminderCommitUncertain:
+                        raise
+                    except Exception:
+                        self.reminder_policy = before_policy
+                        raise
+                return {'ok': True, 'policy': deepcopy(self.reminder_policy)}
+            if action == 'history':
+                if set(args) != {'action'}:
+                    raise ValueError('提醒历史参数不正确')
+                records = [
+                    r for r in self.reminders if r['status'] != 'pending' or 'delivery_attempt' in r
+                ]
+
+                def history_time(item: ReminderRecord) -> tuple[bool, datetime]:
+                    stamp = item.get('updated_at')
+                    if stamp is None and 'delivery_attempt' in item:
+                        attempt = item['delivery_attempt']
+                        stamp = attempt.get('finished_at', attempt['started_at'])
+                    return stamp is not None, self._date(stamp) if stamp is not None else datetime(
+                        1970, 1, 1, tzinfo=ZONE
+                    )
+
+                return {
+                    'ok': True,
+                    'reminders': deepcopy(sorted(records, key=history_time, reverse=True)[:12]),
+                    'timezone': 'Asia/Shanghai',
+                }
+            if 'policy' in args:
+                raise ValueError('提醒策略需单独明确设置')
             before = deepcopy(self.reminders)
             if action == 'create':
-                if len([r for r in self.reminders if r['status'] == 'pending']) >= 32:
+                if (
+                    len(
+                        [
+                            r
+                            for r in self.reminders
+                            if r['status'] in ('pending', 'delivering', 'unconfirmed')
+                        ]
+                    )
+                    >= 32
+                ):
                     raise ValueError('最多保留 32 条待提醒事项')
                 raw_item: dict[str, object] = {
                     'id': uuid.uuid4().hex[:16],
@@ -295,6 +454,7 @@ class Workspace:
                     'repeat': args.get('repeat', 'none'),
                     'status': 'pending',
                     'revision': 1,
+                    'updated_at': self.now().isoformat(timespec='seconds'),
                 }
                 raw_item['due'] = self._validate(raw_item).isoformat(timespec='seconds')
                 # id/status/revision are generated here; user fields just passed validation.
@@ -302,7 +462,9 @@ class Workspace:
                 self.reminders.append(item)
                 if len(self.reminders) > 64:
                     self.reminders = [
-                        r for r in self.reminders if r['status'] == 'pending'
+                        r
+                        for r in self.reminders
+                        if r['status'] in ('pending', 'delivering', 'unconfirmed')
                     ] + self.reminders[-16:]
                 # Stable unique IDs, even after pruning completed records.
                 self.reminders = list({r['id']: r for r in self.reminders}.values())
@@ -311,7 +473,8 @@ class Workspace:
                     (
                         r
                         for r in self.reminders
-                        if r['id'] == args.get('id') and r['status'] == 'pending'
+                        if r['id'] == args.get('id')
+                        and r['status'] in ('pending', 'delivering', 'unconfirmed')
                     ),
                     None,
                 )
@@ -319,6 +482,11 @@ class Workspace:
                     raise ValueError('这条提醒不存在或已经结束')
                 item = current
                 if action == 'cancel':
+                    if item['status'] in ('delivering', 'unconfirmed'):
+                        item['delivery_attempt']['result'] = 'unconfirmed'
+                        item['delivery_attempt']['finished_at'] = self.now().isoformat(
+                            timespec='seconds'
+                        )
                     item['status'] = 'cancelled'
                 else:
                     candidate: dict[str, object] = {
@@ -327,16 +495,183 @@ class Workspace:
                     }
                     candidate['due'] = self._validate(candidate).isoformat(timespec='seconds')
                     item.update(cast(ReminderRecord, candidate))
+                    if item['status'] in ('delivering', 'unconfirmed'):
+                        attempt = item['delivery_attempt']
+                        attempt['result'] = 'unconfirmed'
+                        attempt['finished_at'] = self.now().isoformat(timespec='seconds')
+                    item['status'] = 'pending'
                     item.pop('retry_after', None)
                 item['revision'] = item.get('revision', 0) + 1
+                item['updated_at'] = self.now().isoformat(timespec='seconds')
             else:
                 raise ValueError('不支持的提醒操作')
             try:
                 self._save()
+            except ReminderCommitUncertain:
+                raise
             except Exception:
                 self.reminders = before
                 raise
             return {'ok': True, 'reminder': deepcopy(item)}
+
+    def _advance_repeat(self, item: ReminderRecord) -> None:
+        due = self._date(item['due'])
+        step = 7 if item['repeat'] == 'weekly' else 1
+        try:
+            if due <= self.now():
+                days = (self.now() - due).days
+                due += timedelta(days=(days // step + 1) * step)
+            while item['repeat'] == 'weekdays' and due.weekday() > 4:
+                due += timedelta(days=1)
+        except OverflowError:
+            raise ValueError('下一次重复提醒超出可用日期') from None
+        item['due'] = due.isoformat(timespec='seconds')
+        item['status'] = 'pending'
+        item.pop('retry_after', None)
+
+    def expire_reminders(self) -> bool:
+        with self.lock:
+            if self.reminder_policy['late_policy'] != 'skip':
+                return False
+            now = self.now()
+            before = self.reminders
+            working = deepcopy(self.reminders)
+            changed = False
+            for item in working:
+                due = self._date(item['due'])
+                if item['status'] != 'pending' or now - due <= timedelta(
+                    minutes=self.reminder_policy['max_late_minutes']
+                ):
+                    continue
+                item['delivery_attempt'] = {
+                    'id': uuid.uuid4().hex,
+                    'due': item['due'],
+                    'started_at': now.isoformat(timespec='seconds'),
+                    'finished_at': now.isoformat(timespec='seconds'),
+                    'result': 'missed',
+                }
+                if item['repeat'] == 'none':
+                    item['status'] = 'missed'
+                else:
+                    self._advance_repeat(item)
+                item['revision'] += 1
+                item['updated_at'] = self.now().isoformat(timespec='seconds')
+                changed = True
+            if changed:
+                self.reminders = working
+                try:
+                    self._save()
+                except ReminderCommitUncertain:
+                    raise
+                except Exception:
+                    self.reminders = before
+                    raise
+            return changed
+
+    def claim_reminders(self, limit: int = 3) -> list[ReminderClaim]:
+        """Durably mark exact occurrences before any TTS or output request."""
+        if type(limit) is not int or not 1 <= limit <= 3:
+            raise ValueError('Invalid reminder delivery limit')
+        with self.lock:
+            self.expire_reminders()
+            if quiet(self.reminder_policy, self.now()):
+                return []
+            before = self.reminders
+            working = deepcopy(self.reminders)
+            claims: list[ReminderClaim] = []
+            for item in sorted(working, key=lambda r: r['due']):
+                if item['status'] != 'pending' or self._date(item['due']) > self.now():
+                    continue
+                if item.get('retry_after') and self._date(item['retry_after']) > self.now():
+                    continue
+                ident = uuid.uuid4().hex
+                item['status'] = 'delivering'
+                item['revision'] += 1
+                item['updated_at'] = self.now().isoformat(timespec='seconds')
+                item['delivery_attempt'] = {
+                    'id': ident,
+                    'due': item['due'],
+                    'started_at': self.now().isoformat(timespec='seconds'),
+                    'result': 'pending_ack',
+                }
+                claims.append(
+                    {
+                        'id': item['id'],
+                        'revision': item['revision'],
+                        'attempt_id': ident,
+                        'title': item['title'],
+                    }
+                )
+                if len(claims) == limit:
+                    break
+            if claims:
+                self.reminders = working
+                try:
+                    self._save()
+                except ReminderCommitUncertain:
+                    # No announcement was admitted. Keep uncertain durable
+                    # claims frozen in RAM as well as after a process restart.
+                    for item in self.reminders:
+                        if any(c['id'] == item['id'] for c in claims):
+                            item['status'] = 'unconfirmed'
+                            item['delivery_attempt']['result'] = 'unconfirmed'
+                    raise
+                except Exception:
+                    self.reminders = before
+                    raise
+            return claims
+
+    def finish_reminders(self, claims: list[ReminderClaim], completed: bool) -> bool:
+        """Only the claimed occurrence's terminal playback ACK can mark it played."""
+        with self.lock:
+            before = self.reminders
+            working = deepcopy(self.reminders)
+            changed = False
+            for claim in claims:
+                item = next((r for r in working if r['id'] == claim['id']), None)
+                if (
+                    item is None
+                    or item['status'] != 'delivering'
+                    or item['revision'] != claim['revision']
+                    or item['delivery_attempt']['id'] != claim['attempt_id']
+                ):
+                    continue
+                item['delivery_attempt']['result'] = 'played' if completed else 'unconfirmed'
+                item['delivery_attempt']['finished_at'] = self.now().isoformat(timespec='seconds')
+                if not completed:
+                    item['status'] = 'unconfirmed'
+                elif item['repeat'] == 'none':
+                    item['status'] = 'delivered'
+                else:
+                    self._advance_repeat(item)
+                item['revision'] += 1
+                item['updated_at'] = self.now().isoformat(timespec='seconds')
+                changed = True
+            if changed:
+                self.reminders = working
+                try:
+                    self._save()
+                except ReminderCommitUncertain:
+                    raise
+                except Exception:
+                    self.reminders = before
+                    raise
+            return changed
+
+    def reminder_claims_current(self, claims: list[ReminderClaim]) -> bool:
+        with self.lock:
+            if quiet(self.reminder_policy, self.now()):
+                return False
+            return bool(claims) and all(
+                any(
+                    r['id'] == c['id']
+                    and r['revision'] == c['revision']
+                    and r['status'] == 'delivering'
+                    and r['delivery_attempt']['id'] == c['attempt_id']
+                    for r in self.reminders
+                )
+                for c in claims
+            )
 
     def due(self) -> ReminderRecord | None:
         with self.lock:
@@ -353,6 +688,8 @@ class Workspace:
             )
 
     def delivered(self, ident: str, success: bool, *, revision: object) -> bool:
+        # Compatibility for legacy in-process receipt callers. Production
+        # scheduling uses persisted claims plus finish_reminders tokens.
         # 旧回执不能结束编辑/稍后提醒后的新版本，也不能推进下一次重复提醒。
         with self.lock:
             item = next(
@@ -364,21 +701,24 @@ class Workspace:
                 return False
             before = deepcopy(self.reminders)
             if not success:
-                item['retry_after'] = (self.now() + timedelta(minutes=5)).isoformat(
-                    timespec='seconds'
-                )
+                item['delivery_attempt'] = {
+                    'id': uuid.uuid4().hex,
+                    'due': item['due'],
+                    'started_at': self.now().isoformat(timespec='seconds'),
+                    'finished_at': self.now().isoformat(timespec='seconds'),
+                    'result': 'unconfirmed',
+                }
+                item['status'] = 'unconfirmed'
             elif item['repeat'] == 'none':
                 item['status'] = 'delivered'
             else:
-                due = self._date(item['due'])
-                step = 7 if item['repeat'] == 'weekly' else 1
-                while due <= self.now() or (item['repeat'] == 'weekdays' and due.weekday() > 4):
-                    due += timedelta(days=step)
-                item['due'] = due.isoformat(timespec='seconds')
-                item.pop('retry_after', None)
+                self._advance_repeat(item)
             item['revision'] = revision + 1
+            item['updated_at'] = self.now().isoformat(timespec='seconds')
             try:
                 self._save()
+            except ReminderCommitUncertain:
+                raise
             except Exception:
                 self.reminders = before
                 raise

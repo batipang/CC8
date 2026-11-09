@@ -206,18 +206,18 @@ def build_components(
             publish_workspace=lambda: host.publish_workspace(),
             can_deliver=lambda: (
                 host.session.connection is not None
-                and not host.calibration.active
-                and not host.playback.playing
-                and not host.response.busy
-                and not host.recognition.busy
+                and not voice_busy(host)
                 and host.session.text_generation is None
-                and host.visual.generation is None
-                and host.announcements.generation is None
-                and not host.capture.endpoint.vad.talking
-                and host.response.queue.empty()
             ),
             touch=lambda: host.touch_activity(),
             announce=lambda text: host.announce(text),
+            delivery_owner=lambda: (
+                host.session.connection,
+                host.session.bound_route_token,
+                host.session.generation,
+                host.session.epoch,
+                host.session.capture_id,
+            ),
         )
     )
     device = DeviceController(
