@@ -19,7 +19,7 @@ SESSION_INTERFACES = r"""
   final Object routeLock=new Object();
   SourcesPresentation sourcesPresentation;
   boolean foreground=true,recording,visual,announcement,textSession,receiverRegistered;
-  boolean dotChatSupported,savedTasksSupported,preferenceMemorySupported,resultProvenanceSupported,resultReadingSupported,visionModesSupported,photoFollowupSupported,macWindowSupported,vocabularySupported,reportSourcesSupported,reportArchiveSupported,threadQueueSupported;
+  boolean dotChatSupported,savedTasksSupported,preferenceMemorySupported,resultProvenanceSupported,resultReadingSupported,visionModesSupported,photoFollowupSupported,macWindowSupported,vocabularySupported,reportSourcesSupported,reportArchiveSupported,threadQueueSupported,reportProgressSupported;
   final PhotoFollowupWindow photoFollowup=new PhotoFollowupWindow();
   String pendingPhotoId="",pendingPhotoForgetId="";
   JSONObject voicePreferences,speechCorrection;
@@ -611,8 +611,13 @@ SCENARIOS = r"""
     JSONObject queueArgs=new JSONObject("action","source_queue","registration_id","a".repeat(16),"revision",1);
     yes(!s.reportSourcesRequest("f".repeat(32),queueArgs,route),"queue read accepted without capability");s.threadQueueSupported=true;
     yes(s.reportSourcesRequest("f".repeat(32),queueArgs,route),"current queue read not sent");
+    JSONObject progressArgs=new JSONObject("action","restore_progress","checkpoint_id","b".repeat(32),"revision",1,"confirmed",true);
+    yes(!s.reportSourcesRequest("a".repeat(32),progressArgs,route),"restore accepted without progress capability");s.reportProgressSupported=true;
+    yes(s.reportSourcesRequest("a".repeat(32),progressArgs,route),"explicit current progress request not sent");
+    yes("b".repeat(32).equals(old.events.get(old.events.size()-1).optString("checkpoint_id")),"progress target lost");
     Link next=new Link("wifi");activate(c,next);yes(!s.threadQueueSupported&&!s.reportArchiveSupported&&!s.reportSourcesSupported&&!s.reportSourcesRequest("d".repeat(32),argsValue,route),"handover retained source capability or old route");
-    s.reportSourcesSupported=s.reportArchiveSupported=s.threadQueueSupported=true;s.pause();yes(!s.threadQueueSupported&&!s.reportArchiveSupported&&!s.reportSourcesSupported&&!s.recording&&!s.visual,"Home retained sources or opened capture");break;
+    yes(!s.reportProgressSupported,"handover retained progress capability");
+    s.reportSourcesSupported=s.reportArchiveSupported=s.threadQueueSupported=s.reportProgressSupported=true;s.pause();yes(!s.reportProgressSupported&&!s.threadQueueSupported&&!s.reportArchiveSupported&&!s.reportSourcesSupported&&!s.recording&&!s.visual,"Home retained sources or opened capture");break;
    }
    case "recognition_language":{
     long route=s.routeEpoch;

@@ -72,6 +72,7 @@ class Bridge:
         vocabulary_store=None,
         report_sources_store=None,
         report_archive_store=None,
+        report_checkpoint_store=None,
     ):
         self.diagnostics = TraceBook()
         started_at = time.monotonic()
@@ -108,6 +109,7 @@ class Bridge:
             vocabulary_store=vocabulary_store,
             report_sources_store=report_sources_store,
             report_archive_store=report_archive_store,
+            report_checkpoint_store=report_checkpoint_store,
         )
         self.calibration = components.calibration
         self.visual = components.visual

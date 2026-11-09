@@ -506,7 +506,7 @@ class FeedbackCheck {
  final Object routeLock=new Object();long route=5, activeRoute=5,routeEpoch=5;
  static class CaptureWindow{static int count;final String id="capture"+(++count);boolean startConfirmed=true;}
  CaptureWindow captureWindow=new CaptureWindow();
- boolean dotChatSupported,savedTasksSupported,preferenceMemorySupported,resultProvenanceSupported,resultReadingSupported,visionModesSupported,photoFollowupSupported,macWindowSupported,vocabularySupported,reportSourcesSupported,reportArchiveSupported,threadQueueSupported;
+ boolean dotChatSupported,savedTasksSupported,preferenceMemorySupported,resultProvenanceSupported,resultReadingSupported,visionModesSupported,photoFollowupSupported,macWindowSupported,vocabularySupported,reportSourcesSupported,reportArchiveSupported,threadQueueSupported,reportProgressSupported;
  final PhotoFollowupWindow photoFollowup=new PhotoFollowupWindow();
  String pendingPhotoId="",pendingPhotoForgetId="";
  // The transport handshake itself is covered by the capture route tests.
