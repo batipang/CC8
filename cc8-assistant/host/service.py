@@ -178,6 +178,32 @@ def retry_delay(failures):
     return min(30, 2 ** min(max(failures - 1, 0), 5))
 
 
+def worker_health(health: object, pid: object) -> str:
+    """Classify one current reply; PID metadata is not peer authentication."""
+    if pid is None:
+        return 'unavailable'
+    if not isinstance(health, dict) or type(pid) is not int or not 1 < pid < 2**31:
+        return 'invalid_owner'
+    ready = all(
+        health.get(k) is True
+        for k in ('ok', 'model_ready', 'recognition_worker', 'response_worker')
+    )
+    # A healthy old backend may still be adopted without replacing it solely
+    # because its schema lacks attribution. Do not claim verified readiness.
+    if 'health_owner_version' not in health and 'runtime_process_id' not in health:
+        return 'legacy_unverified' if ready else 'unhealthy'
+    if (
+        type(health.get('health_owner_version')) is not int
+        or health['health_owner_version'] != 1
+        or type(health.get('runtime_process_id')) is not int
+        or not 1 < health['runtime_process_id'] < 2**31
+    ):
+        return 'invalid_owner'
+    if health['runtime_process_id'] != pid:
+        return 'wrong_owner'
+    return 'ready' if ready else 'unhealthy'
+
+
 class Supervisor:
     def __init__(self):
         self.stop = threading.Event()
@@ -308,25 +334,35 @@ class Supervisor:
                         break
                     try:
                         health = query(operation='health')
-                        healthy = all(
-                            health.get(k) is True
-                            for k in ('model_ready', 'recognition_worker', 'response_worker')
-                        )
+                        state = worker_health(health, self.pid)
                     except (OSError, ValueError):
-                        healthy = False
-                    if healthy:
+                        state = 'unhealthy'
+                    # The reply may have been buffered before its worker exited.
+                    # Recheck the owned process before publishing its readiness.
+                    if self.child is not None:
+                        if self.child.poll() is not None:
+                            break
+                    elif not own_process(self.pid):
+                        break
+                    if state in ('ready', 'legacy_unverified'):
+                        # Legacy responsiveness retains the normal recovery
+                        # budget, but remains explicitly unverified externally.
                         was_ready = True
                         bad_health = 0
-                        self.state('ready', failures)
+                        self.state(state, failures)
                         if time.monotonic() - started >= 60:
                             failures = 0
                     # Loading grace applies only until this worker first becomes
                     # ready. A later outage must use the normal failure budget.
-                    elif was_ready or time.monotonic() - started > 180:
+                    elif (
+                        state in ('wrong_owner', 'invalid_owner')
+                        or was_ready
+                        or time.monotonic() - started > 180
+                    ):
                         bad_health += 1
                         if bad_health >= 3:
                             break
-                        self.state('unhealthy', failures)
+                        self.state(state, failures)
                     else:
                         self.state('starting', failures)
                 self.terminate()
@@ -377,7 +413,12 @@ def main():
             health = {'ok': False}
         print(
             json.dumps(
-                {'enabled': enabled(), 'installed': PLIST.exists(), 'health': health},
+                {
+                    'enabled': enabled(),
+                    'installed': PLIST.exists(),
+                    'health': health,
+                    'worker_health': worker_health(health, read_pid()),
+                },
                 ensure_ascii=False,
             )
         )

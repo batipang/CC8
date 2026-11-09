@@ -90,6 +90,8 @@ class StatusReporter:
             'input_quality': self.hooks.capture().input_quality.snapshot(),
             'uptime_seconds': round(time.monotonic() - self.started_at, 1),
             'runtime_instance': self.instance,
+            'health_owner_version': 1,
+            'runtime_process_id': os.getpid(),
             'resources': self.resources.sample(),
             'model_ready': True,
             'playout_receipt_supported': playback.device_can_report_playout,

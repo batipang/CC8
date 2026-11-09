@@ -2,6 +2,7 @@
 
 import json
 import io
+import os
 from contextlib import redirect_stdout
 import socket
 import tempfile
@@ -179,6 +180,9 @@ class DiagnosticsTests(unittest.TestCase):
                 report = query(path, 'diagnostics')
                 self.assertFalse(health['microphone_active'])
                 self.assertFalse(health['connected'])
+                self.assertEqual(health['health_owner_version'], 1)
+                self.assertIs(type(health['runtime_process_id']), int)
+                self.assertEqual(health['runtime_process_id'], os.getpid())
                 self.assertEqual(health['local_wake_count'], 2)
                 self.assertEqual(health['voice_asr_attempts'], 3)
                 self.assertNotIn('SECRET', json.dumps(health))
