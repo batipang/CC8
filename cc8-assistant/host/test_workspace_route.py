@@ -17,6 +17,7 @@ SESSION = JAVA / 'VoiceSession.java'
 SESSION_INTERFACES = r"""
  static class Session {
   final Object routeLock=new Object();
+  SourcesPresentation sourcesPresentation;
   boolean foreground=true,recording,visual,announcement,textSession,receiverRegistered;
   boolean dotChatSupported,savedTasksSupported,preferenceMemorySupported,resultProvenanceSupported,resultReadingSupported,visionModesSupported,photoFollowupSupported;
   final PhotoFollowupWindow photoFollowup=new PhotoFollowupWindow();
@@ -641,6 +642,36 @@ SCENARIOS = r"""
     yes(s.routeEpoch==route&&c.workspaceRevision==5,"Repeated selection preserves the current route and revision");
     yes("completed".equals(c.tasksData.optJSONObject(0).optString("status"))&&!c.taskResultUnconfirmed,"Current terminal receipt stays authoritative");break;
    }
+   case "web_sources_dialog":{
+    s.recording=true;s.minimumGeneration=7;
+    JSONObject row=new JSONObject("title","公开来源","url","https://example.com/article","access_evidence","answer_link_only");
+    Wire.Packet packet=new Wire.Packet(new JSONObject("event","web_sources","items",new JSONArray(row),"retrieved_at","2026-11-09T20:00:00+08:00","time_basis","answer_completed"));
+    s.deliver(packet,old);c.drain();c.showSources();AlertDialog dialog=c.sourcesDialog;AlertDialog.Builder first=AlertDialog.last;
+    yes(first.title.startsWith("回答来源汇总时间")&&first.items[0].contains("读取状态未知"),"real dialog promoted source evidence");
+    first.itemClick.click(dialog,0);yes(c.openedLinks==1&&c.lastLink.equals("https://example.com/article"),"current source click lost URL");
+    s.deliver(packet,old);first.itemClick.click(dialog,0);yes(c.openedLinks==1,"retired queued dialog opened a link");c.drain();yes(dialog.dismissed,"new sources kept old dialog open");
+    c.showSources();c.browserUnavailable=true;AlertDialog.Builder second=AlertDialog.last;second.itemClick.click(c.sourcesDialog,0);
+    AlertDialog fallback=c.sourcesDialog;yes(AlertDialog.last.title.equals("设备无法打开浏览器"),"browser failure lost selectable-link fallback");
+    Link next=new Link("wifi");activate(c,next);c.drain();yes(fallback.dismissed&&c.sourcesDialog==null&&c.sourceCount()==0,"handover kept fallback URL visible");
+    break;
+   }
+   case "web_sources_owner":{
+    s.recording=true;s.minimumGeneration=7;
+    JSONObject row=new JSONObject("title","公开来源","url","https://example.com/article","access_evidence","answer_link_only");
+    Wire.Packet source=new Wire.Packet(new JSONObject("event","web_sources","items",new JSONArray(row),"retrieved_at","2026-11-09T20:00:00+08:00","time_basis","answer_completed"));
+    s.deliver(source,old);SourcesPresentation retired=s.sourcesPresentation;
+    Link next=new Link("wifi");activate(c,next);c.drain();
+    yes(c.displayedSources==null&&!s.currentSourcesPresentation(retired),"queued source crossed route");
+    s.minimumGeneration=7;s.deliver(source,next);c.drain();
+    yes(c.sourceCount()==1&&c.displayedSources==s.sourcesPresentation,"current source receipt was lost");
+    yes(c.displayedSources.at(0).label().contains("读取状态未知"),"answer link promoted to fetched body");
+    SourcesPresentation current=c.displayedSources;
+    Wire.Packet clear=new Wire.Packet(new JSONObject("event","web_sources","items",new JSONArray()));
+    s.deliver(clear,next);c.drain();yes(c.sourceCount()==0&&!s.currentSourcesPresentation(current),"new receipt kept retired sources");
+    s.deliver(source,old);c.drain();yes(c.sourceCount()==0,"old transport revived source links");
+    s.deliver(source,next);s.pause();c.drain();yes(c.sourceCount()==0&&!s.recording,"Home kept source metadata or enabled capture");
+    break;
+   }
    default:throw new AssertionError("Unknown scenario");
   }}finally{s.speakerOwner.close();}
  }
@@ -670,6 +701,10 @@ class WorkspaceRouteTests(unittest.TestCase):
                 'public void workspace(',
                 'public void workspaceResult(',
                 'public void link(',
+                'public void sources(',
+                'private int sourceCount(',
+                'private void clearSources(',
+                'private void showSources(',
                 'private void renderWorkspace(',
                 'private boolean hasRunningTask(',
                 'private String taskStatus(',
@@ -709,6 +744,7 @@ class WorkspaceRouteTests(unittest.TestCase):
                 'private boolean sendWorkspace(',
                 'private boolean acceptSpeechCorrection(',
                 'boolean currentSpeechCorrection(',
+                'boolean currentSourcesPresentation(',
             )
         ]
         camera_route_bound = 'private void sendCameraEvent(' in session
@@ -774,6 +810,8 @@ class WorkspaceRouteTests(unittest.TestCase):
             + branch(session, 'photo_followup_forget_rejected')
             + '}else if("vision_begin".equals(event)){'
             + branch(session, 'vision_begin')
+            + '}else if("web_sources".equals(event)){'
+            + branch(session, 'web_sources')
             + '}' * (session[start:end].count('{') - session[start:end].count('}') + 2)
         )
         if bound:
@@ -795,6 +833,48 @@ class WorkspaceRouteTests(unittest.TestCase):
         )
         harness = harness.replace(method(harness, 'static class Session'), SESSION_INTERFACES)
         harness = harness.replace(
+            'String brainProvider="dot";',
+            'boolean foreground=true;SourcesPresentation displayedSources;AlertDialog sourcesDialog;'
+            'final TextView sourceText=new TextView();static class View{static final int GONE=8,VISIBLE=0;}String brainProvider="dot";',
+        )
+        harness = harness.replace(
+            'String text="";int color;',
+            'String text="";int color,visibility;void setVisibility(int value){visibility=value;}',
+        )
+        harness = harness.replace(
+            'void dismiss(){}',
+            'void dismiss(){dismissed=true;if(dismissListener!=null)dismissListener.accept(this);}',
+        )
+        harness = harness.replace(
+            'static Builder last;',
+            'static Builder last;Builder builder;boolean dismissed;java.util.function.Consumer<Object> dismissListener;'
+            'AlertDialog(){}AlertDialog(Builder b){builder=b;}void show(){last=builder;}void setOnDismissListener(java.util.function.Consumer<Object> listener){dismissListener=listener;}',
+        )
+        harness = harness.replace(
+            'Click positive,neutral,negative;', 'Click positive,neutral,negative,itemClick;'
+        )
+        harness = harness.replace(
+            'items=value;return this;', 'items=value;itemClick=action;return this;'
+        )
+        harness = harness.replace(
+            'void show(){last=this;}',
+            'AlertDialog create(){return new AlertDialog(this);}Builder setView(Object view){return this;}void show(){last=this;}',
+        )
+        harness = harness.replace(
+            'String brainProvider="dot";',
+            'int openedLinks;String lastLink;boolean browserUnavailable;'
+            'static class Intent{static final String ACTION_VIEW="view";final Object uri;Intent(String action,Object value){uri=value;}}'
+            'static class Uri{static String parse(String url){return url;}}'
+            'static class ActivityNotFoundException extends RuntimeException{}'
+            'void startActivity(Intent intent){if(browserUnavailable)throw new ActivityNotFoundException();openedLinks++;lastLink=(String)intent.uri;}'
+            'int dp(int value){return value;}TextView text(String value,int size,int color){TextView t=new TextView();t.text=value;return t;}'
+            'String brainProvider="dot";',
+        )
+        harness = harness.replace(
+            'void setCompoundDrawables(Object a,Object b,Object c,Object d){}',
+            'void setCompoundDrawables(Object a,Object b,Object c,Object d){}void setTextIsSelectable(boolean value){}void setPadding(int a,int b,int c,int d){}',
+        )
+        harness = harness.replace(
             'void runOnUiThread(Runnable work){work.run();}',
             'void runOnUiThread(Runnable work){ui.add(work);}',
         )
@@ -810,6 +890,19 @@ class WorkspaceRouteTests(unittest.TestCase):
         cls.temporary = tempfile.TemporaryDirectory()
         cls.addClassCleanup(cls.temporary.cleanup)
         cls.folder = Path(cls.temporary.name)
+        presentation = cls.folder / 'SourcesPresentation.java'
+        presentation.write_text(
+            (JAVA / 'SourcesPresentation.java')
+            .read_text()
+            .replace(
+                'import org.json.JSONArray;',
+                'import com.happyhome.cc8assistant.ActivityCheck.JSONArray;',
+            )
+            .replace(
+                'import org.json.JSONObject;',
+                'import com.happyhome.cc8assistant.ActivityCheck.JSONObject;',
+            )
+        )
         test = cls.folder / 'ActivityCheck.java'
         test.write_text(harness)
         handler = cls.folder / 'Handler.java'
@@ -836,6 +929,7 @@ class WorkspaceRouteTests(unittest.TestCase):
                 str(JAVA / 'SpeakerOwner.java'),
                 str(JAVA / 'SpeakerSession.java'),
                 str(JAVA / 'PhotoFollowupWindow.java'),
+                str(presentation),
                 str(test),
                 str(handler),
                 str(looper),
@@ -885,6 +979,12 @@ class WorkspaceRouteTests(unittest.TestCase):
 
     def test_photo_offers_keep_typed_current_generation_route_and_home(self):
         self.scenario('photo_offer_owner')
+
+    def test_source_receipts_and_queued_UI_follow_current_route_replacement_and_home(self):
+        self.scenario('web_sources_owner')
+
+    def test_real_sources_dialog_clicks_and_browser_fallback_keep_receipt_ownership(self):
+        self.scenario('web_sources_dialog')
 
     def test_language_controls_keep_capability_generation_route_and_home_ownership(self):
         self.scenario('recognition_language')

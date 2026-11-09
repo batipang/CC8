@@ -561,9 +561,16 @@ class MiniMaxBrain:
                         'sources',
                         {
                             'items': [
-                                {k: v for k, v in row.items() if k != 'snippet'} for row in items
+                                {
+                                    **{k: v for k, v in row.items() if k != 'snippet'},
+                                    'access_evidence': 'search_result_returned',
+                                    'observed_at': retrieved,
+                                    'body_verified': False,
+                                }
+                                for row in items
                             ],
                             'retrieved_at': retrieved,
+                            'time_basis': 'search_response',
                         },
                     )
             except MiniMaxError as error:

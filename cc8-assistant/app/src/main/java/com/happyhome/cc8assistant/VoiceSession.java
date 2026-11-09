@@ -40,7 +40,7 @@ final class VoiceSession {
 
     void heard(String text);
 
-    void sources(JSONArray items, String retrievedAt);
+    void sources(SourcesPresentation update);
 
     void brain(String provider);
 
@@ -86,6 +86,7 @@ final class VoiceSession {
   private volatile String pendingPhotoId = "", pendingPhotoForgetId = "";
   private final PhotoFollowupWindow photoFollowup = new PhotoFollowupWindow();
   private volatile boolean foreground, recording, announcement;
+  private volatile SourcesPresentation sourcesPresentation;
   private volatile int announcementGeneration;
   private volatile ServerSocket server;
   private volatile Socket socket;
@@ -262,6 +263,16 @@ final class VoiceSession {
     lan.release();
   }
 
+  boolean currentSourcesPresentation(SourcesPresentation update) {
+    synchronized (routeLock) {
+      return foreground
+          && update != null
+          && sourcesPresentation == update
+          && currentRoute(update.route)
+          && update.generation >= minimumGeneration;
+    }
+  }
+
   private void closeSocket() {
     final Link usb, wifi;
     final long route;
@@ -270,6 +281,7 @@ final class VoiceSession {
       wifi = wifiLink;
       activeLink = null;
       route = routeEpoch;
+      sourcesPresentation = null;
       photoFollowup.clear();
       pendingPhotoId = pendingPhotoForgetId = "";
       photoFollowupSupported =
@@ -391,6 +403,7 @@ final class VoiceSession {
       }
       boolean captureWasActive = currentCapture != null && currentCapture.nativeReady;
       if (changed) {
+        sourcesPresentation = null;
         // A reused USB Link after Wi-Fi is still a new activation. Invalidate
         // queued workspace callbacks before publishing this route's ready state.
         routeEpoch++;
@@ -533,6 +546,7 @@ final class VoiceSession {
       if (activeLink != link) return;
       activeLink = null;
       routeEpoch++;
+      sourcesPresentation = null;
       photoFollowup.clear();
       pendingPhotoId = pendingPhotoForgetId = "";
       photoFollowupSupported =
@@ -1080,8 +1094,18 @@ final class VoiceSession {
         } else if ("saved_task_result".equals(event)) {
           if (foreground) listener.savedTasks(j);
         } else if ("web_sources".equals(event)) {
-          if ((recording || visual || textSession) && p.generation >= minimumGeneration)
-            listener.sources(j.optJSONArray("items"), j.optString("retrieved_at"));
+          if (foreground
+              && (recording || visual || textSession)
+              && p.generation >= minimumGeneration) {
+            sourcesPresentation =
+                new SourcesPresentation(
+                    j.optJSONArray("items"),
+                    j.optString("retrieved_at"),
+                    j.optString("time_basis"),
+                    route,
+                    p.generation);
+            listener.sources(sourcesPresentation);
+          }
         } else if ("cancel".equals(event)) {
           if (p.generation < minimumGeneration
               || (visual && p.generation < visualGeneration)
@@ -1090,6 +1114,8 @@ final class VoiceSession {
           minimumGeneration = Math.max(minimumGeneration, p.generation);
           photoFollowup.clear();
           pendingPhotoForgetId = "";
+          sourcesPresentation = new SourcesPresentation(null, "", "", route, p.generation);
+          listener.sources(sourcesPresentation);
           if (Boolean.TRUE.equals(j.opt("speech_correction_cleared"))) clearSpeechCorrection(route);
           if (visual) {
             visual = false;

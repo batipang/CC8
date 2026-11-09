@@ -182,6 +182,9 @@ class InterruptedTaskNoticeTests(unittest.TestCase):
         if 'long route' in method(source, 'public void workspace('):
             adapters = """void workspace(JSONObject data){workspace(data,session.routeEpoch);}
 void link(boolean connected){link(connected,++session.routeEpoch);}"""
+        adapters += (
+            'void clearSources(){}'  # Source UI ownership is exercised by its route fixture.
+        )
         path.write_text(
             HARNESS.replace('METHODS', '\n'.join(methods)).replace('ROUTE_ADAPTERS', adapters)
         )

@@ -1,5 +1,12 @@
 # Changelog
 
+## Backend 0.16.15 / Assistant 0.9.79 — traceable web-source evidence
+
+- Distinguish answer-only links, completed/failed page-operation receipts and actual MiniMax search-result returns. A model citation or operation completion cannot establish fetched page contents, publication dates or event dates. Keep the per-turn ledger bounded; only matching owned completed RPC items can annotate links, with no implicit re-fetch or prior-turn evidence reuse.
+- Carry the timestamp basis through the actual response worker and show answer-source collection separately from search-response time. Keep provider-supplied publication labels separate from unknown event dates; guide factual answers to distinguish dates, conflicting sources, unavailable pages and new searches from old context or inference.
+- Add immutable native source snapshots and current route/generation/UI identity checks. New results, cancellation, Home and handover retire old source callbacks and close source/link-fallback dialogs. A stale click cannot open a browser; a current explicit click preserves the bounded public URL and selectable-link fallback without starting capture.
+- This source/UI batch remains a software candidate. The preceding photo-follow-up PR and its fixed-Gradle-source CI remain independently tracked; no P0/P1, real factual-query quality or final 72-hour acceptance is inferred from offline fixtures.
+
 ## Backend 0.16.14 / Assistant 0.9.77 — explicit same-photo follow-up
 
 - Replace the unreliable GitHub release-asset API download in CI with Gradle's official download entry and one independent Huawei Cloud mirror fallback. Keep Gradle 8.11.1, its exact 136920070-byte size and original SHA-256 pin. Each HTTPS-only source uses a fresh partial file; neither failed downloads, missing files nor matching-size corrupt bytes can reach extraction or PATH publication. Exercise the exact workflow and a real full mirror download after a controlled primary HTTP failure.
