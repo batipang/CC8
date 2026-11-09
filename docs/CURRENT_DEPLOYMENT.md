@@ -1,5 +1,13 @@
 # 当前 CC8 部署与验收范围
 
+## 0.16.1／code92 语音工作汇报
+
+[PR #449](https://github.com/batipang/CC8/pull/449) 与 [main 八项 CI](https://github.com/batipang/CC8/actions/runs/42545248506) 通过，源码 `574eefc` 已部署为后台0.16.1，原签名APK92及检测器7保持。五项后台维护19.315秒完成，独立终审核对原profile、完整LaunchAgent／ENV、Interactive策略、owner Dot、MiniMax、双线路和双端停采。登录shell与最小PATH各以真实本机只读RPC读到5项，固定第二项追问不增加扫描；没有模型、播报或采集调用。
+
+正式实例仅做一次文字“汇报工作”的缺时间澄清，收到一条设备播完回执；未登记或读取真实来源，没有ASR／麦克风或大脑回合。原检查器因错误要求播报后的参考音计数为零而记failed，原失败保留；独立只读核对同一请求、同一条135790采样的双端扬声器参考和完成回执后确认送达，没有重发。旧status缓存不作为当前请求证据。该结果不补判真人或声学验收。
+
+下一后台0.16.2候选增加明确起止时间及设备确认后的未播账本，APK92保持；当前运行仍0.16.1。[使用范围](DESKTOP_WORK_REPORTS.md)。最终72小时未启动。
+
 ## 0.16.0／code92 所选聊天工作汇报
 
 [PR #448](https://github.com/batipang/CC8/pull/448) 与 [main 八项 CI](https://github.com/batipang/CC8/actions/runs/42540733245) 通过，源码 `762523e` 已部署为后台0.16.0／原签名助手0.9.55（code92），检测器7保持。九项组合维护52.235秒完成，安装流摘要、系统安装回调及装后哈希均确认。code93前向恢复包只在原76源码修改版本声明，签名与版本递增核验及[独立八项CI](https://github.com/batipang/CC8/actions/runs/42541483995)通过，尚未使用。
@@ -8,7 +16,7 @@
 
 组合更新后另行独立终审确认原profile／完整LaunchAgent及ENV、Interactive策略、owner Codex、Dot大脑和MiniMax ASR／TTS保持，USB优先／Wi-Fi就绪，双端麦克风、相机、播放与校准关闭，采集模型子进程退出且零新增请求。该批只验证新页面及更新，不补判真人、声学或完整P0／P1验收，72小时未启动。
 
-下一后台候选0.16.1把显式时间汇报与固定编号追问接入已有语音／文字入口；当前部署仍为0.16.0，APK92保持。[使用范围](DESKTOP_WORK_REPORTS.md)。
+该段保留0.16.0部署时记录，之后的0.16.1更新见顶部；APK92保持。[使用范围](DESKTOP_WORK_REPORTS.md)。
 
 ## 0.15.76／code91 双段定位与工具批次前缀
 

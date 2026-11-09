@@ -8,8 +8,22 @@ import time
 from typing import Callable, ContextManager
 from dot_client import Cancelled, DotError
 from work_reports import BEIJING, MAX_CARDS, ReportWindow
+from report_time import ReportRange, ReportTimeError, parse_range, range_compound, window_label
+from report_progress import (
+    DeliveryPlan,
+    DeliveryToken,
+    ReportCapacityError,
+    ReportProgress,
+    SINCE_NOTES,
+    key,
+    version,
+)
 
 PERIOD_NAMES = {
+    '上次汇报后': 'since_last',
+    '上次汇报之后': 'since_last',
+    '自上次汇报以来': 'since_last',
+    '从上次汇报到现在': 'since_last',
     '过去半小时': 'half_hour',
     '最近半小时': 'half_hour',
     '近半小时': 'half_hour',
@@ -29,7 +43,12 @@ PERIOD_NAMES = {
     '过去三十分钟': 'half_hour',
     '最近三十分钟': 'half_hour',
 }
-PERIOD_LABELS = {'half_hour': '过去半小时', 'two_hours': '过去两小时', 'today': '今天'}
+PERIOD_LABELS = {
+    'half_hour': '过去半小时',
+    'two_hours': '过去两小时',
+    'today': '今天',
+    'since_last': '上次汇报后的新增及待补播结果',
+}
 PERIOD_PATTERN = '|'.join(PERIOD_NAMES)
 PREFIX = r'(?:请)?(?:帮我)?'
 REPORT = re.compile(
@@ -73,7 +92,7 @@ CONTINUE = re.compile(
 @dataclass(frozen=True)
 class ReportCommand:
     kind: str
-    value: str | int = ''
+    value: str | int | ReportRange = ''
 
 
 def ordinal(text):
@@ -95,8 +114,10 @@ def report_command(text, *, followup=False):
     text = ''.join(text.split()).rstrip('。.!！?？')
     if match := REPORT.fullmatch(text) or QUERY.fullmatch(text):
         return ReportCommand('report', PERIOD_NAMES[match[1]])
-    if COMPOUND.fullmatch(text):
+    if COMPOUND.fullmatch(text) or range_compound(text):
         return ReportCommand('continue')
+    if value := parse_range(text):
+        return ReportCommand('custom', value)
     if match := DETAIL.fullmatch(text):
         if followup or '汇报' in text:
             return ReportCommand('item', ordinal(match[1]))
@@ -138,6 +159,7 @@ class ReportReply:
     source_title: str = ''
     operation: str = 'clarification'
     items: int = 0
+    delivery: tuple[DeliveryToken | None, ...] = ()
 
 
 def item_text(item, number):
@@ -148,6 +170,8 @@ def item_text(item, number):
         '已记录完成时间（北京时间）：' + completed,
         item['excerpt'],
     ]
+    if item.get('since_status') in SINCE_NOTES:
+        lines.insert(1, SINCE_NOTES[item['since_status']])
     if item['excerpt_truncated']:
         lines.append('摘录已截短，本次没有读取完整原答复。')
     lines.append(
@@ -163,13 +187,20 @@ def item_text(item, number):
 
 def report_text(report):
     def date(value):
-        return datetime.fromtimestamp(value, BEIJING).strftime('%m-%d %H:%M:%S')
+        return datetime.fromtimestamp(value, BEIJING).strftime('%Y-%m-%d %H:%M:%S')
 
     lines = [
         '所选聊天工作汇报 · 只读快照',
         '来源：' + report['source_title'],
         f'北京时间：{date(report["window_start"])} 至 {date(report["window_end"])}（含起点，不含终点）',
     ]
+    since = report.get('view') == 'since_last_unheard'
+    if since:
+        lines.append(
+            f'上次读取截止：{date(report["since_last_end"])}；重新检查原范围以收集迟到结果。'
+            f'本次来源读到{report["source_completed_items_read"]}项，跳过{report["delivered_items_skipped"]}项已确认播完的摘要；'
+            f'内存账本待播{report["pending_items"]}项，本页最多{MAX_CARDS}项。'
+        )
     if not report['coverage_complete']:
         lines.append('覆盖不完整，不能据此断言没有其他成果。')
     lines.append(
@@ -178,17 +209,20 @@ def report_text(report):
         f'读取时仍进行中：{report["active_turns_seen"]}。'
     )
     if report['empty_confirmed']:
-        lines.append('已读取范围内没有本窗口的已完成答复。')
+        lines.append(
+            '本次没有新增或待补播结果。' if since else '已读取范围内没有本窗口的已完成答复。'
+        )
     lines.extend(item_text(item, n + 1) for n, item in enumerate(report['items']))
     return '\n\n'.join(lines)
 
 
 class ReportVoice:
-    def __init__(self, hooks, *, clock=time.monotonic):
-        self.hooks, self.clock = hooks, clock
+    def __init__(self, hooks, *, clock=time.monotonic, wall_clock=time.time):
+        self.hooks, self.clock, self.wall_clock = hooks, clock, wall_clock
         self.snapshot = None
         self.followup = False
         self.revision = 0
+        self.progress = self.delivery_plan = None
 
     def command(self, text):
         with self.hooks.lock:
@@ -197,11 +231,19 @@ class ReportVoice:
     def forget(self):
         with self.hooks.lock:
             self.snapshot, self.followup = None, False
+            self.delivery_plan = None
             self.revision += 1
+
+    def clear(self):
+        """Source changes and shutdown erase both content and delivery state."""
+        with self.hooks.lock:
+            self.forget()
+            self.progress = None
 
     def begin(self):
         with self.hooks.lock:
             self.snapshot, self.followup = None, True
+            self.delivery_plan = None
             self.revision += 1
             return self.revision
 
@@ -230,7 +272,12 @@ class ReportVoice:
             ):
                 if type(report[name]) is not int or not 0 <= report[name] <= 1000:
                     return False
+            seen = set()
             for item in report['items']:
+                ident = key(item)
+                if ident in seen:
+                    return False
+                seen.add(ident)
                 if (
                     not isinstance(item['excerpt'], str)
                     or not 0 < len(item['excerpt']) <= 500
@@ -270,7 +317,7 @@ class ReportVoice:
         except (KeyError, TypeError, ValueError, AttributeError):
             return False
 
-    def remember(self, source, report, expected_revision=None):
+    def remember(self, source, report, expected_revision=None, progress=None):
         with self.hooks.lock:
             if expected_revision is not None and expected_revision != self.revision:
                 return False
@@ -282,8 +329,43 @@ class ReportVoice:
             ):
                 return False
             self.snapshot = (context, self.clock() + 600, deepcopy(report))
+            self.progress = progress if progress is not None else ReportProgress(source, report)
+            self.delivery_plan = None
             self.followup = True
             return True
+
+    def confirm(self, token):
+        with self.hooks.lock:
+            if self.progress is not None and self.progress.source is not self.hooks.context()[0]:
+                self.clear()
+            if self.delivery_plan is not None and self.progress is not None:
+                self.delivery_plan.confirm(token, self.progress)
+
+    def delivery(self, messages, requirements):
+        self.delivery_plan = DeliveryPlan(self.progress, requirements)
+        return tuple(self.delivery_plan.token(index) for index in range(len(messages)))
+
+    def resolve(self, command):
+        if command.kind == 'custom':
+            if not isinstance(command.value, ReportRange):
+                raise ValueError('Invalid report range')
+            return command.value.resolve(self.wall_clock())
+        if command.value != 'since_last':
+            return command.value
+        if self.progress is None:
+            raise ReportTimeError(
+                '尚无本来源的汇报基线，请先明确查询“汇报今天的工作”或指定起止时间；重启或更换来源后需重新建立基线。'
+            )
+        now = self.wall_clock()
+        if type(now) not in (int, float) or not self.progress.end < now < 253402300799:
+            raise ReportTimeError(
+                '当前时间尚未晚于上次读取截止，请检查Mac系统时间或稍后重试；未播记录保留。'
+            )
+        if int(now) - self.progress.start > 31 * 86400:
+            raise ReportTimeError(
+                '原汇报范围已超过31天，请先查询待播编号详情，再明确指定新的时间范围；未播记录保留。'
+            )
+        return ReportWindow(self.progress.start, int(now))
 
     @staticmethod
     def same_context(left, right):
@@ -296,9 +378,12 @@ class ReportVoice:
     def answer(self, command, is_current):
         if not is_current():
             raise Cancelled('Report cancelled')
+        with self.hooks.lock:
+            if self.progress is not None and self.progress.source is not self.hooks.context()[0]:
+                self.clear()
         if command.kind == 'period':
             return self.notice(
-                '请明确说“汇报过去半小时的工作”、“汇报过去两小时的工作”或“汇报今天的工作”。'
+                '请明确说“汇报过去半小时的工作”、“汇报今天的工作”、“汇报今天上午八点到上午十点的工作”或“汇报上次汇报后的工作”。'
             )
         if command.kind == 'continue':
             return self.notice(
@@ -326,6 +411,8 @@ class ReportVoice:
                 item = report['items'][number - 1]
                 evidence = item['evidence']
                 messages = [f'第{number}项原答复摘录。', item['excerpt']]
+                if item.get('since_status') in SINCE_NOTES:
+                    messages.insert(1, SINCE_NOTES[item['since_status']])
                 if item['excerpt_truncated']:
                     messages.append('摘录已截短，本次没有读取完整原答复。')
                 messages.append(
@@ -334,16 +421,29 @@ class ReportVoice:
                 if not item['evidence_complete']:
                     messages.append('执行回执未读取完整。')
                 messages.append('回合完成不代表任务已验证，以上原答复尚未独立核验。')
-                return ReportReply(text, tuple(messages), report['source_title'], 'item', 1)
-        if command.kind != 'report':
+                requirements = {(key(item), version(item)): set(range(len(messages)))}
+                return ReportReply(
+                    text,
+                    tuple(messages),
+                    report['source_title'],
+                    'item',
+                    1,
+                    self.delivery(messages, requirements),
+                )
+        if command.kind not in ('report', 'custom'):
             raise ValueError('Invalid report command')
         with self.hooks.lock:
-            revision = self.begin()
             context = self.hooks.context()
             source = context[0]
             if source is None or context[1] is None:
                 return self.notice('请先在设置的“Dot 聊天接续”中选择一个聊天，作为工作汇报来源。')
-        report = self.hooks.read(source, command.value, is_current)
+            try:
+                window = self.resolve(command)
+            except ReportTimeError as error:
+                return self.notice(str(error))
+            previous = self.snapshot
+            revision = self.begin()
+        report = self.hooks.read(source, window, is_current)
         with self.hooks.lock:
             if (
                 not is_current()
@@ -351,16 +451,45 @@ class ReportVoice:
                 or not self.same_context(self.hooks.context(), context)
             ):
                 raise Cancelled('Report cancelled')
-            if not self.remember(source, report, revision):
+            if not self.valid_report(source, report) or (
+                isinstance(window, ReportWindow)
+                and (report['window_start'], report['window_end']) != (window.start, window.end)
+            ):
+                raise DotError('Work report result is unconfirmed')
+            since = command.value == 'since_last'
+            progress = None
+            if since:
+                try:
+                    progress, report = self.progress.merge(report)
+                except ReportCapacityError:
+                    if (
+                        previous is not None
+                        and self.clock() < previous[1]
+                        and self.same_context(previous[0], context)
+                    ):
+                        self.snapshot = previous
+                    return self.notice(
+                        '汇报账本已达256项容量，原待播记录保留；请先查看待播编号详情，再明确查询新的时间范围。'
+                    )
+            if not self.remember(source, report, revision, progress):
                 raise DotError('Work report result is unconfirmed')
             text = report_text(report)
-            messages = [
-                f'这是{PERIOD_LABELS[command.value]}所选聊天的只读汇报。原答复尚未独立核验。'
-            ]
+            label = (
+                window_label(window)
+                if isinstance(window, ReportWindow) and not since
+                else PERIOD_LABELS[command.value]
+            )
+            messages = [f'这是{label}所选聊天的只读汇报。原答复尚未独立核验。']
+            if since:
+                messages.append('重新检查原汇报范围，保留未确认播完的摘要，并收集迟到结果。')
             if not report['coverage_complete']:
                 messages.append('读取覆盖不完整，不能据此判断其他成果。')
             if report['empty_confirmed']:
-                messages.append('已读取范围内没有本窗口的已完成答复。')
+                messages.append(
+                    '本次没有新增或待补播结果。'
+                    if since
+                    else '已读取范围内没有本窗口的已完成答复。'
+                )
             elif not report['items']:
                 messages.append('这次未取得可播报的完成答复，不能据此判断没有成果。')
             else:
@@ -368,7 +497,14 @@ class ReportVoice:
                     f'本次读到{len(report["items"])}项已完成答复。'
                     + ('先播报前三项。' if len(report['items']) > 3 else '')
                 )
+            requirements = {}
             for number, item in enumerate(report['items'][:3], 1):
+                if item.get('since_status') in SINCE_NOTES:
+                    messages.append(SINCE_NOTES[item['since_status']])
+                indices = {len(messages)}
+                if item.get('since_status') in SINCE_NOTES:
+                    indices.add(len(messages) - 1)
+                requirements[key(item), version(item)] = indices
                 messages.append(
                     f'第{number}项，原答复摘录：'
                     + item['excerpt'][:80]
@@ -388,5 +524,10 @@ class ReportVoice:
                 )
             messages.append('本次结果卡可在最近 Dot 完整结果中查看；可按屏幕上的编号查询详情。')
             return ReportReply(
-                text, tuple(messages), report['source_title'], 'report', len(report['items'])
+                text,
+                tuple(messages),
+                report['source_title'],
+                'report',
+                len(report['items']),
+                self.delivery(messages, requirements),
             )

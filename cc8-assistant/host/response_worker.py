@@ -277,7 +277,20 @@ class ResponseWorker:
                     self.hooks.diagnostics().link_turn(
                         generation, self.hooks.brain().last_metrics.get('turn_id')
                     )
-                if not self.hooks.speak(clause, generation):
+                # A successful TTS call is not delivery. Capture this clause's
+                # immutable plan token while the router is suspended at yield;
+                # advance only after a matched device play_done receipt.
+                brain = self.hooks.brain()
+                delivery = getattr(brain, 'current_report_delivery', None)
+                diagnostics = self.hooks.diagnostics()
+                before = diagnostics.confirmed_playback_count(generation) if delivery else None
+                try:
+                    played = self.hooks.speak(clause, generation)
+                finally:
+                    if delivery and diagnostics.confirmed_playback_count(generation) > before:
+                        owner, token = delivery
+                        owner.confirm(token)
+                if not played:
                     completed = False
                     break
                 spoken.append(clause)

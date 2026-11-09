@@ -21,6 +21,7 @@ class BrainRouter:
         self.minimax = minimax
         self.dot = dot or DotBrain()
         self.work_reports = None
+        self.current_report_delivery = None
         self.select(selected)
         self.last_metrics = {}
 
@@ -36,7 +37,7 @@ class BrainRouter:
         cleanup_all(
             self.cancel,
             self.dot.close,
-            lambda: self.work_reports.forget() if self.work_reports else None,
+            lambda: self.work_reports.clear() if self.work_reports else None,
         )
 
     def prepare(self, is_current=lambda: True):
@@ -60,6 +61,7 @@ class BrainRouter:
         return update
 
     def vision_clauses(self, text, image, history, is_current=lambda: True, on_web=None):
+        self.current_report_delivery = None
         if self.work_reports:
             self.work_reports.forget()
         self.last_metrics = {'provider': 'dot', 'vision': True}
@@ -99,6 +101,7 @@ class BrainRouter:
             ) from None
 
     def clauses(self, text, history, is_current=lambda: True, on_web=None):
+        self.current_report_delivery = None
         if not is_current():
             raise Cancelled('Turn cancelled')
         match = DELEGATE.match(text)
@@ -128,10 +131,17 @@ class BrainRouter:
                             'handoff_source_title': reply.source_title,
                         },
                     )
-                for clause in reply.spoken:
+                for index, clause in enumerate(reply.spoken):
                     if not is_current():
                         raise Cancelled('Report cancelled')
-                    yield clause
+                    token = reply.delivery[index] if reply.delivery else None
+                    marker = (self.work_reports, token) if token is not None else None
+                    self.current_report_delivery = marker
+                    try:
+                        yield clause
+                    finally:
+                        if self.current_report_delivery is marker:
+                            self.current_report_delivery = None
             except Exception:
                 self.last_metrics = {'provider': 'work_report', 'completed': False}
                 raise
