@@ -19,7 +19,7 @@ SESSION_INTERFACES = r"""
   final Object routeLock=new Object();
   SourcesPresentation sourcesPresentation;
   boolean foreground=true,recording,visual,announcement,textSession,receiverRegistered;
-  boolean dotChatSupported,savedTasksSupported,preferenceMemorySupported,resultProvenanceSupported,resultReadingSupported,visionModesSupported,photoFollowupSupported,macWindowSupported;
+  boolean dotChatSupported,savedTasksSupported,preferenceMemorySupported,resultProvenanceSupported,resultReadingSupported,visionModesSupported,photoFollowupSupported,macWindowSupported,vocabularySupported;
   final PhotoFollowupWindow photoFollowup=new PhotoFollowupWindow();
   String pendingPhotoId="",pendingPhotoForgetId="";
   JSONObject voicePreferences,speechCorrection;
@@ -117,6 +117,8 @@ SESSION_INTERFACES = r"""
  void speechCorrection(JSONObject state,long route){}
  int preferenceReceipts;
  void preferenceResult(JSONObject data,long route){preferenceReceipts++;}
+ int vocabularyReceipts;
+ void vocabularyResult(JSONObject data,long route){vocabularyReceipts++;}
  void announcement(){}
  void captureRejected(int stoppedEpoch){}
  void playback(boolean active){}void caption(String value,String mood){}void state(String value,String message){}
@@ -569,6 +571,32 @@ SCENARIOS = r"""
     s.visionModesSupported=true;s.pause();yes(!s.visionModesSupported&&!s.requestVision("ocr"),"Home retained OCR");
     break;
    }
+   case "environment_profile":{
+    long route=s.routeEpoch;
+    JSONObject state=new JSONObject("version",1,"revision",4,"speech_rate","normal","natural_barge",true,"supported",true,
+      "environment_profiles_supported",true,"environment_profile","normal");
+    Wire.Packet receipt=new Wire.Packet(new JSONObject("event","voice_preferences","voice_preferences",state,"ok",true));
+    s.deliver(receipt,old);c.drain();int count=old.events.size();
+    yes(s.setEnvironmentProfile("quiet",4,route),"current environment setting not sent");
+    JSONObject sent=old.events.get(count);
+    yes("environment_profile_set".equals(sent.optString("event"))&&"quiet".equals(sent.optString("profile"))&&sent.optInt("revision",-1)==4,"environment request changed scope");
+    yes(!s.setEnvironmentProfile("automatic",4,route),"unknown preset was sent");
+    state.values.put("environment_profile","invalid");s.deliver(receipt,old);yes(!s.setEnvironmentProfile("normal",4,route),"invalid typed snapshot enabled controls");
+    state.values.put("environment_profile","normal");s.deliver(receipt,old);
+    Link next=new Link("wifi");activate(c,next);yes(!s.setEnvironmentProfile("quiet",4,route),"old environment dialog wrote through handover");
+    s.deliver(receipt,next);s.pause();yes(!s.setEnvironmentProfile("normal",4,s.routeEpoch)&&!s.recording,"Home retained settings or opened mic");break;
+   }
+   case "vocabulary_request":{
+    long route=s.routeEpoch;JSONObject argsValue=new JSONObject("action","list");int count=old.events.size();
+    yes(!s.vocabularyRequest("a".repeat(32),argsValue,route),"unsupported vocabulary accepted");s.vocabularySupported=true;
+    yes(s.vocabularyRequest("a".repeat(32),argsValue,route)&&old.events.size()==count+1,"current wordlist request missing");
+    JSONObject sent=old.events.get(count);yes("vocabulary_request".equals(sent.optString("event"))&&"list".equals(sent.optString("action")),"wordlist event wrong");
+    argsValue.values.put("event","session_start");yes(!s.vocabularyRequest("b".repeat(32),argsValue,route)&&old.events.size()==count+1,"wordlist overrode event");
+    argsValue.values.remove("event");s.deliver(new Wire.Packet(new JSONObject("event","vocabulary_result","request_id","a".repeat(32))),old);yes(c.vocabularyReceipts==1,"current receipt lost");
+    Link next=new Link("wifi");activate(c,next);yes(!s.vocabularySupported&&!s.vocabularyRequest("c".repeat(32),argsValue,route),"handover retained capability/editor");
+    s.deliver(new Wire.Packet(new JSONObject("event","vocabulary_result")),old);yes(c.vocabularyReceipts==1,"old route receipt reached wordlist");
+    s.vocabularySupported=true;s.pause();yes(!s.vocabularySupported&&!s.recording&&!s.visual,"Home retained wordlist capability or capture");break;
+   }
    case "recognition_language":{
     long route=s.routeEpoch;
     JSONObject state=new JSONObject("version",1,"revision",4,"speech_rate","slow","natural_barge",false,"supported",true,
@@ -756,6 +784,8 @@ class WorkspaceRouteTests(unittest.TestCase):
                 'JSONObject voicePreferences(',
                 'boolean setVoicePreferences(',
                 'boolean setRecognitionLanguage(',
+                'boolean setEnvironmentProfile(',
+                'boolean vocabularyRequest(',
                 'boolean preferenceRequest(',
                 'private boolean sendWorkspace(',
                 'private boolean acceptSpeechCorrection(',
@@ -810,6 +840,8 @@ class WorkspaceRouteTests(unittest.TestCase):
             + branch(session, 'voice_preferences')
             + '}else if("preference_result".equals(event)){'
             + branch(session, 'preference_result')
+            + '}else if("vocabulary_result".equals(event)){'
+            + branch(session, 'vocabulary_result')
             + '}else if("speech_correction".equals(event)){'
             + branch(session, 'speech_correction')
             + '}else if("announcement_begin".equals(event)){'
@@ -983,6 +1015,12 @@ class WorkspaceRouteTests(unittest.TestCase):
 
     def test_explicit_ocr_request_has_current_capability_nonce_and_one_route(self):
         self.scenario('ocr_request')
+
+    def test_environment_setting_keeps_current_typed_snapshot_route_and_home(self):
+        self.scenario('environment_profile')
+
+    def test_vocabulary_requests_cannot_override_events_or_cross_route_and_home(self):
+        self.scenario('vocabulary_request')
 
     def test_mac_window_uses_current_capability_nonce_and_never_camera_capture(self):
         self.scenario('mac_window_request')

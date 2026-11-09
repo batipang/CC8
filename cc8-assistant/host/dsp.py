@@ -11,6 +11,7 @@ from echo_processors import (
 )
 from recognition_commands import STOP_COMMANDS as STOP_COMMANDS
 from recognition_echo import resembles_playback as resembles_playback
+from recognition_environment import profile as environment_profile
 
 
 UTTERANCE_TOO_LONG = object()
@@ -232,12 +233,13 @@ class NearSpeechDetector:
     # dBFS 阈值越接近 0 越严格；声学证据不是声纹，不能辨别具体说话人。
     """Local WebRTC VAD plus residual energy/correlation; not speaker identity."""
 
-    MIN_DBFS = -43.0
-    MAX_DBFS = -34.0
-    NOISE_MARGIN_DB = 12.0
+    NORMAL_ENVIRONMENT = environment_profile('normal')
+    MIN_DBFS = NORMAL_ENVIRONMENT.minimum_dbfs
+    MAX_DBFS = NORMAL_ENVIRONMENT.maximum_dbfs
+    NOISE_MARGIN_DB = NORMAL_ENVIRONMENT.noise_margin_db
     CONFIRM_WINDOW = 24
-    CONFIRM_MIN_FRAMES = 20
-    CONFIRM_VOTES = 16
+    CONFIRM_MIN_FRAMES = NORMAL_ENVIRONMENT.confirmation_frames
+    CONFIRM_VOTES = NORMAL_ENVIRONMENT.confirmation_votes
 
     def __init__(self, vad=None):
         if vad is None:
@@ -245,7 +247,13 @@ class NearSpeechDetector:
 
             vad = webrtcvad.Vad(2)
         self.vad = vad
+        self.environment = self.NORMAL_ENVIRONMENT
         self.reset()
+
+    def set_environment(self, name):
+        value = environment_profile(name)
+        self.reset()
+        self.environment = value
 
     def reset(self):
         self.votes = deque(maxlen=self.CONFIRM_WINDOW)
@@ -283,7 +291,10 @@ class NearSpeechDetector:
         if any(len(x) != FRAME for x in (cleaned, mic, reference)):
             raise ValueError('Near speech requires 10 ms frames')
         db = level(cleaned)
-        threshold = max(self.MIN_DBFS, min(self.MAX_DBFS, self.noise + self.NOISE_MARGIN_DB))
+        setting = self.environment
+        threshold = max(
+            setting.minimum_dbfs, min(setting.maximum_dbfs, self.noise + setting.noise_margin_db)
+        )
         raw = np.rint(np.clip(cleaned * 1.5, -0.98, 0.98) * 32768).astype('<i2').tobytes()
         speech = bool(self.vad.is_speech(raw, RATE))
         self.speech = speech
@@ -310,8 +321,8 @@ class NearSpeechDetector:
         self.voiced = speech and db > threshold and not echo_only
         self.votes.append(self.voiced)
         self.credible = (
-            len(self.votes) >= self.CONFIRM_MIN_FRAMES
-            and sum(self.votes) >= self.CONFIRM_VOTES
+            len(self.votes) >= setting.confirmation_frames
+            and sum(self.votes) >= setting.confirmation_votes
             and self.voiced
         )
         return self.voiced, self.credible

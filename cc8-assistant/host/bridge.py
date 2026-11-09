@@ -69,6 +69,7 @@ class Bridge:
         wake_window_seconds=60,
         capture_frontend='mono',
         preference_memory=None,
+        vocabulary_store=None,
     ):
         self.diagnostics = TraceBook()
         started_at = time.monotonic()
@@ -102,6 +103,7 @@ class Bridge:
             wake_word=WAKE_WORD,
             dot_runtime=lambda: dot_runtime_status(),
             preference_memory=preference_memory,
+            vocabulary_store=vocabulary_store,
         )
         self.calibration = components.calibration
         self.visual = components.visual
@@ -117,6 +119,7 @@ class Bridge:
         self.chats = components.chats
         self.saved_tasks = components.saved_tasks
         self.preferences = components.preferences
+        self.vocabulary = components.vocabulary
         if isinstance(self.brain, BrainRouter):
             self.brain.preferences = self.preferences
             self.brain.work_reports = self.chats.voice

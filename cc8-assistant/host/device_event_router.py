@@ -44,6 +44,7 @@ class DeviceEventRouter:
     read_result: Callable[[dict], None] = lambda data: None
     correction_action: Callable[[dict], None] = lambda data: None
     preference_action: Callable[[dict], None] = lambda data: None
+    vocabulary_action: Callable[[dict], None] = lambda data: None
 
     def on_event(self, j):
         validate_device_event(j)
@@ -96,6 +97,8 @@ class DeviceEventRouter:
             self.saved_tasks.request(j)
         elif event == 'preference_request':
             self.preference_action(j)
+        elif event == 'vocabulary_request':
+            self.vocabulary_action(j)
         elif event == 'result_read_request':
             self.read_result(j)
         elif event == 'speech_correction_action':
@@ -158,6 +161,8 @@ class DeviceEventRouter:
             self.session.set_voice_preferences(j)
         elif event == 'recognition_language_set':
             self.session.set_recognition_language(j)
+        elif event == 'environment_profile_set':
+            self.session.set_environment_profile(j)
         elif event == 'session_start':
             self.session.start_capture(j)
         elif event == 'session_stop':

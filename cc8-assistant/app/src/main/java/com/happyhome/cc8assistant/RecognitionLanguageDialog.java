@@ -23,8 +23,9 @@ final class RecognitionLanguageDialog {
   }
 
   void close() {
-    if (dialog != null) dialog.dismiss();
+    AlertDialog previous = dialog;
     dialog = null;
+    if (previous != null) previous.dismiss();
   }
 
   void open() {
@@ -76,6 +77,7 @@ final class RecognitionLanguageDialog {
               .getButton(AlertDialog.BUTTON_POSITIVE)
               .setOnClickListener(
                   v -> {
+                    if (dialog != editor || session.voicePreferences(route) != current) return;
                     for (int i = 0; i < ids.length; i++) {
                       if (group.getCheckedRadioButtonId() != ids[i]) continue;
                       if (!session.setRecognitionLanguage(values[i], revision, route))
@@ -84,6 +86,10 @@ final class RecognitionLanguageDialog {
                       break;
                     }
                   });
+        });
+    editor.setOnDismissListener(
+        d -> {
+          if (dialog == editor) dialog = null;
         });
     editor.show();
   }

@@ -17,7 +17,7 @@ from typing import Callable
 from brain_router import BrainRouter
 from diagnostics import TraceBook, error_kind
 from operation_failure import OperationFailure
-from dsp import NearSpeechDetector, VoiceDetector
+from dsp import VoiceDetector
 from failure_feedback import feedback
 from dot_receipt import UnconfirmedTurnStart
 from release_info import RELEASE
@@ -174,6 +174,7 @@ class StatusReporter:
 
     def save_status(self):
         state = self.hooks.session()
+        environment = self.hooks.capture().endpoint.near_speech.environment
         data = {
             'connected': state.connected,
             'active': state.active,
@@ -196,10 +197,11 @@ class StatusReporter:
             'desktop_camera_enabled': bool(self.hooks.visual().challenge),
             'desktop_snapshot_active': self.hooks.visual().snapshot_job is not None,
             'noise_profile': 'moderate',
-            'speech_energy_floor_dbfs': NearSpeechDetector.MIN_DBFS,
-            'speech_noise_margin_db': NearSpeechDetector.NOISE_MARGIN_DB,
+            'listening_environment': environment.name,
+            'speech_energy_floor_dbfs': environment.minimum_dbfs,
+            'speech_noise_margin_db': environment.noise_margin_db,
             'speech_onset_ms': VoiceDetector.ONSET_FRAMES * 10,
-            'barge_confirm_min_ms': NearSpeechDetector.CONFIRM_MIN_FRAMES * 10,
+            'barge_confirm_min_ms': environment.confirmation_frames * 10,
             'vision_active': self.hooks.visual().generation is not None,
             'vision_enabled': isinstance(self.hooks.brain(), BrainRouter),
             'transport': state.transport_kind,

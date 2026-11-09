@@ -9,8 +9,9 @@ class VoicePreferences:
         self.rate = 'normal'
         self.natural_barge = True
         self.recognition_language = 'auto'
+        self.environment_profile = 'normal'
 
-    def snapshot(self, supported, recognition_supported=False):
+    def snapshot(self, supported, recognition_supported=False, environment_supported=False):
         return {
             'version': 1,
             'revision': self.revision,
@@ -19,6 +20,8 @@ class VoicePreferences:
             'supported': supported,
             'recognition_language': self.recognition_language,
             'recognition_language_supported': recognition_supported,
+            'environment_profile': self.environment_profile,
+            'environment_profiles_supported': environment_supported,
         }
 
     def apply(self, request, speech):

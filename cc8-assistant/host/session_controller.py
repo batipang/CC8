@@ -526,7 +526,37 @@ class SessionController:
         recognition_supported = getattr(
             speech, 'recognition_language_supported', False
         ) is True and callable(getattr(speech, 'set_recognition_language', None))
-        return self.voice_preferences.snapshot(supported, recognition_supported)
+        environment_supported = callable(
+            getattr(self.hooks.capture().endpoint, 'set_environment', None)
+        )
+        return self.voice_preferences.snapshot(
+            supported, recognition_supported, environment_supported
+        )
+
+    def set_environment_profile(self, request):
+        # Share revision and the full idle gate with language/voice settings.
+        # The local gate changes only future speech; model text stays original.
+        with self.guard:
+            preferences = self.voice_preferences
+            ok = False
+            if not self.voice_preferences_state()['environment_profiles_supported']:
+                message = '当前后台不支持听音环境预设'
+            elif request['revision'] != preferences.revision:
+                message = '设置已变化，请重新打开听音环境'
+            elif self.active or self.text_generation is not None or self.hooks.voice_busy():
+                message = '请先暂停语音，并等待当前任务和播报结束，再修改听音环境'
+            else:
+                self.hooks.capture().endpoint.set_environment(request['profile'])
+                preferences.environment_profile = request['profile']
+                preferences.revision += 1
+                ok = True
+                message = '听音环境已应用 · 麦克风保持关闭'
+            self.hooks.event(
+                'voice_preferences',
+                voice_preferences=self.voice_preferences_state(),
+                ok=ok,
+                message=message,
+            )
 
     def set_recognition_language(self, request):
         # Share the voice-setting revision, session lock and full idle gate.

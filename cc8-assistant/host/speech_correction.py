@@ -48,6 +48,7 @@ class SpeechCorrection:
     def __init__(self, now=time.monotonic):
         self.now = now
         self.source = None
+        self.source_ident = None
         self.draft = None
         self.revision = 0
 
@@ -55,6 +56,7 @@ class SpeechCorrection:
         changed = self.draft is not None
         if not preserve_source:
             self.source = None
+            self.source_ident = None
         self.draft = None
         if changed:
             self.revision += 1
@@ -68,7 +70,17 @@ class SpeechCorrection:
             except ValueError:
                 return changed
             self.source = (text, owner, self.now() + EXPIRES)
+            self.source_ident = uuid.uuid4().hex
         return changed
+
+    def source_token(self, owner):
+        if (
+            self.source is None
+            or not same_owner(self.source[1], owner)
+            or self.now() >= self.source[2]
+        ):
+            return None
+        return self.source_ident
 
     def prepare(self, body, owner):
         # Replacement is literal and must identify exactly one old occurrence.
