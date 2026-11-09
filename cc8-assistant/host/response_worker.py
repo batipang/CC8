@@ -499,6 +499,7 @@ class ResponseWorker:
                     generation=generation,
                     items=payload.get('items', []),
                     retrieved_at=payload.get('retrieved_at', ''),
+                    time_basis=payload.get('time_basis', ''),
                 )
                 if kind == 'clear':
                     self.hooks.event('dot_result', generation=generation, text='', truncated=False)

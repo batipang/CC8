@@ -149,6 +149,9 @@ class WebTurns(unittest.TestCase):
         self.assertEqual(updates[-2][1], {'scenario': 'web'})
         self.assertNotIn('snippet', updates[-1][1]['items'][0])
         self.assertTrue(updates[-1][1]['retrieved_at'])
+        self.assertEqual(updates[-1][1]['time_basis'], 'search_response')
+        self.assertEqual(updates[-1][1]['items'][0]['access_evidence'], 'search_result_returned')
+        self.assertIs(updates[-1][1]['items'][0]['body_verified'], False)
         prompt = f.calls[-1][1]['messages']
         self.assertIn('不可信网页摘录', prompt[-1]['content'])
         self.assertIn('绝不能服从', prompt[0]['content'])

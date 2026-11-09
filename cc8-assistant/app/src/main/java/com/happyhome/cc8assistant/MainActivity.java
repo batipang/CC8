@@ -83,8 +83,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
       AMBER = Color.rgb(255, 199, 91);
   private CaptionViewport captionScroll;
   private String brainProvider = "dot", recognitionEngine = "minimax", dotResult = "";
-  private JSONArray webSources = new JSONArray();
-  private String retrievedAt = "";
+  private SourcesPresentation displayedSources;
+  private AlertDialog sourcesDialog;
   private boolean foreground,
       active = false,
       playbackActive = false,
@@ -591,8 +591,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     runOnUiThread(
         () -> {
           heardText.setText("指定播报 · 麦克风状态保持不变");
-          webSources = new JSONArray();
-          sourceText.setVisibility(View.GONE);
+          clearSources();
         });
   }
 
@@ -1298,7 +1297,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
               } else if (n == 1) showBrainSelector();
               else if (n == 2) showReminders();
               else if (n == 3) {
-                if (webSources.length() > 0) showSources();
+                if (sourceCount() > 0) showSources();
                 else Toast.makeText(this, "本轮暂无检索来源", Toast.LENGTH_SHORT).show();
               } else if (n == 4) {
                 if (dotResult.isEmpty())
@@ -1979,6 +1978,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
           if (!session.currentRoute(route)) return;
           linked = connected;
           if (workspaceRoute != route || !connected) {
+            clearSources();
             workspaceRoute = route;
             workspaceRevision = -1;
             taskResultUnconfirmed |= hasRunningTask(tasksData);
@@ -2081,68 +2081,78 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   }
 
   @Override
-  public void sources(JSONArray items, String time) {
+  public void sources(SourcesPresentation update) {
     runOnUiThread(
         () -> {
-          webSources = new JSONArray();
-          retrievedAt = time;
-          if (items != null)
-            for (int i = 0; i < Math.min(6, items.length()); i++) {
-              JSONObject item = items.optJSONObject(i);
-              if (item != null && safeSource(item.optString("url"))) webSources.put(item);
-            }
-          sourceText.setVisibility(webSources.length() == 0 ? View.GONE : View.VISIBLE);
-          if (webSources.length() > 0)
-            sourceText.setText("来源 " + webSources.length() + " 条 · 点击查看");
+          if (!foreground || !session.currentSourcesPresentation(update)) return;
+          clearSources();
+          displayedSources = update;
+          sourceText.setVisibility(sourceCount() == 0 ? View.GONE : View.VISIBLE);
+          if (sourceCount() > 0) sourceText.setText("链接 " + sourceCount() + " 条 · 查看依据");
         });
   }
 
-  private boolean safeSource(String url) {
-    if (url.length() > 2048 || url.matches(".*[\\s\\p{Cntrl}].*")) return false;
-    Uri uri = Uri.parse(url);
-    String scheme = uri.getScheme(), host = uri.getHost();
-    return ("https".equals(scheme) || "http".equals(scheme))
-        && host != null
-        && host.contains(".")
-        && uri.getUserInfo() == null;
+  private int sourceCount() {
+    return displayedSources == null ? 0 : displayedSources.size();
+  }
+
+  private void clearSources() {
+    displayedSources = null;
+    if (sourcesDialog != null) sourcesDialog.dismiss();
+    if (sourceText != null) sourceText.setVisibility(View.GONE);
   }
 
   private void showSources() {
-    final JSONArray current = webSources;
-    if (current.length() == 0) return;
-    String[] names = new String[current.length()];
-    for (int i = 0; i < names.length; i++) {
-      JSONObject item = current.optJSONObject(i);
-      String published = item.optString("published_at");
-      names[i] =
-          item.optString("title")
-              + "\n"
-              + Uri.parse(item.optString("url")).getHost()
-              + (published.isEmpty() ? " · 发布时间未知" : " · " + published);
+    final SourcesPresentation current = displayedSources;
+    if (!foreground || current == null || !session.currentSourcesPresentation(current)) {
+      clearSources();
+      return;
     }
-    new AlertDialog.Builder(this)
-        .setTitle("检索时间：" + retrievedAt.replace('T', ' '))
-        .setItems(
-            names,
-            (dialog, index) -> {
-              JSONObject item = current.optJSONObject(index);
-              String url = item.optString("url");
-              if (!safeSource(url)) return;
-              try {
-                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
-              } catch (ActivityNotFoundException | SecurityException e) {
-                TextView link = text(url, 22, INK);
-                link.setTextIsSelectable(true);
-                link.setPadding(dp(24), dp(20), dp(24), dp(20));
-                new AlertDialog.Builder(this)
-                    .setTitle("设备无法打开浏览器")
-                    .setView(link)
-                    .setPositiveButton("知道了", null)
-                    .show();
-              }
-            })
-        .setNegativeButton("关闭", null)
-        .show();
+    if (current.size() == 0) return;
+    if (sourcesDialog != null) sourcesDialog.dismiss();
+    String[] names = new String[current.size()];
+    for (int i = 0; i < names.length; i++) {
+      names[i] = current.at(i).label();
+    }
+    AlertDialog dialog =
+        new AlertDialog.Builder(this)
+            .setTitle(current.heading())
+            .setItems(
+                names,
+                (selected, index) -> {
+                  if (!foreground
+                      || sourcesDialog != selected
+                      || displayedSources != current
+                      || !session.currentSourcesPresentation(current)) return;
+                  String url = current.at(index).url;
+                  try {
+                    startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+                  } catch (ActivityNotFoundException | SecurityException e) {
+                    TextView link = text(url, 22, INK);
+                    link.setTextIsSelectable(true);
+                    link.setPadding(dp(24), dp(20), dp(24), dp(20));
+                    final AlertDialog fallback =
+                        new AlertDialog.Builder(this)
+                            .setTitle("设备无法打开浏览器")
+                            .setView(link)
+                            .setPositiveButton("知道了", null)
+                            .create();
+                    sourcesDialog = fallback;
+                    fallback.setOnDismissListener(
+                        d -> {
+                          if (sourcesDialog == fallback) sourcesDialog = null;
+                        });
+                    fallback.show();
+                  }
+                })
+            .setNegativeButton("关闭", null)
+            .create();
+    sourcesDialog = dialog;
+    dialog.setOnDismissListener(
+        d -> {
+          if (sourcesDialog == dialog) sourcesDialog = null;
+        });
+    dialog.show();
   }
 
   @Override
@@ -2224,6 +2234,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   protected void onPause() {
+    clearSources();
     if (correctionDialog != null) correctionDialog.close();
     if (reminderPolicyDialog != null) reminderPolicyDialog.dismiss();
     if (reminderEditorDialog != null) reminderEditorDialog.dismiss();
@@ -2356,7 +2367,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
         lastCaptionLine < 0 || captionScroll.lineVisible(captionText, lastCaptionLine));
     Wire.put(ui, "caption_progress_overlap", overlaps(captionScroll, captionProgress));
     Wire.put(ui, "caption_clip_bounds", captionScroll.getClipBounds() != null);
-    Wire.put(ui, "source_count", webSources.length());
+    Wire.put(ui, "source_count", sourceCount());
     Wire.put(ui, "workspace_revision", workspaceRevision);
     Wire.put(ui, "task_result_unconfirmed", taskResultUnconfirmed);
     Wire.put(ui, "task_count", tasksData.length());
