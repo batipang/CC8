@@ -974,7 +974,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
               "连接与桌面入口",
               "隐私与语音说明",
               "立即打断播报",
-              "Dot 聊天接续"
+              "Dot 聊天接续",
+              "声音与自然插话"
             },
             (d, n) -> {
               if (n == 0) {
@@ -1018,10 +1019,83 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
                     .setPositiveButton("知道了", null)
                     .show();
               } else if (n == 7) session.interrupt();
-              else dotChats.open();
+              else if (n == 8) dotChats.open();
+              else showVoicePreferences();
             })
         .setNegativeButton("关闭", null)
         .show();
+  }
+
+  private void showVoicePreferences() {
+    final long route = workspaceRoute;
+    JSONObject current = session.voicePreferences(route);
+    if (current == null) {
+      Toast.makeText(this, "请连接支持声音设置的 Mac 后台", Toast.LENGTH_LONG).show();
+      return;
+    }
+    final int revision = current.optInt("revision");
+    LinearLayout content = new LinearLayout(this);
+    content.setOrientation(LinearLayout.VERTICAL);
+    content.setPadding(dp(24), dp(12), dp(24), dp(12));
+    TextView help = new TextView(this);
+    help.setText(
+        "请先暂停语音并等待任务结束，再应用设置。\n"
+            + "语速相对当前音色调整，标准可恢复原语速。关闭自然插话后，播报时的新问题不会打断；仍可说“停一下”或点击停止。\n"
+            + "设置在本次 Mac 服务内有效；更改不会开启麦克风。");
+    help.setTextSize(22);
+    content.addView(help);
+    RadioGroup rates = new RadioGroup(this);
+    rates.setOrientation(RadioGroup.HORIZONTAL);
+    String[] values = {"slow", "normal", "fast"};
+    String[] labels = {"舒缓", "标准", "稍快"};
+    int[] ids = {View.generateViewId(), View.generateViewId(), View.generateViewId()};
+    for (int i = 0; i < values.length; i++) {
+      RadioButton option = new RadioButton(this);
+      option.setId(ids[i]);
+      option.setText(labels[i]);
+      option.setTextSize(24);
+      rates.addView(option);
+      if (values[i].equals(current.optString("speech_rate"))) rates.check(ids[i]);
+    }
+    content.addView(rates);
+    CheckBox barge = new CheckBox(this);
+    barge.setText("允许说新问题打断播报");
+    barge.setTextSize(24);
+    barge.setChecked(current.optBoolean("natural_barge"));
+    content.addView(barge);
+    AlertDialog dialog =
+        new AlertDialog.Builder(this)
+            .setTitle("声音与自然插话")
+            .setView(content)
+            .setNegativeButton("取消", null)
+            .setNeutralButton("恢复默认", null)
+            .setPositiveButton("应用", null)
+            .create();
+    dialog.setOnShowListener(
+        unused -> {
+          dialog
+              .getButton(AlertDialog.BUTTON_NEUTRAL)
+              .setOnClickListener(
+                  v -> {
+                    rates.check(ids[1]);
+                    barge.setChecked(true);
+                  });
+          dialog
+              .getButton(AlertDialog.BUTTON_POSITIVE)
+              .setOnClickListener(
+                  v -> {
+                    int selected = rates.getCheckedRadioButtonId();
+                    for (int i = 0; i < ids.length; i++) {
+                      if (selected != ids[i]) continue;
+                      if (!session.setVoicePreferences(
+                          values[i], barge.isChecked(), revision, route))
+                        Toast.makeText(this, "连接已变化，请重新打开声音设置", Toast.LENGTH_LONG).show();
+                      dialog.dismiss();
+                      break;
+                    }
+                  });
+        });
+    dialog.show();
   }
 
   @Override

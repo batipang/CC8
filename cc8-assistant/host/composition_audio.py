@@ -66,6 +66,7 @@ def build_audio_pipeline(
                     base, stamp
                 ),
                 playing=lambda: host.playback.playing,
+                natural_barge_enabled=lambda: host.session.voice_preferences.natural_barge,
                 last_audio_end=lambda: host.playback.last_audio_end,
                 last_spoken=lambda: host.playback.last_spoken,
                 previous_spoken=lambda: host.playback.previous_spoken,
@@ -100,6 +101,7 @@ def build_audio_pipeline(
             valid=lambda generation: host.valid(generation),
             diagnostics=lambda: host.diagnostics,
             playing=lambda: host.playback.playing,
+            natural_barge_enabled=lambda: host.session.voice_preferences.natural_barge,
             last_audio_end=lambda: host.playback.last_audio_end,
             recent_spoken=lambda: [line for _, line in tuple(host.playback.spoken)],
             pause_state=lambda: host.playback.pause_state,

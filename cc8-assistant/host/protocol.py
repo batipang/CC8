@@ -111,6 +111,16 @@ def validate_device_event(value: object) -> JsonObject:
     for key in required:
         if key not in value:
             raise ValueError('Missing device event field: ' + key)
+    if name == 'voice_preferences_set':
+        revision = value.get('revision')
+        if (
+            set(value) != {'event', 'revision', 'speech_rate', 'natural_barge'}
+            or type(revision) is not int
+            or not 0 <= revision < 2**31 - 1
+            or value.get('speech_rate') not in ('slow', 'normal', 'fast')
+            or type(value.get('natural_barge')) is not bool
+        ):
+            raise ValueError('Invalid voice preferences')
     if name == 'result_read_request':
         if (
             set(value) != {'event', 'request_id', 'id', 'restart'}

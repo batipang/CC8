@@ -1,12 +1,22 @@
 # 当前 CC8 部署与验收范围
 
+## 0.16.5／code96 健康归属与已交付结果功能
+
+当前运行后台0.16.5、原签名助手0.9.59（code96），源码`3634fc7`。[PR #453](https://github.com/batipang/CC8/pull/453)及[main八项CI](https://github.com/batipang/CC8/actions/runs/42562484606)通过。五项后台维护19.620秒完成，独立终审核对健康回复PID确实匹配自有worker，真实只读服务状态为ready，完整原配置／LaunchAgent／ENV、Interactive策略、owner Dot及MiniMax保持。两个APK不重装，USB优先／Wi-Fi就绪，麦克风／相机／播放／校准关闭，零新增正式模型请求。隔离回归覆盖错误归属和已退出子进程；真实系统登录／睡眠仍列最终环境验收。
+
+此前0.16.4／code96的[PR #452](https://github.com/batipang/CC8/pull/452)及[main八项CI](https://github.com/batipang/CC8/actions/runs/42558958992)通过，九项组合维护52.462秒完成并独立终审。一次相关自动实测83.672秒：一个真实公开文字Dot任务完成后，在后续播报段作逻辑USB切换，实际点击任务详情的继续入口，取得两个续读句段的播完回执，原完成任务不变且没有新大脑回合。没有开启麦克风／相机／ASR，不计物理拔插或人耳判断；不重复这轮作为后续无关特性的验收。[结果续读](RESULT_READING.md)。
+
+0.16.3／code94的[PR #451](https://github.com/batipang/CC8/pull/451)及[main八项CI](https://github.com/batipang/CC8/actions/runs/42556137401)已通过，原签名组合维护65.434秒及独立终审完成；结果来源、文件回执与显式Finder定位入口已随之后版本保留。没有把独立新任务称为原聊天接续。[结果来源](RESULT_PROVENANCE.md)。
+
+下一候选0.16.6／code98补声音与自然插话设置，[说明及范围](VOICE_CONTROLS.md)。本节记录已完成的部署，候选未据此宣称已安装；P0-01～05、真人／代表性环境及最终72小时的缺口保留，72小时未启动。
+
 ## 0.16.2／code92 明确时间与未播补报
 
 [PR #450](https://github.com/batipang/CC8/pull/450) 与 [main八项CI](https://github.com/batipang/CC8/actions/runs/42550439038) 通过，源码 `12b085a` 已部署为后台0.16.2，原签名APK92及检测器7保持。五项后台维护19.027秒完成，独立终审核对原配置、完整LaunchAgent／ENV、Interactive策略、owner Dot及MiniMax、USB优先／Wi-Fi就绪和双端停采；没有新增任务、模型、ASR或播放，也未自动登记汇报来源。
 
 本机及Linux CI均通过1890项后台测试（原4项私人录音按显式选择规则未运行）、24项安装器、161项工具及76项Java检查。登录shell与最小PATH的实际本机只读RPC分别核对自定义范围及原起点重新读取，5张未播卡保留，编号追问不增加扫描；零源写入、模型、TTS或采集。设备确认的账本准入由真实响应控制器与受控回执回归覆盖，不补判新的实体语音或声学验收。[使用范围](DESKTOP_WORK_REPORTS.md)。
 
-下一后台0.16.3／APKcode94候选加入来源、文件变更回执与明确点击后的Finder定位，见[结果来源](RESULT_PROVENANCE.md)。当前运行仍0.16.2／code92，最终72小时未启动。
+此段保留0.16.2时的部署记录；之后的来源、续读与健康归属交付见顶部。最终72小时未启动。
 
 ## 0.16.1／code92 语音工作汇报
 

@@ -63,6 +63,7 @@ def complete_handshake(session: SessionController, j):
         supports_saved_task_results=True,
         supports_result_provenance=True,
         supports_result_reading=True,
+        voice_preferences=session.voice_preferences_state(),
         asr_engine=getattr(getattr(hooks.speech(), 'recognizer', None), 'engine', 'sensevoice'),
         **(
             {'capture_start_token': session.capture_start_token}

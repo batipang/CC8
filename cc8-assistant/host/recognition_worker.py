@@ -291,6 +291,14 @@ class RecognitionWorker:
                             self.hooks.status('listening', '我在听')
                         continue
                     wake_mode = self.hooks.wake()
+                    if risky and not command and not self.hooks.natural_barge_enabled():
+                        # Keep explicit stop commands and their echo checks.
+                        # Ordinary playback-time speech cannot replace work,
+                        # or open a camera in this selected mode.
+                        outcome.decision = 'barge_disabled'
+                        outcome.rejected = True
+                        self.hooks.set_metric_field('last_voice_gate', 'rejected', True)
+                        continue
                     local_wake = evidence is not None and evidence.get('local_wake') is True
                     payload = (
                         wake_payload(text, self.hooks.wake_pattern)

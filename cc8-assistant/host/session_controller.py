@@ -25,6 +25,7 @@ from device_session import (
     stop_capture,
 )
 from tool_sample_gate import ToolSampleGate
+from voice_preferences import VoicePreferences
 from capture_frontend import requested_frontend, accepts_frontend
 from route_output import bind_host_packet, host_packet_current, same_route, screen_route_current
 
@@ -49,6 +50,7 @@ class SessionController:
         self.capture_start_token = uuid.uuid4().hex
         self.capture_id = None
         self.tool_samples = ToolSampleGate()
+        self.voice_preferences = VoicePreferences()
         # One device can only retry its current explicitly requested capture.
         # Remember recent consumed IDs across route loss and failed native starts.
         self.consumed_capture_ids = deque(maxlen=64)
@@ -488,6 +490,33 @@ class SessionController:
 
     def settings(self, j):
         apply_settings(self, j)
+
+    def voice_preferences_state(self):
+        supported = callable(getattr(self.hooks.speech(), 'set_voice_rate', None))
+        return self.voice_preferences.snapshot(supported)
+
+    def set_voice_preferences(self, request):
+        # Serialize with text/vision/announcement admission, not just the device
+        # event reader. A queued/stopped worker may still be releasing its TTS.
+        with self.guard:
+            preferences = self.voice_preferences
+            ok = False
+            if not self.voice_preferences_state()['supported']:
+                message = '当前语音提供方不支持这些设置'
+            elif request['revision'] != preferences.revision:
+                message = '设置已变化，请重新打开声音设置'
+            elif self.active or self.text_generation is not None or self.hooks.voice_busy():
+                message = '请先暂停语音，并等待当前任务和播报结束，再修改声音设置'
+            else:
+                preferences.apply(request, self.hooks.speech())
+                ok = True
+                message = '声音设置已应用 · 麦克风保持关闭'
+            self.hooks.event(
+                'voice_preferences',
+                voice_preferences=self.voice_preferences_state(),
+                ok=ok,
+                message=message,
+            )
 
     def arm_tool_sample(self, case, *, compare_engine=None, diagnose_engine=None):
         return self.tool_samples.arm(
