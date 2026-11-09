@@ -16,6 +16,7 @@ from report_archive_protocol import (
     validate_request as validate_archive_request,
 )
 from report_archive import record as archive_record, historical_text
+from thread_queue import queue_text
 
 
 @dataclass(frozen=True)
@@ -252,10 +253,15 @@ class ChatController:
 
     def run(self, request_id, action, data, generation, connection, report_revision=None):
         report_owner = self.report_source() if action == 'report' else None
+        queue_owner = None
 
         def current():
             with self.hooks.lock:
                 with self.lock:
+                    if action == 'source_queue' and queue_owner is not None:
+                        rows = self.sources.snapshot()['items']
+                        if not any(r == queue_owner for r in rows):
+                            return False
                     if action == 'save_report':
                         try:
                             if not self.archive_offer_current(data['snapshot_id']):
@@ -291,6 +297,20 @@ class ChatController:
                 result['registry'] = self.sources.snapshot()
             elif action == 'register_source':
                 selected = self.catalog.registration(data['source_id'])
+            elif action == 'source_queue':
+                state = self.sources.snapshot()
+                if state['revision'] != data['revision']:
+                    raise ValueError('Registered source revision changed')
+                queue_owner = next(
+                    (r for r in state['items'] if r['id'] == data['registration_id']), None
+                )
+                if queue_owner is None:
+                    raise ValueError('Registered source no longer exists')
+                source = {
+                    k: queue_owner[k] for k in ('provider', 'host', 'thread_id', 'title', 'project')
+                }
+                queue_report = self.catalog.queue(source, is_current=current)
+                result = dict(source_queue=queue_report, queue_text=queue_text(queue_report))
             with self.hooks.lock:
                 with self.lock:
                     if self.active_request != request_id:
