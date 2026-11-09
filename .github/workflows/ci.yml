@@ -49,7 +49,7 @@ jobs:
         run: python cc8 notifications build
 
       - name: Check and build single-window input (synthetic pixels, no screen capture)
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && hashFiles('mac-window-input/Package.swift') != ''
         run: |
           xcrun swift run --package-path mac-window-input cc8-window-check
           xcrun swift test --package-path mac-window-input

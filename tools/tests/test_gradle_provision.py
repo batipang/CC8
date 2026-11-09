@@ -26,6 +26,34 @@ def provision_step():
 
 
 class GradleProvisionTests(unittest.TestCase):
+    def test_optional_window_component_keeps_all_checks_when_source_is_present(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text())
+        steps = workflow['jobs']['tests']['steps']
+        matching = [
+            step
+            for step in steps
+            if step.get('name')
+            == 'Check and build single-window input (synthetic pixels, no screen capture)'
+        ]
+        self.assertEqual(len(matching), 1)
+        step = matching[0]
+        self.assertEqual(
+            step['if'],
+            "runner.os == 'macOS' && hashFiles('mac-window-input/Package.swift') != ''",
+        )
+        self.assertEqual(
+            step['run'].splitlines(),
+            [
+                'xcrun swift run --package-path mac-window-input cc8-window-check',
+                'xcrun swift test --package-path mac-window-input',
+                'python tools/build_window_input.py --output "$RUNNER_TEMP/cc8-window-helper"',
+            ],
+        )
+        # The absence guard belongs only to this optional component, not core host suites.
+        host = [s for s in steps if 'tools/test_all.py' in s.get('run', '')]
+        self.assertEqual(len(host), 1)
+        self.assertNotIn('if', host[0])
+
     def test_version_digest_and_pipeline_preserve_existing_wrapper_and_build_gates(self):
         steps, step = provision_step()
         properties = dict(
