@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "recognition-language-20261109.1",
+  "release_id": "explicit-photo-followup-recovery-20261109.1",
   "backend": {
     "version": "0.16.12"
   },
   "assistant": {
-    "version": "0.9.73",
-    "version_code": 110,
+    "version": "0.9.78",
+    "version_code": 115,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {
