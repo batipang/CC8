@@ -257,6 +257,7 @@ class StatusReporter:
             record['stage'] if record else stage,
             record['kind'] if record else error_kind(error),
             unconfirmed=isinstance(error, UnconfirmedTurnStart),
+            input_source=error.input_source if isinstance(error, OperationFailure) else None,
         )
         self.hooks.log(
             'runtime_error',

@@ -55,9 +55,18 @@ class FailureFeedback:
     message: str
 
 
-def feedback(stage, kind, *, unconfirmed=False):
+def feedback(stage, kind, *, unconfirmed=False, input_source=None):
     if stage not in STAGES or kind not in KINDS:
         raise ValueError('Invalid feedback category')
+    if input_source not in (None, 'mac_window'):
+        raise ValueError('Invalid input source')
+    if stage == 'vision' and input_source == 'mac_window':
+        return FailureFeedback(
+            stage,
+            kind,
+            'Mac 窗口输入未完成。请在 Mac 系统面板重新选择一个仍打开的窗口，核对预览后点击发送；'
+            '如系统提示权限，请在 Mac 核对屏幕录制权限。本次不会改抓全屏或自动重试。',
+        )
     if unconfirmed:
         return FailureFeedback(
             stage,

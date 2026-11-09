@@ -48,6 +48,13 @@ jobs:
         if: runner.os == 'macOS'
         run: python cc8 notifications build
 
+      - name: Check and build single-window input (synthetic pixels, no screen capture)
+        if: runner.os == 'macOS'
+        run: |
+          xcrun swift run --package-path mac-window-input cc8-window-check
+          xcrun swift test --package-path mac-window-input
+          python tools/build_window_input.py --output "$RUNNER_TEMP/cc8-window-helper"
+
   quality:
     name: Python, Java and workflow checks
     runs-on: ubuntu-24.04

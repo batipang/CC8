@@ -1,5 +1,12 @@
 # Changelog
 
+## Backend 0.16.16 / Assistant 0.9.81 — explicit Mac single-window input
+
+- Add a system single-window picker, immutable preview and explicit one-shot Send. Keep selection under one 90-second lease and three attempts, reject stale callbacks and concurrent duplicate sends, validate the chosen window before/after capture and before Send, and never substitute a display or another window. Use an independently bounded, private inherited-pipe child with no provider credentials, image files or audio capture.
+- Add the negotiated CC8 long-press Look entry and reuse the current Dot vision route. Preserve microphone state; do not request CC8 camera permission or retain this image as a follow-up photo. Scope metadata accompanies the question and task title. Cancel only the owning helper on Home, handover, disconnection, Stop or superseding work. Keep Mac-window guidance separate from camera permission guidance.
+- Reproduce and fix reentrant cancellation overwriting a newer visual generation. Keep Mac-window waits separate from the camera's 15-second request timeout. Shared synthetic-pixel/lease checks run through both XCTest and a CLT-only executable; retain the local missing-XCTest failure and run the framework wrapper in macOS CI.
+- PR462 and PR463 are merged and their exact main commits passed all eight required checks. The 0.16.15 main package and deployed-0.16.12 recovery package were built with the original certificate; grouped installation remains pending. Real Mac selection/permission and three content-class acceptance remain distinct from synthetic/offline checks; no final 72-hour run has started.
+
 ## Backend 0.16.15 / Assistant 0.9.79 — traceable web-source evidence
 
 - Distinguish answer-only links, completed/failed page-operation receipts and actual MiniMax search-result returns. A model citation or operation completion cannot establish fetched page contents, publication dates or event dates. Keep the per-turn ledger bounded; only matching owned completed RPC items can annotate links, with no implicit re-fetch or prior-turn evidence reuse.

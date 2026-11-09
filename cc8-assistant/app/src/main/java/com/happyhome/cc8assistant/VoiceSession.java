@@ -112,7 +112,7 @@ final class VoiceSession {
   private volatile boolean dotChatSupported, savedTasksSupported, preferenceMemorySupported;
   private volatile boolean resultProvenanceSupported;
   private volatile boolean resultReadingSupported;
-  private volatile boolean visionModesSupported, photoFollowupSupported;
+  private volatile boolean visionModesSupported, photoFollowupSupported, macWindowSupported;
   private volatile JSONObject voicePreferences;
   private volatile JSONObject speechCorrection;
   private int speechCorrectionRevision = -1;
@@ -127,6 +127,10 @@ final class VoiceSession {
 
   boolean supportsVisionModes() {
     return visionModesSupported;
+  }
+
+  boolean supportsMacWindow() {
+    return macWindowSupported;
   }
 
   PhotoFollowupWindow.Picture photoForFollowup() {
@@ -286,10 +290,11 @@ final class VoiceSession {
       pendingPhotoId = pendingPhotoForgetId = "";
       photoFollowupSupported =
           visionModesSupported =
-              dotChatSupported =
-                  savedTasksSupported =
-                      preferenceMemorySupported =
-                          resultProvenanceSupported = resultReadingSupported = false;
+              macWindowSupported =
+                  dotChatSupported =
+                      savedTasksSupported =
+                          preferenceMemorySupported =
+                              resultProvenanceSupported = resultReadingSupported = false;
       voicePreferences = null;
       speechCorrection = null;
       speechCorrectionRevision = -1;
@@ -429,10 +434,11 @@ final class VoiceSession {
         pendingPhotoId = pendingPhotoForgetId = "";
         photoFollowupSupported =
             visionModesSupported =
-                dotChatSupported =
-                    savedTasksSupported =
-                        preferenceMemorySupported =
-                            resultProvenanceSupported = resultReadingSupported = false;
+                macWindowSupported =
+                    dotChatSupported =
+                        savedTasksSupported =
+                            preferenceMemorySupported =
+                                resultProvenanceSupported = resultReadingSupported = false;
         voicePreferences = null;
         speechCorrection = null;
         speechCorrectionRevision = -1;
@@ -551,10 +557,11 @@ final class VoiceSession {
       pendingPhotoId = pendingPhotoForgetId = "";
       photoFollowupSupported =
           visionModesSupported =
-              dotChatSupported =
-                  savedTasksSupported =
-                      preferenceMemorySupported =
-                          resultProvenanceSupported = resultReadingSupported = false;
+              macWindowSupported =
+                  dotChatSupported =
+                      savedTasksSupported =
+                          preferenceMemorySupported =
+                              resultProvenanceSupported = resultReadingSupported = false;
       voicePreferences = null;
       speechCorrection = null;
       speechCorrectionRevision = -1;
@@ -759,6 +766,7 @@ final class VoiceSession {
             if (!foreground || !currentRoute(route) || p.generation < minimumGeneration) return;
             preferenceMemorySupported = Boolean.TRUE.equals(j.opt("supports_preference_memory"));
             visionModesSupported = Boolean.TRUE.equals(j.opt("supports_vision_modes"));
+            macWindowSupported = Boolean.TRUE.equals(j.opt("supports_mac_window"));
             photoFollowupSupported = Boolean.TRUE.equals(j.opt("supports_photo_followup"));
             if (!photoFollowupSupported) photoFollowup.clear();
             resultProvenanceSupported = Boolean.TRUE.equals(j.opt("supports_result_provenance"));
@@ -888,6 +896,11 @@ final class VoiceSession {
               || p.generation < minimumGeneration
               || (visual && p.generation == visualGeneration)) return;
           boolean desktop = "desktop".equals(j.optString("origin"));
+          boolean macWindow = "mac_window".equals(j.optString("origin"));
+          if (macWindow
+              && (!macWindowSupported
+                  || !nonce.matches("[a-f0-9]{32}")
+                  || !nonce.equals(pendingVisionNonce))) return;
           boolean userFollowup = "followup".equals(j.optString("origin"));
           boolean voiceFollowup = "followup_voice".equals(j.optString("origin"));
           boolean followup = userFollowup || voiceFollowup;
@@ -913,20 +926,31 @@ final class VoiceSession {
           visualGeneration = p.generation;
           if (!desktop) beginTaskOutput("vision", p.generation);
           visionRequestId =
-              userFollowup ? pendingPhotoId : voiceFollowup ? j.optString("photo_id") : "";
-          if (followup) {
+              macWindow
+                  ? nonce
+                  : userFollowup ? pendingPhotoId : voiceFollowup ? j.optString("photo_id") : "";
+          if (followup || macWindow) {
             photoFollowup.clear();
             pendingPhotoId = "";
             pendingVisionNonce = "";
           }
           listener.dotResult("", false, "");
           listener.caption(
-              followup
-                  ? "正在分析你指定的同一张照片，不重新拍摄。"
-                  : desktop ? "Dot 请求拍照，请调整画面；预览 5 秒后拍摄并返回当前聊天。" : "请调整画面，预览 5 秒后拍摄；拍后核对按你的看图设置执行。",
+              macWindow
+                  ? "请在 Mac 系统面板选择一个窗口，核对冻结画面后点击发送。CC8 摄像头关闭。"
+                  : followup
+                      ? "正在分析你指定的同一张照片，不重新拍摄。"
+                      : desktop
+                          ? "Dot 请求拍照，请调整画面；预览 5 秒后拍摄并返回当前聊天。"
+                          : "请调整画面，预览 5 秒后拍摄；拍后核对按你的看图设置执行。",
               "attentive");
           listener.screen(false);
-          listener.vision(true, followup ? "正在追问本张照片 · 摄像头关闭" : "请调整画面 · 预览 5 秒后拍摄", false);
+          listener.vision(
+              true,
+              macWindow
+                  ? "等待 Mac 选窗确认 · CC8 摄像头关闭"
+                  : followup ? "正在追问本张照片 · 摄像头关闭" : "请调整画面 · 预览 5 秒后拍摄",
+              false);
           final int waitingGeneration = visualGeneration;
           final long waitingRoute = routeEpoch;
           new android.os.Handler(android.os.Looper.getMainLooper())
@@ -1469,8 +1493,9 @@ final class VoiceSession {
 
   boolean requestVision(String mode) {
     synchronized (routeLock) {
-      if (!("observe".equals(mode) || "ocr".equals(mode))
+      if (!("observe".equals(mode) || "ocr".equals(mode) || "mac_window".equals(mode))
           || ("ocr".equals(mode) && !visionModesSupported)
+          || ("mac_window".equals(mode) && !macWindowSupported)
           || !foreground
           || !isConnected()
           || visual
@@ -1478,12 +1503,15 @@ final class VoiceSession {
       pendingVisionNonce = java.util.UUID.randomUUID().toString().replace("-", "");
       JSONObject e = Wire.event("vision_request");
       Wire.put(e, "nonce", pendingVisionNonce);
-      if ("ocr".equals(mode)) Wire.put(e, "mode", mode);
+      if (!"observe".equals(mode)) Wire.put(e, "mode", mode);
       if (!sendWorkspace(e, routeEpoch)) {
         pendingVisionNonce = "";
         return false;
       }
-      listener.vision(true, "正在请求拍摄 · 图片将交给 Dot", false);
+      listener.vision(
+          true,
+          "mac_window".equals(mode) ? "请在 Mac 选择并确认一个窗口 · CC8 摄像头关闭" : "正在请求拍摄 · 图片将交给 Dot",
+          false);
       final String nonce = pendingVisionNonce;
       new android.os.Handler(android.os.Looper.getMainLooper())
           .postDelayed(

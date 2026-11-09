@@ -6,6 +6,7 @@ import time
 from typing import TYPE_CHECKING
 from wake_controller import WAITING
 from route_output import same_route
+from window_input import available as window_available
 
 if TYPE_CHECKING:
     from session_controller import SessionController
@@ -67,6 +68,7 @@ def complete_handshake(session: SessionController, j):
         supports_preference_memory=True,
         supports_vision_modes=True,
         supports_photo_followup=True,
+        supports_mac_window=window_available(),
         supports_result_provenance=True,
         supports_result_reading=True,
         voice_preferences=session.voice_preferences_state(),

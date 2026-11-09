@@ -464,10 +464,11 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
               new AlertDialog.Builder(this)
                   .setTitle("看图与识字")
                   .setItems(
-                      new String[] {"普通看图", "识别图片文字", "看图设置", "追问最近照片"},
+                      new String[] {"普通看图", "识别图片文字", "看图设置", "追问最近照片", "选择 Mac 窗口"},
                       (d, n) -> {
                         if (n == 2) showImageQuality();
                         else if (n == 3) showPhotoQuestion();
+                        else if (n == 4) requestImage("mac_window");
                         else requestImage(n == 1 ? "ocr" : "observe");
                       })
                   .setNegativeButton("取消", null)
@@ -1566,6 +1567,12 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     }
     if ("ocr".equals(mode) && !session.supportsVisionModes()) {
       Toast.makeText(this, "请连接支持识字入口的 Mac 后台", Toast.LENGTH_LONG).show();
+      return;
+    }
+    if ("mac_window".equals(mode)) {
+      // This path must not request Android camera permission or start Eyes.
+      if (!session.supportsMacWindow() || !session.requestVision(mode))
+        Toast.makeText(this, "Mac 窗口入口尚未就绪，请检查 Mac 的安装和连接", Toast.LENGTH_LONG).show();
       return;
     }
     if (Build.VERSION.SDK_INT >= 23
