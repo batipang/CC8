@@ -510,6 +510,8 @@ class FeedbackCheck {
  static class Link {}
  final Link source=new Link();
  boolean captureHello(Link link,Data hello){return true;}
+ // The typed settings receipt is exercised by WorkspaceRouteTests.
+ void acceptVoicePreferences(Object state){}
  String recordingPhase(){return recording?"listening":"idle";}
  boolean currentRoute(long wanted){return activeRoute==wanted;}
  String phase="idle";
@@ -520,6 +522,7 @@ class FeedbackCheck {
  String pendingVisionNonce="",desktopVisionNonce="";
  static class Packet{int generation;Packet(int g){generation=g;}}
  static class Data{String next,message;Object listening="unknown",captureId,epoch,startFailure,provenance;Data(String n,String m){next=n;message=m;}
+  Object optJSONObject(String key){return null;}
   String optString(String k){return "phase".equals(k)?next:"listening_state".equals(k)?String.valueOf(listening):message;}
   String optString(String k,String fallback){return optString(k);}
   Object opt(String k){

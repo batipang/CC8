@@ -19,6 +19,7 @@ SESSION_INTERFACES = r"""
   final Object routeLock=new Object();
   boolean foreground=true,recording,visual,announcement,textSession,receiverRegistered;
   boolean dotChatSupported,savedTasksSupported,resultProvenanceSupported,resultReadingSupported;
+  JSONObject voicePreferences;
   int epoch,minimumGeneration,lifecycle,requests,announcementGeneration,textGeneration;
   CaptureWindow captureWindow;
   int visualGeneration;String visionRequestId="",pendingVisionNonce="",desktopVisionNonce="";
@@ -448,6 +449,42 @@ SCENARIOS = r"""
     yes(Toast.shows==0,"Old operation result cannot show in the new activation");
     s.deliver(result,next);c.drain();yes(Toast.shows==1,"Current operation result remains visible");break;
    }
+   case "voice_controls":{
+    long route=s.routeEpoch;
+    JSONObject state=new JSONObject("version",1,"revision",0,"speech_rate","normal","natural_barge",true,"supported",true);
+    Wire.Packet receipt=new Wire.Packet(new JSONObject("event","voice_preferences","voice_preferences",state,"ok",true,"message","已应用"));
+    s.minimumGeneration=8;s.deliver(receipt,old);
+    yes(s.voicePreferences(route)==null,"stale generation published settings");
+    s.minimumGeneration=7;s.deliver(receipt,old);c.drain();
+    yes(s.voicePreferences(route)==state&&!s.recording,"current state missing or capture opened");
+    int count=old.events.size();
+    yes(s.setVoicePreferences("slow",false,0,route)&&old.events.size()==count+1,"current explicit setting not queued once");
+    JSONObject sent=old.events.get(count);
+    yes("voice_preferences_set".equals(sent.optString("event"))&&"slow".equals(sent.optString("speech_rate")),"setting request changed");
+    Link next=new Link("wifi");activate(c,next);
+    yes(s.voicePreferences(s.routeEpoch)==null&&!s.setVoicePreferences("fast",true,0,route),"old dialog crossed handover");
+    s.deliver(receipt,old);yes(s.voicePreferences(s.routeEpoch)==null,"old source restored settings");
+    s.deliver(receipt,next);yes(s.voicePreferences(s.routeEpoch)==state,"new route did not reconcile state");
+    activate(c,old);yes(s.voicePreferences(s.routeEpoch)==null,"link reuse retained old capability");
+    s.deliver(receipt,old);s.pause();yes(s.voicePreferences(s.routeEpoch)==null&&!s.recording,"Home retained controls or capture");
+    break;
+   }
+   case "voice_controls_invalid":{
+    for(Object version:new Object[]{true,2,"1"}){
+     s.acceptVoicePreferences(new JSONObject("version",version,"revision",0,"speech_rate","normal","natural_barge",true,"supported",true));
+     yes(s.voicePreferences(s.routeEpoch)==null,"bad version enabled settings");
+    }
+    for(Object revision:new Object[]{true,-1,1.0,"1"}){
+     s.acceptVoicePreferences(new JSONObject("version",1,"revision",revision,"speech_rate","normal","natural_barge",true,"supported",true));
+     yes(s.voicePreferences(s.routeEpoch)==null,"bad revision enabled settings");
+    }
+    for(String rate:new String[]{"fast","slow","normal"}){
+     s.acceptVoicePreferences(new JSONObject("version",1,"revision",0,"speech_rate",rate,"natural_barge",false,"supported",true));
+     yes(s.voicePreferences(s.routeEpoch)!=null,"supported mode unavailable");
+    }
+    s.acceptVoicePreferences(null);yes(s.voicePreferences(s.routeEpoch)==null,"missing capability retained state");
+    break;
+   }
    case "current_order":{
     c.snapshot(5,task("completed"));c.drain();long route=s.routeEpoch;
     s.select(old);c.drain();c.snapshot(4,task("running"));c.drain();
@@ -508,6 +545,10 @@ class WorkspaceRouteTests(unittest.TestCase):
                 'private void lost(',
                 'void pause(',
                 'private void closeSocket(',
+                'private void acceptVoicePreferences(',
+                'JSONObject voicePreferences(',
+                'boolean setVoicePreferences(',
+                'private boolean sendWorkspace(',
             )
         ]
         camera_route_bound = 'private void sendCameraEvent(' in session
@@ -553,6 +594,8 @@ class WorkspaceRouteTests(unittest.TestCase):
             + branch(session, 'workspace')
             + '}else if("workspace_result".equals(event)){'
             + branch(session, 'workspace_result')
+            + '}else if("voice_preferences".equals(event)){'
+            + branch(session, 'voice_preferences')
             + '}else if("announcement_begin".equals(event)){'
             + branch(session, 'announcement_begin')
             + '}else if("camera_capture".equals(event)){'
@@ -574,7 +617,7 @@ class WorkspaceRouteTests(unittest.TestCase):
         )
         harness = harness.replace(
             'String optString(String key)',
-            'Object opt(String key){return values.get(key);}int optInt(String key,int fallback){return (int)optLong(key,fallback);}JSONObject getJSONObject(String key){return (JSONObject)values.get(key);}boolean optBoolean(String key){return Boolean.TRUE.equals(values.get(key));}String optString(String key)',
+            'Object opt(String key){return values.get(key);}int optInt(String key,int fallback){return (int)optLong(key,fallback);}JSONObject getJSONObject(String key){return (JSONObject)values.get(key);}JSONObject optJSONObject(String key){Object v=values.get(key);return v instanceof JSONObject?(JSONObject)v:null;}boolean optBoolean(String key){return Boolean.TRUE.equals(values.get(key));}String optString(String key)',
         )
         harness = harness.replace(method(harness, 'static class Session'), SESSION_INTERFACES)
         harness = harness.replace(
@@ -633,6 +676,12 @@ class WorkspaceRouteTests(unittest.TestCase):
             timeout=10,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_voice_controls_keep_receipts_dialogs_and_queued_writes_on_their_route(self):
+        self.scenario('voice_controls')
+
+    def test_voice_controls_require_typed_supported_state(self):
+        self.scenario('voice_controls_invalid')
 
     def test_camera_transfer_is_bound_to_the_current_request_and_activation(self):
         for scenario in ('camera_stale_id', 'camera_stale_activation', 'camera_current'):

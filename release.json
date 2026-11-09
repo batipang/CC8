@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "supervisor-health-owner-20261109.1",
+  "release_id": "voice-controls-20261109.1",
   "backend": {
-    "version": "0.16.5"
+    "version": "0.16.6"
   },
   "assistant": {
-    "version": "0.9.59",
-    "version_code": 96,
+    "version": "0.9.61",
+    "version_code": 98,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {

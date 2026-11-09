@@ -105,6 +105,7 @@ final class VoiceSession {
   private volatile boolean dotChatSupported, savedTasksSupported;
   private volatile boolean resultProvenanceSupported;
   private volatile boolean resultReadingSupported;
+  private volatile JSONObject voicePreferences;
 
   boolean supportsDotChatHandoff() {
     return dotChatSupported;
@@ -241,6 +242,7 @@ final class VoiceSession {
       route = routeEpoch;
       dotChatSupported =
           savedTasksSupported = resultProvenanceSupported = resultReadingSupported = false;
+      voicePreferences = null;
       output = null;
       socket = null;
       availability.offline(SystemClock.elapsedRealtime());
@@ -374,6 +376,7 @@ final class VoiceSession {
         next.pairedCaptureRequested = false;
         dotChatSupported =
             savedTasksSupported = resultProvenanceSupported = resultReadingSupported = false;
+        voicePreferences = null;
         socket = next.connection;
         output = next.out;
         phase = recordingPhase();
@@ -482,6 +485,7 @@ final class VoiceSession {
       routeEpoch++;
       dotChatSupported =
           savedTasksSupported = resultProvenanceSupported = resultReadingSupported = false;
+      voicePreferences = null;
       socket = null;
       output = null;
       Link backup =
@@ -683,6 +687,7 @@ final class VoiceSession {
             if (!foreground || !currentRoute(route) || p.generation < minimumGeneration) return;
             resultProvenanceSupported = Boolean.TRUE.equals(j.opt("supports_result_provenance"));
             resultReadingSupported = Boolean.TRUE.equals(j.opt("supports_result_reading"));
+            acceptVoicePreferences(j.optJSONObject("voice_preferences"));
             if (Boolean.TRUE.equals(j.opt("playback_interrupted_by_transport"))) {
               if (!statusFeedback.transportInterruption(p.generation)) return;
               phase = "error";
@@ -696,6 +701,10 @@ final class VoiceSession {
                       : j.optString("message", "Mac 已连接，点击开始语音"));
             }
           }
+        } else if ("voice_preferences".equals(event)) {
+          if (p.generation < minimumGeneration) return;
+          acceptVoicePreferences(j.optJSONObject("voice_preferences"));
+          listener.workspaceResult(Boolean.TRUE.equals(j.opt("ok")), j.optString("message"), route);
         } else if ("capture_started".equals(event)) {
           confirmCaptureStart(j, route);
         } else if ("capture_rejected".equals(event)) {
@@ -1064,6 +1073,36 @@ final class VoiceSession {
     Wire.put(j, "id", id);
     Wire.put(j, "restart", restart);
     return sendWorkspace(j, route);
+  }
+
+  private void acceptVoicePreferences(JSONObject data) {
+    voicePreferences = null;
+    if (data == null
+        || !Integer.valueOf(1).equals(data.opt("version"))
+        || !(data.opt("revision") instanceof Integer)
+        || data.optInt("revision", -1) < 0
+        || !(data.opt("natural_barge") instanceof Boolean)
+        || !Boolean.TRUE.equals(data.opt("supported"))) return;
+    String rate = data.optString("speech_rate");
+    if ("slow".equals(rate) || "normal".equals(rate) || "fast".equals(rate))
+      voicePreferences = data;
+  }
+
+  JSONObject voicePreferences(long route) {
+    synchronized (routeLock) {
+      return foreground && currentRoute(route) ? voicePreferences : null;
+    }
+  }
+
+  boolean setVoicePreferences(String rate, boolean naturalBarge, int revision, long route) {
+    synchronized (routeLock) {
+      if (voicePreferences(route) == null) return false;
+      JSONObject j = Wire.event("voice_preferences_set");
+      Wire.put(j, "speech_rate", rate);
+      Wire.put(j, "natural_barge", naturalBarge);
+      Wire.put(j, "revision", revision);
+      return sendWorkspace(j, route);
+    }
   }
 
   boolean reminderAction(JSONObject args, long route) {

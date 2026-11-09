@@ -129,6 +129,8 @@ class DeviceEventRouter:
             self.touch_activity()
         elif event == 'settings':
             self.session.settings(j)
+        elif event == 'voice_preferences_set':
+            self.session.set_voice_preferences(j)
         elif event == 'session_start':
             self.session.start_capture(j)
         elif event == 'session_stop':

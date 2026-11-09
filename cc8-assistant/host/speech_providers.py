@@ -12,6 +12,7 @@ from configuration import load_config
 from recognition import MandarinRecognizer
 from minimax_client import MiniMaxVoice, MiniMaxError
 from dsp import RATE
+from voice_preferences import RATES
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -91,6 +92,12 @@ class DirectSpeech(LocalSpeech):
         settings = config or load_config()
         super().__init__(config=settings)
         self.voice = MiniMaxVoice(config=settings)
+        self.default_voice_speed = self.voice.speed
+
+    def set_voice_rate(self, rate):
+        # Applied only while the session and all provider workers are idle.
+        # Relative to the owner's configured speed; normal restores it exactly.
+        self.voice.speed = max(0.5, min(2.0, self.default_voice_speed * RATES[rate]))
 
     def cancel(self):
         self.voice.cancel()

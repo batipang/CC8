@@ -82,6 +82,7 @@ class EndpointHooks:
     complete_chinese_enabled: Callable[[], bool] = lambda: False
     complete_chinese_pending: Callable[[WaitingUtterance | None], bool] = lambda _: False
     complete_chinese_guard: Callable[[], ContextManager[object]] = nullcontext
+    natural_barge_enabled: Callable[[], bool] = lambda: True
     complete_chinese_ticket: Callable[[WaitingUtterance, int], WaitingUtterance | None] = (
         lambda *_: None
     )
@@ -315,6 +316,7 @@ class EndpointPipeline:
             and credible
             and self.hooks.playing()
             and self.hooks.awake()
+            and self.hooks.natural_barge_enabled()
             and (not self.hooks.paused())
         ):
             self.turn_pause_token = self.hooks.pause_voice(stamp)
