@@ -16,7 +16,7 @@
 
 ## 校验升级和恢复包
 
-`verify-transition` 比较三个干净的 Git 工作区。基线 APK 的 SHA-256 必须与已核实的安装记录一致。工具校验三个 APK 的包名、版本和 Android 27 签名，要求签名证书一致、升级和恢复的 versionCode 逐步增加。它还核对两份新包的构建回执、双向协议兼容，以及恢复源码相对基线只改 `release.json`。
+`verify-transition` 比较三个干净的 Git 工作区。基线 APK 的 SHA-256 必须与已核实的安装记录一致。工具校验三个 APK 的包名、版本和 Android 27 签名，要求签名证书一致、升级和恢复的 versionCode 逐步增加。它还核对两份新包的构建回执和双向协议兼容；恢复源码必须保留基线运行行为，只改 `release.json`。为保留固定 Gradle 下载源修复，允许额外携带 `.github/workflows/ci.yml` 和 `tools/tests/test_gradle_provision.py`，但每份必须是与候选提交完全相同的普通、非可执行 Git 文件。缺失、删除、链接、可执行位或内容不一致均拒绝，其他路径仍拒绝。报告记录实际差异和匹配的构建支持路径，不把这项检查当成设备安装授权。
 
 ```sh
 ./cc8 upgrade verify-transition --from-root /absolute/running-source \

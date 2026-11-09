@@ -151,6 +151,17 @@ class EndpointPipeline:
     def reset_transport(self):
         return reset_transport(self)
 
+    def set_environment(self, name):
+        # An idle controller owns this transition. Reject direct changes while
+        # a real utterance still owns timing, retained PCM or wake evidence.
+        if self.vad.talking or self.waiting_turn is not None or self.voice_trace is not None:
+            raise RuntimeError('A pending utterance owns the current environment')
+        from recognition_environment import profile
+
+        profile(name)
+        self.reset_voice_activity()
+        self.near_speech.set_environment(name)
+
     def reset_session(self):
         return reset_session(self)
 

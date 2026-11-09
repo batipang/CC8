@@ -115,6 +115,10 @@ def validate_device_event(value: object) -> JsonObject:
         from preference_protocol import validate_request
 
         validate_request(value)
+    if name == 'vocabulary_request':
+        from recognition_vocabulary import validate_request as validate_vocabulary_request
+
+        validate_vocabulary_request(value)
     if name == 'photo_followup_forget':
         photo_id = value.get('photo_id')
         if (
@@ -158,6 +162,17 @@ def validate_device_event(value: object) -> JsonObject:
             or type(value.get('natural_barge')) is not bool
         ):
             raise ValueError('Invalid voice preferences')
+    if name == 'environment_profile_set':
+        from recognition_environment import profile
+
+        revision = value.get('revision')
+        if (
+            set(value) != {'event', 'revision', 'profile'}
+            or type(revision) is not int
+            or not 0 <= revision < 2**31 - 1
+        ):
+            raise ValueError('Invalid environment setting')
+        profile(value.get('profile'))
     if name == 'recognition_language_set':
         revision = value.get('revision')
         if (

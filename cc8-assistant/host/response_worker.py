@@ -17,7 +17,12 @@ from failure_feedback import FailureSink, feedback
 from dot_receipt import UnconfirmedTurnStart
 from operation_failure import OperationFailure, KINDS
 from reply_types import Reply, TextReply, VisualReply, BrainPreparation, ResultRead, CorrectedReply
-from speech_correction import SpeechCorrection, CorrectionUnavailable, command as correction_command
+from speech_correction import (
+    SpeechCorrection,
+    CorrectionUnavailable,
+    same_owner,
+    command as correction_command,
+)
 from result_reading import ResultReading, ReadingUnavailable, reading_command
 from saved_tasks import ident as result_ident
 from session_ports import EventSink, MetricSink
@@ -69,6 +74,20 @@ class ResponseWorker:
         self.hooks.event(
             'speech_correction', **self.corrections.state(self.hooks.correction_owner())
         )
+
+    def prepare_vocabulary(self, term, alias, source_id):
+        # Only an explicit, freshly validated local wordlist pair enters here.
+        # Literal uniqueness and numeric/token boundaries remain owned by the
+        # existing correction engine; no ASR history or task is replaced now.
+        with self.hooks.lock:
+            owner = self.hooks.correction_owner()
+            if not source_id or self.corrections.source_token(owner) != source_id:
+                raise CorrectionUnavailable('Original recognition changed')
+            draft = self.corrections.prepare(term + '，不是' + alias, owner)
+            self.publish_corrections()
+            if not same_owner(owner, self.hooks.correction_owner()):
+                raise CorrectionUnavailable('Correction owner changed')
+            self.corrections.current(owner, draft.ident)
 
     def clear_corrections(self, preserve_source=False, *, publish=True):
         with self.hooks.lock:

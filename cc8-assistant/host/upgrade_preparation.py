@@ -32,6 +32,54 @@ EXCLUDED = [
     'service_definition',
 ]
 
+# Recovery may carry these reviewed CI-only download fixes, never runtime changes.
+RECOVERY_BUILD_SUPPORT = frozenset(
+    ('.github/workflows/ci.yml', 'tools/tests/test_gradle_provision.py')
+)
+
+
+def _recovery_source_gate(roots, commits):
+    """Compare pinned Git objects; reject missing, linked or divergent support files."""
+    changed = (
+        subprocess.check_output(
+            [
+                'git',
+                '-C',
+                str(roots[2]),
+                'diff',
+                '--no-ext-diff',
+                '--no-renames',
+                '--name-only',
+                '-z',
+                commits[0],
+                commits[2],
+                '--',
+            ],
+            timeout=15,
+        )
+        .decode()
+        .split('\0')[:-1]
+    )
+    extra = set(changed) - {'release.json'}
+    if 'release.json' not in changed or extra - RECOVERY_BUILD_SUPPORT:
+        raise ValueError('Recovery source may change only release.json and matching CI support')
+    for path in sorted(extra):
+        entries = []
+        for root, commit in zip(roots[1:], commits[1:]):
+            entry = subprocess.check_output(
+                ['git', '-C', str(root), 'ls-tree', '-z', commit, '--', path],
+                timeout=10,
+            )
+            # Require one regular non-executable blob at this exact path in both trees.
+            if not re.fullmatch(
+                rb'100644 blob [a-f0-9]{40}\t' + re.escape(path.encode()) + rb'\x00', entry
+            ):
+                raise ValueError('Recovery CI support must be a regular candidate-matching file')
+            entries.append(entry)
+        if entries[0] != entries[1]:
+            raise ValueError('Recovery CI support differs from the candidate source')
+    return {'changed_paths': changed, 'candidate_matching_build_support': sorted(extra)}
+
 
 def fingerprint(value):
     return hashlib.sha256(
@@ -156,23 +204,7 @@ def verify_assistant_transition(
         raise ValueError('A transition crosses an incompatible host/device protocol')
     if replace(recovery, release_id=before.release_id, assistant=before.assistant) != before:
         raise ValueError('Recovery must retain baseline runtime and protocol metadata')
-    changed = subprocess.check_output(
-        [
-            'git',
-            '-C',
-            str(roots[2]),
-            'diff',
-            '--no-ext-diff',
-            '--name-only',
-            states[0][0],
-            states[2][0],
-            '--',
-        ],
-        text=True,
-        timeout=15,
-    ).splitlines()
-    if changed != ['release.json']:
-        raise ValueError('Recovery source may change only release.json')
+    recovery_source = _recovery_source_gate(roots, [state[0] for state in states])
     reminder_gates = {
         name: reminder_storage_gate(roots[0], target)
         for name, target in (('candidate', roots[1]), ('recovery', roots[2]))
@@ -235,6 +267,7 @@ def verify_assistant_transition(
         'ready_for_installation': False,
         'device_acceptance': 'not_asserted',
         'reminder_storage': reminder_gates,
+        'recovery_source': recovery_source,
         **observation,
     }
 

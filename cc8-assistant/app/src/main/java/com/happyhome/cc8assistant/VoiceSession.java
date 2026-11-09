@@ -67,6 +67,8 @@ final class VoiceSession {
     default void speechCorrection(JSONObject state, long route) {}
 
     default void preferenceResult(JSONObject data, long route) {}
+
+    default void vocabularyResult(JSONObject data, long route) {}
   }
 
   private final Context context;
@@ -113,6 +115,7 @@ final class VoiceSession {
   private volatile boolean resultProvenanceSupported;
   private volatile boolean resultReadingSupported;
   private volatile boolean visionModesSupported, photoFollowupSupported, macWindowSupported;
+  private volatile boolean vocabularySupported;
   private volatile JSONObject voicePreferences;
   private volatile JSONObject speechCorrection;
   private int speechCorrectionRevision = -1;
@@ -131,6 +134,10 @@ final class VoiceSession {
 
   boolean supportsMacWindow() {
     return macWindowSupported;
+  }
+
+  boolean supportsVocabulary() {
+    return vocabularySupported;
   }
 
   PhotoFollowupWindow.Picture photoForFollowup() {
@@ -291,10 +298,11 @@ final class VoiceSession {
       photoFollowupSupported =
           visionModesSupported =
               macWindowSupported =
-                  dotChatSupported =
-                      savedTasksSupported =
-                          preferenceMemorySupported =
-                              resultProvenanceSupported = resultReadingSupported = false;
+                  vocabularySupported =
+                      dotChatSupported =
+                          savedTasksSupported =
+                              preferenceMemorySupported =
+                                  resultProvenanceSupported = resultReadingSupported = false;
       voicePreferences = null;
       speechCorrection = null;
       speechCorrectionRevision = -1;
@@ -435,10 +443,11 @@ final class VoiceSession {
         photoFollowupSupported =
             visionModesSupported =
                 macWindowSupported =
-                    dotChatSupported =
-                        savedTasksSupported =
-                            preferenceMemorySupported =
-                                resultProvenanceSupported = resultReadingSupported = false;
+                    vocabularySupported =
+                        dotChatSupported =
+                            savedTasksSupported =
+                                preferenceMemorySupported =
+                                    resultProvenanceSupported = resultReadingSupported = false;
         voicePreferences = null;
         speechCorrection = null;
         speechCorrectionRevision = -1;
@@ -558,10 +567,11 @@ final class VoiceSession {
       photoFollowupSupported =
           visionModesSupported =
               macWindowSupported =
-                  dotChatSupported =
-                      savedTasksSupported =
-                          preferenceMemorySupported =
-                              resultProvenanceSupported = resultReadingSupported = false;
+                  vocabularySupported =
+                      dotChatSupported =
+                          savedTasksSupported =
+                              preferenceMemorySupported =
+                                  resultProvenanceSupported = resultReadingSupported = false;
       voicePreferences = null;
       speechCorrection = null;
       speechCorrectionRevision = -1;
@@ -765,6 +775,7 @@ final class VoiceSession {
           synchronized (routeLock) {
             if (!foreground || !currentRoute(route) || p.generation < minimumGeneration) return;
             preferenceMemorySupported = Boolean.TRUE.equals(j.opt("supports_preference_memory"));
+            vocabularySupported = Boolean.TRUE.equals(j.opt("supports_vocabulary"));
             visionModesSupported = Boolean.TRUE.equals(j.opt("supports_vision_modes"));
             macWindowSupported = Boolean.TRUE.equals(j.opt("supports_mac_window"));
             photoFollowupSupported = Boolean.TRUE.equals(j.opt("supports_photo_followup"));
@@ -1115,6 +1126,8 @@ final class VoiceSession {
           if (foreground) listener.dotChats(j);
         } else if ("preference_result".equals(event)) {
           if (foreground) listener.preferenceResult(j, route);
+        } else if ("vocabulary_result".equals(event)) {
+          if (foreground) listener.vocabularyResult(j, route);
         } else if ("saved_task_result".equals(event)) {
           if (foreground) listener.savedTasks(j);
         } else if ("web_sources".equals(event)) {
@@ -1288,6 +1301,12 @@ final class VoiceSession {
             || !("auto".equals(data.optString("recognition_language"))
                 || "zh".equals(data.optString("recognition_language"))
                 || "en".equals(data.optString("recognition_language"))))) return;
+    if (data.opt("environment_profiles_supported") != null
+        && (!(data.opt("environment_profiles_supported") instanceof Boolean)
+            || !(data.opt("environment_profile") instanceof String)
+            || !("normal".equals(data.optString("environment_profile"))
+                || "quiet".equals(data.optString("environment_profile"))
+                || "television".equals(data.optString("environment_profile"))))) return;
     if ("slow".equals(rate) || "normal".equals(rate) || "fast".equals(rate))
       voicePreferences = data;
   }
@@ -1371,6 +1390,20 @@ final class VoiceSession {
     }
   }
 
+  boolean setEnvironmentProfile(String profile, int revision, long route) {
+    synchronized (routeLock) {
+      JSONObject current = voicePreferences(route);
+      if (current == null
+          || !Boolean.TRUE.equals(current.opt("environment_profiles_supported"))
+          || !("normal".equals(profile) || "quiet".equals(profile) || "television".equals(profile)))
+        return false;
+      JSONObject request = Wire.event("environment_profile_set");
+      Wire.put(request, "profile", profile);
+      Wire.put(request, "revision", revision);
+      return sendWorkspace(request, route);
+    }
+  }
+
   boolean preferenceRequest(String requestId, JSONObject args, long route) {
     synchronized (routeLock) {
       if (!preferenceMemorySupported || !foreground || !currentRoute(route)) return false;
@@ -1387,6 +1420,29 @@ final class VoiceSession {
         Wire.put(j, key, args.opt(key));
       }
       return sendWorkspace(j, route);
+    }
+  }
+
+  boolean vocabularyRequest(String requestId, JSONObject args, long route) {
+    synchronized (routeLock) {
+      if (!vocabularySupported
+          || !foreground
+          || !currentRoute(route)
+          || !requestId.matches("[a-f0-9]{32}")) return false;
+      JSONObject request = Wire.event("vocabulary_request");
+      Wire.put(request, "request_id", requestId);
+      java.util.Iterator<String> keys = args.keys();
+      while (keys.hasNext()) {
+        String key = keys.next();
+        if (!("action".equals(key)
+            || "revision".equals(key)
+            || "term".equals(key)
+            || "aliases".equals(key)
+            || "alias".equals(key)
+            || "source_id".equals(key))) return false;
+        Wire.put(request, key, args.opt(key));
+      }
+      return sendWorkspace(request, route);
     }
   }
 

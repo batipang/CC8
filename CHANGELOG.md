@@ -1,5 +1,13 @@
 # Changelog
 
+## Backend 0.16.17 / Assistant 0.9.83 — explicit listening environments and spelling references
+
+- Add normal, quiet and stricter television-background local speech gates. Normal preserves the deployed floor, margin and votes. Share the existing revision/full-idle admission rule, clear old vote/partial-utterance state, and report the applied thresholds. Keep wake, AEC, transcript text, TTS and microphone ownership unchanged; synthetic gate checks do not establish real room/ASR performance.
+- Add an explicitly edited, owner-private 64-term vocabulary with four bounded mishearing forms per term, atomic storage, cross-writer locking and revision checks. Public MiniMax ASR docs do not establish a hotword input, so no invented parameter, automatic transcript rewrite or model/preference injection is added. Selecting a stored literal pair only prepares the existing correction draft; separate confirmation submits a new request once and preserves original task receipts.
+- Fence native wordlist requests, immutable display snapshots and dialog callbacks by request/route/window identity; reject retired menus, late responses and timeouts. Apply the same closed-editor/snapshot check to the affected language dialog. No settings or wordlist action starts audio/video capture.
+- Keep recovery runtime sources identical to the deployed baseline while permitting the two fixed Gradle CI-support files only when their regular Git blobs exactly match the candidate. Reject unknown paths, divergent bytes, deletion, links and executable modes before APK checks; record the actual support delta in the transition receipt.
+- Carry PR464's passing protected main checks, original-signature code118 build and code119 original-behavior recovery preparation. The deployed 0.16.12/code110 pair remains unchanged. Grouped installation and real picker/environment/recognition acceptance remain separate; the final 72-hour acceptance has not started.
+
 ## Backend 0.16.16 / Assistant 0.9.81 — explicit Mac single-window input
 
 - Add a system single-window picker, immutable preview and explicit one-shot Send. Keep selection under one 90-second lease and three attempts, reject stale callbacks and concurrent duplicate sends, validate the chosen window before/after capture and before Send, and never substitute a display or another window. Use an independently bounded, private inherited-pipe child with no provider credentials, image files or audio capture.

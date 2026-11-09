@@ -49,6 +49,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   private DotChatsDialog dotChats;
   private PreferenceMemoryDialog preferenceMemory;
   private RecognitionLanguageDialog recognitionLanguage;
+  private RecognitionEnvironmentDialog recognitionEnvironment;
+  private VocabularyDialog vocabulary;
   private AlertDialog imageQualityDialog;
   private boolean highDefinitionImage;
   private boolean reviewCapturedImage;
@@ -170,6 +172,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     dotChats = new DotChatsDialog(this, session);
     preferenceMemory = new PreferenceMemoryDialog(this, session);
     recognitionLanguage = new RecognitionLanguageDialog(this, session);
+    recognitionEnvironment = new RecognitionEnvironmentDialog(this, session);
+    vocabulary = new VocabularyDialog(this, session);
     resultDetails = new ResultDetailsDialog(this, session);
     savedTasks = new SavedTasksDialog(this, session, resultDetails);
     requestOpenVoice(getIntent());
@@ -1269,7 +1273,9 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
               "识别语言",
               "看图设置",
               "识别图片文字",
-              "追问最近照片"
+              "追问最近照片",
+              "听音环境",
+              "用户词表／选词纠错"
             },
             (d, n) -> {
               if (n == 0) {
@@ -1320,6 +1326,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
               else if (n == 13) showImageQuality();
               else if (n == 14) requestImage("ocr");
               else if (n == 15) showPhotoQuestion();
+              else if (n == 16) recognitionEnvironment.open();
+              else if (n == 17) vocabulary.open();
               else showReminderHistory();
             })
         .setNegativeButton("关闭", null)
@@ -1801,6 +1809,15 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   }
 
   @Override
+  public void vocabularyResult(JSONObject data, long route) {
+    runOnUiThread(
+        () -> {
+          if (foreground && session.currentRoute(route) && vocabulary != null)
+            vocabulary.accept(data, route);
+        });
+  }
+
+  @Override
   public void speechCorrection(JSONObject data, long route) {
     runOnUiThread(
         () -> {
@@ -1992,6 +2009,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
             dotChats.close();
             preferenceMemory.close();
             recognitionLanguage.close();
+            recognitionEnvironment.close();
+            vocabulary.close();
             if (imageQualityDialog != null) imageQualityDialog.dismiss();
             savedTasks.close();
             resultDetails.close();
@@ -2250,6 +2269,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     if (dotChats != null) dotChats.close();
     if (preferenceMemory != null) preferenceMemory.close();
     if (recognitionLanguage != null) recognitionLanguage.close();
+    if (recognitionEnvironment != null) recognitionEnvironment.close();
+    if (vocabulary != null) vocabulary.close();
     if (imageQualityDialog != null) imageQualityDialog.dismiss();
     if (savedTasks != null) savedTasks.close();
     if (resultDetails != null) resultDetails.close();

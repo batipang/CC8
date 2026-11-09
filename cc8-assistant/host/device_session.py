@@ -66,6 +66,7 @@ def complete_handshake(session: SessionController, j):
         supports_dot_chat_handoff=True,
         supports_saved_task_results=True,
         supports_preference_memory=True,
+        supports_vocabulary=True,
         supports_vision_modes=True,
         supports_photo_followup=True,
         supports_mac_window=window_available(),
