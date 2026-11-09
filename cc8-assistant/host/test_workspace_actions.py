@@ -28,6 +28,7 @@ public class JSONObject {
  public JSONArray optJSONArray(String k){Object v=values.get(k);return v instanceof JSONArray?(JSONArray)v:null;}
  public JSONObject optJSONObject(String k){Object v=values.get(k);return v instanceof JSONObject?(JSONObject)v:null;}
  public Object remove(String k){return values.remove(k);}
+ public boolean isNull(String k){return values.get(k)==null;}
 }
 """,
     'org/json/JSONArray.java': r"""
@@ -79,14 +80,15 @@ public class EditText extends TextView {
 """,
     'android/widget/ScrollView.java': r"""
 package android.widget;
-public class ScrollView {public ScrollView(Object owner){}public void addView(Object child){}}
+public class ScrollView {public Object child;public ScrollView(Object owner){}public void addView(Object value){child=value;}}
 """,
     'android/widget/LinearLayout.java': r"""
 package android.widget;
 public class LinearLayout {
  public static final int VERTICAL=1;
+ public final java.util.List<Object> children=new java.util.ArrayList<>();
  public LinearLayout(Object owner){}public void setOrientation(int value){}
- public void setPadding(int a,int b,int c,int d){}public void addView(Object child){}
+ public void setPadding(int a,int b,int c,int d){}public void addView(Object child){children.add(child);}
  public void addView(Object child,LayoutParams params){}
  public static class LayoutParams{public LayoutParams(int width,int height){}}
 }
@@ -135,9 +137,9 @@ public class AlertDialog {
  public void positive(){getButton(BUTTON_POSITIVE).performClick();}
  public void negative(){getButton(BUTTON_NEGATIVE).performClick();}
  public static class Builder {
-  public String title="",message="";public String[] labels;public Click positive,negative,neutral,itemsClick;
+  public String title="",message="";public Object view;public String[] labels;public Click positive,negative,neutral,itemsClick;
   public Builder(Object owner){}public Builder setTitle(String value){title=value;return this;}
-  public Builder setMessage(String value){message=value;return this;}public Builder setView(Object value){return this;}
+  public Builder setMessage(String value){message=value;return this;}public Builder setView(Object value){view=value;return this;}
   public Builder setPositiveButton(String label,Click click){positive=click;return this;}
   public Builder setNegativeButton(String label,Click click){negative=click;return this;}
   public Builder setNeutralButton(String label,Click click){neutral=click;return this;}
@@ -176,8 +178,9 @@ public class Looper{public static Looper getMainLooper(){return new Looper();}}
     'android/os/Handler.java': r"""
 package android.os;
 public class Handler {
- public Handler(Looper looper){}public void postDelayed(Runnable work,long delay){}
- public void removeCallbacks(Runnable work){}
+ public static Runnable last;
+ public Handler(Looper looper){}public void postDelayed(Runnable work,long delay){last=work;}
+ public void removeCallbacks(Runnable work){if(last==work)last=null;}
 }
 """,
     'android/content/ClipData.java': r"""
@@ -194,7 +197,7 @@ HARNESS = r"""
 package com.happyhome.cc8assistant;
 import android.app.*;import android.widget.*;import org.json.*;import java.util.*;import java.io.*;
 class VoiceSession {
- final Object routeLock=new Object();boolean foreground=true,savedTasksSupported=true;
+ final Object routeLock=new Object();boolean foreground=true,savedTasksSupported=true,resultProvenanceSupported=true;
  long routeEpoch=1;int epoch,eventCalls;Link activeLink=new Link("original"),usbLink,wifiLink,backup;
  final List<JSONObject> sent=new ArrayList<>();
  boolean failNext;
@@ -234,7 +237,9 @@ class Wire {
  static JSONObject decode(byte[] raw){return values.get(java.nio.ByteBuffer.wrap(raw).getInt());}
 }
 class ActionCheck extends Activity {
- final VoiceSession session=new VoiceSession();final SavedTasksDialog savedTasks=new SavedTasksDialog(this,session);
+ final VoiceSession session=new VoiceSession();
+ final ResultDetailsDialog resultDetails=new ResultDetailsDialog(this,session);
+ final SavedTasksDialog savedTasks=new SavedTasksDialog(this,session,resultDetails);
  boolean linked=true;long workspaceRoute=1;
  JSONArray tasksData=new JSONArray(),remindersData=new JSONArray();
  static final int INK=1,MUTED=2;
@@ -248,9 +253,61 @@ class ActionCheck extends Activity {
  void detail(String status){tasksData=new JSONArray(task(status));showTaskList();AlertDialog.last.item(1);}
  void reminderOptions(){remindersData=new JSONArray(reminder());showReminders();AlertDialog.last.item(0);}
  void answer(Object... data){JSONObject j=new JSONObject(data);j.values.put("ok",true);j.values.put("request_id",session.sent.get(session.sent.size()-1).optString("request_id"));savedTasks.accept(j);}
+ static JSONObject sourceTask(String kind,String status){
+  JSONObject value=task("completed");
+  JSONObject file=new JSONObject("item_id","file-item","path","/tmp/public.txt","kind",kind,"status",status,"move_to",null);
+  value.values.put("finished_at","2026-11-09T08:00:00+08:00");
+  value.values.put("provenance",new JSONObject("provider","dot","host","local","thread_id","voice-thread","turn_id","voice-turn","files",new JSONArray(file),"files_truncated",false));
+  return value;
+ }
+ static Button locateButton(){
+  LinearLayout content=(LinearLayout)((ScrollView)AlertDialog.last.builder.view).child;
+  return (Button)content.children.get(1);
+ }
  public static void main(String[] args)throws Exception{
   ActionCheck c=new ActionCheck();VoiceSession s=c.session;
   switch(args[0]){
+   case "result_source":{
+    c.resultDetails.open(sourceTask("update","completed"),false,s.routeEpoch);
+    yes(s.sent.isEmpty(),"Viewing provenance must not send a task or locate anything");
+    TextView body=(TextView)((LinearLayout)((ScrollView)AlertDialog.last.builder.view).child).children.get(0);
+    yes(body.getText().toString().contains("voice-thread")&&body.getText().toString().contains("/tmp/public.txt"),"Actual receipt provenance must be visible");
+    locateButton().performClick();AlertDialog.last.item(0);
+    yes(s.sent.size()==1,"An explicit file choice sends exactly one request");
+    JSONObject request=s.sent.get(0);
+    yes("reveal_live".equals(request.optString("action"))&&request.values.size()==5&&!request.values.containsKey("path"),"Wire may carry only receipt ID and index, never a client path");break;
+   }
+   case "result_stale_choice":{
+    c.resultDetails.open(sourceTask("update","completed"),false,s.routeEpoch);locateButton().performClick();
+    AlertDialog choice=AlertDialog.last;s.change();choice.item(0);
+    yes(s.sent.isEmpty(),"Old result choice must not reveal on a new route");break;
+   }
+   case "result_bad_receipt":{
+    c.resultDetails.open(sourceTask("delete","completed"),false,s.routeEpoch);locateButton().performClick();AlertDialog.last.item(0);
+    c.resultDetails.open(sourceTask("update","failed"),false,s.routeEpoch);locateButton().performClick();AlertDialog.last.item(0);
+    yes(s.sent.isEmpty(),"Deleted and failed file receipts cannot launch file location");break;
+   }
+   case "result_capability":{
+    s.resultProvenanceSupported=false;c.resultDetails.open(sourceTask("update","completed"),false,s.routeEpoch);
+    LinearLayout view=(LinearLayout)((ScrollView)AlertDialog.last.builder.view).child;
+    yes(view.children.size()==1&&!s.revealResultFile("id","task",0,false,s.routeEpoch)&&s.sent.isEmpty(),"Old backend must not show or accept the new action");break;
+   }
+   case "result_saved":{
+    c.savedTasks.open();c.answer("items",new JSONArray(sourceTask("update","completed")));AlertDialog.last.item(0);
+    c.answer("item",sourceTask("update","completed"));locateButton().performClick();
+    locateButton().performClick();AlertDialog.last.item(0);
+    yes(s.sent.size()==3&&"reveal_saved".equals(s.sent.get(2).optString("action")),"Saved provenance must use the saved-receipt lookup");break;
+   }
+   case "result_timeout":{
+    c.resultDetails.open(sourceTask("update","completed"),false,s.routeEpoch);locateButton().performClick();AlertDialog.last.item(0);
+    AlertDialog waiting=AlertDialog.last;android.os.Handler.last.run();
+    c.resultDetails.accept(new JSONObject("request_id",s.sent.get(0).optString("request_id"),"ok",true,"revealed",true));
+    yes(s.sent.size()==1&&waiting.dismissed,"Timeout/late ACK must not retry or reopen a stale result");break;
+   }
+   case "result_queue_failure":{
+    c.resultDetails.open(sourceTask("update","completed"),false,s.routeEpoch);locateButton().performClick();s.backup=s.new Link("backup");s.failNext=true;AlertDialog.last.item(0);
+    yes(s.sent.isEmpty()&&s.eventCalls==1,"An uncertain reveal write cannot retry on a fallback route");break;
+   }
    case "task_list":{
     c.tasksData=new JSONArray(task("running"));c.showTaskList();AlertDialog list=AlertDialog.last;s.change();list.item(1);
     if(AlertDialog.last!=list)AlertDialog.last.positive();
@@ -365,6 +422,8 @@ class WorkspaceActionTests(unittest.TestCase):
                 'boolean isConnected(',
                 'boolean currentRoute(',
                 'boolean supportsSavedTaskResults(',
+                'boolean supportsResultProvenance(',
+                'boolean revealResultFile(',
                 'private void send(',
                 'private void sendPacket(',
                 'private void ownPacket(',
@@ -396,6 +455,7 @@ boolean savedTaskRequest(String requestId,String action,String id,long ignored){
             **FIXTURES,
             'ActionCheck.java': harness,
             'SavedTasksDialog.java': SAVED.read_text(),
+            'ResultDetailsDialog.java': (JAVA / 'ResultDetailsDialog.java').read_text(),
         }.items():
             path = cls.folder / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -479,3 +539,24 @@ boolean savedTaskRequest(String requestId,String action,String id,long ignored){
 
     def test_current_saved_delete_remains_usable(self):
         self.scenario('current_saved_delete')
+
+    def test_result_source_view_and_explicit_receipt_file_choice(self):
+        self.scenario('result_source')
+
+    def test_old_result_file_choice_cannot_cross_a_route(self):
+        self.scenario('result_stale_choice')
+
+    def test_deleted_and_failed_files_do_not_request_reveal(self):
+        self.scenario('result_bad_receipt')
+
+    def test_old_backend_does_not_offer_result_reveal(self):
+        self.scenario('result_capability')
+
+    def test_saved_result_uses_saved_source_lookup(self):
+        self.scenario('result_saved')
+
+    def test_result_reveal_timeout_and_late_receipt_do_not_retry(self):
+        self.scenario('result_timeout')
+
+    def test_result_reveal_write_failure_does_not_retry_on_fallback(self):
+        self.scenario('result_queue_failure')

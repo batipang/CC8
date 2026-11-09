@@ -129,12 +129,27 @@ def validate_device_event(value: object) -> JsonObject:
         ):
             raise ValueError('Invalid work report period')
         if name == 'saved_task_request':
-            if value['action'] not in ('list', 'get', 'save', 'delete'):
+            if value['action'] not in (
+                'list',
+                'get',
+                'save',
+                'delete',
+                'reveal_live',
+                'reveal_saved',
+            ):
                 raise ValueError('Invalid saved result action')
             if value['action'] != 'list':
                 task_id = value.get('id')
                 if not isinstance(task_id, str) or not re.fullmatch('[a-f0-9]{16}', task_id):
                     raise ValueError('Invalid saved task ID')
+            if value['action'] in ('reveal_live', 'reveal_saved'):
+                index = value.get('file_index')
+                if (
+                    type(index) is not int
+                    or not 0 <= index < 8
+                    or set(value) != {'event', 'request_id', 'action', 'id', 'file_index'}
+                ):
+                    raise ValueError('Invalid result reveal request')
     if name in ('session_start', 'session_rebind', 'session_stop'):
         for key in ('capture_id', 'capture_start_token'):
             if key in value:

@@ -13,6 +13,7 @@ import threading
 import time
 import uuid
 from zoneinfo import ZoneInfo
+from result_provenance import validate as validate_provenance
 
 LIMIT = 32
 MAX_BYTES = 512 * 1024
@@ -54,7 +55,7 @@ def date(value):
 
 
 def validate(item):
-    if not isinstance(item, dict) or set(item) != {
+    required = {
         'id',
         'title',
         'status',
@@ -62,7 +63,12 @@ def validate(item):
         'steps',
         'started_at',
         'saved_at',
-    }:
+    }
+    if (
+        not isinstance(item, dict)
+        or not required <= set(item)
+        or set(item) - required - {'provenance', 'finished_at'}
+    ):
         raise ValueError('Invalid saved task fields')
     ident(item['id'])
     if (
@@ -73,6 +79,10 @@ def validate(item):
         raise ValueError('Invalid saved task receipt')
     date(item['started_at'])
     date(item['saved_at'])
+    if 'finished_at' in item:
+        date(item['finished_at'])
+    if 'provenance' in item:
+        validate_provenance(item['provenance'])
     steps = item['steps']
     if not isinstance(steps, list) or len(steps) > 5:
         raise ValueError('Invalid saved task steps')
@@ -177,7 +187,7 @@ class SavedTasks:
             not isinstance(value, dict)
             or set(value) != {'schema_version', 'items'}
             or type(value['schema_version']) is not int
-            or value['schema_version'] != 1
+            or value['schema_version'] not in (1, 2)
         ):
             raise ValueError('Invalid saved task store')
         items = value['items']
@@ -198,7 +208,7 @@ class SavedTasks:
         if actual != expected:
             raise OSError('Saved task store changed externally')
         raw = (
-            json.dumps({'schema_version': 1, 'items': items}, ensure_ascii=False, allow_nan=False)
+            json.dumps({'schema_version': 2, 'items': items}, ensure_ascii=False, allow_nan=False)
             + '\n'
         ).encode('utf-8')
         if len(raw) > MAX_BYTES:
@@ -239,6 +249,9 @@ class SavedTasks:
             for key in ('id', 'title', 'status', 'result', 'steps', 'started_at')
         }
         item['saved_at'] = datetime.now(ZoneInfo('Asia/Shanghai')).isoformat(timespec='seconds')
+        for key in ('provenance', 'finished_at'):
+            if key in task:
+                item[key] = deepcopy(task[key])
         validate(item)
         with self.lock, self.directory(create=True) as directory, self.writer(directory):
             items, identity = self.read(directory)

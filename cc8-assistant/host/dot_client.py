@@ -16,6 +16,7 @@ from vision import jpeg_dimensions
 from dot_errors import GENERIC
 from lifecycle_cleanup import cleanup_all
 from dot_terminals import CommandScope, stop_owned_terminals
+from file_receipts import FileReceipts
 from codex_rpc import CodexRpc as CodexRpc, EventQueue as EventQueue
 from dot_runtime import codex_command as codex_command, runtime_status as runtime_status
 from dot_receipt import (
@@ -297,6 +298,9 @@ class DotBrain:
                     payload['reused'] = reused
                 on_web('brain_stage', payload)
 
+        files = None
+        remove_files = None
+
         def publish_answer(answer, observed_at=None):
             turn.receipt_completed.set()
             observed_at = self.clock() if observed_at is None else observed_at
@@ -344,6 +348,14 @@ class DotBrain:
             if callable(getattr(self.rpc, 'listen', None)):
                 turn.terminals = CommandScope(turn.thread_id)
                 remove_commands = self.rpc.listen(turn.terminals.observe)
+                files = FileReceipts(
+                    turn.thread_id,
+                    handoff.cwd if handoff and handoff.cwd else str(ROOT),
+                    handoff,
+                    lambda: self.current is turn and not turn.stopped.is_set() and is_current(),
+                    lambda data: on_web('result_provenance', data) if on_web else None,
+                )
+                remove_files = self.rpc.listen(files.feed)
                 watch = ReceiptWatch(
                     self.rpc,
                     turn.thread_id,
@@ -378,6 +390,8 @@ class DotBrain:
             self.last_metrics['turn_id'] = ident
             turn.ident_ready.set()
             mark_stage('dot_turn_ack', at=ack_at)
+            if files:
+                files.bind(ident)
             if turn.stopped.is_set() or not is_current():
                 self._interrupt(turn)
                 raise Cancelled('Turn cancelled')
@@ -543,6 +557,8 @@ class DotBrain:
             turn.stopped.set()
             raise
         finally:
+            if remove_files:
+                remove_files()
             if remove_commands:
                 remove_commands()
             if watch:

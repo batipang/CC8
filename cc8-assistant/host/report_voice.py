@@ -18,6 +18,7 @@ from report_progress import (
     key,
     version,
 )
+from result_provenance import validate as validate_provenance
 
 PERIOD_NAMES = {
     '上次汇报后': 'since_last',
@@ -160,6 +161,23 @@ class ReportReply:
     operation: str = 'clarification'
     items: int = 0
     delivery: tuple[DeliveryToken | None, ...] = ()
+    provenance: dict | None = None
+
+
+def report_source(source, turn_id: str | None = None):
+    return validate_provenance(
+        dict(
+            version=1,
+            provider='work_report',
+            host='local',
+            thread_id=source.source_id,
+            turn_id=turn_id,
+            ephemeral=False,
+            original_source=dict(thread_id=source.source_id, title=source.source_title),
+            files=[],
+            files_truncated=False,
+        )
+    )
 
 
 def item_text(item, number):
@@ -429,6 +447,7 @@ class ReportVoice:
                     'item',
                     1,
                     self.delivery(messages, requirements),
+                    report_source(context[0], item['turn_id']),
                 )
         if command.kind not in ('report', 'custom'):
             raise ValueError('Invalid report command')
@@ -530,4 +549,5 @@ class ReportVoice:
                 'report',
                 len(report['items']),
                 self.delivery(messages, requirements),
+                report_source(source),
             )

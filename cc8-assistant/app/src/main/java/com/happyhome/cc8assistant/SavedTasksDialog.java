@@ -8,6 +8,8 @@ import android.os.Handler;
 import android.os.Looper;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.LinearLayout;
+import android.widget.Button;
 import android.widget.Toast;
 import java.util.UUID;
 import org.json.JSONArray;
@@ -17,15 +19,17 @@ import org.json.JSONObject;
 final class SavedTasksDialog {
   private final Activity activity;
   private final VoiceSession session;
+  private final ResultDetailsDialog resultDetails;
   private final Handler handler = new Handler(Looper.getMainLooper());
   private String pending = "", action = "";
   private long pendingRoute = -1;
   private AlertDialog progress;
   private Runnable timeout;
 
-  SavedTasksDialog(Activity activity, VoiceSession session) {
+  SavedTasksDialog(Activity activity, VoiceSession session, ResultDetailsDialog resultDetails) {
     this.activity = activity;
     this.session = session;
+    this.resultDetails = resultDetails;
   }
 
   void open() {
@@ -36,7 +40,8 @@ final class SavedTasksDialog {
     if (!available(route)) return;
     new AlertDialog.Builder(activity)
         .setTitle("保存这条任务结果？")
-        .setMessage("在这台 Mac 保存任务标题、结束状态、最近五个步骤及最多 1600 字结果摘录。重启后仍可查看，可在“已保存结果”中删除；不保存录音或全部聊天。")
+        .setMessage(
+            "在这台 Mac 保存任务标题、结束状态与时间、最近五个步骤、最多 1600 字结果摘录，以及可用的会话来源和最多 8 条文件变更回执（含本机路径）。重启后可查看、复制、定位文件或删除记录；不保存录音或全部聊天。")
         .setPositiveButton("保存", (d, n) -> request("save", id, route))
         .setNegativeButton("取消", null)
         .show();
@@ -164,8 +169,17 @@ final class SavedTasksDialog {
     detail.setTextSize(22);
     detail.setTextIsSelectable(true);
     detail.setPadding(24, 18, 24, 18);
+    LinearLayout content = new LinearLayout(activity);
+    content.setOrientation(LinearLayout.VERTICAL);
+    content.addView(detail);
+    if (item.optJSONObject("provenance") != null) {
+      Button source = new Button(activity);
+      source.setText("来源与文件");
+      source.setOnClickListener(v -> resultDetails.open(item, true, route));
+      content.addView(source);
+    }
     ScrollView scroll = new ScrollView(activity);
-    scroll.addView(detail);
+    scroll.addView(content);
     new AlertDialog.Builder(activity)
         .setTitle(item.optString("title"))
         .setView(scroll)

@@ -1,12 +1,20 @@
 # 当前 CC8 部署与验收范围
 
+## 0.16.2／code92 明确时间与未播补报
+
+[PR #450](https://github.com/batipang/CC8/pull/450) 与 [main八项CI](https://github.com/batipang/CC8/actions/runs/42550439038) 通过，源码 `12b085a` 已部署为后台0.16.2，原签名APK92及检测器7保持。五项后台维护19.027秒完成，独立终审核对原配置、完整LaunchAgent／ENV、Interactive策略、owner Dot及MiniMax、USB优先／Wi-Fi就绪和双端停采；没有新增任务、模型、ASR或播放，也未自动登记汇报来源。
+
+本机及Linux CI均通过1890项后台测试（原4项私人录音按显式选择规则未运行）、24项安装器、161项工具及76项Java检查。登录shell与最小PATH的实际本机只读RPC分别核对自定义范围及原起点重新读取，5张未播卡保留，编号追问不增加扫描；零源写入、模型、TTS或采集。设备确认的账本准入由真实响应控制器与受控回执回归覆盖，不补判新的实体语音或声学验收。[使用范围](DESKTOP_WORK_REPORTS.md)。
+
+下一后台0.16.3／APKcode94候选加入来源、文件变更回执与明确点击后的Finder定位，见[结果来源](RESULT_PROVENANCE.md)。当前运行仍0.16.2／code92，最终72小时未启动。
+
 ## 0.16.1／code92 语音工作汇报
 
 [PR #449](https://github.com/batipang/CC8/pull/449) 与 [main 八项 CI](https://github.com/batipang/CC8/actions/runs/42545248506) 通过，源码 `574eefc` 已部署为后台0.16.1，原签名APK92及检测器7保持。五项后台维护19.315秒完成，独立终审核对原profile、完整LaunchAgent／ENV、Interactive策略、owner Dot、MiniMax、双线路和双端停采。登录shell与最小PATH各以真实本机只读RPC读到5项，固定第二项追问不增加扫描；没有模型、播报或采集调用。
 
 正式实例仅做一次文字“汇报工作”的缺时间澄清，收到一条设备播完回执；未登记或读取真实来源，没有ASR／麦克风或大脑回合。原检查器因错误要求播报后的参考音计数为零而记failed，原失败保留；独立只读核对同一请求、同一条135790采样的双端扬声器参考和完成回执后确认送达，没有重发。旧status缓存不作为当前请求证据。该结果不补判真人或声学验收。
 
-下一后台0.16.2候选增加明确起止时间及设备确认后的未播账本，APK92保持；当前运行仍0.16.1。[使用范围](DESKTOP_WORK_REPORTS.md)。最终72小时未启动。
+该段保留0.16.1部署时记录，之后0.16.2更新见顶部，APK92保持。[使用范围](DESKTOP_WORK_REPORTS.md)。最终72小时未启动。
 
 ## 0.16.0／code92 所选聊天工作汇报
 
