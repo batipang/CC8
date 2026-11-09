@@ -34,6 +34,10 @@ from chat_controller import ChatController, ChatHooks
 from report_sources import ReportSources
 from report_archive import ReportArchive
 from report_checkpoint import ReportCheckpoints
+from report_watch_store import ReportWatchStore
+from report_watch_scheduler import WatchHooks
+from report_watch_guard import automation_active
+from reminder_policy import quiet
 from saved_tasks import SavedTasks
 from saved_task_controller import SavedTaskController, SavedTaskHooks
 from preference_memory import PreferenceMemory
@@ -99,6 +103,7 @@ def build_components(
     report_sources_store: ReportSources | None = None,
     report_archive_store: ReportArchive | None = None,
     report_checkpoint_store: ReportCheckpoints | None = None,
+    report_watch_store: ReportWatchStore | None = None,
 ) -> Components:
     calibration = CalibrationController(
         CalibrationHooks(
@@ -318,7 +323,44 @@ def build_components(
         checkpoints=report_checkpoint_store
         if report_checkpoint_store is not None
         else ReportCheckpoints(private_directory() / 'work-report-progress.json'),
+        watch=report_watch_store,
     )
+    if report_watch_store is not None:
+
+        def watch_send(channel, ident, text, current):
+            if not current():
+                raise RuntimeError('Report notice owner changed')
+            if channel == 'desktop':
+                return DesktopDelivery(DesktopNotifier(), ident, text, current)
+
+            def prepare(generation):
+                if not current():
+                    raise RuntimeError('Report notice owner changed')
+
+            return announcements.announce(text, prepare=prepare)
+
+        chats.watch_ui.bind(
+            WatchHooks(
+                lock=host.session.guard,
+                owner=lambda: (
+                    (host.session.connection, host.session.bound_route_token)
+                    if host.session.connection is not None
+                    else None
+                ),
+                activation=lambda: host.session.capture_id if host.session.active else None,
+                generation=lambda: host.session.generation,
+                blocked=lambda: automation_active(private_directory() / 'automation-test.lock'),
+                idle=lambda: (
+                    not voice_busy(host)
+                    and host.session.text_generation is None
+                    and host.response.corrections.draft is None
+                    and not quiet(host.workspace.reminder_policy, host.workspace.now())
+                ),
+                ready=lambda: not chats.busy and reminders.job is None,
+                send=watch_send,
+                error=lambda kind: host.log('work_report_watch_error', error_type=kind),
+            )
+        )
     saved_tasks = SavedTaskController(
         SavedTaskHooks(
             lock=host.session.guard,

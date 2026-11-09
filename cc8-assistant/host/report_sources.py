@@ -206,6 +206,7 @@ class ReportSources:
             '.work-report-sources.lock',
             '.work-report-archive.lock',
             '.work-report-progress.lock',
+            '.work-report-watch.lock',
         ):
             raise ValueError('Invalid report store lock')
         with disk.directory(create=True) as directory:

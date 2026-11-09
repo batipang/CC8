@@ -1518,6 +1518,8 @@ final class VoiceSession {
             || "registration_id".equals(key)
             || "cursor".equals(key)
             || "period".equals(key)
+            || "period_seconds".equals(key)
+            || "channel".equals(key)
             || "page".equals(key)
             || "snapshot_id".equals(key)
             || "saved_id".equals(key)

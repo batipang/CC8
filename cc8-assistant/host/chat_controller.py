@@ -26,6 +26,12 @@ from report_checkpoint_controller import CheckpointController
 from report_display import display_fields, paged_text
 from report_display_protocol import validate_request as validate_page
 from report_display_snapshot import DisplaySnapshot
+from report_watch_controller import WatchController
+from report_watch_protocol import (
+    ACTIONS as WATCH_ACTIONS,
+    MUTATIONS as WATCH_MUTATIONS,
+    validate_request as validate_watch,
+)
 
 
 @dataclass(frozen=True)
@@ -42,7 +48,9 @@ class ChatHooks:
 
 
 class ChatController:
-    def __init__(self, hooks, catalog=None, sources=None, archive=None, checkpoints=None):
+    def __init__(
+        self, hooks, catalog=None, sources=None, archive=None, checkpoints=None, watch=None
+    ):
         self.hooks = hooks
         self.catalog = catalog or ChatCatalog()
         self.lock = threading.Lock()
@@ -77,6 +85,36 @@ class ChatController:
             )
         )
         self.progress_ui = CheckpointController(self, checkpoints)
+        self.watch_ui = WatchController(self, watch)
+
+    def read_subscription(self, source, period, is_current):
+        with self.hooks.lock:
+            if not is_current() or not self.scope_current(source) or not self.hooks.idle():
+                raise Cancelled('Report subscription owner changed')
+            if not self.hooks.available():
+                raise DotError('Report subscription unavailable')
+            with self.lock:
+                if self.busy:
+                    raise DotError('Work report reader busy')
+                self.busy = True
+                ident = self.active_request = uuid.uuid4().hex
+
+        def current():
+            with self.hooks.lock:
+                return (
+                    self.active_request == ident
+                    and is_current()
+                    and self.scope_current(source)
+                    and self.hooks.idle()
+                )
+
+        try:
+            return self.catalog.report(source, period, is_current=current)
+        finally:
+            with self.lock:
+                self.busy = False
+                if self.active_request == ident:
+                    self.active_request = None
 
     def report_source(self):
         return self.report_scope if self.report_scope is not None else self.selection
@@ -168,6 +206,7 @@ class ChatController:
             'history_persisted': False,
             'work_reports_supported': True,
             'registered_sources_supported': self.sources is not None,
+            'report_watch_supported': self.watch_ui.scheduler is not None,
             'report_source_available': self.report_source() is not None,
             'report_source_title': self.report_source().source_title
             if self.report_source() is not None
@@ -194,6 +233,7 @@ class ChatController:
             *REGISTRY_ACTIONS,
             *ARCHIVE_ACTIONS,
             *PROGRESS_ACTIONS,
+            *WATCH_ACTIONS,
         ):
             raise ValueError('Invalid chat action')
         if action in REGISTRY_ACTIONS:
@@ -204,6 +244,8 @@ class ChatController:
             validate_progress_request(data)
         if action == 'report_page':
             validate_page(data)
+        if action in WATCH_ACTIONS:
+            validate_watch(data)
         if action == 'report' and data.get('period') not in ('half_hour', 'two_hours', 'today'):
             raise ValueError('Invalid report period')
         with self.hooks.lock:
@@ -222,6 +264,9 @@ class ChatController:
             if action in PROGRESS_ACTIONS and self.progress_ui.store is None:
                 self.publish(request_id, ok=False, message='当前后台不支持保存补播进度')
                 return
+            if action in WATCH_ACTIONS and self.watch_ui.scheduler is None:
+                self.publish(request_id, ok=False, message='当前后台不支持定时工作提示')
+                return
             if action == 'report' and self.report_source() is None:
                 self.publish(request_id, ok=False, message='请先选择一个 Dot 聊天作为汇报来源')
                 return
@@ -234,6 +279,7 @@ class ChatController:
                 action in MUTATIONS
                 or action in ARCHIVE_MUTATIONS
                 or action in PROGRESS_MUTATIONS
+                or action in WATCH_MUTATIONS
                 or action in ('use_sources', 'use_selected_report')
             ) and not self.hooks.capture_stopped():
                 self.publish(request_id, ok=False, message='请先暂停语音，再修改工作汇报来源')
@@ -258,6 +304,7 @@ class ChatController:
                     action in REGISTRY_ACTIONS
                     or action in ARCHIVE_ACTIONS
                     or action in PROGRESS_ACTIONS
+                    or action in WATCH_ACTIONS
                 ):
                     if request_id in self.source_requests:
                         self.publish(
@@ -462,6 +509,8 @@ class ChatController:
                         )
                 if action in PROGRESS_ACTIONS:
                     result = self.progress_ui.run(action, data, current)
+                if action in WATCH_ACTIONS:
+                    result = self.watch_ui.run(action, data, current)
                 if action == 'report':
                     if not self.voice.valid_report(report_owner, result['report']):
                         raise DotError('Unconfirmed work report')
@@ -534,6 +583,8 @@ class ChatController:
                                 if action in ARCHIVE_ACTIONS
                                 else '补播进度未确认，请刷新查看，不自动重试。先暂停语音并选择原来源；最多8份、总计256KiB，原聊天和任务不变。'
                                 if action in PROGRESS_ACTIONS
+                                else '定时工作提示状态未确认，请先暂停语音后重新查看，不自动重试。原聊天和任务不变。'
+                                if action in WATCH_ACTIONS
                                 else '无法确认聊天状态，请刷新查看；原聊天未追加消息'
                             ),
                         )

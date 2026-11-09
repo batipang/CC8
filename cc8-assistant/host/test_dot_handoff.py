@@ -244,14 +244,17 @@ class HandoffBrainTests(unittest.TestCase):
 
 
 class ControllerTests(unittest.TestCase):
-    def session(self):
+    def session(self, report_watch_store=None):
         class Mini:
             def cancel(self):
                 pass
 
         with patch('threading.Thread.start'):
             b = Bridge(
-                None, BrainRouter(Mini(), DotBrain(FakeRpc())), preference_memory=isolated_memory()
+                None,
+                BrainRouter(Mini(), DotBrain(FakeRpc())),
+                preference_memory=isolated_memory(),
+                report_watch_store=report_watch_store,
             )
         b.session.connection = object()
         b.save_status = lambda: None

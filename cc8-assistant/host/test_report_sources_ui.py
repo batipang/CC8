@@ -36,6 +36,9 @@ public class ReportSourcesCheck {
   master(ui,s);AlertDialog.last.click(-3);AlertDialog.last.pick(5);ui.accept(payload.put("request_id",s.lastId));
  }
  static JSONObject progressPayload(){return new JSONObject("ok",true,"progress_checkpoints",progressState(progressRow()),"offer_id","f".repeat(32),"current_progress_text","待补播3项，不执行任务");}
+
+ static JSONObject watchPayload(VoiceSession s){return new JSONObject("request_id",s.lastId,"ok",true,"report_watch",new JSONObject("schema",1,"revision",4,"configured",true,"enabled",true),"watch_text","原来源：等待允许检查","watch_offer_id","a".repeat(32),"watch_offer_text","原来源与成员");}
+ static void watch(ReportSourcesDialog ui,VoiceSession s,JSONObject payload){ui.open();ui.accept(result(s,state(row())).put("report_watch_supported",true));AlertDialog.last.click(-3);AlertDialog.last.pick(6);ui.accept(payload.put("request_id",s.lastId));}
  public static void main(String[] args){VoiceSession s=new VoiceSession();ReportSourcesDialog ui=new ReportSourcesDialog(new Activity(),s);
   switch(args[0]){
    case "register":{
@@ -220,6 +223,32 @@ public class ReportSourcesCheck {
     try{java.lang.reflect.Field deadline=ReportTextPage.Copy.class.getDeclaredField("deadline");deadline.setAccessible(true);deadline.setLong(job,0);}catch(Exception e){throw new AssertionError(e);}
     yes(!job.alive()&&job.completed()==null,"expired copy remained usable");break;
    }
+
+   case "watch_configure":{
+    JSONObject data=watchPayload(s);watch(ui,s,data);int count=s.requests.size();AlertDialog.last.click(-1);AlertDialog.last.pick(1);AlertDialog.last.pick(1);
+    data.put("watch_offer_id","b".repeat(32));data.optJSONObject("report_watch").put("revision",99);
+    yes(s.requests.size()==count,"watch configured without final consent");AlertDialog.last.click(-1);JSONObject sent=s.requests.get(s.requests.size()-1);
+    yes("configure_watch".equals(sent.optString("action"))&&"a".repeat(32).equals(sent.optString("offer_id"))&&sent.optInt("revision")==4&&sent.optInt("period_seconds")==900&&"desktop".equals(sent.optString("channel"))&&Boolean.TRUE.equals(sent.opt("confirmed")),"watch consent/source/period/channel retargeted");
+    yes(sent.opt("source_id")==null&&sent.opt("text")==null&&sent.opt("path")==null,"watch supplied target/body");break;
+   }
+   case "watch_management":{
+    for(int n=0;n<2;n++){
+     JSONObject data=watchPayload(s);watch(ui,s,data);AlertDialog.last.click(-3);AlertDialog.last.pick(n);int count=s.requests.size();yes(s.requests.size()==count,"watch management changed before consent");
+     data.optJSONObject("report_watch").put("revision",9);AlertDialog.last.click(-1);JSONObject sent=s.requests.get(s.requests.size()-1);
+     yes((n==0?"pause_watch":"clear_watch").equals(sent.optString("action"))&&sent.optInt("revision")==4&&Boolean.TRUE.equals(sent.opt("confirmed")),"watch management retargeted");
+    }break;
+   }
+   case "watch_stale":{
+    watch(ui,s,watchPayload(s));AlertDialog.last.click(-1);AlertDialog.last.pick(0);AlertDialog.last.pick(0);AlertDialog old=AlertDialog.last;int count=s.requests.size();
+    ui.close();s.route++;old.builder.actions.get(-1).onClick(old,-1);yes(s.requests.size()==count,"old watch confirmation survived Home/route");
+    watch(ui,s,watchPayload(s));AlertDialog.last.click(-1);AlertDialog.last.pick(0);AlertDialog.last.pick(0);AlertDialog.last.click(-1);Runnable timer=android.os.Handler.queued.get(android.os.Handler.queued.size()-1);count=s.requests.size();timer.run();
+    ui.accept(watchPayload(s));yes(!AlertDialog.last.showing&&s.requests.size()==count,"watch timeout retried or accepted late receipt");break;
+   }
+   case "watch_invalid_unsupported":{
+    master(ui,s);AlertDialog.last.click(-3);yes(AlertDialog.last.builder.labels.length==6,"old host offered subscription");
+    JSONObject data=watchPayload(s);data.optJSONObject("report_watch").put("revision",true);watch(ui,s,data);yes(!AlertDialog.last.showing,"Boolean watch revision accepted");
+    data=watchPayload(s);data.optJSONObject("report_watch").put("configured",false);watch(ui,s,data);yes(!AlertDialog.last.showing,"enabled without configuration accepted");break;
+   }
    default:throw new AssertionError("unknown case");
   }
  }
@@ -269,6 +298,7 @@ class ReportSourcesUiTests(unittest.TestCase):
             files.append(str(path))
         files.append(str(widgets.JAVA / 'ReportSourcesDialog.java'))
         files.append(str(widgets.JAVA / 'ReportTextPage.java'))
+        files.append(str(widgets.JAVA / 'ReportWatchDialog.java'))
         cls.java = java_bin()
         result = subprocess.run(
             [str(cls.java / 'javac'), '-encoding', 'UTF-8', '-d', str(cls.folder), *files],
@@ -368,3 +398,15 @@ class ReportSourcesUiTests(unittest.TestCase):
 
     def test_complete_copy_capacity_and_whole_job_deadline_are_enforced(self):
         self.scenario('copy_bounds')
+
+    def test_watch_freezes_source_revision_period_channel_and_waits_for_consent(self):
+        self.scenario('watch_configure')
+
+    def test_watch_pause_and_clear_use_only_confirmed_frozen_revision(self):
+        self.scenario('watch_management')
+
+    def test_watch_child_closes_with_parent_home_route_and_timeout(self):
+        self.scenario('watch_stale')
+
+    def test_watch_malformed_state_and_older_host_do_not_offer_actions(self):
+        self.scenario('watch_invalid_unsupported')

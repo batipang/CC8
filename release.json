@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "lossless-report-pages-20261110.1",
+  "release_id": "optional-work-notices-20261110.1",
   "backend": {
-    "version": "0.16.22"
+    "version": "0.16.23"
   },
   "assistant": {
-    "version": "0.9.93",
-    "version_code": 130,
+    "version": "0.9.95",
+    "version_code": 132,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {
