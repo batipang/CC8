@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -181,8 +182,8 @@ class ServiceTests(unittest.TestCase):
                             self.assertEqual((recovered['phase'], recovered['pid']), ('ready', 123))
                             supervisor.stop.set()
                         return dict.fromkeys(
-                            ('model_ready', 'recognition_worker', 'response_worker'), True
-                        )
+                            ('ok', 'model_ready', 'recognition_worker', 'response_worker'), True
+                        ) | {'health_owner_version': 1, 'runtime_process_id': supervisor.pid}
 
                     def stop_worker(_pid, _sig):
                         stopped.append(supervisor.stop.is_set())
@@ -386,6 +387,127 @@ class ServiceTests(unittest.TestCase):
                 with self.assertRaises(BlockingIOError):
                     service.disable()
             self.assertTrue(service.enabled(marker))
+
+
+class WorkerHealthTests(unittest.TestCase):
+    def reply(self):
+        return dict(
+            ok=True,
+            model_ready=True,
+            recognition_worker=True,
+            response_worker=True,
+            health_owner_version=1,
+            runtime_process_id=123,
+        )
+
+    def test_same_live_worker_requires_healthy_flags_and_matching_owner(self):
+        data = self.reply()
+        self.assertEqual(service.worker_health(data, 123), 'ready')
+        self.assertEqual(service.worker_health(data, 124), 'wrong_owner')
+        for field in ('ok', 'model_ready', 'recognition_worker', 'response_worker'):
+            for invalid in (False, 'true', 1, None):
+                self.assertEqual(service.worker_health({**data, field: invalid}, 123), 'unhealthy')
+
+    def test_missing_partial_malformed_or_future_attribution_is_not_ready(self):
+        data = self.reply()
+        for fields in (
+            {'runtime_process_id': True},
+            {'runtime_process_id': '123'},
+            {'runtime_process_id': 0},
+            {'runtime_process_id': 2**31},
+            {'health_owner_version': True},
+            {'health_owner_version': 2},
+            {'health_owner_version': None},
+        ):
+            self.assertEqual(service.worker_health({**data, **fields}, 123), 'invalid_owner')
+        for missing in ('runtime_process_id', 'health_owner_version'):
+            self.assertEqual(
+                service.worker_health({k: v for k, v in data.items() if k != missing}, 123),
+                'invalid_owner',
+            )
+
+    def test_old_ready_reply_is_explicitly_unverified_and_bad_flags_remain_unhealthy(self):
+        legacy = {
+            k: v
+            for k, v in self.reply().items()
+            if k not in ('health_owner_version', 'runtime_process_id')
+        }
+        self.assertEqual(service.worker_health(legacy, 123), 'legacy_unverified')
+        self.assertEqual(service.worker_health({**legacy, 'model_ready': False}, 123), 'unhealthy')
+        self.assertEqual(service.worker_health(self.reply(), None), 'unavailable')
+        self.assertEqual(service.worker_health(self.reply(), True), 'invalid_owner')
+        self.assertEqual(service.worker_health([], 123), 'invalid_owner')
+
+    def test_a_reply_cannot_mark_ready_after_the_owned_child_has_exited(self):
+        alive = [True]
+        phases = []
+        stop = threading.Event()
+
+        class Child:
+            def poll(self):
+                return None if alive[0] else 0
+
+            def wait(self, timeout):
+                return 0
+
+        class Gate:
+            def is_set(self):
+                return stop.is_set()
+
+            def wait(self, seconds):
+                return stop.is_set()
+
+        with (
+            tempfile.TemporaryDirectory() as folder,
+            patch.object(service, 'PRIVATE', Path(folder)),
+            patch.object(service, 'enabled', return_value=True),
+            patch.object(service, 'read_pid', return_value=None),
+            patch.object(service, 'ensure_available'),
+        ):
+            supervisor = service.Supervisor()
+            supervisor.stop = Gate()
+
+            def spawn():
+                supervisor.child, supervisor.pid = Child(), 123
+
+            def reply(**kwargs):
+                alive[0] = False
+                return self.reply()
+
+            original = supervisor.state
+
+            def state(phase, failures):
+                phases.append(phase)
+                original(phase, failures)
+                if phase == 'backoff':
+                    stop.set()
+
+            supervisor.state = state
+            with (
+                patch.object(supervisor, 'start_child', side_effect=spawn),
+                patch.object(service, 'query', side_effect=reply),
+            ):
+                supervisor.run()
+        self.assertNotIn('ready', phases)
+        self.assertEqual(phases[-1], 'stopped')
+
+    def test_status_exposes_ownership_without_starting_or_stopping_service(self):
+        import io
+        from contextlib import redirect_stdout
+
+        output = io.StringIO()
+        with (
+            patch.object(sys, 'argv', ['service.py', 'status']),
+            patch.object(service, 'query', return_value=self.reply()),
+            patch.object(service, 'read_pid', return_value=124),
+            patch.object(service, 'install') as install,
+            patch.object(service, 'disable') as disable,
+            redirect_stdout(output),
+        ):
+            service.main()
+        self.assertEqual(json.loads(output.getvalue())['worker_health'], 'wrong_owner')
+        install.assert_not_called()
+        disable.assert_not_called()
 
 
 if __name__ == '__main__':

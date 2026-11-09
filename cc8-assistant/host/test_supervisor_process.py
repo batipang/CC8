@@ -76,7 +76,11 @@ while True:
         # next poll cannot race with a deliberately non-accepting server.
         if stop_after_ready:
             atomic_private_json(private / 'enabled.json', {'enabled': False})
-        peer.sendall((json.dumps({'ok': True, 'model_ready': healthy, 'recognition_worker': True, 'response_worker': True}) + '\\n').encode())
+        reply = {'ok': True, 'model_ready': healthy, 'recognition_worker': True, 'response_worker': True}
+        if mode != 'legacy':
+            reply.update(health_owner_version=1,
+                         runtime_process_id=os.getppid() if mode == 'wrong_owner' else os.getpid())
+        peer.sendall((json.dumps(reply) + '\\n').encode())
     if mode in ('disable', 'argv_unavailable') or stop_after_ready:
         atomic_private_json(private / 'enabled.json', {'enabled': False})
         while True:
@@ -159,7 +163,10 @@ def exercise(root):
             clock_offset[0] = 200
         # Bound the old implementation too: it must fail an assertion, not wait
         # for 180 seconds or leave a live fixture child when grace is misapplied.
-        if mode in ('ready_then_unhealthy', 'ready_then_error') and health_queries[0] >= 12:
+        if (
+            mode in ('ready_then_unhealthy', 'ready_then_error', 'wrong_owner', 'legacy')
+            and health_queries[0] >= 12
+        ):
             stop.set()
         if mode == 'ready_then_error' and result.get('model_ready') is False:
             raise OSError('synthetic IPC unavailable')
@@ -223,6 +230,8 @@ def exercise(root):
                 'spawned': len(spawned),
                 'backoffs': backoffs,
                 'ready': phases.count('ready'),
+                'wrong_owner': phases.count('wrong_owner'),
+                'legacy_unverified': phases.count('legacy_unverified'),
                 'unhealthy': phases.count('unhealthy'),
                 'starting': phases.count('starting'),
                 'health_queries': health_queries[0],
@@ -275,7 +284,14 @@ class SupervisorProcessTests(unittest.TestCase):
                 self.assertEqual(len(pids), 2)
                 self.assertEqual(int((private / 'bridge.pid').read_text()), pids[-1])
                 stop.set()
-                return dict(model_ready=True, recognition_worker=True, response_worker=True)
+                return dict(
+                    ok=True,
+                    model_ready=True,
+                    recognition_worker=True,
+                    response_worker=True,
+                    health_owner_version=1,
+                    runtime_process_id=pids[-1],
+                )
 
             with (
                 patch.object(service, 'ROOT', root),
@@ -476,6 +492,20 @@ class SupervisorProcessTests(unittest.TestCase):
                 return report
             finally:
                 cleanup(root)
+
+    def test_a_different_live_process_health_cannot_mark_its_worker_ready(self):
+        report = self.check_mode('wrong_owner')
+        self.assertEqual(report['ready'], 0)
+        self.assertGreaterEqual(report['spawned'], 2)
+        self.assertGreaterEqual(report['wrong_owner'], 2)
+        self.assertFalse(report['startup_budget_advanced'])
+
+    def test_legacy_health_is_unverified_without_restarting_a_healthy_old_worker(self):
+        report = self.check_mode('legacy')
+        self.assertEqual(report['ready'], 0)
+        self.assertEqual(report['spawned'], 1)
+        self.assertGreaterEqual(report['legacy_unverified'], 1)
+        self.assertFalse(report['backoffs'])
 
     def test_ten_real_child_crashes_recover_serially_with_bounded_backoff(self):
         report = self.check_mode('crash')

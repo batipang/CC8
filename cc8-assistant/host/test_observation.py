@@ -41,6 +41,8 @@ def health(rss=100, *, instance=INSTANCE, uptime=10, cpu=1):
         'render_frames': 0,
         'waiting_for_wake': False,
         'runtime_instance': instance,
+        'runtime_process_id': 901234,
+        'health_owner_version': 1,
         'resources': {
             'rss_bytes': rss,
             'peak_rss_bytes': 1000,
@@ -145,6 +147,8 @@ class ObservationTests(unittest.TestCase):
         encoded = json.dumps(report)
         self.assertNotIn(SECRET, encoded)
         self.assertNotIn(INSTANCE, encoded)
+        self.assertNotIn('runtime_process_id', encoded)
+        self.assertNotIn('health_owner_version', encoded)
         self.assertFalse(report['long_run_acceptance_asserted'])
         report['samples'].clear()
         self.assertEqual(len(book.report()['samples']), 4)
