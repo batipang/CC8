@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "report-ranges-delivery-20261109.1",
+  "release_id": "result-provenance-forward-recovery-20261109.1",
   "backend": {
     "version": "0.16.2"
   },
   "assistant": {
-    "version": "0.9.55",
-    "version_code": 92,
+    "version": "0.9.58",
+    "version_code": 95,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {
