@@ -32,6 +32,7 @@ from device_controller import DeviceController, DeviceControlHooks
 from device_event_router import DeviceEventRouter
 from chat_controller import ChatController, ChatHooks
 from report_sources import ReportSources
+from report_archive import ReportArchive
 from saved_tasks import SavedTasks
 from saved_task_controller import SavedTaskController, SavedTaskHooks
 from preference_memory import PreferenceMemory
@@ -95,6 +96,7 @@ def build_components(
     preference_memory: PreferenceMemory | None = None,
     vocabulary_store: VocabularyStore | None = None,
     report_sources_store: ReportSources | None = None,
+    report_archive_store: ReportArchive | None = None,
 ) -> Components:
     calibration = CalibrationController(
         CalibrationHooks(
@@ -308,6 +310,9 @@ def build_components(
         sources=report_sources_store
         if report_sources_store is not None
         else ReportSources(private_directory() / 'work-report-sources.json'),
+        archive=report_archive_store
+        if report_archive_store is not None
+        else ReportArchive(private_directory() / 'work-report-archive.json'),
     )
     saved_tasks = SavedTaskController(
         SavedTaskHooks(

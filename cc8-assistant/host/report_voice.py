@@ -448,6 +448,22 @@ class ReportVoice:
             if self.delivery_plan is not None and self.progress is not None:
                 self.delivery_plan.confirm(token, self.progress)
 
+    def snapshot_for_save(self, snapshot_id):
+        """Only the current, unexpired server-held report can be explicitly saved."""
+        with self.hooks.lock:
+            if self.snapshot is None:
+                raise ValueError('No current report snapshot')
+            context, deadline, report = self.snapshot
+            if (
+                self.clock() >= deadline
+                or not self.same_context(context, self.hooks.context())
+                or context[1] is None
+                or report.get('snapshot_id') != snapshot_id
+                or not self.valid_report(context[0], report)
+            ):
+                raise ValueError('Report snapshot owner or lifetime changed')
+            return context[0], deepcopy(report)
+
     def delivery(self, messages, requirements):
         self.delivery_plan = DeliveryPlan(self.progress, requirements)
         return tuple(self.delivery_plan.token(index) for index in range(len(messages)))

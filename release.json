@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "registered-work-reports-20261110.1",
+  "release_id": "saved-work-reports-20261110.1",
   "backend": {
-    "version": "0.16.18"
+    "version": "0.16.19"
   },
   "assistant": {
-    "version": "0.9.85",
-    "version_code": 122,
+    "version": "0.9.87",
+    "version_code": 124,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {

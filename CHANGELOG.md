@@ -1,5 +1,12 @@
 # Changelog
 
+## Backend 0.16.19 / Assistant 0.9.87 — explicitly saved work-report snapshots
+
+- Save only an explicitly confirmed current server-held report, with source identities, completion-time result indexes and bounded excerpts. Keep up to 16 snapshots within a total 256 KiB quota, without silent eviction; browse by save time, copy, delete or clear through native dialogs. Normal reports stay in RAM.
+- Bind consent to immutable report IDs and archive revisions; recheck the snapshot lifetime, registered membership, connection and owner before commit. Use private atomic storage and a separate cross-process lock; uncertain writes are queried, never retried automatically. Corrupt storage does not prevent an independent live report read.
+- Mark restored records as historical, non-live snapshots. Restart does not restore voice follow-up, delivery ledgers, active report scope, capture or source-task execution. Original-chat writing and ChatGPT remain unimplemented dependencies, separate from archive viewing.
+- Carry PR467 and merged-main eight-check CI, clean original-signature code122 build and baseline-preserving code123 recovery checks. Those packages remain uninstalled; actual runtime stays 0.16.17/code120 pending grouped delivery. Full human/environment and final 72-hour acceptance remain open.
+
 ## Backend 0.16.18 / Assistant 0.9.85 — explicitly registered multi-chat work reports
 
 - Register up to eight current catalog offerings with explicit metadata consent, private atomic storage, revision/lock checks and deletion controls. Persist only names, project basenames and local Codex thread identifiers. Registration does not read history, run a model, change the summary handoff or activate a report scope on restart.

@@ -198,20 +198,24 @@ class ReportSources:
             return deepcopy(self.read(ReminderStore(self.path)))
 
     @contextmanager
-    def writer(self, disk: ReminderStore) -> Iterator[None]:
+    def writer(
+        self, disk: ReminderStore, *, lock_name: str = '.work-report-sources.lock'
+    ) -> Iterator[None]:
+        if lock_name not in ('.work-report-sources.lock', '.work-report-archive.lock'):
+            raise ValueError('Invalid report store lock')
         with disk.directory(create=True) as directory:
             flags = os.O_RDWR | os.O_NONBLOCK | os.O_NOFOLLOW
             created = False
             try:
                 fd = os.open(
-                    '.work-report-sources.lock',
+                    lock_name,
                     flags | os.O_CREAT | os.O_EXCL,
                     0o600,
                     dir_fd=directory,
                 )
                 created = True
             except FileExistsError:
-                fd = os.open('.work-report-sources.lock', flags, dir_fd=directory)
+                fd = os.open(lock_name, flags, dir_fd=directory)
             try:
                 if created:
                     os.fchmod(fd, 0o600)

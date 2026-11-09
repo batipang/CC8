@@ -20,6 +20,16 @@ public class ReportSourcesCheck {
   AlertDialog.last.click(-1);
   ui.accept(result(s,state(row())).put("items",new JSONArray(candidate)));
  }
+ static void report(ReportSourcesDialog ui,VoiceSession s,JSONObject payload){
+  master(ui,s);AlertDialog.last.click(-3);AlertDialog.last.pick(2);AlertDialog.last.pick(0);ui.accept(payload.put("request_id",s.lastId));
+ }
+ static JSONObject reportPayload(){return new JSONObject("ok",true,"action","report","report_text","只读摘要", "report",new JSONObject("snapshot_id","c".repeat(32)),"archive_revision",2);}
+ static JSONObject archiveRow(){return new JSONObject("id","d".repeat(32),"source_title","原来源","saved_at",150,"coverage_complete",false);}
+ static JSONObject archiveState(JSONObject row){return new JSONObject("revision",3,"items",new JSONArray(row));}
+ static void archives(ReportSourcesDialog ui,VoiceSession s,JSONObject state){
+  master(ui,s);AlertDialog.last.click(-3);AlertDialog.last.pick(4);
+  ui.accept(new JSONObject("request_id",s.lastId,"ok",true,"action","saved_reports","saved_reports",state));
+ }
  public static void main(String[] args){VoiceSession s=new VoiceSession();ReportSourcesDialog ui=new ReportSourcesDialog(new Activity(),s);
   switch(args[0]){
    case "register":{
@@ -72,6 +82,43 @@ public class ReportSourcesCheck {
     int count=s.requests.size();Runnable timer=android.os.Handler.queued.get(android.os.Handler.queued.size()-1);timer.run();
     yes(s.requests.size()==count&&!AlertDialog.last.showing,"uncertain mutation retried or kept UI alive");break;
    }
+   case "archive_save":{
+    JSONObject data=reportPayload();report(ui,s,data);int count=s.requests.size();AlertDialog.last.click(-1);
+    data.put("archive_revision",9);data.optJSONObject("report").put("snapshot_id","f".repeat(32));
+    yes(s.requests.size()==count,"save did not require confirmation");AlertDialog.last.click(-1);
+    JSONObject sent=s.requests.get(s.requests.size()-1);
+    yes("save_report".equals(sent.optString("action"))&&"c".repeat(32).equals(sent.optString("snapshot_id"))&&sent.optInt("revision")==2&&Boolean.TRUE.equals(sent.opt("confirmed")),"save confirmation retargeted immutable report");break;
+   }
+   case "archive_stale":{
+    report(ui,s,reportPayload());AlertDialog.last.click(-1);AlertDialog confirm=AlertDialog.last;int count=s.requests.size();
+    ui.close();s.route++;confirm.builder.actions.get(-1).onClick(confirm,-1);
+    yes(s.requests.size()==count,"old confirmation saved after Home/handover");break;
+   }
+   case "archive_delete":{
+    JSONObject row=archiveRow(),state=archiveState(row);archives(ui,s,state);
+    yes(AlertDialog.last.builder.labels[0].contains("01-01 08:02")&&AlertDialog.last.builder.labels[0].contains("覆盖不完整"),"archive list lost saved time or coverage");
+    AlertDialog.last.pick(0);yes("d".repeat(32).equals(s.requests.get(s.requests.size()-1).optString("saved_id")),"selected wrong snapshot");
+    JSONObject response=new JSONObject("request_id",s.lastId,"ok",true,"action","saved_report","saved_reports",state,"saved_id","d".repeat(32),"saved_report_text","历史快照正文");
+    ui.accept(response);AlertDialog.last.click(-3);int count=s.requests.size();
+    row.put("id","e".repeat(32));state.put("revision",8);response.put("saved_id","e".repeat(32));
+    yes(s.requests.size()==count,"delete did not require confirmation");AlertDialog.last.click(-1);
+    JSONObject sent=s.requests.get(s.requests.size()-1);
+    yes("delete_report".equals(sent.optString("action"))&&"d".repeat(32).equals(sent.optString("saved_id"))&&sent.optInt("revision")==3,"mutable receipt retargeted delete");break;
+   }
+   case "archive_copy":{
+    JSONObject state=archiveState(archiveRow());archives(ui,s,state);AlertDialog.last.pick(0);
+    JSONObject data=new JSONObject("request_id",s.lastId,"ok",true,"action","saved_report","saved_reports",state,"saved_id","d".repeat(32),"saved_report_text","历史快照正文");
+    ui.accept(data);data.put("saved_report_text","替换正文");int count=s.requests.size();AlertDialog.last.click(-1);
+    yes("历史快照正文".equals(android.content.ClipboardManager.text)&&s.requests.size()==count,"copy changed body or sent work");break;
+   }
+   case "archive_clear":{
+    archives(ui,s,archiveState(archiveRow()));int count=s.requests.size();AlertDialog.last.click(-3);yes(s.requests.size()==count,"clear lacked confirmation");
+    AlertDialog.last.click(-1);JSONObject sent=s.requests.get(s.requests.size()-1);
+    yes("clear_reports".equals(sent.optString("action"))&&sent.optInt("revision")==3&&Boolean.TRUE.equals(sent.opt("confirmed")),"clear lost revision or consent");break;
+   }
+   case "archive_capability":{
+    s.archive=false;report(ui,s,reportPayload());yes(!AlertDialog.last.builder.actions.containsKey(-1),"old host offered save");break;
+   }
    default:throw new AssertionError("unknown case");
   }
  }
@@ -93,13 +140,22 @@ class ReportSourcesUiTests(unittest.TestCase):
             'com/happyhome/cc8assistant/VoiceSession.java'
         ].replace(
             'boolean supportsVocabulary()',
-            'boolean supportsReportSources(){return true;}void dotChatCancel(String id){}'
+            'boolean supportsReportSources(){return true;}boolean archive=true;boolean supportsReportArchive(){return archive;}void dotChatCancel(String id){}'
             'boolean reportSourcesRequest(String id,JSONObject args,long r){if(!currentRoute(r))return false;lastId=id;requests.add(args);return true;}'
             'boolean supportsVocabulary()',
         )
         stubs['android/app/AlertDialog.java'] = stubs['android/app/AlertDialog.java'].replace(
             'final java.util.Map<Integer,OnClickListener> actions=',
             'public final java.util.Map<Integer,OnClickListener> actions=',
+        )
+        stubs['android/content/Context.java'] = (
+            'package android.content;public class Context{public static final String CLIPBOARD_SERVICE="clipboard";public Object getSystemService(String s){return new ClipboardManager();}}'
+        )
+        stubs['android/content/ClipData.java'] = (
+            'package android.content;public class ClipData{public String text;public static ClipData newPlainText(String title,String text){ClipData d=new ClipData();d.text=text;return d;}}'
+        )
+        stubs['android/content/ClipboardManager.java'] = (
+            'package android.content;public class ClipboardManager{public static String text;public void setPrimaryClip(ClipData data){text=data.text;}}'
         )
         files = []
         for name, source in {
@@ -159,3 +215,19 @@ class ReportSourcesUiTests(unittest.TestCase):
 
     def test_unconfirmed_mutation_timeout_never_retries(self):
         self.scenario('timeout')
+
+    def test_save_confirmation_is_bound_to_the_original_report_and_revision(self):
+        self.scenario('archive_save')
+
+    def test_old_save_confirmation_cannot_survive_home_or_handover(self):
+        self.scenario('archive_stale')
+
+    def test_delete_and_clear_require_current_immutable_snapshot_consent(self):
+        self.scenario('archive_delete')
+        self.scenario('archive_clear')
+
+    def test_copy_uses_only_the_displayed_historical_body_without_rpc(self):
+        self.scenario('archive_copy')
+
+    def test_older_host_cannot_offer_persistent_save(self):
+        self.scenario('archive_capability')

@@ -10,6 +10,12 @@ from dot_handoff import ChatCatalog
 from dot_client import Cancelled, DotError
 from report_voice import ReportVoice, ReportVoiceHooks, report_text
 from report_sources import REGISTRY_ACTIONS, MUTATIONS, ReportScope, validate_request
+from report_archive_protocol import (
+    ACTIONS as ARCHIVE_ACTIONS,
+    MUTATIONS as ARCHIVE_MUTATIONS,
+    validate_request as validate_archive_request,
+)
+from report_archive import record as archive_record, historical_text
 
 
 @dataclass(frozen=True)
@@ -26,7 +32,7 @@ class ChatHooks:
 
 
 class ChatController:
-    def __init__(self, hooks, catalog=None, sources=None):
+    def __init__(self, hooks, catalog=None, sources=None, archive=None):
         self.hooks = hooks
         self.catalog = catalog or ChatCatalog()
         self.lock = threading.Lock()
@@ -35,6 +41,8 @@ class ChatController:
         self.active_request = None
         self.worker = None
         self.sources = sources
+        self.archive = archive
+        self.archive_offer = None
         self.report_scope = None
         self.source_requests = deque(maxlen=64)
         self.voice = ReportVoice(
@@ -51,6 +59,17 @@ class ChatController:
 
     def report_source(self):
         return self.report_scope if self.report_scope is not None else self.selection
+
+    def archive_offer_current(self, snapshot_id):
+        offer = self.archive_offer
+        return (
+            offer is not None
+            and offer[0] == snapshot_id
+            and offer[1] == self.hooks.generation()
+            and offer[2] is self.hooks.connection()
+            and offer[3] == self.hooks.transport_revision()
+            and offer[4] == self.voice.revision
+        )
 
     def report_context_source(self):
         if self.report_scope is not None:
@@ -144,10 +163,20 @@ class ChatController:
         if not isinstance(request_id, str) or not re.fullmatch('[a-f0-9]{32}', request_id):
             raise ValueError('Invalid chat request ID')
         action = data.get('action')
-        if action not in ('state', 'list', 'select', 'clear', 'report', *REGISTRY_ACTIONS):
+        if action not in (
+            'state',
+            'list',
+            'select',
+            'clear',
+            'report',
+            *REGISTRY_ACTIONS,
+            *ARCHIVE_ACTIONS,
+        ):
             raise ValueError('Invalid chat action')
         if action in REGISTRY_ACTIONS:
             validate_request(data)
+        if action in ARCHIVE_ACTIONS:
+            validate_archive_request(data)
         if action == 'report' and data.get('period') not in ('half_hour', 'two_hours', 'today'):
             raise ValueError('Invalid report period')
         with self.hooks.lock:
@@ -160,6 +189,9 @@ class ChatController:
             if action in REGISTRY_ACTIONS and self.sources is None:
                 self.publish(request_id, ok=False, message='当前后台未接入登记来源')
                 return
+            if action in ARCHIVE_ACTIONS and self.archive is None:
+                self.publish(request_id, ok=False, message='当前后台不支持汇报快照')
+                return
             if action == 'report' and self.report_source() is None:
                 self.publish(request_id, ok=False, message='请先选择一个 Dot 聊天作为汇报来源')
                 return
@@ -169,15 +201,29 @@ class ChatController:
                 )
                 return
             if (
-                action in MUTATIONS or action in ('use_sources', 'use_selected_report')
+                action in MUTATIONS
+                or action in ARCHIVE_MUTATIONS
+                or action in ('use_sources', 'use_selected_report')
             ) and not self.hooks.capture_stopped():
                 self.publish(request_id, ok=False, message='请先暂停语音，再修改工作汇报来源')
                 return
+            if action == 'save_report':
+                try:
+                    if not self.archive_offer_current(data['snapshot_id']):
+                        raise ValueError('Report save offer owner changed')
+                    self.voice.snapshot_for_save(data['snapshot_id'])
+                except ValueError:
+                    self.publish(
+                        request_id,
+                        ok=False,
+                        message='这份汇报已过期或归属已变化，请重新读取后再保存',
+                    )
+                    return
             with self.lock:
                 if self.busy:
                     self.publish(request_id, ok=False, message='正在读取聊天，请稍后再试')
                     return
-                if action in REGISTRY_ACTIONS:
+                if action in REGISTRY_ACTIONS or action in ARCHIVE_ACTIONS:
                     if request_id in self.source_requests:
                         self.publish(
                             request_id, ok=False, message='此来源请求已处理，请刷新查看，不自动重试'
@@ -210,6 +256,13 @@ class ChatController:
         def current():
             with self.hooks.lock:
                 with self.lock:
+                    if action == 'save_report':
+                        try:
+                            if not self.archive_offer_current(data['snapshot_id']):
+                                return False
+                            self.voice.snapshot_for_save(data['snapshot_id'])
+                        except ValueError:
+                            return False
                     return (
                         self.active_request == request_id
                         and generation == self.hooks.generation()
@@ -302,6 +355,41 @@ class ChatController:
                             self.report_scope = None
                             self.voice.clear()
                         result = {'registry': self.sources.snapshot()}
+                if action in ARCHIVE_ACTIONS:
+                    # The same owner lock protects the last admission and commit;
+                    # device payloads never supply report bodies or file paths.
+                    if action in ARCHIVE_MUTATIONS:
+                        if (
+                            not self.hooks.idle()
+                            or not self.hooks.capture_stopped()
+                            or not current()
+                        ):
+                            raise ValueError('Saved report owner is busy')
+                        item = None
+                        if action == 'save_report':
+                            source, report = self.voice.snapshot_for_save(data['snapshot_id'])
+                            item = archive_record(source, report)
+                        state = self.archive.apply(
+                            {
+                                'save_report': 'save',
+                                'delete_report': 'delete',
+                                'clear_reports': 'clear',
+                            }[action],
+                            data['revision'],
+                            item=item,
+                            ident=data.get('saved_id'),
+                            current=current,
+                        )
+                    else:
+                        state = self.archive.snapshot()
+                    result = {'saved_reports': self.archive.listing(state)}
+                    if action == 'saved_report':
+                        item = next(
+                            (r for r in state['items'] if r['id'] == data['saved_id']), None
+                        )
+                        if item is None:
+                            raise ValueError('Saved report no longer exists')
+                        result.update(saved_id=item['id'], saved_report_text=historical_text(item))
                 if action == 'report':
                     if not self.voice.valid_report(report_owner, result['report']):
                         raise DotError('Unconfirmed work report')
@@ -311,6 +399,20 @@ class ChatController:
                         report_owner, result['report'], report_revision
                     )
                     result['report_text'] = report_text(result['report'])
+                    # A broken archive must not prevent an otherwise valid live
+                    # read. It only removes the save affordance until repaired.
+                    if result['report_snapshot_adopted'] and self.archive is not None:
+                        try:
+                            result['archive_revision'] = self.archive.snapshot()['revision']
+                            self.archive_offer = (
+                                result['report']['snapshot_id'],
+                                generation,
+                                connection,
+                                self.hooks.transport_revision(),
+                                self.voice.revision,
+                            )
+                        except (OSError, ValueError):
+                            pass
                 self.publish(request_id, ok=True, action=action, **result)
         except Exception:
             with self.hooks.lock:
@@ -329,7 +431,11 @@ class ChatController:
                         self.publish(
                             request_id,
                             ok=False,
-                            message='无法确认聊天状态，请刷新查看；原聊天未追加消息',
+                            message=(
+                                '汇报快照状态未确认，请刷新查看，不自动重试。最多16份、总计256KiB；可先删除不需要的记录。原聊天和任务不变。'
+                                if action in ARCHIVE_ACTIONS
+                                else '无法确认聊天状态，请刷新查看；原聊天未追加消息'
+                            ),
                         )
                     except (OSError, EOFError, ValueError):
                         pass

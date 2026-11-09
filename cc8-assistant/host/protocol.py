@@ -213,6 +213,17 @@ def validate_device_event(value: object) -> JsonObject:
             REGISTRY_ACTIONS,
             validate_request as validate_report_sources_request,
         )
+        from report_archive_protocol import (
+            ACTIONS as ARCHIVE_ACTIONS,
+            validate_request as validate_archive,
+        )
+
+        if (
+            name == 'dot_chat_request'
+            and isinstance(value['action'], str)
+            and value['action'] in ARCHIVE_ACTIONS
+        ):
+            validate_archive(value)
 
         if (
             name == 'dot_chat_request'
@@ -227,6 +238,7 @@ def validate_device_event(value: object) -> JsonObject:
             'clear',
             'report',
             *REGISTRY_ACTIONS,
+            *ARCHIVE_ACTIONS,
         ):
             raise ValueError('Invalid chat action')
         if (
