@@ -62,10 +62,11 @@ public class TextView {
 package android.widget;
 public class Button extends TextView {
  public interface Click{void click(Object view);}
- private Click click;
+ private Click click;boolean enabled=true;
+ public void setEnabled(boolean value){enabled=value;}
  public Button(Object owner){super(owner);}
  public void setOnClickListener(Click value){click=value;}
- public void performClick(){if(click!=null)click.click(this);}
+ public void performClick(){if(enabled&&click!=null)click.click(this);}
 }
 """,
     'android/widget/EditText.java': r"""
@@ -197,7 +198,7 @@ HARNESS = r"""
 package com.happyhome.cc8assistant;
 import android.app.*;import android.widget.*;import org.json.*;import java.util.*;import java.io.*;
 class VoiceSession {
- final Object routeLock=new Object();boolean foreground=true,savedTasksSupported=true,resultProvenanceSupported=true;
+ final Object routeLock=new Object();boolean foreground=true,savedTasksSupported=true,resultProvenanceSupported=true,resultReadingSupported=true;
  long routeEpoch=1;int epoch,eventCalls;Link activeLink=new Link("original"),usbLink,wifiLink,backup;
  final List<JSONObject> sent=new ArrayList<>();
  boolean failNext;
@@ -267,6 +268,26 @@ class ActionCheck extends Activity {
  public static void main(String[] args)throws Exception{
   ActionCheck c=new ActionCheck();VoiceSession s=c.session;
   switch(args[0]){
+   case "reading_controls":{
+    c.detail("completed");LinearLayout content=(LinearLayout)((ScrollView)AlertDialog.last.builder.view).child;
+    ((Button)content.children.get(1)).performClick();((Button)content.children.get(1)).performClick();
+    yes(s.sent.size()==1,"Repeated taps must not resend");JSONObject request=s.sent.get(0);
+    yes("result_read_request".equals(request.optString("event"))&&request.values.size()==4&&!request.optBoolean("restart")&&!request.values.containsKey("text"),"Continue sends only receipt identity and mode");
+    ((Button)content.children.get(2)).performClick();yes(s.sent.size()==2&&s.sent.get(1).optBoolean("restart"),"From-start mode remains explicit");break;
+   }
+   case "reading_stale":{
+    c.detail("completed");LinearLayout content=(LinearLayout)((ScrollView)AlertDialog.last.builder.view).child;
+    s.change();((Button)content.children.get(1)).performClick();yes(s.sent.isEmpty(),"Old task read cannot cross a route");break;
+   }
+   case "reading_capability":{
+    s.resultReadingSupported=false;c.detail("completed");LinearLayout content=(LinearLayout)((ScrollView)AlertDialog.last.builder.view).child;
+    yes(content.children.size()==1&&!s.readResult("id",false,s.routeEpoch)&&s.sent.isEmpty(),"Old backend has no unsupported read control");break;
+   }
+   case "reading_queue_failure":{
+    c.detail("completed");LinearLayout content=(LinearLayout)((ScrollView)AlertDialog.last.builder.view).child;
+    s.backup=s.new Link("backup");s.failNext=true;((Button)content.children.get(1)).performClick();
+    yes(s.sent.isEmpty()&&s.eventCalls==1,"Uncertain read cannot retry on backup");break;
+   }
    case "result_source":{
     c.resultDetails.open(sourceTask("update","completed"),false,s.routeEpoch);
     yes(s.sent.isEmpty(),"Viewing provenance must not send a task or locate anything");
@@ -423,6 +444,8 @@ class WorkspaceActionTests(unittest.TestCase):
                 'boolean currentRoute(',
                 'boolean supportsSavedTaskResults(',
                 'boolean supportsResultProvenance(',
+                'boolean supportsResultReading(',
+                'boolean readResult(',
                 'boolean revealResultFile(',
                 'private void send(',
                 'private void sendPacket(',
@@ -539,6 +562,18 @@ boolean savedTaskRequest(String requestId,String action,String id,long ignored){
 
     def test_current_saved_delete_remains_usable(self):
         self.scenario('current_saved_delete')
+
+    def test_reading_controls_send_identity_once_and_explicit_restart(self):
+        self.scenario('reading_controls')
+
+    def test_reading_old_page_cannot_cross_route(self):
+        self.scenario('reading_stale')
+
+    def test_reading_requires_advertised_backend_capability(self):
+        self.scenario('reading_capability')
+
+    def test_reading_uncertain_write_never_uses_backup(self):
+        self.scenario('reading_queue_failure')
 
     def test_result_source_view_and_explicit_receipt_file_choice(self):
         self.scenario('result_source')

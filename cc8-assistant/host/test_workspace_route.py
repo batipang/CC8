@@ -18,7 +18,7 @@ SESSION_INTERFACES = r"""
  static class Session {
   final Object routeLock=new Object();
   boolean foreground=true,recording,visual,announcement,textSession,receiverRegistered;
-  boolean dotChatSupported,savedTasksSupported,resultProvenanceSupported;
+  boolean dotChatSupported,savedTasksSupported,resultProvenanceSupported,resultReadingSupported;
   int epoch,minimumGeneration,lifecycle,requests,announcementGeneration,textGeneration;
   CaptureWindow captureWindow;
   int visualGeneration;String visionRequestId="",pendingVisionNonce="",desktopVisionNonce="";

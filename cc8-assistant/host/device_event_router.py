@@ -41,6 +41,7 @@ class DeviceEventRouter:
     reminder_action: Callable[[object], object]
     touch_activity: Callable[[], None]
     log: EventSink
+    read_result: Callable[[dict], None] = lambda data: None
 
     def on_event(self, j):
         validate_device_event(j)
@@ -74,6 +75,8 @@ class DeviceEventRouter:
             self.chats.cancel(j['request_id'])
         elif event == 'saved_task_request':
             self.saved_tasks.request(j)
+        elif event == 'result_read_request':
+            self.read_result(j)
         elif event == 'workspace_get':
             self.publish_workspace()
         elif event == 'text_request':

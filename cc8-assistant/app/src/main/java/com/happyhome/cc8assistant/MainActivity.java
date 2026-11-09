@@ -761,8 +761,24 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     TextView detail = text(body.toString(), 22, INK);
     detail.setTextIsSelectable(true);
     detail.setPadding(dp(24), dp(18), dp(24), dp(18));
+    LinearLayout content = new LinearLayout(this);
+    content.setOrientation(LinearLayout.VERTICAL);
+    content.addView(detail);
+    if ("completed".equals(task.optString("status")) && session.supportsResultReading()) {
+      for (boolean restart : new boolean[] {false, true}) {
+        Button read = new Button(this);
+        read.setText(restart ? "从头朗读结果" : "继续朗读结果");
+        read.setTextSize(22);
+        read.setOnClickListener(
+            v -> {
+              if (!session.readResult(task.optString("id"), restart, route)) workspaceNotSent();
+              read.setEnabled(false);
+            });
+        content.addView(read);
+      }
+    }
     ScrollView scroll = new ScrollView(this);
-    scroll.addView(detail);
+    scroll.addView(content);
     AlertDialog.Builder dialog =
         new AlertDialog.Builder(this)
             .setTitle(task.optString("title"))

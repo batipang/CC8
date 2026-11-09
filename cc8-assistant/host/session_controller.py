@@ -11,7 +11,8 @@ import threading
 import time
 import uuid
 from protocol import Packet
-from reply_types import TextReply
+from reply_types import TextReply, ResultRead
+from saved_tasks import ident as result_ident
 from request_text import validate_request_text
 from diagnostics import error_kind
 from failure_feedback import feedback
@@ -220,8 +221,12 @@ class SessionController:
                 self.pending_screen_event = 'screen_sleep'
                 self.flush_screen_event()
 
-    def submit_text(self, text):
+    def submit_text(self, text, *, result_id=None, result_restart=False):
         text = validate_request_text(text, 6000)
+        if result_id is not None:
+            result_ident(result_id)
+            if type(result_restart) is not bool:
+                raise ValueError('Invalid result reading mode')
         with self.guard:
             if self.connection is None or self.hooks.calibration().active:
                 raise RuntimeError('Text request unavailable')
@@ -265,7 +270,11 @@ class SessionController:
                 if self.connection is None:
                     raise RuntimeError('Text request unavailable')
                 stage = 'runtime'
-                self.hooks.enqueue_response(TextReply(generation, text))
+                self.hooks.enqueue_response(
+                    TextReply(generation, text)
+                    if result_id is None
+                    else ResultRead(generation, text, result_id, result_restart)
+                )
                 if not current():
                     return superseded()
             except Exception as error:
