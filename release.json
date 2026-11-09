@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "saved-report-progress-20261110.1",
+  "release_id": "report-pages-recovery-20261110.1",
   "backend": {
     "version": "0.16.21"
   },
   "assistant": {
-    "version": "0.9.91",
-    "version_code": 128,
+    "version": "0.9.94",
+    "version_code": 131,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {
