@@ -284,6 +284,7 @@ def build_components(
             ),
             select=select_chat,
             event=lambda name, **fields: host.event(name, **fields),
+            transport_revision=lambda: host.metrics.get('transport_changes', 0),
         )
     )
     saved_tasks = SavedTaskController(

@@ -114,6 +114,8 @@ class Bridge:
         self.wake = components.wake
         self.chats = components.chats
         self.saved_tasks = components.saved_tasks
+        if isinstance(self.brain, BrainRouter):
+            self.brain.work_reports = self.chats.voice
         self.probes = AcousticProbes(
             session=self.session,
             wake=self.wake,
