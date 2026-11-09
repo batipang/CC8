@@ -359,6 +359,7 @@ def build_device_events(host: Bridge) -> DeviceEventRouter:
         touch_activity=lambda: host.touch_activity(),
         log=lambda name, **fields: host.log(name, **fields),
         read_result=lambda data: host.response.request_read(data),
+        correction_action=lambda data: host.response.request_correction(data),
     )
 
 
@@ -397,6 +398,9 @@ def build_session(host: Bridge, *, capture_frontend: str = 'mono') -> SessionCon
             wake_tick=lambda: host.wake.tick(),
             prepare_brain=lambda generation: host.response.prepare(generation),
             cancel_observation=lambda: host.cancel_playback_observation(),
+            discard_corrections=lambda preserve: host.response.clear_corrections(
+                preserve_source=preserve, publish=False
+            ),
         ),
         capture_frontend=capture_frontend,
     )

@@ -63,6 +63,8 @@ final class VoiceSession {
     void workspace(JSONObject data, long route);
 
     void workspaceResult(boolean ok, String message, long route);
+
+    default void speechCorrection(JSONObject state, long route) {}
   }
 
   private final Context context;
@@ -106,6 +108,8 @@ final class VoiceSession {
   private volatile boolean resultProvenanceSupported;
   private volatile boolean resultReadingSupported;
   private volatile JSONObject voicePreferences;
+  private volatile JSONObject speechCorrection;
+  private int speechCorrectionRevision = -1;
 
   boolean supportsDotChatHandoff() {
     return dotChatSupported;
@@ -243,6 +247,8 @@ final class VoiceSession {
       dotChatSupported =
           savedTasksSupported = resultProvenanceSupported = resultReadingSupported = false;
       voicePreferences = null;
+      speechCorrection = null;
+      speechCorrectionRevision = -1;
       output = null;
       socket = null;
       availability.offline(SystemClock.elapsedRealtime());
@@ -377,12 +383,15 @@ final class VoiceSession {
         dotChatSupported =
             savedTasksSupported = resultProvenanceSupported = resultReadingSupported = false;
         voicePreferences = null;
+        speechCorrection = null;
+        speechCorrectionRevision = -1;
         socket = next.connection;
         output = next.out;
         phase = recordingPhase();
       }
       JSONObject hello = Wire.event("device_ready");
       Wire.put(hello, "supports_playback_pause", true);
+      Wire.put(hello, "speech_correction_version", 1);
       Wire.put(hello, "playback_pause_applied_version", 1);
       Wire.put(hello, "playout_receipt_version", 1);
       Wire.put(hello, "render_clock_report_version", 1);
@@ -486,6 +495,8 @@ final class VoiceSession {
       dotChatSupported =
           savedTasksSupported = resultProvenanceSupported = resultReadingSupported = false;
       voicePreferences = null;
+      speechCorrection = null;
+      speechCorrectionRevision = -1;
       socket = null;
       output = null;
       Link backup =
@@ -701,6 +712,9 @@ final class VoiceSession {
                       : j.optString("message", "Mac 已连接，点击开始语音"));
             }
           }
+        } else if ("speech_correction".equals(event)) {
+          if (p.generation < minimumGeneration) return;
+          if (acceptSpeechCorrection(j)) listener.speechCorrection(j, route);
         } else if ("voice_preferences".equals(event)) {
           if (p.generation < minimumGeneration) return;
           acceptVoicePreferences(j.optJSONObject("voice_preferences"));
@@ -723,8 +737,10 @@ final class VoiceSession {
             textGeneration = p.generation;
             beginTaskOutput("text", p.generation);
             listener.playback(true);
-            listener.heard(j.optString("text"));
-            listener.caption("已收到文字指令。\n正在处理…", "attentive");
+            boolean corrected = "correction".equals(j.optString("input_origin"));
+            listener.heard((corrected ? "已确认更正：" : "") + j.optString("text"));
+            listener.caption(
+                corrected ? "已确认更正，正在处理新问题。\n原来已执行的操作不会撤销。" : "已收到文字指令。\n正在处理…", "attentive");
           }
         } else if ("text_done".equals(event)) {
           if (textSession && p.generation == textGeneration) {
@@ -943,6 +959,7 @@ final class VoiceSession {
               || !statusFeedback.cancel(
                   p.generation, recording || announcement || visual || textSession)) return;
           minimumGeneration = Math.max(minimumGeneration, p.generation);
+          if (Boolean.TRUE.equals(j.opt("speech_correction_cleared"))) clearSpeechCorrection(route);
           if (visual) {
             visual = false;
             listener.vision(false, "已停止看图 · 摄像头关闭", false);
@@ -1086,6 +1103,54 @@ final class VoiceSession {
     String rate = data.optString("speech_rate");
     if ("slow".equals(rate) || "normal".equals(rate) || "fast".equals(rate))
       voicePreferences = data;
+  }
+
+  private boolean acceptSpeechCorrection(JSONObject state) {
+    Object revision = state.opt("revision");
+    if (!(revision instanceof Integer)
+        || (Integer) revision < 0
+        || (Integer) revision < speechCorrectionRevision
+        || !(state.opt("pending") instanceof Boolean)) return false;
+    if (Boolean.TRUE.equals(state.opt("pending"))) {
+      if (!state.optString("draft_id").matches("[a-f0-9]{32}")
+          || !(state.opt("original") instanceof String)
+          || !(state.opt("proposed") instanceof String)
+          || state.optString("original").isEmpty()
+          || state.optString("original").length() > 1024
+          || state.optString("proposed").isEmpty()
+          || state.optString("proposed").length() > 1024) return false;
+    }
+    speechCorrectionRevision = (Integer) revision;
+    speechCorrection = state;
+    return true;
+  }
+
+  private void clearSpeechCorrection(long route) {
+    JSONObject cleared = Wire.event("speech_correction");
+    Wire.put(cleared, "pending", false);
+    speechCorrection = cleared;
+    listener.speechCorrection(cleared, route);
+  }
+
+  boolean currentSpeechCorrection(JSONObject state, long route) {
+    synchronized (routeLock) {
+      return foreground && currentRoute(route) && speechCorrection == state;
+    }
+  }
+
+  boolean speechCorrectionAction(String id, String action, long route) {
+    synchronized (routeLock) {
+      JSONObject current = speechCorrection;
+      if (current == null
+          || !currentSpeechCorrection(current, route)
+          || !Boolean.TRUE.equals(current.opt("pending"))
+          || !id.equals(current.optString("draft_id"))) return false;
+      JSONObject request = Wire.event("speech_correction_action");
+      Wire.put(request, "request_id", java.util.UUID.randomUUID().toString().replace("-", ""));
+      Wire.put(request, "draft_id", id);
+      Wire.put(request, "action", action);
+      return sendWorkspace(request, route);
+    }
   }
 
   JSONObject voicePreferences(long route) {

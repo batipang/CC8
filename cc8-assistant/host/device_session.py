@@ -14,6 +14,9 @@ if TYPE_CHECKING:
 def complete_handshake(session: SessionController, j):
     hooks = session.hooks
     hooks.visual().update_peer(j)
+    session.correction_ui_supported = (
+        type(j.get('speech_correction_version')) is int and j['speech_correction_version'] == 1
+    )
     frontend = session.negotiate_capture_frontend(j)
     hooks.capture().paired_peer_ready = frontend == 'paired'
     session.capture_rejection_supported = (

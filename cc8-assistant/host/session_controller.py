@@ -11,7 +11,7 @@ import threading
 import time
 import uuid
 from protocol import Packet
-from reply_types import TextReply, ResultRead
+from reply_types import TextReply, ResultRead, CorrectedReply
 from saved_tasks import ident as result_ident
 from request_text import validate_request_text
 from diagnostics import error_kind
@@ -45,6 +45,7 @@ class SessionController:
         self.capture_route_pending = False
         self.capture_start_required = False
         self.capture_rejection_supported = False
+        self.correction_ui_supported = False
         self.rejected_capture_id = None
         self.capture_start_ack = False
         self.capture_start_token = uuid.uuid4().hex
@@ -126,6 +127,7 @@ class SessionController:
             self.rebind_seen = False
             self.capture_route_pending = True
             self.capture_rejection_supported = False
+            self.correction_ui_supported = False
             self.capture_start_ack = False
             self.capture_frontend_requested = 'mono'
         try:
@@ -223,8 +225,10 @@ class SessionController:
                 self.pending_screen_event = 'screen_sleep'
                 self.flush_screen_event()
 
-    def submit_text(self, text, *, result_id=None, result_restart=False):
+    def submit_text(self, text, *, result_id=None, result_restart=False, corrected=False):
         text = validate_request_text(text, 6000)
+        if type(corrected) is not bool or corrected and result_id is not None:
+            raise ValueError('Invalid corrected input mode')
         if result_id is not None:
             result_ident(result_id)
             if type(result_restart) is not bool:
@@ -266,14 +270,19 @@ class SessionController:
                 self.hooks.touch_activity()
                 if not current():
                     return superseded()
-                self.hooks.event('text_begin', generation=generation, text=text)
+                self.hooks.event(
+                    'text_begin',
+                    generation=generation,
+                    text=text,
+                    **({'input_origin': 'correction'} if corrected else {}),
+                )
                 if not current():
                     return superseded()
                 if self.connection is None:
                     raise RuntimeError('Text request unavailable')
                 stage = 'runtime'
                 self.hooks.enqueue_response(
-                    TextReply(generation, text)
+                    (CorrectedReply if corrected else TextReply)(generation, text)
                     if result_id is None
                     else ResultRead(generation, text, result_id, result_restart)
                 )
@@ -354,6 +363,14 @@ class SessionController:
             )
             self.generation += 1
             generation = self.generation
+            cleared_correction = False
+            if reason not in ('voice', 'verified_voice'):
+                # Erase the draft without display callbacks during cleanup.
+                # The fenced cancel packet closes its UI after output stops;
+                # stopping output alone may keep the recent original question.
+                cleared_correction = self.hooks.discard_corrections(
+                    reason in ('streaming_stop_keyword', 'button', 'correction_cancel')
+                )
             self.tool_samples.advance_generation(generation, reason)
             was_playing = self.hooks.playback().stop_output()
             if reason == 'transport_switch' and was_playing and not self.hooks.calibration().active:
@@ -383,7 +400,11 @@ class SessionController:
             # Only CC8 can discard PCM already queued on its side.
             try:
                 if self.connection is not None:
-                    self.hooks.event('cancel', generation=generation)
+                    self.hooks.event(
+                        'cancel',
+                        generation=generation,
+                        **({'speech_correction_cleared': True} if cleared_correction else {}),
+                    )
                 if workspace_changed:
                     self.hooks.publish_workspace()
             except (OSError, EOFError, ValueError) as error:

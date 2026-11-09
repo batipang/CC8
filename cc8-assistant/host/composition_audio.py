@@ -102,6 +102,7 @@ def build_audio_pipeline(
             diagnostics=lambda: host.diagnostics,
             playing=lambda: host.playback.playing,
             natural_barge_enabled=lambda: host.session.voice_preferences.natural_barge,
+            clear_correction_draft=lambda: host.response.clear_corrections(preserve_source=True),
             last_audio_end=lambda: host.playback.last_audio_end,
             recent_spoken=lambda: [line for _, line in tuple(host.playback.spoken)],
             pause_state=lambda: host.playback.pause_state,
@@ -178,6 +179,22 @@ def build_audio_pipeline(
             submit_read=lambda ident, restart: host.session.submit_text(
                 '朗读已完成结果', result_id=ident, result_restart=restart
             ),
+            correction_owner=lambda: (
+                (
+                    host.session.connection,
+                    host.session.bound_route_token,
+                    host.session.epoch,
+                    host.session.capture_id,
+                )
+                if host.session.active
+                and host.session.connection is not None
+                and not host.session.capture_route_pending
+                and host.session.correction_ui_supported
+                and host.wake.allowed()
+                else None
+            ),
+            submit_corrected=lambda text: host.session.submit_text(text, corrected=True),
+            cancel_correction=lambda: host.cancel('correction_cancel'),
         )
     )
     return capture, recognition, response

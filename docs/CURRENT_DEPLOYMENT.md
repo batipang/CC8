@@ -1,5 +1,13 @@
 # 当前 CC8 部署与验收范围
 
+## 0.16.6／code98 声音与自然插话
+
+当前部署后台0.16.6／原签名助手0.9.61（code98），源码`a35f2ff`。[PR #454](https://github.com/batipang/CC8/pull/454)、[main八项CI](https://github.com/batipang/CC8/actions/runs/42565269982)与code99前向恢复包独立CI通过。九项组合维护51.085秒完成，独立终审核对原配置、完整LaunchAgent／ENV、Interactive策略、owner Dot、MiniMax、两个APK身份与前台USB优先／Wi-Fi就绪，双端停采。
+
+一次无收音的真实设置界面检查129.390秒完成：后台默认值、取消编辑无副作用、舒缓／关闭自然插话的实际后台回读，以及恢复标准／允许插话均通过。独立终审再次确认默认已恢复、原实例及配置保持、没有任务／ASR／TTS／采集调用。之前更新预检的审计字段名错误在设备变更前退出，已修正并以实际旧审计schema回归覆盖，原失败保留。[声音设置](VOICE_CONTROLS.md)。
+
+本机及Linux／macOS CI均通过1958项后台回归（原4项私人录音显式选择规则保持）、24项安装器、161项工具和76项Java检查。词表、纠错与环境预设当时仍开放；下一候选0.16.7／code100的[明确纠错](SPEECH_CORRECTION.md)另行交付，不用此次界面检查补判真人、声学或72小时验收。
+
 ## 0.16.5／code96 健康归属与已交付结果功能
 
 当前运行后台0.16.5、原签名助手0.9.59（code96），源码`3634fc7`。[PR #453](https://github.com/batipang/CC8/pull/453)及[main八项CI](https://github.com/batipang/CC8/actions/runs/42562484606)通过。五项后台维护19.620秒完成，独立终审核对健康回复PID确实匹配自有worker，真实只读服务状态为ready，完整原配置／LaunchAgent／ENV、Interactive策略、owner Dot及MiniMax保持。两个APK不重装，USB优先／Wi-Fi就绪，麦克风／相机／播放／校准关闭，零新增正式模型请求。隔离回归覆盖错误归属和已退出子进程；真实系统登录／睡眠仍列最终环境验收。

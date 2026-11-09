@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "voice-controls-20261109.1",
+  "release_id": "speech-correction-20261109.1",
   "backend": {
-    "version": "0.16.6"
+    "version": "0.16.7"
   },
   "assistant": {
-    "version": "0.9.61",
-    "version_code": 98,
+    "version": "0.9.63",
+    "version_code": 100,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {

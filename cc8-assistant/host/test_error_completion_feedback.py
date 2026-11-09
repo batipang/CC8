@@ -512,6 +512,7 @@ class FeedbackCheck {
  boolean captureHello(Link link,Data hello){return true;}
  // The typed settings receipt is exercised by WorkspaceRouteTests.
  void acceptVoicePreferences(Object state){}
+ void clearSpeechCorrection(long route){}
  String recordingPhase(){return recording?"listening":"idle";}
  boolean currentRoute(long wanted){return activeRoute==wanted;}
  String phase="idle";

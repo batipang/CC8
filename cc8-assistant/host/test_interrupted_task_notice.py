@@ -75,6 +75,7 @@ class ActivityCheck {
  static final int INK=1,MUTED=2,CYAN=3,AMBER=4;
  final TextView dotText=new TextView(),taskAction=new TextView(),reminderText=new TextView(),brainText=new TextView(),linkText=new TextView();
  final Dialog dotChats=new Dialog(),savedTasks=new Dialog(),resultDetails=new Dialog();
+ Dialog correctionDialog;
  final Companion companion=new Companion();final Steps taskSteps=new Steps();
  final Session session=new Session();
  JSONArray tasksData=new JSONArray(),remindersData=new JSONArray();

@@ -21,6 +21,7 @@ from recognition_echo import resembles_playback
 from session_ports import RecognitionHooks
 from tool_asr_compare import comparison_evidence
 from vision import visual_request
+from speech_correction import command as correction_command
 from wake_controller import WAITING
 from wake_utterance import WaitingUtterance
 
@@ -353,11 +354,14 @@ class RecognitionWorker:
                         references=len(available),
                     )
                     if command:
+                        self.hooks.clear_correction_draft()
+                        if not self.hooks.valid(generation):
+                            continue
                         self.hooks.diagnostics().mark(trace_id, ASR_STOP_STAGE)
                         self.hooks.diagnostics().finish(trace_id, 'completed')
                         self.hooks.status('listening', '已停止播报，我在听')
                         continue
-                    if visual_request(text):
+                    if correction_command(text) is None and visual_request(text):
                         self.hooks.begin_visual(text, 'voice')
                     else:
                         if local_wake:
