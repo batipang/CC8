@@ -55,6 +55,10 @@ class DeviceEventRouter:
             'camera_error',
         ):
             self.visual.feed(j)
+        elif event == 'photo_followup_forget':
+            self.visual.forget_photo(j)
+        elif event == 'photo_followup_request':
+            self.visual.begin_followup(j)
         elif event == 'vision_request':
             nonce = j.get('nonce')
             if isinstance(nonce, str) and re.fullmatch('[a-f0-9]{32}', nonce):

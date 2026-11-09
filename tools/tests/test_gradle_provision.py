@@ -41,9 +41,12 @@ class GradleProvisionTests(unittest.TestCase):
         self.assertIn('--max-time 180 --max-filesize 136920070', step['run'])
         self.assertIn('size != 136920070', step['run'])
         self.assertIn(
-            'https://api.github.com/repos/gradle/gradle-distributions/releases/assets/207876967',
+            'https://downloads.gradle.org/distributions/gradle-8.11.1-bin.zip',
             step['run'],
         )
+        self.assertIn('https://mirrors.huaweicloud.com/gradle/gradle-8.11.1-bin.zip', step['run'])
+        self.assertNotIn('api.github.com', step['run'])
+        self.assertIn("--proto '=https' --proto-redir '=https'", step['run'])
         setup = next(
             s for s in steps if s.get('uses', '').startswith('gradle/actions/setup-gradle@')
         )
@@ -66,10 +69,26 @@ class GradleProvisionTests(unittest.TestCase):
             root = Path(folder)
             temp = root / 'runner temp'
             temp.mkdir()
+            previous = temp / 'gradle-8.11.1-bin.zip'
+            previous.write_bytes(b'previous-unverified-download')
             bin = root / 'commands with spaces'
             bin.mkdir()
             curl = bin / 'curl'
-            curl.write_text('#!/bin/sh\n' + body + '\n')
+            curl.write_text(
+                """#!/bin/sh
+output= source=
+while [ "$#" -gt 0 ]; do
+ case "$1" in
+  --output) output="$2"; shift 2;;
+  https://*) source="$1"; shift;;
+  *) shift;;
+ esac
+done
+printf '%s\\n' "$source" >> "$RUNNER_TEMP/source-calls"
+"""
+                + body
+                + '\n'
+            )
             curl.chmod(0o700)
             unzip = bin / 'unzip'
             unzip.write_text('#!/bin/sh\nprintf reached > "$RUNNER_TEMP/extraction-reached"\n')
@@ -90,19 +109,41 @@ class GradleProvisionTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse((temp / 'extraction-reached').exists())
             self.assertEqual(target.read_text(), '')
+            self.assertEqual(previous.read_bytes(), b'previous-unverified-download')
+            self.assertEqual(
+                (temp / 'source-calls').read_text().splitlines(),
+                [
+                    'https://downloads.gradle.org/distributions/gradle-8.11.1-bin.zip',
+                    'https://mirrors.huaweicloud.com/gradle/gradle-8.11.1-bin.zip',
+                ],
+            )
+            self.assertEqual(list(temp.glob('cc8-gradle-download.*')), [])
             return result
 
     def test_http_failure_stops_before_any_extraction_or_path_change(self):
         result = self.failure('exit 22')
-        self.assertEqual(result.returncode, 22)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stderr.count('source unavailable'), 2)
 
     def test_success_http_with_invalid_archive_body_is_rejected_before_unzip(self):
-        result = self.failure('printf wrong > "$RUNNER_TEMP/gradle-8.11.1-bin.zip"')
+        result = self.failure('printf wrong > "$output"')
         self.assertIn('size/checksum mismatch', result.stderr)
 
     def test_missing_download_cannot_expose_any_existing_gradle_as_verified(self):
         result = self.failure('exit 0')
         self.assertIn('No such file', result.stderr)
+
+    def test_failed_partial_cannot_be_carried_into_the_second_source(self):
+        result = self.failure("""
+if [ -e "$output" ]; then printf 'reused partial' >&2; exit 99; fi
+printf incomplete > "$output"
+exit 22""")
+        self.assertNotIn('reused partial', result.stderr)
+        self.assertEqual(result.stderr.count('source unavailable'), 2)
+
+    def test_correct_size_with_wrong_sha_is_rejected_on_both_sources(self):
+        result = self.failure('truncate -s 136920070 "$output"')
+        self.assertEqual(result.stderr.count('size/checksum mismatch'), 2)
 
 
 if __name__ == '__main__':

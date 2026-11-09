@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "vision-capture-quality-20261109.1",
+  "release_id": "explicit-photo-followup-20261109.1",
   "backend": {
-    "version": "0.16.13"
+    "version": "0.16.14"
   },
   "assistant": {
-    "version": "0.9.75",
-    "version_code": 112,
+    "version": "0.9.77",
+    "version_code": 114,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {

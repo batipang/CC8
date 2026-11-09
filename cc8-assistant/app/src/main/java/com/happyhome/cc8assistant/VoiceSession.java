@@ -83,6 +83,8 @@ final class VoiceSession {
   private volatile boolean visual;
   private volatile int visualGeneration;
   private volatile String pendingVisionNonce = "", visionRequestId = "", desktopVisionNonce = "";
+  private volatile String pendingPhotoId = "", pendingPhotoForgetId = "";
+  private final PhotoFollowupWindow photoFollowup = new PhotoFollowupWindow();
   private volatile boolean foreground, recording, announcement;
   private volatile int announcementGeneration;
   private volatile ServerSocket server;
@@ -109,7 +111,7 @@ final class VoiceSession {
   private volatile boolean dotChatSupported, savedTasksSupported, preferenceMemorySupported;
   private volatile boolean resultProvenanceSupported;
   private volatile boolean resultReadingSupported;
-  private volatile boolean visionModesSupported;
+  private volatile boolean visionModesSupported, photoFollowupSupported;
   private volatile JSONObject voicePreferences;
   private volatile JSONObject speechCorrection;
   private int speechCorrectionRevision = -1;
@@ -124,6 +126,19 @@ final class VoiceSession {
 
   boolean supportsVisionModes() {
     return visionModesSupported;
+  }
+
+  PhotoFollowupWindow.Picture photoForFollowup() {
+    synchronized (routeLock) {
+      return foreground
+              && photoFollowupSupported
+              && isConnected()
+              && !visual
+              && !announcement
+              && !textSession
+          ? photoFollowup.current(routeEpoch, minimumGeneration, SystemClock.elapsedRealtime())
+          : null;
+    }
   }
 
   boolean supportsSavedTaskResults() {
@@ -255,11 +270,14 @@ final class VoiceSession {
       wifi = wifiLink;
       activeLink = null;
       route = routeEpoch;
-      visionModesSupported =
-          dotChatSupported =
-              savedTasksSupported =
-                  preferenceMemorySupported =
-                      resultProvenanceSupported = resultReadingSupported = false;
+      photoFollowup.clear();
+      pendingPhotoId = pendingPhotoForgetId = "";
+      photoFollowupSupported =
+          visionModesSupported =
+              dotChatSupported =
+                  savedTasksSupported =
+                      preferenceMemorySupported =
+                          resultProvenanceSupported = resultReadingSupported = false;
       voicePreferences = null;
       speechCorrection = null;
       speechCorrectionRevision = -1;
@@ -394,11 +412,14 @@ final class VoiceSession {
         next.outputBound = outputBound;
         next.captureStartToken = null;
         next.pairedCaptureRequested = false;
-        visionModesSupported =
-            dotChatSupported =
-                savedTasksSupported =
-                    preferenceMemorySupported =
-                        resultProvenanceSupported = resultReadingSupported = false;
+        photoFollowup.clear();
+        pendingPhotoId = pendingPhotoForgetId = "";
+        photoFollowupSupported =
+            visionModesSupported =
+                dotChatSupported =
+                    savedTasksSupported =
+                        preferenceMemorySupported =
+                            resultProvenanceSupported = resultReadingSupported = false;
         voicePreferences = null;
         speechCorrection = null;
         speechCorrectionRevision = -1;
@@ -416,6 +437,7 @@ final class VoiceSession {
       Wire.put(hello, "desktop_camera_version", 1);
       Wire.put(hello, "vision_capture_version", 2);
       Wire.put(hello, "vision_review_version", 1);
+      Wire.put(hello, "vision_followup_version", 1);
       Wire.put(hello, "desktop_camera_challenge", desktopCameraAuth.challenge());
       Wire.put(hello, "protocol", BuildConfig.CC8_PROTOCOL);
       Wire.put(hello, "sample_rate", 16000);
@@ -511,11 +533,14 @@ final class VoiceSession {
       if (activeLink != link) return;
       activeLink = null;
       routeEpoch++;
-      visionModesSupported =
-          dotChatSupported =
-              savedTasksSupported =
-                  preferenceMemorySupported =
-                      resultProvenanceSupported = resultReadingSupported = false;
+      photoFollowup.clear();
+      pendingPhotoId = pendingPhotoForgetId = "";
+      photoFollowupSupported =
+          visionModesSupported =
+              dotChatSupported =
+                  savedTasksSupported =
+                      preferenceMemorySupported =
+                          resultProvenanceSupported = resultReadingSupported = false;
       voicePreferences = null;
       speechCorrection = null;
       speechCorrectionRevision = -1;
@@ -720,6 +745,8 @@ final class VoiceSession {
             if (!foreground || !currentRoute(route) || p.generation < minimumGeneration) return;
             preferenceMemorySupported = Boolean.TRUE.equals(j.opt("supports_preference_memory"));
             visionModesSupported = Boolean.TRUE.equals(j.opt("supports_vision_modes"));
+            photoFollowupSupported = Boolean.TRUE.equals(j.opt("supports_photo_followup"));
+            if (!photoFollowupSupported) photoFollowup.clear();
             resultProvenanceSupported = Boolean.TRUE.equals(j.opt("supports_result_provenance"));
             resultReadingSupported = Boolean.TRUE.equals(j.opt("supports_result_reading"));
             acceptVoicePreferences(j.optJSONObject("voice_preferences"));
@@ -786,12 +813,80 @@ final class VoiceSession {
         } else if ("workspace_result".equals(event)) {
           if (foreground)
             listener.workspaceResult(j.optBoolean("ok"), j.optString("message"), route);
+        } else if ("photo_followup_ready".equals(event)) {
+          synchronized (routeLock) {
+            if (!foreground
+                || !photoFollowupSupported
+                || !currentRoute(route)
+                || p.generation != minimumGeneration) return;
+            Object width = j.opt("width"), height = j.opt("height"), ttl = j.opt("ttl_ms");
+            if (!(width instanceof Integer)
+                || !(height instanceof Integer)
+                || !(ttl instanceof Integer)) return;
+            photoFollowup.offer(
+                j.optString("photo_id"),
+                p.generation,
+                (Integer) width,
+                (Integer) height,
+                (Integer) ttl,
+                route,
+                SystemClock.elapsedRealtime());
+          }
+        } else if ("photo_followup_expired".equals(event)) {
+          synchronized (routeLock) {
+            if (foreground && currentRoute(route)) {
+              photoFollowup.expire(j.optString("photo_id"), p.generation, route);
+              if (p.generation == minimumGeneration
+                  && !pendingPhotoForgetId.isEmpty()
+                  && pendingPhotoForgetId.equals(j.optString("photo_id"))) {
+                pendingPhotoForgetId = "";
+                listener.workspaceResult(true, "照片已清除", route);
+              }
+            }
+          }
+        } else if ("photo_followup_forget_rejected".equals(event)) {
+          synchronized (routeLock) {
+            if (foreground
+                && currentRoute(route)
+                && p.generation == minimumGeneration
+                && !pendingPhotoForgetId.isEmpty()
+                && pendingPhotoForgetId.equals(j.optString("photo_id"))) {
+              pendingPhotoForgetId = "";
+              listener.workspaceResult(false, "照片已变化，请重新打开看图入口", route);
+            }
+          }
+        } else if ("photo_followup_rejected".equals(event)) {
+          synchronized (routeLock) {
+            if (!foreground
+                || !currentRoute(route)
+                || p.generation < minimumGeneration
+                || pendingPhotoId.isEmpty()
+                || !pendingPhotoId.equals(j.optString("photo_id"))
+                || !pendingVisionNonce.equals(j.optString("nonce"))) return;
+            pendingPhotoId = "";
+            pendingVisionNonce = "";
+            if (!visual && !textSession && !announcement)
+              listener.vision(false, j.optString("message", "照片已不可追问，请重新拍摄"), false);
+          }
         } else if ("vision_begin".equals(event)) {
           String nonce = j.optString("nonce");
           if (!foreground
               || p.generation < minimumGeneration
               || (visual && p.generation == visualGeneration)) return;
           boolean desktop = "desktop".equals(j.optString("origin"));
+          boolean userFollowup = "followup".equals(j.optString("origin"));
+          boolean voiceFollowup = "followup_voice".equals(j.optString("origin"));
+          boolean followup = userFollowup || voiceFollowup;
+          if (voiceFollowup
+              && (!photoFollowupSupported
+                  || !recording
+                  || !nonce.matches("[a-f0-9]{32}")
+                  || !j.optString("photo_id").matches("[a-f0-9]{32}"))) return;
+          if (userFollowup
+              && (!photoFollowupSupported
+                  || pendingPhotoId.isEmpty()
+                  || !pendingPhotoId.equals(j.optString("photo_id"))
+                  || !nonce.equals(pendingVisionNonce))) return;
           if (desktop
               && !lan.authorizeDesktopCamera(
                   desktopCameraAuth, nonce, p.generation, j.optString("camera_auth"))) return;
@@ -803,13 +898,21 @@ final class VoiceSession {
           visual = true;
           visualGeneration = p.generation;
           if (!desktop) beginTaskOutput("vision", p.generation);
-          visionRequestId = "";
+          visionRequestId =
+              userFollowup ? pendingPhotoId : voiceFollowup ? j.optString("photo_id") : "";
+          if (followup) {
+            photoFollowup.clear();
+            pendingPhotoId = "";
+            pendingVisionNonce = "";
+          }
           listener.dotResult("", false, "");
           listener.caption(
-              desktop ? "Dot 请求拍照，请调整画面；预览 5 秒后拍摄并返回当前聊天。" : "请调整画面，预览 5 秒后拍摄；拍后核对按你的看图设置执行。",
+              followup
+                  ? "正在分析你指定的同一张照片，不重新拍摄。"
+                  : desktop ? "Dot 请求拍照，请调整画面；预览 5 秒后拍摄并返回当前聊天。" : "请调整画面，预览 5 秒后拍摄；拍后核对按你的看图设置执行。",
               "attentive");
           listener.screen(false);
-          listener.vision(true, "请调整画面 · 预览 5 秒后拍摄", false);
+          listener.vision(true, followup ? "正在追问本张照片 · 摄像头关闭" : "请调整画面 · 预览 5 秒后拍摄", false);
           final int waitingGeneration = visualGeneration;
           final long waitingRoute = routeEpoch;
           new android.os.Handler(android.os.Looper.getMainLooper())
@@ -985,6 +1088,8 @@ final class VoiceSession {
               || !statusFeedback.cancel(
                   p.generation, recording || announcement || visual || textSession)) return;
           minimumGeneration = Math.max(minimumGeneration, p.generation);
+          photoFollowup.clear();
+          pendingPhotoForgetId = "";
           if (Boolean.TRUE.equals(j.opt("speech_correction_cleared"))) clearSpeechCorrection(route);
           if (visual) {
             visual = false;
@@ -1367,8 +1472,62 @@ final class VoiceSession {
     }
   }
 
+  boolean requestPhotoFollowup(PhotoFollowupWindow.Picture expected, String text) {
+    synchronized (routeLock) {
+      if (expected == null
+          || photoForFollowup() != expected
+          || !pendingVisionNonce.isEmpty()
+          || !PhotoFollowupWindow.validQuestion(text)) return false;
+      pendingVisionNonce = java.util.UUID.randomUUID().toString().replace("-", "");
+      pendingPhotoId = expected.id;
+      JSONObject e = Wire.event("photo_followup_request");
+      Wire.put(e, "nonce", pendingVisionNonce);
+      Wire.put(e, "photo_id", expected.id);
+      Wire.put(e, "text", text.trim());
+      if (!sendWorkspace(e, expected.route)) {
+        pendingVisionNonce = "";
+        pendingPhotoId = "";
+        return false;
+      }
+      photoFollowup.clear();
+      listener.vision(true, "正在提交本张照片的追问 · 摄像头关闭", false);
+      final String nonce = pendingVisionNonce;
+      new android.os.Handler(android.os.Looper.getMainLooper())
+          .postDelayed(
+              () -> {
+                synchronized (routeLock) {
+                  if (foreground
+                      && currentRoute(expected.route)
+                      && nonce.equals(pendingVisionNonce)
+                      && expected.id.equals(pendingPhotoId)) {
+                    cancelVision();
+                    listener.vision(false, "追问请求未确认，请重新打开看图入口", false);
+                  }
+                }
+              },
+              15000);
+      return true;
+    }
+  }
+
+  boolean forgetPhotoForFollowup() {
+    synchronized (routeLock) {
+      PhotoFollowupWindow.Picture picture = photoForFollowup();
+      if (picture == null) return true;
+      photoFollowup.clear();
+      JSONObject event = Wire.event("photo_followup_forget");
+      Wire.put(event, "photo_id", picture.id);
+      pendingPhotoForgetId = picture.id;
+      if (sendWorkspace(event, picture.route)) return true;
+      pendingPhotoForgetId = "";
+      return false;
+    }
+  }
+
   void cancelVision() {
     synchronized (routeLock) {
+      photoFollowup.clear();
+      pendingPhotoId = "";
       boolean had = visual || !pendingVisionNonce.isEmpty();
       int stoppedGeneration = visual ? visualGeneration : -1;
       String stoppedNonce = pendingVisionNonce;
@@ -1404,6 +1563,10 @@ final class VoiceSession {
   }
 
   void imageReady(JSONObject request, byte[] jpeg, int width, int height) {
+    imageReady(request, jpeg, width, height, false);
+  }
+
+  void imageReady(JSONObject request, byte[] jpeg, int width, int height, boolean keepPhoto) {
     final int gen = request.optInt("vision_generation", -1);
     final String ident = request.optString("request_id");
     final long route = request.optLong("vision_route", -1);
@@ -1419,6 +1582,8 @@ final class VoiceSession {
                 Wire.put(head, "width", width);
                 Wire.put(head, "height", height);
                 Wire.put(head, "sha256", hex.toString());
+                if (keepPhoto && Boolean.TRUE.equals(request.opt("followup_allowed")))
+                  Wire.put(head, "retain_for_followup", true);
                 sendCameraEvent(head, gen, ident, route);
                 int index = 0;
                 for (int at = 0; at < jpeg.length; at += 12288) {

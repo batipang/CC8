@@ -52,6 +52,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   private AlertDialog imageQualityDialog;
   private boolean highDefinitionImage;
   private boolean reviewCapturedImage;
+  private boolean retainCapturedPhoto;
   private SpeechCorrectionDialog correctionDialog;
   private SavedTasksDialog savedTasks;
   private ResultDetailsDialog resultDetails;
@@ -463,9 +464,10 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
               new AlertDialog.Builder(this)
                   .setTitle("看图与识字")
                   .setItems(
-                      new String[] {"普通看图", "识别图片文字", "看图设置"},
+                      new String[] {"普通看图", "识别图片文字", "看图设置", "追问最近照片"},
                       (d, n) -> {
                         if (n == 2) showImageQuality();
+                        else if (n == 3) showPhotoQuestion();
                         else requestImage(n == 1 ? "ocr" : "observe");
                       })
                   .setNegativeButton("取消", null)
@@ -1266,7 +1268,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
               "偏好记忆",
               "识别语言",
               "看图设置",
-              "识别图片文字"
+              "识别图片文字",
+              "追问最近照片"
             },
             (d, n) -> {
               if (n == 0) {
@@ -1316,6 +1319,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
               else if (n == 12) recognitionLanguage.open();
               else if (n == 13) showImageQuality();
               else if (n == 14) requestImage("ocr");
+              else if (n == 15) showPhotoQuestion();
               else showReminderHistory();
             })
         .setNegativeButton("关闭", null)
@@ -1426,6 +1430,11 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     review.setTextSize(24);
     review.setChecked(reviewCapturedImage);
     content.addView(review);
+    CheckBox keep = new CheckBox(this);
+    keep.setText("允许追问：首次回答后在 Mac 内存保留这张照片 2 分钟");
+    keep.setTextSize(24);
+    keep.setChecked(retainCapturedPhoto);
+    content.addView(keep);
     ScrollView scroll = new ScrollView(this);
     scroll.addView(content);
     AlertDialog dialog =
@@ -1436,8 +1445,17 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
                 "应用",
                 (d, n) -> {
                   if (foreground && imageQualityDialog == d) {
+                    if (session.isVisual()) {
+                      Toast.makeText(this, "正在处理照片，请结束后再修改设置", Toast.LENGTH_LONG).show();
+                      return;
+                    }
                     highDefinitionImage = quality.getCheckedRadioButtonId() == hdId;
                     reviewCapturedImage = review.isChecked();
+                    if (retainCapturedPhoto
+                        && !keep.isChecked()
+                        && !session.forgetPhotoForFollowup())
+                      Toast.makeText(this, "清除照片未确认，请检查连接", Toast.LENGTH_LONG).show();
+                    retainCapturedPhoto = keep.isChecked();
                   }
                 })
             .setNegativeButton("取消", null)
@@ -1446,6 +1464,96 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     dialog.setOnDismissListener(
         d -> {
           if (imageQualityDialog == dialog) imageQualityDialog = null;
+        });
+    dialog.show();
+  }
+
+  private void showPhotoQuestion() {
+    if (!foreground) return;
+    final PhotoFollowupWindow.Picture picture = session.photoForFollowup();
+    if (picture == null) {
+      Toast.makeText(this, "没有可追问的照片。请在看图设置明确允许保留，再拍一张。", Toast.LENGTH_LONG).show();
+      return;
+    }
+    if (imageQualityDialog != null) imageQualityDialog.dismiss();
+    LinearLayout content = new LinearLayout(this);
+    content.setOrientation(LinearLayout.VERTICAL);
+    content.setPadding(dp(24), dp(12), dp(24), dp(12));
+    content.addView(
+        text(
+            "照片 #"
+                + picture.id.substring(0, 6)
+                + " · "
+                + picture.width
+                + "×"
+                + picture.height
+                + "。本次会把同一张照片交给 Dot，不重新打开相机；追问不会延长原保留窗口。语音已开启时，也可说‘追问这张照片，……’。",
+            22,
+            INK));
+    EditText question = new EditText(this);
+    question.setTextSize(24);
+    question.setHint("例如：这张照片上的文字是什么意思？");
+    question.setInputType(
+        android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+    question.setMaxLines(4);
+    question.setFilters(
+        new android.text.InputFilter[] {new android.text.InputFilter.LengthFilter(1000)});
+    content.addView(question, new LinearLayout.LayoutParams(-1, -2));
+    ScrollView scroll = new ScrollView(this);
+    scroll.addView(content);
+    AlertDialog dialog =
+        new AlertDialog.Builder(this)
+            .setTitle("追问这张照片")
+            .setView(scroll)
+            .setPositiveButton("发送追问", null)
+            .setNegativeButton("取消", null)
+            .setNeutralButton(
+                "清除照片",
+                (d, n) -> {
+                  if (foreground && imageQualityDialog == d && !session.forgetPhotoForFollowup())
+                    Toast.makeText(this, "清除照片未确认，请检查连接", Toast.LENGTH_LONG).show();
+                })
+            .create();
+    imageQualityDialog = dialog;
+    dialog.setOnDismissListener(
+        d -> {
+          if (imageQualityDialog == dialog) imageQualityDialog = null;
+        });
+    dialog.setOnShowListener(
+        d -> {
+          dialog
+              .getWindow()
+              .setSoftInputMode(
+                  android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+                      | android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN);
+          dialog
+              .getButton(AlertDialog.BUTTON_POSITIVE)
+              .setOnClickListener(
+                  v -> {
+                    if (!foreground || imageQualityDialog != dialog) return;
+                    String value = question.getText().toString();
+                    if (!PhotoFollowupWindow.validQuestion(value)) {
+                      Toast.makeText(this, "请输入有效问题（最多 1000 字符）", Toast.LENGTH_LONG).show();
+                      return;
+                    }
+                    if (!session.requestPhotoFollowup(picture, value)) {
+                      Toast.makeText(this, "照片或连接已变化，请重新打开入口", Toast.LENGTH_LONG).show();
+                      return;
+                    }
+                    dialog.dismiss();
+                  });
+          new android.os.Handler(android.os.Looper.getMainLooper())
+              .postDelayed(
+                  new Runnable() {
+                    public void run() {
+                      if (imageQualityDialog != dialog) return;
+                      if (!foreground || session.photoForFollowup() != picture) dialog.dismiss();
+                      else
+                        new android.os.Handler(android.os.Looper.getMainLooper())
+                            .postDelayed(this, 500);
+                    }
+                  },
+                  500);
         });
     dialog.show();
   }
@@ -1506,12 +1614,13 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
             session.cameraFailed(request, "unsupported_preview");
             return;
           }
+          final boolean keepPhoto = retainCapturedPhoto && profile.followupAllowed;
           eyes.start(
               new SingleFrameCamera.Result() {
                 public void image(byte[] jpeg, int width, int height) {
                   if (foreground && session.isVisionRequestCurrent(request)) {
                     state("thinking", "摄像头已关闭 · 正在把本次画面交给 Dot");
-                    session.imageReady(request, jpeg, width, height);
+                    session.imageReady(request, jpeg, width, height, keepPhoto);
                   }
                 }
 
@@ -2212,6 +2321,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     Wire.put(ui, "camera_quality_fallback", eyes == null ? "" : eyes.qualityFallback());
     Wire.put(ui, "camera_hd_requested", highDefinitionImage);
     Wire.put(ui, "camera_review_requested", reviewCapturedImage);
+    Wire.put(ui, "camera_followup_requested", retainCapturedPhoto);
     Wire.put(ui, "screen_sleeping", screenSleeping);
     Wire.put(ui, "orbit_clock_time", companion.clockTime());
     Wire.put(ui, "orbit_clock_timezone", companion.clockTimeZone());

@@ -353,6 +353,8 @@ class RecognitionWorker:
                         echo_risk=risky,
                         references=len(available),
                     )
+                    if self.hooks.photo_voice(text, generation, bool(command)):
+                        continue
                     if command:
                         self.hooks.clear_correction_draft()
                         if not self.hooks.valid(generation):

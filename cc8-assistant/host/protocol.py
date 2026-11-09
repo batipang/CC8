@@ -115,6 +115,28 @@ def validate_device_event(value: object) -> JsonObject:
         from preference_protocol import validate_request
 
         validate_request(value)
+    if name == 'photo_followup_forget':
+        photo_id = value.get('photo_id')
+        if (
+            set(value) != {'event', 'photo_id'}
+            or not isinstance(photo_id, str)
+            or not re.fullmatch('[a-f0-9]{32}', photo_id)
+        ):
+            raise ValueError('Invalid photo forget request')
+    if name == 'photo_followup_request':
+        from request_text import validate_request_text
+
+        nonce = value.get('nonce')
+        photo_id = value.get('photo_id')
+        if (
+            set(value) != {'event', 'nonce', 'photo_id', 'text'}
+            or not isinstance(nonce, str)
+            or not re.fullmatch('[a-f0-9]{32}', nonce)
+            or not isinstance(photo_id, str)
+            or not re.fullmatch('[a-f0-9]{32}', photo_id)
+        ):
+            raise ValueError('Invalid photo follow-up request')
+        validate_request_text(value.get('text'), 1000)
     if name == 'vision_request':
         nonce = value.get('nonce')
         if set(value) - {'event', 'nonce', 'mode'} or (
@@ -222,6 +244,7 @@ def validate_device_event(value: object) -> JsonObject:
         'desktop_camera_version': 32,
         'vision_capture_version': 32,
         'vision_review_version': 32,
+        'vision_followup_version': 32,
         'capture_reject_version': 32,
         'capture_start_ack_version': 32,
         'paired_capture_version': 32,

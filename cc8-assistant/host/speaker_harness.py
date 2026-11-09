@@ -120,7 +120,9 @@ public class VoiceSession implements AutoCloseable {
  CaptureWindow captureWindow;
  float inputLevel;
  static class AudioRecord {void stop(){}}
- String pendingVisionNonce="",desktopVisionNonce="",visionRequestId="";
+ String pendingVisionNonce="",desktopVisionNonce="",visionRequestId="",pendingPhotoId="";
+ boolean photoFollowupSupported;
+ final PhotoFollowupWindow photoFollowup=new PhotoFollowupWindow();
  final Object desktopCameraAuth=new Object();
  static class Lan {boolean authorizeDesktopCamera(Object auth,String nonce,int generation,String proof){return true;}}
  final Lan lan=new Lan();
@@ -473,6 +475,7 @@ class SpeakerHarness:
                     'StatusFeedback',
                     'CaptureWindow',
                     'CaptureClockStats',
+                    'PhotoFollowupWindow',
                 )
             ]
             result = subprocess.run(

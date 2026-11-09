@@ -1,6 +1,6 @@
 """In-memory work items and presentation mood; no worker/session ownership."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 def mood(text):
@@ -23,6 +23,15 @@ class Reply:
 class VisualReply(Reply):
     origin: str = 'voice'
     nonce: str = ''
+
+
+@dataclass
+class PhotoReply(VisualReply):
+    """An explicit, already-consumed photo question; no camera acquisition."""
+
+    image: bytes | None = field(default=None, repr=False)
+    policy: object = None
+    expires: float = 0
 
 
 @dataclass

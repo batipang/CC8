@@ -377,7 +377,9 @@ class SessionController:
                 self.playback_interrupted_by_transport = True
             self.hooks.announcements().invalidate()
             self.text_generation = None
-            self.hooks.visual().invalidate()
+            self.hooks.visual().invalidate(
+                reason=reason, new_generation=generation, capture_owner=self.capture_owner()
+            )
             self.hooks.playback().clear_cancelled_pause(was_playing)
             self.hooks.wake_reset('cancel')
         # Wake local waiters independently of provider/transport cancellation.
@@ -405,6 +407,7 @@ class SessionController:
                         generation=generation,
                         **({'speech_correction_cleared': True} if cleared_correction else {}),
                     )
+                    self.hooks.visual().publish_followup(generation)
                 if workspace_changed:
                     self.hooks.publish_workspace()
             except (OSError, EOFError, ValueError) as error:
@@ -414,6 +417,11 @@ class SessionController:
                 self.hooks.metric('interruptions', self.hooks.metric_value('interruptions') + 1)
                 self.hooks.log('playback_cancelled', reason=reason, generation=generation)
         return generation
+
+    def capture_owner(self):
+        if not self.active or self.connection is None:
+            return None
+        return (id(self.connection), self.bound_route_token, self.epoch, self.capture_id)
 
     def stop(self, *, transport_lost=False):
         with self.guard:
