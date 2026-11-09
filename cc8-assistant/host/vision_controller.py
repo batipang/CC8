@@ -18,6 +18,7 @@ from session_ports import EventSink, AnswerSink, MetricSink
 from diagnostics import TraceBook, error_kind
 from failure_feedback import FailureSink
 from operation_failure import OperationFailure
+from window_input import WindowPicker, WindowSelectionEnded, available as window_available
 
 
 @dataclass(frozen=True)
@@ -60,12 +61,16 @@ class VisionController:
         self.followup_job = None
         self.followup_job_timer = None
         self.followup_capture_owner = None
+        self.window_picker = None
 
     def invalidate(self, reason=None, new_generation=None, capture_owner=None):
         # Caller holds the shared session guard; inbox owns its inner lock.
         self.generation = None
         self.nonce = ''
         self.inbox.cancel()
+        picker, self.window_picker = self.window_picker, None
+        if picker is not None:
+            picker.cancel()
         preserved = None
         if (
             reason in ('voice', 'verified_voice')
@@ -394,13 +399,30 @@ class VisionController:
                 'vision_unavailable', message='请先连接 Mac、结束校准，并确认 Dot 可用'
             )
             return
+        if origin == 'mac_window' and not window_available():
+            self.hooks.event(
+                'vision_unavailable',
+                message='Mac 窗口入口未安装或系统不支持，请在 Mac 完成准备后重试。',
+            )
+            return
         with self.hooks.lock:
             generation = self.hooks.cancel_session('vision_request')
+            # Provider/transport cleanup may synchronously admit replacement
+            # work. Its generation owns the UI and queue, even on this thread.
+            if self.hooks.session_generation() != generation or not self.hooks.connected():
+                return
             self.generation = generation
             self.nonce = nonce
             self.hooks.diagnostics().begin('vision', generation)
             self.hooks.touch()
-            self.hooks.event('vision_begin', generation=generation, nonce=nonce)
+            self.hooks.event(
+                'vision_begin',
+                generation=generation,
+                nonce=nonce,
+                **({'origin': 'mac_window'} if origin == 'mac_window' else {}),
+            )
+            if self.generation != generation or not self.hooks.valid(generation):
+                return
             self.hooks.enqueue(VisualReply(generation, text, origin, nonce))
         self.hooks.save_status()
 
@@ -410,6 +432,9 @@ class VisionController:
         image = None
         capture = None
         retained = isinstance(job, PhotoReply)
+        window = job.origin == 'mac_window'
+        picker = None
+        question = job.text
         try:
             with self.hooks.lock:
                 if not self.hooks.valid(generation):
@@ -422,6 +447,9 @@ class VisionController:
                         self.release_queued_photo()
                     if image is None or time.monotonic() >= job.expires:
                         raise VisionError('capture_timeout')
+                elif window:
+                    picker = WindowPicker()
+                    self.window_picker = picker
                 else:
                     capture = self.inbox.begin(
                         generation,
@@ -429,7 +457,15 @@ class VisionController:
                         review=self.review_capable,
                         followup=self.followup_capable,
                     )
-            if not retained:
+            if window:
+                self.hooks.status(
+                    'thinking', '请在 Mac 选择一个窗口，预览后点击发送 · CC8 摄像头关闭'
+                )
+                selected = picker.choose(job.text, job.nonce, lambda: self.hooks.valid(generation))
+                image = selected.image
+                question = selected.prompt()
+                selected = None
+            elif not retained:
                 self.hooks.status('thinking', '正在打开摄像头 · 预览 5 秒后拍摄给 Dot')
                 self.hooks.event(
                     'camera_capture',
@@ -445,7 +481,7 @@ class VisionController:
                 image = self.inbox.wait(capture, lambda: self.hooks.valid(generation))
             if not self.hooks.valid(generation):
                 return
-            if not retained:
+            if not retained and not window:
                 self.hooks.metric('vision_frames_received', increment=True)
                 self.hooks.log(
                     'vision_frame_received',
@@ -453,12 +489,16 @@ class VisionController:
                     width=capture.width,
                     height=capture.height,
                 )
-            self.hooks.answer(job.text, generation, image=image)
+            self.hooks.answer(question, generation, image=image)
             outcome = 'failed' if self.hooks.answer_completed() is False else 'completed'
             with self.hooks.lock:
                 if outcome == 'completed' and self.hooks.valid(generation):
                     self.hooks.metric('vision_dot_completed', increment=True)
-                    if self.followup_capable and (retained or capture.followup_requested):
+                    if (
+                        not window
+                        and self.followup_capable
+                        and (retained or capture.followup_requested)
+                    ):
                         expires = job.expires if retained else None
                         if expires is None or time.monotonic() < expires:
                             try:
@@ -478,9 +518,24 @@ class VisionController:
             outcome = 'failed'
             with self.hooks.lock:
                 if self.hooks.valid(generation):
+                    if (
+                        window
+                        and isinstance(error, WindowSelectionEnded)
+                        and error.reason == 'cancelled'
+                    ):
+                        outcome = 'cancelled'
+                        self.hooks.status(
+                            'listening' if self.hooks.capture_owner() else 'idle',
+                            '已取消 Mac 窗口输入，没有发送画面。',
+                        )
+                        return
                     self.hooks.metric(
                         'vision_last_error',
-                        error.code if isinstance(error, VisionError) else error_kind(error),
+                        error.code
+                        if isinstance(error, VisionError)
+                        else 'timeout'
+                        if isinstance(error, WindowSelectionEnded) and error.reason == 'expired'
+                        else error_kind(error),
                     )
                     stage = self.hooks.diagnostics().current_stage(
                         generation, default='vision' if image is None else 'brain'
@@ -489,17 +544,26 @@ class VisionController:
                         error
                         if isinstance(error, OperationFailure)
                         else OperationFailure(
-                            'Vision operation failed', stage=stage, kind=error_kind(error)
+                            'Vision operation failed',
+                            stage=stage,
+                            kind='timeout'
+                            if isinstance(error, WindowSelectionEnded) and error.reason == 'expired'
+                            else error_kind(error),
+                            input_source='mac_window' if window else None,
                         )
                     )
                     self.hooks.failure('这次看图没有完成', failure, trace_key=generation)
         finally:
             image = None
+            if picker is not None:
+                picker.cancel()
             if retained:
                 job.image = None
             if capture is not None:
                 self.inbox.cancel_capture(capture)
             with self.hooks.lock:
+                if self.window_picker is picker:
+                    self.window_picker = None
                 if self.followup_job is job:
                     self.release_queued_photo()
                 if self.generation == generation:

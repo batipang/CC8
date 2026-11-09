@@ -23,9 +23,12 @@ class ClassifiedFailure(RuntimeError):
 
 
 class OperationFailure(ClassifiedFailure):
-    def __init__(self, message, *, stage, kind):
+    def __init__(self, message, *, stage, kind, input_source=None):
         if stage not in STAGES or kind not in KINDS:
             raise ValueError('Invalid operation failure category')
         super().__init__(message, kind=kind)
         self.stage = stage
         self.kind = kind
+        if input_source not in (None, 'mac_window'):
+            raise ValueError('Invalid input source')
+        self.input_source = input_source

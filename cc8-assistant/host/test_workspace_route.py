@@ -19,7 +19,7 @@ SESSION_INTERFACES = r"""
   final Object routeLock=new Object();
   SourcesPresentation sourcesPresentation;
   boolean foreground=true,recording,visual,announcement,textSession,receiverRegistered;
-  boolean dotChatSupported,savedTasksSupported,preferenceMemorySupported,resultProvenanceSupported,resultReadingSupported,visionModesSupported,photoFollowupSupported;
+  boolean dotChatSupported,savedTasksSupported,preferenceMemorySupported,resultProvenanceSupported,resultReadingSupported,visionModesSupported,photoFollowupSupported,macWindowSupported;
   final PhotoFollowupWindow photoFollowup=new PhotoFollowupWindow();
   String pendingPhotoId="",pendingPhotoForgetId="";
   JSONObject voicePreferences,speechCorrection;
@@ -538,6 +538,22 @@ SCENARIOS = r"""
     yes(s.photoFollowup.offer("d".repeat(32),7,640,480,120000,s.routeEpoch,SystemClock.now),"new route offer failed");
     s.pause();yes(!s.photoFollowupSupported&&s.photoForFollowup()==null,"Home kept photo state");break;
    }
+   case "mac_window_request":{
+    int count=old.events.size();
+    yes(!s.requestVision("mac_window")&&old.events.size()==count,"unprepared Mac accepted a window request");
+    s.macWindowSupported=true;
+    yes(s.requestVision("mac_window"),"prepared window request was not sent");
+    JSONObject sent=old.events.get(count);String nonce=sent.optString("nonce");
+    yes("mac_window".equals(sent.optString("mode"))&&nonce.matches("[a-f0-9]{32}"),"window scope or nonce lost");
+    Wire.Packet begin=new Wire.Packet(new JSONObject("event","vision_begin","origin","mac_window","nonce","b".repeat(32)));begin.generation=8;
+    s.deliver(begin,old);yes(!s.visual,"mismatched window receipt accepted");
+    ((JSONObject)begin.data).values.put("nonce",nonce);s.deliver(begin,old);
+    yes(s.visual&&s.visualGeneration==8&&s.visionRequestId.equals(nonce)&&s.pendingVisionNonce.isEmpty(),"window wait still follows the 15-second camera timeout");
+    Wire.Packet camera=new Wire.Packet(new JSONObject("event","camera_capture","origin","button","request_id","c".repeat(32),"nonce",nonce));camera.generation=8;
+    s.deliver(camera,old);yes(c.cameraRequest==null&&!s.recording,"window request opened the CC8 camera or microphone");
+    Link next=new Link("wifi");activate(c,next);yes(!s.macWindowSupported&&!s.visual,"handover preserved old window capability/work");
+    s.macWindowSupported=true;s.pause();yes(!s.macWindowSupported&&!s.requestVision("mac_window"),"Home retained the window entry");break;
+   }
    case "ocr_request":{
     int count=old.events.size();
     yes(!s.requestVision("ocr")&&old.events.size()==count,"old server accepted OCR");
@@ -967,6 +983,9 @@ class WorkspaceRouteTests(unittest.TestCase):
 
     def test_explicit_ocr_request_has_current_capability_nonce_and_one_route(self):
         self.scenario('ocr_request')
+
+    def test_mac_window_uses_current_capability_nonce_and_never_camera_capture(self):
+        self.scenario('mac_window_request')
 
     def test_photo_followup_uses_owned_metadata_nonce_and_no_camera(self):
         self.scenario('photo_request')

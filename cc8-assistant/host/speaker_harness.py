@@ -121,7 +121,7 @@ public class VoiceSession implements AutoCloseable {
  float inputLevel;
  static class AudioRecord {void stop(){}}
  String pendingVisionNonce="",desktopVisionNonce="",visionRequestId="",pendingPhotoId="";
- boolean photoFollowupSupported;
+ boolean photoFollowupSupported,macWindowSupported;
  final PhotoFollowupWindow photoFollowup=new PhotoFollowupWindow();
  final Object desktopCameraAuth=new Object();
  static class Lan {boolean authorizeDesktopCamera(Object auth,String nonce,int generation,String proof){return true;}}

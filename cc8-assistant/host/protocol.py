@@ -144,7 +144,7 @@ def validate_device_event(value: object) -> JsonObject:
             and (
                 not isinstance(nonce, str)
                 or not re.fullmatch('[a-f0-9]{32}', nonce)
-                or value['mode'] not in ('observe', 'ocr')
+                or value['mode'] not in ('observe', 'ocr', 'mac_window')
             )
         ):
             raise ValueError('Invalid vision request')

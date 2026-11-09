@@ -32,3 +32,4 @@ device-access/private/
 .ruff_cache/
 .pre-commit-cache/
 .hypothesis/
+mac-window-input/.build/
