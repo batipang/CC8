@@ -18,6 +18,44 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class UpgradeTests(unittest.TestCase):
+    def test_scheduled_summary_format_blocks_old_recovery_without_export_or_migration(self):
+        from report_watch_store import ReportWatchStore
+        from test_report_watch_store import SOURCE
+
+        with tempfile.TemporaryDirectory() as folder:
+            before, after = self.manifests(folder)
+            path = before / 'device-access/private/voice-runtime/work-report-watch.json'
+            store = ReportWatchStore(path, clock=lambda: 200)
+            store.configure(0, SOURCE, 300, 'cc8', mode='summary')
+            raw = path.read_bytes()
+            import builtins
+
+            original_import = builtins.__import__
+
+            def stdlib_only(name, *args, **kwargs):
+                if name == 'report_watch_store':
+                    raise AssertionError('Format inspection must not import voice runtime')
+                return original_import(name, *args, **kwargs)
+
+            with patch('builtins.__import__', side_effect=stdlib_only):
+                gate = upgrade.plan(before, after)['report_watch_storage']
+            self.assertFalse(gate['compatible'])
+            self.assertFalse(gate['report_content_exported'])
+            self.assertNotIn('source', gate)
+            code, _, _ = self.invoke(['plan', '--from-root', str(before), '--to-root', str(after)])
+            self.assertEqual(code, 2)
+            source = after / 'cc8-assistant/host/report_watch_store.py'
+            source.parent.mkdir(parents=True)
+            source.write_text('READER_VERSION = 2\n')
+            self.assertTrue(upgrade.plan(before, after)['report_watch_storage']['compatible'])
+            self.assertEqual(path.read_bytes(), raw)
+            source.write_text('READER_VERSION = True\n')
+            with self.assertRaises(ValueError):
+                upgrade.plan(before, after)
+            source.write_text('READER_VERSION = 1\n')
+            store.clear(1)
+            self.assertTrue(upgrade.plan(before, after)['report_watch_storage']['compatible'])
+
     def profile(self, folder, values=None):
         path = Path(folder) / 'original.json'
         path.write_text(json.dumps(values or {'schema_version': 1, 'tts_speed': 1.2}))

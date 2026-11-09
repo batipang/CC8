@@ -2,7 +2,10 @@
 
 import time
 import uuid
-from report_checkpoint import describe
+from report_checkpoint import describe, source_from
+from report_watch_results import WatchResults
+from report_display import paged_text
+from report_voice import report_text
 from report_watch_reader import WatchReader
 from report_watch_scheduler import WatchScheduler
 from report_watch_protocol import MUTATIONS
@@ -25,6 +28,21 @@ class WatchController:
     def __init__(self, chat, store, *, clock=time.monotonic):
         self.chat, self.store, self.clock = chat, store, clock
         self.offer = self.scheduler = None
+        self.results = WatchResults(self.result_context, clock=clock)
+
+    def result_context(self):
+        scheduler = self.scheduler
+        if scheduler is None or not scheduler.owner_current(scheduler.grant):
+            return None
+        watch = self.store.snapshot()['watch']
+        if (
+            watch is None
+            or watch['id'] != scheduler.grant[1]
+            or not self.chat.scope_current(source_from(watch['source']))
+        ):
+            return None
+        connection, route = scheduler.grant[0]
+        return (connection, route, watch['id'], watch['source'])
 
     def bind(self, hooks):
         reader = WatchReader(
@@ -32,6 +50,7 @@ class WatchController:
             self.chat.read_subscription,
             self.chat.scope_current,
             commit_lock=self.chat.hooks.lock,
+            results=self.results,
         )
         self.scheduler = WatchScheduler(self.store, reader, hooks)
 
@@ -62,11 +81,29 @@ class WatchController:
         if self.store is None or self.scheduler is None:
             raise ValueError('Report subscriptions unavailable')
         chat = self.chat
+        if not current():
+            raise ValueError('Report subscription request changed')
+        if action in ('watch_result', 'watch_result_page'):
+            report = self.results.read(data.get('snapshot_id'))
+            fields = dict(
+                watch_result=True,
+                snapshot_id=report['snapshot_id'],
+                watch_result_ttl_ms=self.results.remaining_ms(),
+            )
+            return paged_text(
+                '最近定时检查 · 只读快照，非实时。可能含已提示结果；不改变手动汇报编号和补播进度。\n\n'
+                + report_text(report),
+                dict(request_id=data['request_id'], ok=True, action=action, **chat.state()),
+                page=data.get('page', 0),
+                fields=fields,
+            )
         if action in MUTATIONS and (
             not current() or not chat.hooks.capture_stopped() or not chat.hooks.idle()
         ):
             raise ValueError('Pause voice before changing subscriptions')
         if action == 'configure_watch':
+            if data.get('mode') == 'summary' and self.scheduler.hooks.send_summary is None:
+                raise ValueError('Scheduled summary delivery unavailable')
             source = self.offered(data['offer_id'], data['revision'])
 
             def confirmed():
@@ -77,9 +114,11 @@ class WatchController:
                 describe(source),
                 data['period_seconds'],
                 data['channel'],
+                mode=data.get('mode', 'count'),
                 current=confirmed,
             )
             self.offer = None
+            self.results.clear()
             self.scheduler.arm()
         elif action in ('pause_watch', 'clear_watch'):
             change = self.store.pause if action == 'pause_watch' else self.store.clear
@@ -87,7 +126,12 @@ class WatchController:
             self.scheduler.revoke()
         else:
             state = self.store.snapshot()
-        result = dict(report_watch=self.summary(state), watch_text=self.description(state))
+        result = dict(
+            report_watch=self.summary(state),
+            watch_text=self.description(state),
+            watch_has_results=self.results.available(),
+            watch_summary_supported=self.scheduler.hooks.send_summary is not None,
+        )
         self.offer = None
         source = chat.report_context_source()
         if source is not None and chat.hooks.capture_stopped() and chat.hooks.idle():
@@ -118,7 +162,11 @@ class WatchController:
             return '定时工作进展提示默认关闭。请先暂停语音，明确选择工作汇报来源，再确认周期和渠道。没有自动读取聊天、采集或通知。'
         status = '已启用，等待下次允许检查' if watch['enabled'] else '已暂停'
         if watch['last_check'] is not None:
-            status += '\n' + STATUS.get(watch['last_check']['status'], '等待读取')
+            status += '\n' + (
+                '本批摘要已按逐项设备回执确认播完，不表示原工作已验证'
+                if watch.get('mode') == 'summary' and watch['last_check']['status'] == 'delivered'
+                else STATUS.get(watch['last_check']['status'], '等待读取')
+            )
         if watch['attempt'] is not None:
             pending = self.scheduler.pending
             status += (
@@ -132,10 +180,16 @@ class WatchController:
             status += '\n当前没有前台准入，正常开始语音后才恢复检查；重连本身不启用'
         return (
             f'来源：{watch["source"]["source_title"]}\n每{watch["period_seconds"] // 60}分钟检查 · '
-            + ('桌面通知' if watch['channel'] == 'desktop' else 'CC8短播报')
+            + ('桌面通知' if watch['channel'] == 'desktop' else 'CC8播报')
+            + (' · 原答复摘要' if watch.get('mode') == 'summary' else ' · 只提示数量')
             + f'\n已确认提示{len(watch["seen"])}/256个结果版本\n'
             + status
-            + '\n通知索引不表示摘要播完，不改变手动补播账本或原工作。保留至手动清除，不保存结果正文。'
+            + (
+                '\n摘要只按逐项播完确认记账，打断保留未确认项，不自动重播；不表示工作已验证。'
+                if watch.get('mode') == 'summary'
+                else '\n通知索引不表示摘要播完。'
+            )
+            + '不改变手动补播账本或原工作。保留至手动清除，不保存结果正文。'
         )
 
 

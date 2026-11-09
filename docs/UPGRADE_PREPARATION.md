@@ -14,6 +14,8 @@
 
 结果固定 ready_for_installation=false、installed_signer_checked=false、device_acceptance=not_asserted。协议任一方向不兼容时写报告并退出 2；退出 0 只表示声明检查完成。原签名/实际已装版本、服务所有权、配对/资源和物理切换仍须在正式部署流程核对，不能由一份 JSON 自动批准升级。Android 降级仍有平台限制，工具不会卸载、清数据或强制降级。
 
+0.16.24增加定时汇报索引格式门禁，与既有提醒格式独立检查。`report_watch_storage`只输出文件是否存在、格式版本和目标reader声明，不导出来源、正文或索引；`plan`和三包`verify-transition`都检查现有私有文件。旧数量配置仍为schema1；只有明确启用摘要才写schema2。基于0.16.23的恢复包不能读取schema2，门禁会拒绝该恢复，不能覆盖或还原旧索引来绕过。若用户明确清除定时配置／索引，或明确重新设置为数量模式并接受从现在重建索引，保存格式可回到schema1；规划工具本身不做这些修改。恢复准备通过只证明当时文件兼容，真正恢复前须按当时文件重新检查。
+
 ## 校验升级和恢复包
 
 `verify-transition` 比较三个干净的 Git 工作区。基线 APK 的 SHA-256 必须与已核实的安装记录一致。工具校验三个 APK 的包名、版本和 Android 27 签名，要求签名证书一致、升级和恢复的 versionCode 逐步增加。它还核对两份新包的构建回执和双向协议兼容；恢复源码必须保留基线运行行为，只改 `release.json`。为保留固定 Gradle 下载源修复，允许额外携带 `.github/workflows/ci.yml` 和 `tools/tests/test_gradle_provision.py`，但每份必须是与候选提交完全相同的普通、非可执行 Git 文件。缺失、删除、链接、可执行位或内容不一致均拒绝，其他路径仍拒绝。报告记录实际差异和匹配的构建支持路径，不把这项检查当成设备安装授权。

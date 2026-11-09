@@ -1,5 +1,7 @@
 """Explicit foreground grants, bounded background reads and receipt-only notice settlement."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 import threading
 import time
@@ -20,6 +22,8 @@ class WatchHooks:
     ready: Callable[[], bool]
     send: Callable
     error: Callable[[str], None] = lambda kind: None
+    send_summary: Callable | None = None
+    cancel: Callable[[object], None] = lambda job: None
 
 
 class WatchScheduler:
@@ -45,12 +49,19 @@ class WatchScheduler:
     def revoke(self):
         with self.hooks.lock:
             self.grant = self.reading = None
+            self.clear_results()
+
+    def clear_results(self):
+        clear = getattr(self.reader, 'clear_results', None)
+        if clear is not None:
+            clear()
 
     def owner_current(self, grant):
         if self.hooks.blocked():
             # A maintenance/test interval revokes its prior grant as well. Ending
             # the lease is not a new user Start and must not resume history reads.
             self.grant = self.reading = None
+            self.clear_results()
             return False
         return self.grant == grant and grant is not None and grant[0] == self.hooks.owner()
 
@@ -61,6 +72,13 @@ class WatchScheduler:
         done = job.done.is_set()
         if not done and self.monotonic() < deadline:
             return
+        if not done and channel == 'cc8':
+            # Invalidate a queued/blocked old announcement before freezing its
+            # uncertainty. The host cancels only this job's exact generation.
+            try:
+                self.hooks.cancel(job)
+            except Exception as error:
+                self.hooks.error(type(error).__name__)
         expected = 'notification_center' if channel == 'desktop' else 'completed'
         completed = done and getattr(job, 'result', None) == expected
         detail = expected if completed else getattr(job, 'detail', 'unconfirmed')
@@ -81,6 +99,9 @@ class WatchScheduler:
 
     def tick(self):
         with self.hooks.lock:
+            expire = getattr(self.reader, 'expire_results', None)
+            if expire is not None:
+                expire()
             self.settle()
             owner, activation = self.hooks.owner(), self.hooks.activation()
             if self.grant is not None and self.grant[0] != owner:
@@ -152,6 +173,8 @@ class WatchScheduler:
             with self.hooks.lock:
                 if not current():
                     return
+                if notice.segments and self.hooks.send_summary is None:
+                    raise RuntimeError('Scheduled summary delivery unavailable')
                 state = self.reader.claim(notice, current)
                 watch, job = state['watch'], None
                 attempt = watch['attempt']
@@ -176,9 +199,27 @@ class WatchScheduler:
                 try:
                     if not current() or not claimed_owner():
                         raise Cancelled('Report notice owner changed')
-                    job = self.hooks.send(
-                        watch['channel'], attempt['id'], notice.text, claimed_owner
-                    )
+                    if notice.segments:
+
+                        def confirmed(index):
+                            if type(index) is not int or not 0 <= index <= len(notice.pairs):
+                                raise ValueError('Invalid summary segment receipt')
+                            if index:
+                                key, fingerprint = notice.pairs[index - 1]
+                                with self.hooks.lock:
+                                    self.store.part(
+                                        watch['id'],
+                                        attempt['id'],
+                                        dict(key=list(key), fingerprint=fingerprint),
+                                    )
+
+                        job = self.hooks.send_summary(
+                            attempt['id'], notice.segments, claimed_owner, confirmed
+                        )
+                    else:
+                        job = self.hooks.send(
+                            watch['channel'], attempt['id'], notice.text, claimed_owner
+                        )
                     if not callable(getattr(getattr(job, 'done', None), 'is_set', None)):
                         raise RuntimeError('Report notice delivery receipt unavailable')
                     self.pending = (
@@ -186,7 +227,7 @@ class WatchScheduler:
                         attempt['id'],
                         watch['channel'],
                         job,
-                        self.monotonic() + 90,
+                        self.monotonic() + (600 if notice.segments else 90),
                     )
                 except Exception:
                     self.store.settle(watch['id'], attempt['id'], False)

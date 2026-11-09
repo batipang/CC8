@@ -1,5 +1,7 @@
 """Explicit local text-to-CC8 announcements; never starts microphone capture."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from pathlib import Path
 import argparse
@@ -14,6 +16,7 @@ import socket
 import stat
 import sys
 import threading
+from typing import Callable
 from vision import jpeg_dimensions
 from qa_speech import tool_sample_request
 from known_speech_receipt import valid_request as known_speech_request
@@ -29,6 +32,14 @@ class Announcement:
     text: str
     done: threading.Event = field(default_factory=threading.Event)
     result: str = 'interrupted'
+    segments: tuple[str, ...] = ()
+    on_segment: Callable[[int], None] | None = None
+
+    def discard_segments(self):
+        # The response worker can keep its last job while awaiting the next
+        # queue item. Do not let a terminal receipt retain result excerpts.
+        if self.segments:
+            self.text, self.segments, self.on_segment = '', (), None
 
 
 def validate_text(text):

@@ -583,6 +583,8 @@ class ChatController:
                                 if action in ARCHIVE_ACTIONS
                                 else '补播进度未确认，请刷新查看，不自动重试。先暂停语音并选择原来源；最多8份、总计256KiB，原聊天和任务不变。'
                                 if action in PROGRESS_ACTIONS
+                                else '最近检查结果已过期或归属已变化，请等待下一次已启用的定时检查；查看不会重新查询聊天。'
+                                if action in ('watch_result', 'watch_result_page')
                                 else '定时工作提示状态未确认，请先暂停语音后重新查看，不自动重试。原聊天和任务不变。'
                                 if action in WATCH_ACTIONS
                                 else '无法确认聊天状态，请刷新查看；原聊天未追加消息'

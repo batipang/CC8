@@ -339,6 +339,20 @@ def build_components(
 
             return announcements.announce(text, prepare=prepare)
 
+        def watch_summary(ident, segments, current, confirmed):
+            if not current():
+                raise RuntimeError('Report summary owner changed')
+
+            def prepare(generation):
+                if not current():
+                    raise RuntimeError('Report summary owner changed')
+
+            return announcements.announce_segments(segments, prepare=prepare, on_segment=confirmed)
+
+        def watch_cancel(job):
+            if host.session.generation == job.generation:
+                host.cancel('report_watch_timeout')
+
         chats.watch_ui.bind(
             WatchHooks(
                 lock=host.session.guard,
@@ -358,6 +372,8 @@ def build_components(
                 ),
                 ready=lambda: not chats.busy and reminders.job is None,
                 send=watch_send,
+                send_summary=watch_summary,
+                cancel=watch_cancel,
                 error=lambda kind: host.log('work_report_watch_error', error_type=kind),
             )
         )

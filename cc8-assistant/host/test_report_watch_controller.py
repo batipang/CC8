@@ -36,7 +36,7 @@ class WatchControllerTests(unittest.TestCase):
         Packet.event('dot_chat_state', **fields).bind_route('b' * 32).encode()
         return fields
 
-    def configure(self, b):
+    def configure(self, b, mode='count'):
         value = self.request(b, 'watch_state')
         self.assertTrue(value['ok'])
         value = self.request(
@@ -47,6 +47,7 @@ class WatchControllerTests(unittest.TestCase):
             period_seconds=300,
             channel='cc8',
             confirmed=True,
+            **({'mode': mode} if mode != 'count' else {}),
         )
         self.assertTrue(value['ok'])
         return value
@@ -158,6 +159,8 @@ class WatchControllerTests(unittest.TestCase):
             dict(period_seconds=True),
             dict(period_seconds=1),
             dict(channel='email'),
+            dict(mode='automatic'),
+            dict(mode='summary', channel='desktop'),
         ):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 validate_device_event(dict(base, **changes))
@@ -179,6 +182,26 @@ class WatchControllerTests(unittest.TestCase):
             b.on_event(dict(data, action='clear_watch', revision=2))
             self.assertFalse(b.events[-1][1]['ok'])
             self.assertEqual(store.path.read_bytes(), raw)
+
+    def test_unsupported_summary_cannot_be_enabled_by_bypassing_native_options(self):
+        with tempfile.TemporaryDirectory() as folder:
+            b, store = self.session(folder)
+            scheduler = b.chats.watch_ui.scheduler
+            scheduler.hooks = replace(scheduler.hooks, send_summary=None)
+            offer = self.request(b, 'watch_state')
+            self.assertFalse(offer['watch_summary_supported'])
+            value = self.request(
+                b,
+                'configure_watch',
+                revision=0,
+                offer_id=offer['watch_offer_id'],
+                period_seconds=300,
+                channel='cc8',
+                mode='summary',
+                confirmed=True,
+            )
+            self.assertFalse(value['ok'])
+            self.assertFalse(store.path.exists())
 
     def test_default_bridge_has_no_subscription_timer_or_private_reads(self):
         b = sessions.ControllerTests().session()
