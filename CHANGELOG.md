@@ -1,5 +1,11 @@
 # Changelog
 
+## Backend 0.16.21 / Assistant 0.9.91 — explicitly saved report delivery progress
+
+- Explicitly save up to eight owner-private delivery checkpoints within 256 KiB, retaining bounded result excerpts, source identities, range and actual device-confirmed summary delivery. View and delete checkpoints without changing live progress, source registrations, saved reports or original tasks. Normal reporting remains in RAM; no automatic checkpoint updates.
+- Restore only after explicit confirmation with the same selected source or registered members. Fence revisions, stale offers, routes, capture and current membership; start a new playback epoch and clear old ordinal context without reading chats or starting media. A later explicit “since last report” query rechecks results, skips unchanged delivered summaries and preserves unverified cached unheard results.
+- Add capability-gated native save/restore/delete controls and strict content-free wire requests. Preserve current voice, model/tool permissions, original signing and UI composition. Candidate not installed; original-chat execution, actual-source acceptance and final 72-hour observation remain open.
+
 ## Backend 0.16.20 / Assistant 0.9.89 — explicit source-queue inspection
 
 - Inspect only an explicitly selected registered Codex source through `thread/queue/list`. Fence registration/revision and current request/route ownership; bound four eight-item pages with a shared 25-second budget, preserve unavailable/partial coverage and sanitize bounded previews without reading attachments. Queue reads never change handoff, voice context or task state, and are not persisted or sent to a model.

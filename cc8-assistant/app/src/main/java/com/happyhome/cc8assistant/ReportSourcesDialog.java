@@ -173,6 +173,21 @@ final class ReportSourcesDialog {
       toast(data.optString("message", "未确认来源状态，请刷新查看"));
       return;
     }
+    if (completed.equals("restore_progress")) {
+      toast(
+          Boolean.TRUE.equals(data.opt("progress_restored"))
+              ? "已恢复补播进度；可明确查询上次汇报后的工作，没有自动播报或执行"
+              : "未确认补播进度恢复，请重新查看");
+      return;
+    }
+    if (completed.equals("progress_checkpoints")
+        || completed.equals("progress_checkpoint")
+        || completed.equals("save_progress")
+        || completed.equals("delete_progress")
+        || completed.equals("clear_progress")) {
+      showProgress(data, completed);
+      return;
+    }
     if ("source_queue".equals(completed)) {
       Object body = data.opt("queue_text");
       if (!(body instanceof String)
@@ -405,7 +420,8 @@ final class ReportSourcesDialog {
                   "使用当前摘要聊天",
                   "读取当前范围：" + (scope.isEmpty() ? "未选择" : scope),
                   "清空来源登记",
-                  "已保存汇报"
+                  "已保存汇报",
+                  "补播进度：明确保存／恢复"
                 },
                 (d, n) -> {
                   if (!live(owner, value)) return;
@@ -416,8 +432,12 @@ final class ReportSourcesDialog {
                   } else if (n == 1) request(args("use_selected_report"));
                   else if (n == 2) periods(value);
                   else if (n == 3) clear(value);
-                  else if (session.supportsReportArchive()) request(args("saved_reports"));
-                  else toast("当前后台不支持汇报快照");
+                  else if (n == 4) {
+                    if (session.supportsReportArchive()) request(args("saved_reports"));
+                    else toast("当前后台不支持汇报快照");
+                  } else if (session.supportsReportProgress())
+                    request(args("progress_checkpoints"));
+                  else toast("当前后台不支持保存补播进度");
                 })
             .setNegativeButton("关闭", null)
             .create());
@@ -590,6 +610,157 @@ final class ReportSourcesDialog {
                   Wire.put(value, "revision", revision);
                   Wire.put(value, "confirmed", true);
                   if (!id.isEmpty()) Wire.put(value, "saved_id", id);
+                  request(value);
+                })
+            .setNegativeButton("取消", null)
+            .create());
+  }
+
+  private void showProgress(JSONObject data, String completed) {
+    JSONObject state = data.optJSONObject("progress_checkpoints");
+    if (state == null
+        || !(state.opt("revision") instanceof Integer)
+        || (Integer) state.opt("revision") < 0) {
+      toast("补播进度格式不兼容");
+      return;
+    }
+    final int revision = (Integer) state.opt("revision");
+    JSONArray rows = state.optJSONArray("items");
+    if (rows == null || rows.length() > 8) {
+      toast("补播进度格式不兼容");
+      return;
+    }
+    final List<String> ids = new ArrayList<>(), labels = new ArrayList<>();
+    for (int i = 0; i < rows.length(); i++) {
+      JSONObject row = rows.optJSONObject(i);
+      if (row == null
+          || !(row.opt("id") instanceof String)
+          || !row.optString("id").matches("[a-f0-9]{32}")
+          || ids.contains(row.optString("id"))
+          || !(row.opt("source_title") instanceof String)
+          || !label(row.optString("source_title"))
+          || !(row.opt("saved_at") instanceof Integer || row.opt("saved_at") instanceof Long)
+          || !(row.opt("total") instanceof Integer)
+          || !(row.opt("delivered") instanceof Integer)) {
+        toast("补播进度格式不兼容");
+        return;
+      }
+      long saved = ((Number) row.opt("saved_at")).longValue();
+      int total = row.optInt("total"), delivered = row.optInt("delivered");
+      if (saved < 0
+          || saved >= 253402300799L
+          || total < 0
+          || total > 256
+          || delivered < 0
+          || delivered > total) {
+        toast("补播进度数据无效");
+        return;
+      }
+      java.text.SimpleDateFormat format =
+          new java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.CHINA);
+      format.setTimeZone(java.util.TimeZone.getTimeZone("Asia/Shanghai"));
+      ids.add(row.optString("id"));
+      labels.add(
+          row.optString("source_title")
+              + " · "
+              + format.format(new java.util.Date(saved * 1000))
+              + " · 待补播"
+              + (total - delivered)
+              + "项");
+    }
+    final long owner = epoch + 1;
+    AlertDialog.Builder builder =
+        new AlertDialog.Builder(activity)
+            .setTitle("补播进度 · " + ids.size() + "/8")
+            .setNegativeButton("关闭", null);
+    if (completed.equals("progress_checkpoint")) {
+      final String id = data.optString("checkpoint_id");
+      Object raw = data.opt("progress_text");
+      if (!ids.contains(id)
+          || !(raw instanceof String)
+          || ((String) raw).isEmpty()
+          || ((String) raw).length() > 10000
+          || !(data.opt("can_restore") instanceof Boolean)) {
+        toast("未取得有效补播进度");
+        return;
+      }
+      final String text = (String) raw;
+      builder
+          .setTitle("已保存的补播进度")
+          .setMessage(text)
+          .setNeutralButton(
+              "删除",
+              (d, n) -> {
+                if (live(owner, null))
+                  confirmProgress(
+                      "delete_progress", id, revision, "只删除这份已保存的补播进度；原聊天、历史快照及当前内存进度不变。");
+              });
+      if (Boolean.TRUE.equals(data.opt("can_restore")))
+        builder.setPositiveButton(
+            "恢复补播进度",
+            (d, n) -> {
+              if (live(owner, null)) confirmProgress("restore_progress", id, revision, text);
+            });
+      else
+        builder.setPositiveButton(
+            "恢复条件",
+            (d, n) -> {
+              if (live(owner, null)) toast("请先暂停语音，并明确选择与保存时完全相同的聊天或登记范围，再重新查看");
+            });
+    } else {
+      if (ids.isEmpty())
+        builder.setMessage(
+            "尚未保存补播进度。暂停语音并完成一次汇报后，可明确保存当前基线和设备已确认的播完记录；启动不自动恢复。最多8份、总计256KiB，不自动淘汰。");
+      else
+        builder
+            .setItems(
+                labels.toArray(new String[0]),
+                (d, n) -> {
+                  if (!live(owner, null)) return;
+                  JSONObject value = args("progress_checkpoint");
+                  Wire.put(value, "checkpoint_id", ids.get(n));
+                  request(value);
+                })
+            .setNeutralButton(
+                "清空",
+                (d, n) -> {
+                  if (live(owner, null))
+                    confirmProgress(
+                        "clear_progress", "", revision, "只清空已保存补播进度；原聊天、汇报快照及当前内存进度不变。");
+                });
+      Object offer = data.opt("offer_id"), raw = data.opt("current_progress_text");
+      if (offer instanceof String
+          && ((String) offer).matches("[a-f0-9]{32}")
+          && raw instanceof String
+          && !((String) raw).isEmpty()
+          && ((String) raw).length() <= 10000) {
+        final String id = (String) offer, text = (String) raw;
+        builder.setPositiveButton(
+            "保存当前进度",
+            (d, n) -> {
+              if (live(owner, null)) confirmProgress("save_progress", id, revision, text);
+            });
+      }
+    }
+    show(builder.create());
+  }
+
+  private void confirmProgress(String action, String id, int revision, String text) {
+    final long owner = epoch + 1;
+    show(
+        new AlertDialog.Builder(activity)
+            .setTitle("确认修改补播进度？")
+            .setMessage(text + "\n\n请先暂停语音。未确认时重新查看，不自动重试。")
+            .setPositiveButton(
+                "确认",
+                (d, n) -> {
+                  if (!live(owner, null) || !session.supportsReportProgress()) return;
+                  JSONObject value = args(action);
+                  Wire.put(value, "revision", revision);
+                  Wire.put(value, "confirmed", true);
+                  if (!id.isEmpty())
+                    Wire.put(
+                        value, action.equals("save_progress") ? "offer_id" : "checkpoint_id", id);
                   request(value);
                 })
             .setNegativeButton("取消", null)

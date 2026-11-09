@@ -33,6 +33,7 @@ from device_event_router import DeviceEventRouter
 from chat_controller import ChatController, ChatHooks
 from report_sources import ReportSources
 from report_archive import ReportArchive
+from report_checkpoint import ReportCheckpoints
 from saved_tasks import SavedTasks
 from saved_task_controller import SavedTaskController, SavedTaskHooks
 from preference_memory import PreferenceMemory
@@ -97,6 +98,7 @@ def build_components(
     vocabulary_store: VocabularyStore | None = None,
     report_sources_store: ReportSources | None = None,
     report_archive_store: ReportArchive | None = None,
+    report_checkpoint_store: ReportCheckpoints | None = None,
 ) -> Components:
     calibration = CalibrationController(
         CalibrationHooks(
@@ -313,6 +315,9 @@ def build_components(
         archive=report_archive_store
         if report_archive_store is not None
         else ReportArchive(private_directory() / 'work-report-archive.json'),
+        checkpoints=report_checkpoint_store
+        if report_checkpoint_store is not None
+        else ReportCheckpoints(private_directory() / 'work-report-progress.json'),
     )
     saved_tasks = SavedTaskController(
         SavedTaskHooks(

@@ -17,6 +17,12 @@ from report_archive_protocol import (
 )
 from report_archive import record as archive_record, historical_text
 from thread_queue import queue_text
+from report_checkpoint_protocol import (
+    ACTIONS as PROGRESS_ACTIONS,
+    MUTATIONS as PROGRESS_MUTATIONS,
+    validate_request as validate_progress_request,
+)
+from report_checkpoint_controller import CheckpointController
 
 
 @dataclass(frozen=True)
@@ -33,7 +39,7 @@ class ChatHooks:
 
 
 class ChatController:
-    def __init__(self, hooks, catalog=None, sources=None, archive=None):
+    def __init__(self, hooks, catalog=None, sources=None, archive=None, checkpoints=None):
         self.hooks = hooks
         self.catalog = catalog or ChatCatalog()
         self.lock = threading.Lock()
@@ -57,6 +63,7 @@ class ChatController:
                 read=self.read_voice_report,
             )
         )
+        self.progress_ui = CheckpointController(self, checkpoints)
 
     def report_source(self):
         return self.report_scope if self.report_scope is not None else self.selection
@@ -172,12 +179,15 @@ class ChatController:
             'report',
             *REGISTRY_ACTIONS,
             *ARCHIVE_ACTIONS,
+            *PROGRESS_ACTIONS,
         ):
             raise ValueError('Invalid chat action')
         if action in REGISTRY_ACTIONS:
             validate_request(data)
         if action in ARCHIVE_ACTIONS:
             validate_archive_request(data)
+        if action in PROGRESS_ACTIONS:
+            validate_progress_request(data)
         if action == 'report' and data.get('period') not in ('half_hour', 'two_hours', 'today'):
             raise ValueError('Invalid report period')
         with self.hooks.lock:
@@ -193,6 +203,9 @@ class ChatController:
             if action in ARCHIVE_ACTIONS and self.archive is None:
                 self.publish(request_id, ok=False, message='当前后台不支持汇报快照')
                 return
+            if action in PROGRESS_ACTIONS and self.progress_ui.store is None:
+                self.publish(request_id, ok=False, message='当前后台不支持保存补播进度')
+                return
             if action == 'report' and self.report_source() is None:
                 self.publish(request_id, ok=False, message='请先选择一个 Dot 聊天作为汇报来源')
                 return
@@ -204,6 +217,7 @@ class ChatController:
             if (
                 action in MUTATIONS
                 or action in ARCHIVE_MUTATIONS
+                or action in PROGRESS_MUTATIONS
                 or action in ('use_sources', 'use_selected_report')
             ) and not self.hooks.capture_stopped():
                 self.publish(request_id, ok=False, message='请先暂停语音，再修改工作汇报来源')
@@ -224,7 +238,11 @@ class ChatController:
                 if self.busy:
                     self.publish(request_id, ok=False, message='正在读取聊天，请稍后再试')
                     return
-                if action in REGISTRY_ACTIONS or action in ARCHIVE_ACTIONS:
+                if (
+                    action in REGISTRY_ACTIONS
+                    or action in ARCHIVE_ACTIONS
+                    or action in PROGRESS_ACTIONS
+                ):
                     if request_id in self.source_requests:
                         self.publish(
                             request_id, ok=False, message='此来源请求已处理，请刷新查看，不自动重试'
@@ -410,6 +428,8 @@ class ChatController:
                         if item is None:
                             raise ValueError('Saved report no longer exists')
                         result.update(saved_id=item['id'], saved_report_text=historical_text(item))
+                if action in PROGRESS_ACTIONS:
+                    result = self.progress_ui.run(action, data, current)
                 if action == 'report':
                     if not self.voice.valid_report(report_owner, result['report']):
                         raise DotError('Unconfirmed work report')
@@ -454,6 +474,8 @@ class ChatController:
                             message=(
                                 '汇报快照状态未确认，请刷新查看，不自动重试。最多16份、总计256KiB；可先删除不需要的记录。原聊天和任务不变。'
                                 if action in ARCHIVE_ACTIONS
+                                else '补播进度未确认，请刷新查看，不自动重试。先暂停语音并选择原来源；最多8份、总计256KiB，原聊天和任务不变。'
+                                if action in PROGRESS_ACTIONS
                                 else '无法确认聊天状态，请刷新查看；原聊天未追加消息'
                             ),
                         )

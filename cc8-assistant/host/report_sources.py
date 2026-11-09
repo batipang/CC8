@@ -202,7 +202,11 @@ class ReportSources:
     def writer(
         self, disk: ReminderStore, *, lock_name: str = '.work-report-sources.lock'
     ) -> Iterator[None]:
-        if lock_name not in ('.work-report-sources.lock', '.work-report-archive.lock'):
+        if lock_name not in (
+            '.work-report-sources.lock',
+            '.work-report-archive.lock',
+            '.work-report-progress.lock',
+        ):
             raise ValueError('Invalid report store lock')
         with disk.directory(create=True) as directory:
             flags = os.O_RDWR | os.O_NONBLOCK | os.O_NOFOLLOW

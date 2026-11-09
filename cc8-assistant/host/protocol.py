@@ -217,6 +217,17 @@ def validate_device_event(value: object) -> JsonObject:
             ACTIONS as ARCHIVE_ACTIONS,
             validate_request as validate_archive,
         )
+        from report_checkpoint_protocol import (
+            ACTIONS as PROGRESS_ACTIONS,
+            validate_request as validate_progress,
+        )
+
+        if (
+            name == 'dot_chat_request'
+            and isinstance(value['action'], str)
+            and value['action'] in PROGRESS_ACTIONS
+        ):
+            validate_progress(value)
 
         if (
             name == 'dot_chat_request'
@@ -239,6 +250,7 @@ def validate_device_event(value: object) -> JsonObject:
             'report',
             *REGISTRY_ACTIONS,
             *ARCHIVE_ACTIONS,
+            *PROGRESS_ACTIONS,
         ):
             raise ValueError('Invalid chat action')
         if (

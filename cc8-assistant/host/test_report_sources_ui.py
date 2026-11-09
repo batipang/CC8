@@ -30,6 +30,12 @@ public class ReportSourcesCheck {
   master(ui,s);AlertDialog.last.click(-3);AlertDialog.last.pick(4);
   ui.accept(new JSONObject("request_id",s.lastId,"ok",true,"action","saved_reports","saved_reports",state));
  }
+ static JSONObject progressRow(){return new JSONObject("id","e".repeat(32),"source_title","原来源","saved_at",150,"total",4,"delivered",1);}
+ static JSONObject progressState(JSONObject row){return new JSONObject("revision",3,"items",new JSONArray(row));}
+ static void checkpoints(ReportSourcesDialog ui,VoiceSession s,JSONObject payload){
+  master(ui,s);AlertDialog.last.click(-3);AlertDialog.last.pick(5);ui.accept(payload.put("request_id",s.lastId));
+ }
+ static JSONObject progressPayload(){return new JSONObject("ok",true,"progress_checkpoints",progressState(progressRow()),"offer_id","f".repeat(32),"current_progress_text","待补播3项，不执行任务");}
  public static void main(String[] args){VoiceSession s=new VoiceSession();ReportSourcesDialog ui=new ReportSourcesDialog(new Activity(),s);
   switch(args[0]){
    case "register":{
@@ -136,6 +142,39 @@ public class ReportSourcesCheck {
    case "source_queue_capability":{
     s.threadQueue=false;master(ui,s);AlertDialog.last.pick(0);yes(!AlertDialog.last.builder.actions.containsKey(-3),"old host offered queue inspection");break;
    }
+   case "progress_save":{
+    JSONObject payload=progressPayload();checkpoints(ui,s,payload);
+    payload.put("offer_id","b".repeat(32));payload.optJSONObject("progress_checkpoints").put("revision",8);
+    int before=s.requests.size();AlertDialog.last.click(-1);yes(s.requests.size()==before,"progress saved without consent");AlertDialog.last.click(-1);
+    JSONObject sent=s.requests.get(s.requests.size()-1);yes("save_progress".equals(sent.optString("action"))&&sent.optInt("revision")==3&&"f".repeat(32).equals(sent.optString("offer_id"))&&Boolean.TRUE.equals(sent.opt("confirmed")),"progress save consent retargeted");
+    yes(sent.opt("entries")==null&&sent.opt("thread_id")==null&&sent.opt("path")==null,"device supplied progress body/target");break;
+   }
+   case "progress_restore":{
+    checkpoints(ui,s,progressPayload());AlertDialog.last.pick(0);
+    JSONObject detail=progressPayload().put("request_id",s.lastId).put("checkpoint_id","e".repeat(32)).put("progress_text","原来源：待补播3项").put("can_restore",true);ui.accept(detail);
+    detail.put("checkpoint_id","a".repeat(32));int count=s.requests.size();AlertDialog.last.click(-1);yes(s.requests.size()==count,"progress restored without confirmation");AlertDialog.last.click(-1);
+    JSONObject sent=s.requests.get(s.requests.size()-1);yes("restore_progress".equals(sent.optString("action"))&&"e".repeat(32).equals(sent.optString("checkpoint_id"))&&sent.optInt("revision")==3&&Boolean.TRUE.equals(sent.opt("confirmed")),"progress restore target/revision changed");break;
+   }
+   case "progress_delete":{
+    checkpoints(ui,s,progressPayload());AlertDialog.last.pick(0);ui.accept(progressPayload().put("request_id",s.lastId).put("checkpoint_id","e".repeat(32)).put("progress_text","原来源").put("can_restore",false));
+    AlertDialog.last.click(-3);AlertDialog.last.click(-1);JSONObject sent=s.requests.get(s.requests.size()-1);
+    yes("delete_progress".equals(sent.optString("action"))&&"e".repeat(32).equals(sent.optString("checkpoint_id")),"progress delete changed target");break;
+   }
+   case "progress_clear":{
+    checkpoints(ui,s,progressPayload());AlertDialog.last.click(-3);AlertDialog.last.click(-1);JSONObject sent=s.requests.get(s.requests.size()-1);
+    yes("clear_progress".equals(sent.optString("action"))&&sent.opt("checkpoint_id")==null&&sent.optInt("revision")==3,"progress clear not explicitly bound");break;
+   }
+   case "progress_stale":{
+    checkpoints(ui,s,progressPayload());AlertDialog.last.click(-1);AlertDialog retired=AlertDialog.last;int count=s.requests.size();ui.close();s.route++;
+    retired.builder.actions.get(-1).onClick(retired,-1);yes(s.requests.size()==count,"old progress confirmation survived handover");break;
+   }
+   case "progress_capability":{
+    s.reportProgress=false;master(ui,s);AlertDialog.last.click(-3);int count=s.requests.size();AlertDialog.last.pick(5);yes(s.requests.size()==count,"unsupported host received progress request");break;
+   }
+   case "progress_invalid":{
+    JSONObject payload=progressPayload();payload.optJSONObject("progress_checkpoints").optJSONArray("items").optJSONObject(0).put("delivered",5);
+    checkpoints(ui,s,payload);yes(!AlertDialog.last.showing,"malformed progress offered mutations");break;
+   }
    default:throw new AssertionError("unknown case");
   }
  }
@@ -157,7 +196,7 @@ class ReportSourcesUiTests(unittest.TestCase):
             'com/happyhome/cc8assistant/VoiceSession.java'
         ].replace(
             'boolean supportsVocabulary()',
-            'boolean supportsReportSources(){return true;}boolean archive=true,threadQueue=true;boolean supportsThreadQueue(){return threadQueue;}boolean supportsReportArchive(){return archive;}void dotChatCancel(String id){}'
+            'boolean supportsReportSources(){return true;}boolean archive=true,threadQueue=true,reportProgress=true;boolean supportsReportProgress(){return reportProgress;}boolean supportsThreadQueue(){return threadQueue;}boolean supportsReportArchive(){return archive;}void dotChatCancel(String id){}'
             'boolean reportSourcesRequest(String id,JSONObject args,long r){if(!currentRoute(r))return false;lastId=id;requests.add(args);return true;}'
             'boolean supportsVocabulary()',
         )
@@ -255,3 +294,16 @@ class ReportSourcesUiTests(unittest.TestCase):
     def test_source_queue_cannot_use_an_old_window_or_unsupported_host(self):
         self.scenario('source_queue_stale')
         self.scenario('source_queue_capability')
+
+    def test_progress_save_and_restore_require_current_frozen_explicit_consent(self):
+        self.scenario('progress_save')
+        self.scenario('progress_restore')
+
+    def test_progress_delete_and_clear_do_not_retarget_or_submit_bodies(self):
+        self.scenario('progress_delete')
+        self.scenario('progress_clear')
+
+    def test_progress_old_confirmation_unsupported_host_and_bad_counts_fail_closed(self):
+        self.scenario('progress_stale')
+        self.scenario('progress_capability')
+        self.scenario('progress_invalid')
