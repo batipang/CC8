@@ -194,6 +194,17 @@ class ResponseWorker:
                     self.hooks.event('dot_result', generation=generation, **payload)
                     self.hooks.publish_workspace()
                 return
+            if kind == 'result_provenance':
+                with self.hooks.lock:
+                    if self.hooks.valid(generation):
+                        self.hooks.workspace().task_provenance(task_id, payload)
+                        try:
+                            self.hooks.publish_workspace()
+                        except (OSError, EOFError):
+                            # Display metadata cannot prevent the following
+                            # authoritative result from committing locally.
+                            pass
+                return
             if not self.hooks.valid(generation):
                 return
             if kind == 'progress':

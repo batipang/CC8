@@ -487,7 +487,7 @@ class DeviceFeedbackTests(unittest.TestCase):
         methods = '\n'.join(
             'void '
             + event
-            + '(int gen, String next, String message){Packet p=new Packet(gen);Data j=new Data(next,message);j.startFailure=suppliedStartFailure;j.listening=suppliedListeningState;j.captureId=suppliedCaptureId!=null?suppliedCaptureId:captureWindow==null?null:captureWindow.id;j.epoch=suppliedCaptureEpoch!=null?suppliedCaptureEpoch:Integer.valueOf(epoch);'
+            + '(int gen, String next, String message){Packet p=new Packet(gen);Data j=new Data(next,message);j.startFailure=suppliedStartFailure;j.provenance=suppliedResultProvenance;j.listening=suppliedListeningState;j.captureId=suppliedCaptureId!=null?suppliedCaptureId:captureWindow==null?null:captureWindow.id;j.epoch=suppliedCaptureEpoch!=null?suppliedCaptureEpoch:Integer.valueOf(epoch);'
             + branch(source, event)
             + '}'
             for event in events
@@ -505,7 +505,7 @@ class FeedbackCheck {
  final Object routeLock=new Object();long route=5, activeRoute=5,routeEpoch=5;
  static class CaptureWindow{static int count;final String id="capture"+(++count);boolean startConfirmed=true;}
  CaptureWindow captureWindow=new CaptureWindow();
- boolean dotChatSupported,savedTasksSupported;
+ boolean dotChatSupported,savedTasksSupported,resultProvenanceSupported;
  // The transport handshake itself is covered by the capture route tests.
  static class Link {}
  final Link source=new Link();
@@ -516,12 +516,14 @@ class FeedbackCheck {
  Object suppliedListeningState="unknown";
  Object suppliedCaptureId,suppliedCaptureEpoch;
  Object suppliedStartFailure;
+ Object suppliedResultProvenance;
  String pendingVisionNonce="",desktopVisionNonce="";
  static class Packet{int generation;Packet(int g){generation=g;}}
- static class Data{String next,message;Object listening="unknown",captureId,epoch,startFailure;Data(String n,String m){next=n;message=m;}
+ static class Data{String next,message;Object listening="unknown",captureId,epoch,startFailure,provenance;Data(String n,String m){next=n;message=m;}
   String optString(String k){return "phase".equals(k)?next:"listening_state".equals(k)?String.valueOf(listening):message;}
   String optString(String k,String fallback){return optString(k);}
   Object opt(String k){
+   if("supports_result_provenance".equals(k))return provenance;
    if("request_start_failed".equals(k))return startFailure;
    if("listening_state".equals(k))return listening;
    if("capture_id".equals(k))return captureId;
@@ -664,6 +666,21 @@ class FeedbackCheck {
  yes(c.listener.phase.equals("calibrating"),"pending native start advertised listening");
  c.captureWindow.startConfirmed=true;c.status(8,"listening","fresh receipt");
  yes(c.listener.listeningState.state().equals("awake"),"rejected old metadata consumed rightful status");""")
+
+    def test_provenance_capability_requires_current_foreground_generation(self):
+        self.compile_and_run("""c.minimumGeneration=9;c.suppliedResultProvenance=Boolean.TRUE;
+ c.hello(8,"","late hello");
+ yes(!c.resultProvenanceSupported,"old generation enabled file control");
+ c.hello(9,"","current hello");
+ yes(c.resultProvenanceSupported,"current capability unavailable");
+ c.suppliedResultProvenance=Boolean.FALSE;c.hello(8,"","late downgrade");
+ yes(c.resultProvenanceSupported,"old generation disabled current capability");
+ c.hello(9,"","current downgrade");
+ yes(!c.resultProvenanceSupported,"current route cannot disable capability");
+ c.foreground=false;c.suppliedResultProvenance=Boolean.TRUE;c.hello(9,"","background");
+ yes(!c.resultProvenanceSupported,"background enabled file control");
+ c.foreground=true;c.activeRoute=6;c.hello(9,"","stale route");
+ yes(!c.resultProvenanceSupported,"old route enabled file control");""")
 
     def test_route_interruption_notice_survives_rebind_and_clears_for_new_work(self):
         self.compile_and_run("""c.recording=true;c.hello(8,"notice","连接切换中断播报");

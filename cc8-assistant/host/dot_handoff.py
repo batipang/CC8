@@ -2,23 +2,13 @@
 
 from dataclasses import dataclass
 import json
-import re
 import threading
 import time
 from pathlib import Path
-from dot_client import CodexRpc, DotError, Cancelled
-
-
-def identifier(value):
-    if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,95}', value):
-        raise ValueError('Invalid chat identifier')
-    return value
-
-
-def title(value):
-    if not isinstance(value, str):
-        return '未命名聊天'
-    return ''.join(c for c in value[:160] if ord(c) >= 32)[:80].strip() or '未命名聊天'
+from codex_rpc import CodexRpc
+from dot_receipt import DotError
+from minimax_client import Cancelled
+from source_identity import identifier as identifier, title as title
 
 
 @dataclass(frozen=True)

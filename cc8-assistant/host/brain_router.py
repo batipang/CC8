@@ -123,6 +123,8 @@ class BrainRouter:
                     'items': reply.items,
                 }
                 if on_web:
+                    if reply.provenance is not None:
+                        on_web('result_provenance', reply.provenance)
                     on_web(
                         'dot_result',
                         {

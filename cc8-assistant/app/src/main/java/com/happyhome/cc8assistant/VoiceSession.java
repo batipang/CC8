@@ -103,6 +103,7 @@ final class VoiceSession {
   private final HostActivation hostActivation = new HostActivation();
   private final ConnectionAvailability availability = new ConnectionAvailability();
   private volatile boolean dotChatSupported, savedTasksSupported;
+  private volatile boolean resultProvenanceSupported;
 
   boolean supportsDotChatHandoff() {
     return dotChatSupported;
@@ -110,6 +111,10 @@ final class VoiceSession {
 
   boolean supportsSavedTaskResults() {
     return savedTasksSupported;
+  }
+
+  boolean supportsResultProvenance() {
+    return resultProvenanceSupported;
   }
 
   VoiceSession(Context context, Listener listener) {
@@ -229,7 +234,7 @@ final class VoiceSession {
       wifi = wifiLink;
       activeLink = null;
       route = routeEpoch;
-      dotChatSupported = savedTasksSupported = false;
+      dotChatSupported = savedTasksSupported = resultProvenanceSupported = false;
       output = null;
       socket = null;
       availability.offline(SystemClock.elapsedRealtime());
@@ -361,7 +366,7 @@ final class VoiceSession {
         next.outputBound = outputBound;
         next.captureStartToken = null;
         next.pairedCaptureRequested = false;
-        dotChatSupported = savedTasksSupported = false;
+        dotChatSupported = savedTasksSupported = resultProvenanceSupported = false;
         socket = next.connection;
         output = next.out;
         phase = recordingPhase();
@@ -468,7 +473,7 @@ final class VoiceSession {
       if (activeLink != link) return;
       activeLink = null;
       routeEpoch++;
-      dotChatSupported = savedTasksSupported = false;
+      dotChatSupported = savedTasksSupported = resultProvenanceSupported = false;
       socket = null;
       output = null;
       Link backup =
@@ -668,6 +673,7 @@ final class VoiceSession {
           listener.recognition(j.optString("asr_engine", "sensevoice"));
           synchronized (routeLock) {
             if (!foreground || !currentRoute(route) || p.generation < minimumGeneration) return;
+            resultProvenanceSupported = Boolean.TRUE.equals(j.opt("supports_result_provenance"));
             if (Boolean.TRUE.equals(j.opt("playback_interrupted_by_transport"))) {
               if (!statusFeedback.transportInterruption(p.generation)) return;
               phase = "error";
@@ -1029,6 +1035,16 @@ final class VoiceSession {
     Wire.put(j, "request_id", requestId);
     Wire.put(j, "action", action);
     if (id != null) Wire.put(j, "id", id);
+    return sendWorkspace(j, route);
+  }
+
+  boolean revealResultFile(String requestId, String id, int index, boolean saved, long route) {
+    if (!resultProvenanceSupported) return false;
+    JSONObject j = Wire.event("saved_task_request");
+    Wire.put(j, "request_id", requestId);
+    Wire.put(j, "action", saved ? "reveal_saved" : "reveal_live");
+    Wire.put(j, "id", id);
+    Wire.put(j, "file_index", index);
     return sendWorkspace(j, route);
   }
 

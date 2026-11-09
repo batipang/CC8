@@ -14,6 +14,7 @@ import threading
 import uuid
 from zoneinfo import ZoneInfo
 from typing import Callable, Literal, NotRequired, TypeAlias, TypedDict, cast
+from result_provenance import Provenance, validate as validate_provenance
 
 ZONE = ZoneInfo('Asia/Shanghai')
 
@@ -33,6 +34,8 @@ class TaskRecord(TypedDict):
     steps: list[TaskStep]
     result: str
     started_at: str
+    finished_at: NotRequired[str]
+    provenance: NotRequired[Provenance]
 
 
 class ReminderRecord(TypedDict):
@@ -233,6 +236,7 @@ class Workspace:
             if not task or task['status'] != 'running':
                 return
             task['status'] = status
+            task['finished_at'] = self.now().isoformat(timespec='seconds')
             task['result'] = result[:1600]
             task['stage'] = {
                 'completed': '请求已完成',
@@ -253,6 +257,13 @@ class Workspace:
                         else 'completed'
                     )
             self.revision += 1
+
+    def task_provenance(self, ident: str | None, value: object) -> None:
+        with self.lock:
+            task = next((t for t in self.tasks if t['id'] == ident), None)
+            if task is not None and task['status'] == 'running':
+                task['provenance'] = deepcopy(validate_provenance(value))
+                self.revision += 1
 
     def cancel_generation(self, generation: int, *, unconfirmed: bool = False) -> bool:
         with self.lock:

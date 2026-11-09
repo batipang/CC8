@@ -44,6 +44,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   private VoiceSession session;
   private DotChatsDialog dotChats;
   private SavedTasksDialog savedTasks;
+  private ResultDetailsDialog resultDetails;
   private String dotResultSource = "";
   private CompanionView companion;
   private WaveformView waveform;
@@ -155,7 +156,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
                 | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
     session = new VoiceSession(this, this);
     dotChats = new DotChatsDialog(this, session);
-    savedTasks = new SavedTasksDialog(this, session);
+    resultDetails = new ResultDetailsDialog(this, session);
+    savedTasks = new SavedTasksDialog(this, session, resultDetails);
     requestOpenVoice(getIntent());
     build();
   }
@@ -774,6 +776,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
           });
     else if (linked)
       dialog.setPositiveButton("保存结果", (d, n) -> savedTasks.save(task.optString("id"), route));
+    if (!"running".equals(task.optString("status")) && task.optJSONObject("provenance") != null)
+      dialog.setNeutralButton("来源与文件", (d, n) -> resultDetails.open(task, false, route));
     dialog.show();
   }
 
@@ -1193,7 +1197,11 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   public void savedTasks(JSONObject data) {
-    runOnUiThread(() -> savedTasks.accept(data));
+    runOnUiThread(
+        () -> {
+          savedTasks.accept(data);
+          resultDetails.accept(data);
+        });
   }
 
   private void traceAuto(String event) {
@@ -1378,6 +1386,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
             taskResultUnconfirmed |= hasRunningTask(tasksData);
             dotChats.close();
             savedTasks.close();
+            resultDetails.close();
             tasksData = new JSONArray();
             remindersData = new JSONArray();
             renderWorkspace();
@@ -1610,6 +1619,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     if (connectionInfoDialog != null) connectionInfoDialog.dismiss();
     if (dotChats != null) dotChats.close();
     if (savedTasks != null) savedTasks.close();
+    if (resultDetails != null) resultDetails.close();
     screen(false);
     foreground = false;
     if (eyes != null) eyes.cancel();
