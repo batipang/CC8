@@ -109,6 +109,7 @@ final class VoiceSession {
   private volatile boolean dotChatSupported, savedTasksSupported, preferenceMemorySupported;
   private volatile boolean resultProvenanceSupported;
   private volatile boolean resultReadingSupported;
+  private volatile boolean visionModesSupported;
   private volatile JSONObject voicePreferences;
   private volatile JSONObject speechCorrection;
   private int speechCorrectionRevision = -1;
@@ -119,6 +120,10 @@ final class VoiceSession {
 
   boolean supportsPreferenceMemory() {
     return preferenceMemorySupported;
+  }
+
+  boolean supportsVisionModes() {
+    return visionModesSupported;
   }
 
   boolean supportsSavedTaskResults() {
@@ -250,10 +255,11 @@ final class VoiceSession {
       wifi = wifiLink;
       activeLink = null;
       route = routeEpoch;
-      dotChatSupported =
-          savedTasksSupported =
-              preferenceMemorySupported =
-                  resultProvenanceSupported = resultReadingSupported = false;
+      visionModesSupported =
+          dotChatSupported =
+              savedTasksSupported =
+                  preferenceMemorySupported =
+                      resultProvenanceSupported = resultReadingSupported = false;
       voicePreferences = null;
       speechCorrection = null;
       speechCorrectionRevision = -1;
@@ -388,10 +394,11 @@ final class VoiceSession {
         next.outputBound = outputBound;
         next.captureStartToken = null;
         next.pairedCaptureRequested = false;
-        dotChatSupported =
-            savedTasksSupported =
-                preferenceMemorySupported =
-                    resultProvenanceSupported = resultReadingSupported = false;
+        visionModesSupported =
+            dotChatSupported =
+                savedTasksSupported =
+                    preferenceMemorySupported =
+                        resultProvenanceSupported = resultReadingSupported = false;
         voicePreferences = null;
         speechCorrection = null;
         speechCorrectionRevision = -1;
@@ -407,6 +414,8 @@ final class VoiceSession {
       Wire.put(hello, "render_clock_report_version", 1);
       Wire.put(hello, "playback_done_id_version", 1);
       Wire.put(hello, "desktop_camera_version", 1);
+      Wire.put(hello, "vision_capture_version", 2);
+      Wire.put(hello, "vision_review_version", 1);
       Wire.put(hello, "desktop_camera_challenge", desktopCameraAuth.challenge());
       Wire.put(hello, "protocol", BuildConfig.CC8_PROTOCOL);
       Wire.put(hello, "sample_rate", 16000);
@@ -502,10 +511,11 @@ final class VoiceSession {
       if (activeLink != link) return;
       activeLink = null;
       routeEpoch++;
-      dotChatSupported =
-          savedTasksSupported =
-              preferenceMemorySupported =
-                  resultProvenanceSupported = resultReadingSupported = false;
+      visionModesSupported =
+          dotChatSupported =
+              savedTasksSupported =
+                  preferenceMemorySupported =
+                      resultProvenanceSupported = resultReadingSupported = false;
       voicePreferences = null;
       speechCorrection = null;
       speechCorrectionRevision = -1;
@@ -709,6 +719,7 @@ final class VoiceSession {
           synchronized (routeLock) {
             if (!foreground || !currentRoute(route) || p.generation < minimumGeneration) return;
             preferenceMemorySupported = Boolean.TRUE.equals(j.opt("supports_preference_memory"));
+            visionModesSupported = Boolean.TRUE.equals(j.opt("supports_vision_modes"));
             resultProvenanceSupported = Boolean.TRUE.equals(j.opt("supports_result_provenance"));
             resultReadingSupported = Boolean.TRUE.equals(j.opt("supports_result_reading"));
             acceptVoicePreferences(j.optJSONObject("voice_preferences"));
@@ -795,7 +806,7 @@ final class VoiceSession {
           visionRequestId = "";
           listener.dotResult("", false, "");
           listener.caption(
-              desktop ? "Dot 请求拍照，请调整画面；预览 5 秒后拍摄并返回当前聊天。" : "请调整画面，预览 5 秒后自动拍摄并交给 Dot 分析。",
+              desktop ? "Dot 请求拍照，请调整画面；预览 5 秒后拍摄并返回当前聊天。" : "请调整画面，预览 5 秒后拍摄；拍后核对按你的看图设置执行。",
               "attentive");
           listener.screen(false);
           listener.vision(true, "请调整画面 · 预览 5 秒后拍摄", false);
@@ -1322,22 +1333,38 @@ final class VoiceSession {
   }
 
   void requestVision() {
-    if (!foreground || !isConnected() || visual || !pendingVisionNonce.isEmpty()) return;
-    pendingVisionNonce = java.util.UUID.randomUUID().toString().replace("-", "");
-    JSONObject e = Wire.event("vision_request");
-    Wire.put(e, "nonce", pendingVisionNonce);
-    send(e);
-    listener.vision(true, "正在请求拍摄 · 图片将交给 Dot", false);
-    final String nonce = pendingVisionNonce;
-    new android.os.Handler(android.os.Looper.getMainLooper())
-        .postDelayed(
-            () -> {
-              if (!nonce.isEmpty() && nonce.equals(pendingVisionNonce)) {
-                cancelVision();
-                listener.state(recording ? "listening" : "idle", "拍摄请求超时，请重试");
-              }
-            },
-            15000);
+    requestVision("observe");
+  }
+
+  boolean requestVision(String mode) {
+    synchronized (routeLock) {
+      if (!("observe".equals(mode) || "ocr".equals(mode))
+          || ("ocr".equals(mode) && !visionModesSupported)
+          || !foreground
+          || !isConnected()
+          || visual
+          || !pendingVisionNonce.isEmpty()) return false;
+      pendingVisionNonce = java.util.UUID.randomUUID().toString().replace("-", "");
+      JSONObject e = Wire.event("vision_request");
+      Wire.put(e, "nonce", pendingVisionNonce);
+      if ("ocr".equals(mode)) Wire.put(e, "mode", mode);
+      if (!sendWorkspace(e, routeEpoch)) {
+        pendingVisionNonce = "";
+        return false;
+      }
+      listener.vision(true, "正在请求拍摄 · 图片将交给 Dot", false);
+      final String nonce = pendingVisionNonce;
+      new android.os.Handler(android.os.Looper.getMainLooper())
+          .postDelayed(
+              () -> {
+                if (!nonce.isEmpty() && nonce.equals(pendingVisionNonce)) {
+                  cancelVision();
+                  listener.state(recording ? "listening" : "idle", "拍摄请求超时，请重试");
+                }
+              },
+              15000);
+      return true;
+    }
   }
 
   void cancelVision() {

@@ -1,5 +1,14 @@
 # Changelog
 
+## Backend 0.16.13 / Assistant 0.9.75 — bounded HD and photo review
+
+- Negotiate fixed image limits per capture. Keep standard automatic five-second framing as the default; optionally choose a supported Camera1 HD preview up to 1280 pixels per edge, 1280×960 pixels and 768 KiB JPEG. Show actual dimensions and explicit fallback. Desktop photos retain automatic return without review.
+- Add optional RAM-only post-capture review: send, at most three explicit shots, crop, restore original and cancel. Release the sensor before review; keep a single 70-second device deadline and a fixed 75-second host grant, with fresh visible five-second framing on each retake. Bind decode, crop and send to the original task and attempt; discard stale and background results.
+- Add explicit OCR through the long-press Look menu and settings. Preserve line breaks and unknown text, treat pictured instructions as content, and reject unsupported routes without fallback or new tool permissions. Dedicated same-image follow-up remains open.
+- Reject retired SurfaceTexture update, resize and destruction callbacks before they can start or cancel a newer framing window; reproduce the old failure and cover both retired and current surfaces with the actual methods.
+- Seven capture/network-permission-free synthetic image UI cases passed on the actual CC8, including crop pixels/dimensions, byte-exact restore, retake bound, cancellation, stale decode and Home cleanup. Initial missing-permission build and unstable UI/cleanup failures remain recorded; no sensor, microphone, model, real quality or full P1 acceptance is inferred.
+- Carry the preceding 0.16.12 / code110 deployment and six production-language UI checks with this functional batch. This camera release remains a software candidate until protected CI and grouped deployment are complete; final 72-hour acceptance has not started.
+
 ## Backend 0.16.1 — voice work reports and fixed-snapshot details
 
 - Recognize explicit half-hour, two-hour and Beijing-today work reports locally after source selection. Read bounded source results without a model turn or source-chat writes, then narrate a short overview with the existing MiniMax voice and expose all result cards in the existing full-result entry.

@@ -35,6 +35,40 @@ MAX_IMAGE = 384 * 1024
 CHUNK = 12288
 
 
+@dataclass(frozen=True)
+class ImagePolicy:
+    version: int
+    max_edge: int
+    max_pixels: int
+    max_bytes: int
+
+    def valid_dimensions(self, width, height):
+        return (
+            type(width) is type(height) is int
+            and min(width, height) > 0
+            and max(width, height) <= self.max_edge
+            and width * height <= self.max_pixels
+        )
+
+    def fields(self):
+        return {
+            'capture_version': self.version,
+            'max_image_edge': self.max_edge,
+            'max_image_pixels': self.max_pixels,
+            'max_image_bytes': self.max_bytes,
+        }
+
+
+LEGACY_IMAGE = ImagePolicy(1, 640, 640 * 480, MAX_IMAGE)
+HD_IMAGE = ImagePolicy(2, 1280, 1280 * 960, 768 * 1024)
+
+
+def image_policy(version):
+    if type(version) is not int or version not in (1, 2):
+        raise ValueError('Unsupported capture policy')
+    return HD_IMAGE if version == 2 else LEGACY_IMAGE
+
+
 ERROR_CODES = frozenset(
     (
         'invalid_jpeg',
@@ -123,10 +157,10 @@ def visual_request(text):
     )
 
 
-def jpeg_dimensions(data):
+def jpeg_dimensions(data, *, policy=LEGACY_IMAGE):
     if (
         not isinstance(data, bytes)
-        or not 32 <= len(data) <= MAX_IMAGE
+        or not 32 <= len(data) <= policy.max_bytes
         or data[:2] != b'\xff\xd8'
         or data[-2:] != b'\xff\xd9'
     ):
@@ -151,7 +185,7 @@ def jpeg_dimensions(data):
                 raise VisionError('unsupported_jpeg')
             height = int.from_bytes(data[at + 3 : at + 5], 'big')
             width = int.from_bytes(data[at + 5 : at + 7], 'big')
-            if width < 1 or height < 1 or max(width, height) > 640 or width * height > 640 * 480:
+            if not policy.valid_dimensions(width, height):
                 raise VisionError('image_dimensions_exceeded')
             return width, height
         at += size
@@ -161,6 +195,8 @@ def jpeg_dimensions(data):
 @dataclass
 class Capture:
     generation: int
+    policy: ImagePolicy = LEGACY_IMAGE
+    review_allowed: bool = False
     ident: str = field(default_factory=lambda: secrets.token_hex(16))
     expires: float = field(default_factory=lambda: time.monotonic() + 16)
     done: threading.Event = field(default_factory=threading.Event)
@@ -178,6 +214,7 @@ class Capture:
 class DesktopSnapshot:
     generation: int
     ident: str
+    policy: ImagePolicy = LEGACY_IMAGE
     done: threading.Event = field(default_factory=threading.Event)
     image: bytes | None = None
     result: str = 'interrupted'
@@ -191,10 +228,17 @@ class CameraInbox:
         self.lock = threading.Lock()
         self.pending = None
 
-    def begin(self, generation):
+    def begin(self, generation, *, policy=LEGACY_IMAGE, review=False):
+        if policy not in (LEGACY_IMAGE, HD_IMAGE) or type(review) is not bool:
+            raise ValueError('Invalid capture grant')
         with self.lock:
             self._cancel()
-            self.pending = Capture(generation)
+            self.pending = Capture(
+                generation,
+                policy=policy,
+                review_allowed=review,
+                expires=time.monotonic() + (75 if review else 16),
+            )
             return self.pending
 
     def _cancel(self):
@@ -237,15 +281,9 @@ class CameraInbox:
                     width = value.get('width')
                     height = value.get('height')
                     digest = value.get('sha256')
-                    if type(size) is not int or not 32 <= size <= MAX_IMAGE:
+                    if type(size) is not int or not 32 <= size <= c.policy.max_bytes:
                         raise VisionError('image_size_exceeded')
-                    if (
-                        type(width) is not int
-                        or type(height) is not int
-                        or min(width, height) < 1
-                        or max(width, height) > 640
-                        or width * height > 640 * 480
-                    ):
+                    if not c.policy.valid_dimensions(width, height):
                         raise VisionError('image_dimensions_exceeded')
                     if not isinstance(digest, str) or not re.fullmatch('[a-f0-9]{64}', digest):
                         raise VisionError('invalid_image_hash')
@@ -277,7 +315,7 @@ class CameraInbox:
                     image = bytes(c.data)
                     if hashlib.sha256(image).hexdigest() != c.digest:
                         raise VisionError('image_hash_mismatch')
-                    if jpeg_dimensions(image) != (c.width, c.height):
+                    if jpeg_dimensions(image, policy=c.policy) != (c.width, c.height):
                         raise VisionError('image_dimensions_mismatch')
                     c.image = image
                     c.data.clear()

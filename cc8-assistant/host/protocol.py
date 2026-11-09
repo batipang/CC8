@@ -115,6 +115,17 @@ def validate_device_event(value: object) -> JsonObject:
         from preference_protocol import validate_request
 
         validate_request(value)
+    if name == 'vision_request':
+        nonce = value.get('nonce')
+        if set(value) - {'event', 'nonce', 'mode'} or (
+            'mode' in value
+            and (
+                not isinstance(nonce, str)
+                or not re.fullmatch('[a-f0-9]{32}', nonce)
+                or value['mode'] not in ('observe', 'ocr')
+            )
+        ):
+            raise ValueError('Invalid vision request')
     if name == 'voice_preferences_set':
         revision = value.get('revision')
         if (
@@ -209,6 +220,8 @@ def validate_device_event(value: object) -> JsonObject:
         'vision_generation': 32,
         'nanos': 64,
         'desktop_camera_version': 32,
+        'vision_capture_version': 32,
+        'vision_review_version': 32,
         'capture_reject_version': 32,
         'capture_start_ack_version': 32,
         'paired_capture_version': 32,

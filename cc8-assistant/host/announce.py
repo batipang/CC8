@@ -247,11 +247,12 @@ class AnnouncementServer:
                         'reason': job.error or 'capture_interrupted',
                     }
                 image = job.image
-                width, height = jpeg_dimensions(image)
+                width, height = jpeg_dimensions(image, policy=job.policy)
                 return {
                     'status': 'completed',
                     'request_id': ident,
                     'media_type': 'image/jpeg',
+                    'capture_version': job.policy.version,
                     'width': width,
                     'height': height,
                     'bytes': len(image),

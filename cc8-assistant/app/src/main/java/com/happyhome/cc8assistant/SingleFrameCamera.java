@@ -9,7 +9,6 @@ import android.hardware.Camera;
 import android.os.*;
 import android.view.*;
 import android.widget.*;
-import java.io.ByteArrayOutputStream;
 
 /** Visible, one-shot Camera1 capture. No files, no continuous streaming. */
 @SuppressWarnings("deprecation")
@@ -21,6 +20,10 @@ final class SingleFrameCamera implements TextureView.SurfaceTextureListener {
     void error(String reason);
   }
 
+  interface Authorization {
+    boolean current();
+  }
+
   private final Activity activity;
   private final FrameLayout panel;
   private final TextureView preview;
@@ -30,6 +33,13 @@ final class SingleFrameCamera implements TextureView.SurfaceTextureListener {
   private final Handler ui = new Handler(Looper.getMainLooper());
   private final HandlerThread thread = new HandlerThread("cc8-one-frame-camera");
   private final Handler worker;
+  private final PhotoReviewPanel reviewPanel;
+  private final PhotoReviewClock reviewClock = new PhotoReviewClock();
+  private final Runnable cancelAction;
+  private volatile Authorization authorized = () -> true;
+  private volatile long reviewTask;
+  private volatile boolean reviewEnabled;
+  private volatile long retakeVisibleBaseline;
   private volatile SurfaceTexture surface;
   private volatile boolean wanted, opening;
   private volatile int serial;
@@ -38,9 +48,15 @@ final class SingleFrameCamera implements TextureView.SurfaceTextureListener {
   private volatile boolean cameraOpen, frameReceived;
   private long captures;
   private String lastError = "";
+  private volatile CaptureProfile profile = CaptureProfile.legacy();
+  private volatile boolean preferHD;
+  private volatile int previewWidth, previewHeight;
+  private volatile int previewRotation;
+  private volatile String qualityLabel = "", qualityFallback = "";
 
   SingleFrameCamera(Activity activity, FrameLayout stage, Runnable cancel) {
     this.activity = activity;
+    cancelAction = cancel;
     thread.start();
     worker = new Handler(thread.getLooper());
     panel = new FrameLayout(activity);
@@ -65,15 +81,49 @@ final class SingleFrameCamera implements TextureView.SurfaceTextureListener {
     lp.leftMargin = 40;
     lp.topMargin = 155;
     stage.addView(panel, lp);
+    reviewPanel = new PhotoReviewPanel(activity, stage, worker);
   }
 
   void start(Result callback) {
-    // 11 秒是整个任务上限，5 秒调整时间另从实际可见的首帧开始计算。
+    start(callback, false, CaptureProfile.legacy());
+  }
+
+  void start(Result callback, boolean highDefinition, CaptureProfile limits) {
+    start(callback, highDefinition, limits, false, () -> true);
+  }
+
+  void start(
+      Result callback,
+      boolean highDefinition,
+      CaptureProfile limits,
+      boolean reviewRequested,
+      Authorization authorizer) {
+    // Review never extends the original task deadline on retake. Each shot
+    // still needs its own visible five-second framing window.
     cancel();
     result = callback;
     wanted = true;
-    lastError = "";
+    authorized = authorizer;
+    profile = limits;
+    preferHD = highDefinition;
+    reviewEnabled = reviewRequested && limits.reviewAllowed;
+    final long task = reviewClock.begin(SystemClock.elapsedRealtime(), reviewEnabled);
+    reviewTask = task;
     serial++;
+    prepareAttempt();
+    ui.postDelayed(
+        () -> {
+          if (wanted && reviewClock.sameTask(task)) fail(serial, "camera_timeout");
+        },
+        reviewEnabled ? PhotoReviewClock.REVIEW_MS : PhotoReviewClock.ATTEMPT_MS);
+  }
+
+  private void prepareAttempt() {
+    retakeVisibleBaseline = surface == null ? Long.MIN_VALUE : surface.getTimestamp();
+    previewWidth = previewHeight = 0;
+    qualityLabel = qualityFallback = "";
+    lastError = "";
+    opening = false;
     delay.reset();
     frameReceived = false;
     capturedAfterPreviewMs = 0;
@@ -83,9 +133,9 @@ final class SingleFrameCamera implements TextureView.SurfaceTextureListener {
     final int token = serial;
     ui.postDelayed(
         () -> {
-          if (current(token)) fail(token, "camera_timeout");
+          if (alive(token) && !reviewClock.reviewing()) fail(token, "camera_timeout");
         },
-        11000);
+        PhotoReviewClock.ATTEMPT_MS);
   }
 
   boolean busy() {
@@ -116,7 +166,25 @@ final class SingleFrameCamera implements TextureView.SurfaceTextureListener {
     return lastError;
   }
 
+  int previewWidth() {
+    return previewWidth;
+  }
+
+  int previewHeight() {
+    return previewHeight;
+  }
+
+  String qualityFallback() {
+    return qualityFallback;
+  }
+
   private boolean current(int token) {
+    return alive(token)
+        && reviewClock.current(reviewTask, SystemClock.elapsedRealtime())
+        && authorized.current();
+  }
+
+  private boolean alive(int token) {
     return wanted && serial == token;
   }
 
@@ -133,7 +201,10 @@ final class SingleFrameCamera implements TextureView.SurfaceTextureListener {
   // MainActivity and here.
   private void open(int token, SurfaceTexture target) {
     try {
-      if (!current(token)) return;
+      if (!current(token)) {
+        retire(token);
+        return;
+      }
       if (activity.checkCallingOrSelfPermission(Manifest.permission.CAMERA)
           != PackageManager.PERMISSION_GRANTED) {
         fail(token, "permission_denied");
@@ -159,19 +230,52 @@ final class SingleFrameCamera implements TextureView.SurfaceTextureListener {
       cameraOpen = true;
       if (!current(token)) {
         release();
+        retire(token);
         return;
       }
       Camera.Parameters p = owned.getParameters();
-      boolean supports = false;
-      for (Camera.Size s : p.getSupportedPreviewSizes())
-        if (s.width == 640 && s.height == 480) supports = true;
-      if (!supports || !p.getSupportedPreviewFormats().contains(ImageFormat.NV21)) {
+      java.util.List<Camera.Size> sizes = p.getSupportedPreviewSizes();
+      if (sizes == null
+          || sizes.size() > 256
+          || p.getSupportedPreviewFormats() == null
+          || !p.getSupportedPreviewFormats().contains(ImageFormat.NV21)) {
         fail(token, "unsupported_preview");
         return;
       }
-      p.setPreviewSize(640, 480);
+      int[][] candidates = new int[sizes.size()][2];
+      for (int i = 0; i < sizes.size(); i++) {
+        candidates[i][0] = sizes.get(i).width;
+        candidates[i][1] = sizes.get(i).height;
+      }
+      final CaptureProfile limits = profile;
+      final long task = reviewTask;
+      final int shot = reviewClock.attempt();
+      int[] selected = PreviewSizes.select(candidates, preferHD, limits.maxEdge, limits.maxPixels);
+      if (selected == null) {
+        fail(token, "unsupported_preview");
+        return;
+      }
+      final int frameWidth = selected[0], frameHeight = selected[1];
+      p.setPreviewSize(frameWidth, frameHeight);
       p.setPreviewFormat(ImageFormat.NV21);
       owned.setParameters(p);
+      Camera.Size applied = owned.getParameters().getPreviewSize();
+      if (applied == null || applied.width != frameWidth || applied.height != frameHeight) {
+        fail(token, "unsupported_preview");
+        return;
+      }
+      previewWidth = frameWidth;
+      previewHeight = frameHeight;
+      qualityFallback =
+          preferHD && limits.version < 2
+              ? "host_legacy"
+              : preferHD && frameWidth * frameHeight <= 640 * 480 ? "hd_unavailable" : "";
+      qualityLabel =
+          " · "
+              + frameWidth
+              + "×"
+              + frameHeight
+              + (qualityFallback.isEmpty() ? "" : " · 高清不可用，使用标准画面");
       int rotation = activity.getWindowManager().getDefaultDisplay().getRotation();
       int degrees =
           rotation == Surface.ROTATION_90
@@ -181,16 +285,26 @@ final class SingleFrameCamera implements TextureView.SurfaceTextureListener {
           info.facing == Camera.CameraInfo.CAMERA_FACING_FRONT
               ? (info.orientation + degrees) % 360
               : (info.orientation - degrees + 360) % 360;
+      previewRotation = upright;
+      ui.post(
+          () -> {
+            if (current(token)) fitPreview();
+          });
       owned.setDisplayOrientation(
           info.facing == Camera.CameraInfo.CAMERA_FACING_FRONT ? (360 - upright) % 360 : upright);
-      target.setDefaultBufferSize(640, 480);
+      target.setDefaultBufferSize(frameWidth, frameHeight);
       owned.setPreviewTexture(target);
       final int[] frames = {0};
       owned.setErrorCallback((code, ignored) -> fail(token, "camera_error_" + code));
       owned.setPreviewCallbackWithBuffer(
           (data, owner) -> {
-            if (!current(token) || owner != camera) return;
-            if (data == null || data.length < 640 * 480 * 3 / 2) {
+            if (owner != camera) return;
+            if (!current(token)) {
+              release();
+              retire(token);
+              return;
+            }
+            if (data == null || data.length < frameWidth * frameHeight * 3 / 2) {
               fail(token, "invalid_frame");
               return;
             }
@@ -206,54 +320,36 @@ final class SingleFrameCamera implements TextureView.SurfaceTextureListener {
             }
             try {
               capturedAfterPreviewMs = delay.elapsed(SystemClock.elapsedRealtime());
-              ByteArrayOutputStream out = new ByteArrayOutputStream();
-              boolean ok =
-                  new YuvImage(data, ImageFormat.NV21, 640, 480, null)
-                      .compressToJpeg(new Rect(0, 0, 640, 480), 82, out);
-              if (!ok) throw new IllegalStateException();
-              byte[] jpeg = out.toByteArray();
-              int width = 640, height = 480;
-              if (upright != 0) {
-                Bitmap b = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length);
-                if (b == null) throw new IllegalStateException();
-                Matrix m = new Matrix();
-                m.postRotate(upright);
-                Bitmap rotated = Bitmap.createBitmap(b, 0, 0, b.getWidth(), b.getHeight(), m, true);
-                out.reset();
-                if (!rotated.compress(Bitmap.CompressFormat.JPEG, 82, out))
-                  throw new IllegalStateException();
-                width = rotated.getWidth();
-                height = rotated.getHeight();
-                jpeg = out.toByteArray();
-                if (rotated != b) rotated.recycle();
-                b.recycle();
-              }
-              if (jpeg.length > 384 * 1024) throw new IllegalStateException();
+              CameraJpeg.Frame frame =
+                  CameraJpeg.encode(data, frameWidth, frameHeight, upright, limits);
               release();
-              final byte[] image = jpeg;
-              final int w = width, h = height;
+              if (!reviewClock.captured(task, shot, SystemClock.elapsedRealtime())) {
+                fail(token, "camera_timeout");
+                return;
+              }
               ui.post(
                   () -> {
-                    if (!current(token)) return;
-                    wanted = false;
+                    if (!current(token)) {
+                      retire(token);
+                      return;
+                    }
                     opening = false;
-                    captures++;
-                    panel.setVisibility(View.GONE);
-                    Result done = result;
-                    result = null;
-                    if (done != null) done.image(image, w, h);
+                    if (reviewEnabled) showReview(token, frame);
+                    else complete(token, frame.bytes, frame.width, frame.height);
                   });
-            } catch (Exception error) {
+            } catch (Exception | OutOfMemoryError error) {
               fail(token, "image_encode_failed");
             }
           });
-      for (int i = 0; i < 3; i++) owned.addCallbackBuffer(new byte[640 * 480 * 3 / 2]);
+      for (int i = 0; i < 3; i++)
+        owned.addCallbackBuffer(new byte[frameWidth * frameHeight * 3 / 2]);
       if (!current(token)) {
         release();
+        retire(token);
         return;
       }
       owned.startPreview();
-    } catch (Exception error) {
+    } catch (Exception | OutOfMemoryError error) {
       fail(token, "camera_open_failed");
     }
   }
@@ -261,20 +357,91 @@ final class SingleFrameCamera implements TextureView.SurfaceTextureListener {
   private void fail(int token, String reason) {
     worker.post(
         () -> {
-          if (!current(token)) return;
+          if (!alive(token)) return;
           release();
           ui.post(
               () -> {
-                if (!current(token)) return;
+                if (!alive(token)) return;
+                boolean report = authorized.current();
+                reviewClock.cancel();
                 wanted = false;
                 opening = false;
                 lastError = reason;
                 panel.setVisibility(View.GONE);
+                reviewPanel.clear();
                 Result done = result;
                 result = null;
-                if (done != null) done.error(reason);
+                if (report && done != null) done.error(reason);
               });
         });
+  }
+
+  private void retire(int token) {
+    ui.post(
+        () -> {
+          if (alive(token)) cancel();
+        });
+  }
+
+  private void showReview(int token, CameraJpeg.Frame frame) {
+    reviewPanel.show(
+        frame.bytes,
+        frame.width,
+        frame.height,
+        profile.maxBytes,
+        new PhotoReviewPanel.Actions() {
+          public boolean current() {
+            return SingleFrameCamera.this.current(token) && reviewClock.reviewing();
+          }
+
+          public int attempt() {
+            return reviewClock.attempt();
+          }
+
+          public long remaining() {
+            return reviewClock.remaining(reviewTask, SystemClock.elapsedRealtime());
+          }
+
+          public boolean retake() {
+            if (!current() || !reviewClock.retake(reviewTask, SystemClock.elapsedRealtime()))
+              return false;
+            reviewPanel.clear();
+            serial++;
+            prepareAttempt();
+            return true;
+          }
+
+          public void send(byte[] jpeg, int width, int height) {
+            complete(token, jpeg, width, height);
+          }
+
+          public void cancel() {
+            cancelAction.run();
+          }
+
+          public void error(String reason) {
+            fail(token, reason);
+          }
+        });
+  }
+
+  private void complete(int token, byte[] jpeg, int width, int height) {
+    if (!current(token)) {
+      retire(token);
+      return;
+    }
+    if (!reviewClock.finish(reviewTask, SystemClock.elapsedRealtime())) {
+      fail(token, "camera_timeout");
+      return;
+    }
+    wanted = false;
+    opening = false;
+    captures++;
+    reviewPanel.clear();
+    panel.setVisibility(View.GONE);
+    Result done = result;
+    result = null;
+    if (done != null) done.image(jpeg, width, height);
   }
 
   private void release() {
@@ -295,10 +462,12 @@ final class SingleFrameCamera implements TextureView.SurfaceTextureListener {
   }
 
   void cancel() {
+    reviewClock.cancel();
     wanted = false;
     opening = false;
     serial++;
     result = null;
+    reviewPanel.clear();
     panel.setVisibility(View.GONE);
     worker.post(this::release);
   }
@@ -315,10 +484,26 @@ final class SingleFrameCamera implements TextureView.SurfaceTextureListener {
   }
 
   @Override
-  public void onSurfaceTextureSizeChanged(SurfaceTexture texture, int w, int h) {}
+  public void onSurfaceTextureSizeChanged(SurfaceTexture texture, int w, int h) {
+    if (texture != surface) return;
+    fitPreview();
+  }
+
+  private void fitPreview() {
+    int w = preview.getWidth(), h = preview.getHeight();
+    if (w <= 0 || h <= 0 || previewWidth <= 0 || previewHeight <= 0) return;
+    boolean turned = previewRotation == 90 || previewRotation == 270;
+    float sourceW = turned ? previewHeight : previewWidth;
+    float sourceH = turned ? previewWidth : previewHeight;
+    float scale = Math.min(w / sourceW, h / sourceH);
+    Matrix transform = new Matrix();
+    transform.setScale(sourceW * scale / w, sourceH * scale / h, w / 2f, h / 2f);
+    preview.setTransform(transform);
+  }
 
   @Override
   public boolean onSurfaceTextureDestroyed(SurfaceTexture texture) {
+    if (texture != surface) return true;
     surface = null;
     if (wanted) fail(serial, "preview_surface_lost");
     else worker.post(this::release);
@@ -328,13 +513,17 @@ final class SingleFrameCamera implements TextureView.SurfaceTextureListener {
   private void countdown(int token) {
     if (!current(token) || !delay.started()) return;
     int seconds = delay.secondsLeft(SystemClock.elapsedRealtime());
-    label.setText(seconds > 0 ? "● 调整画面 · " + seconds + " 秒后拍摄" : "● 正在采集当前画面…");
+    label.setText((seconds > 0 ? "● 调整画面 · " + seconds + " 秒后拍摄" : "● 正在采集当前画面…") + qualityLabel);
     if (seconds > 0) ui.postDelayed(() -> countdown(token), 100);
   }
 
   @Override
   public void onSurfaceTextureUpdated(SurfaceTexture texture) {
-    if (wanted && frameReceived && !delay.started()) {
+    if (texture != surface) return;
+    if (wanted
+        && frameReceived
+        && !delay.started()
+        && (reviewClock.attempt() == 1 || texture.getTimestamp() != retakeVisibleBaseline)) {
       delay.visible(SystemClock.elapsedRealtime());
       countdown(serial);
     }

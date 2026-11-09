@@ -18,7 +18,7 @@ SESSION_INTERFACES = r"""
  static class Session {
   final Object routeLock=new Object();
   boolean foreground=true,recording,visual,announcement,textSession,receiverRegistered;
-  boolean dotChatSupported,savedTasksSupported,preferenceMemorySupported,resultProvenanceSupported,resultReadingSupported;
+  boolean dotChatSupported,savedTasksSupported,preferenceMemorySupported,resultProvenanceSupported,resultReadingSupported,visionModesSupported;
   JSONObject voicePreferences,speechCorrection;
   int speechCorrectionRevision=-1;
   int epoch,minimumGeneration,lifecycle,requests,announcementGeneration,textGeneration;
@@ -478,6 +478,21 @@ SCENARIOS = r"""
     yes(Toast.shows==0,"Old operation result cannot show in the new activation");
     s.deliver(result,next);c.drain();yes(Toast.shows==1,"Current operation result remains visible");break;
    }
+   case "ocr_request":{
+    int count=old.events.size();
+    yes(!s.requestVision("ocr")&&old.events.size()==count,"old server accepted OCR");
+    s.visionModesSupported=true;
+    yes(!s.requestVision("other"),"unknown image mode submitted");
+    yes(s.requestVision("ocr"),"supported OCR did not send");
+    yes(old.events.size()==count+1,"OCR sent multiple requests");
+    JSONObject sent=old.events.get(count);
+    yes("vision_request".equals(sent.optString("event"))&&"ocr".equals(sent.optString("mode"))&&sent.optString("nonce").matches("[a-f0-9]{32}"),"OCR mode/nonce lost");
+    yes(!s.requestVision("ocr")&&!s.recording,"duplicate pending OCR or recording enabled");
+    Link next=new Link("wifi");activate(c,next);
+    yes(!s.visionModesSupported,"handover retained old OCR capability");
+    s.visionModesSupported=true;s.pause();yes(!s.visionModesSupported&&!s.requestVision("ocr"),"Home retained OCR");
+    break;
+   }
    case "recognition_language":{
     long route=s.routeEpoch;
     JSONObject state=new JSONObject("version",1,"revision",4,"speech_rate","slow","natural_barge",false,"supported",true,
@@ -617,6 +632,8 @@ class WorkspaceRouteTests(unittest.TestCase):
                 'private void sendPacket(',
                 'private boolean captureRegistered(',
                 'boolean isVisionRequestCurrent(',
+                'boolean requestVision(String mode)',
+                'boolean isConnected()',
                 'void cameraFailed(',
                 'private void lost(',
                 'void pause(',
@@ -722,6 +739,14 @@ class WorkspaceRouteTests(unittest.TestCase):
         cls.folder = Path(cls.temporary.name)
         test = cls.folder / 'ActivityCheck.java'
         test.write_text(harness)
+        handler = cls.folder / 'Handler.java'
+        handler.write_text(
+            'package android.os; public class Handler {public Handler(Looper loop){} public boolean postDelayed(Runnable action,long delay){return true;}}'
+        )
+        looper = cls.folder / 'Looper.java'
+        looper.write_text(
+            'package android.os; public class Looper {public static Looper getMainLooper(){return new Looper();}}'
+        )
         cls.java = java_bin()
         compiled = subprocess.run(
             [
@@ -738,6 +763,8 @@ class WorkspaceRouteTests(unittest.TestCase):
                 str(JAVA / 'SpeakerOwner.java'),
                 str(JAVA / 'SpeakerSession.java'),
                 str(test),
+                str(handler),
+                str(looper),
             ],
             capture_output=True,
             text=True,
@@ -769,6 +796,9 @@ class WorkspaceRouteTests(unittest.TestCase):
 
     def test_preference_receipts_are_retired_on_handover_and_home(self):
         self.scenario('preference_receipts')
+
+    def test_explicit_ocr_request_has_current_capability_nonce_and_one_route(self):
+        self.scenario('ocr_request')
 
     def test_language_controls_keep_capability_generation_route_and_home_ownership(self):
         self.scenario('recognition_language')

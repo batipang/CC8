@@ -49,6 +49,9 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   private DotChatsDialog dotChats;
   private PreferenceMemoryDialog preferenceMemory;
   private RecognitionLanguageDialog recognitionLanguage;
+  private AlertDialog imageQualityDialog;
+  private boolean highDefinitionImage;
+  private boolean reviewCapturedImage;
   private SpeechCorrectionDialog correctionDialog;
   private SavedTasksDialog savedTasks;
   private ResultDetailsDialog resultDetails;
@@ -450,17 +453,30 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     place(modes, freeButton, 213, 0, 227, 68);
     rule(root, 476, 688, 1, 64);
     visionButton = action("看一看", R.drawable.ic_hud_camera);
-    visionButton.setContentDescription("拍一张画面交给 Dot 分析");
-    visionButton.setOnClickListener(
+    visionButton.setContentDescription("点按看图，长按选择识字和看图设置");
+    visionButton.setOnClickListener(v -> requestImage("observe"));
+    visionButton.setOnLongClickListener(
         v -> {
-          if (session.isVisual()) {
-            eyes.cancel();
-            session.cancelVision();
-          } else if (Build.VERSION.SDK_INT >= 23
-              && checkSelfPermission(Manifest.permission.CAMERA)
-                  != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[] {Manifest.permission.CAMERA}, 34);
-          } else session.requestVision();
+          if (!foreground || session.isVisual()) return false;
+          if (imageQualityDialog != null) imageQualityDialog.dismiss();
+          AlertDialog dialog =
+              new AlertDialog.Builder(this)
+                  .setTitle("看图与识字")
+                  .setItems(
+                      new String[] {"普通看图", "识别图片文字", "看图设置"},
+                      (d, n) -> {
+                        if (n == 2) showImageQuality();
+                        else requestImage(n == 1 ? "ocr" : "observe");
+                      })
+                  .setNegativeButton("取消", null)
+                  .create();
+          imageQualityDialog = dialog;
+          dialog.setOnDismissListener(
+              d -> {
+                if (imageQualityDialog == dialog) imageQualityDialog = null;
+              });
+          dialog.show();
+          return true;
         });
     place(root, visionButton, 499, 686, 177, 68);
     Button tasks = action("任务", R.drawable.ic_hud_task);
@@ -1248,7 +1264,9 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
               "声音与自然插话",
               "提醒送达记录",
               "偏好记忆",
-              "识别语言"
+              "识别语言",
+              "看图设置",
+              "识别图片文字"
             },
             (d, n) -> {
               if (n == 0) {
@@ -1296,6 +1314,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
               else if (n == 9) showVoicePreferences();
               else if (n == 11) preferenceMemory.open();
               else if (n == 12) recognitionLanguage.open();
+              else if (n == 13) showImageQuality();
+              else if (n == 14) requestImage("ocr");
               else showReminderHistory();
             })
         .setNegativeButton("关闭", null)
@@ -1374,6 +1394,82 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     dialog.show();
   }
 
+  private void showImageQuality() {
+    if (!foreground) return;
+    if (session.isVisual()) {
+      Toast.makeText(this, "请先结束本次看图，再修改设置", Toast.LENGTH_LONG).show();
+      return;
+    }
+    if (imageQualityDialog != null) imageQualityDialog.dismiss();
+    LinearLayout content = new LinearLayout(this);
+    content.setOrientation(LinearLayout.VERTICAL);
+    content.setPadding(dp(24), dp(12), dp(24), dp(12));
+    TextView help =
+        text("默认预览 5 秒后直接分析。开启拍后核对后，可发送、重拍和裁剪；最多三张，等待最长 70 秒，拍完即关闭相机。设置仅本次界面有效，不会打开相机。", 22, INK);
+    content.addView(help);
+    RadioGroup quality = new RadioGroup(this);
+    int standardId = View.generateViewId(), hdId = View.generateViewId();
+    RadioButton standard = new RadioButton(this);
+    standard.setId(standardId);
+    standard.setText("标准（默认）");
+    standard.setTextSize(24);
+    quality.addView(standard);
+    RadioButton hd = new RadioButton(this);
+    hd.setId(hdId);
+    hd.setText("高清（需相机和 Mac 后台支持）");
+    hd.setTextSize(24);
+    quality.addView(hd);
+    quality.check(highDefinitionImage ? hdId : standardId);
+    content.addView(quality);
+    CheckBox review = new CheckBox(this);
+    review.setText("拍后核对，可重拍／裁剪");
+    review.setTextSize(24);
+    review.setChecked(reviewCapturedImage);
+    content.addView(review);
+    ScrollView scroll = new ScrollView(this);
+    scroll.addView(content);
+    AlertDialog dialog =
+        new AlertDialog.Builder(this)
+            .setTitle("看图设置")
+            .setView(scroll)
+            .setPositiveButton(
+                "应用",
+                (d, n) -> {
+                  if (foreground && imageQualityDialog == d) {
+                    highDefinitionImage = quality.getCheckedRadioButtonId() == hdId;
+                    reviewCapturedImage = review.isChecked();
+                  }
+                })
+            .setNegativeButton("取消", null)
+            .create();
+    imageQualityDialog = dialog;
+    dialog.setOnDismissListener(
+        d -> {
+          if (imageQualityDialog == dialog) imageQualityDialog = null;
+        });
+    dialog.show();
+  }
+
+  private void requestImage(String mode) {
+    if (!foreground) return;
+    if (session.isVisual()) {
+      eyes.cancel();
+      session.cancelVision();
+      return;
+    }
+    if ("ocr".equals(mode) && !session.supportsVisionModes()) {
+      Toast.makeText(this, "请连接支持识字入口的 Mac 后台", Toast.LENGTH_LONG).show();
+      return;
+    }
+    if (Build.VERSION.SDK_INT >= 23
+        && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+      requestPermissions(new String[] {Manifest.permission.CAMERA}, 34);
+      return;
+    }
+    if (!session.requestVision(mode))
+      Toast.makeText(this, "未提交拍摄，请确认连接后重试", Toast.LENGTH_LONG).show();
+  }
+
   @Override
   public void vision(boolean busy, String message, boolean preserveError) {
     runOnUiThread(
@@ -1403,6 +1499,13 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
             state("idle", "请点看一看允许摄像头权限，然后重试");
             return;
           }
+          final CaptureProfile profile;
+          try {
+            profile = CaptureProfile.fromRequest(request);
+          } catch (IllegalArgumentException error) {
+            session.cameraFailed(request, "unsupported_preview");
+            return;
+          }
           eyes.start(
               new SingleFrameCamera.Result() {
                 public void image(byte[] jpeg, int width, int height) {
@@ -1415,7 +1518,11 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
                 public void error(String reason) {
                   session.cameraFailed(request, reason);
                 }
-              });
+              },
+              highDefinitionImage,
+              profile,
+              reviewCapturedImage,
+              () -> foreground && session.isVisionRequestCurrent(request));
         });
   }
 
@@ -1685,7 +1792,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
       state(
           "idle",
           results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED
-              ? "摄像头已授权，请再点看一看"
+              ? "摄像头已授权，请重新选择看图或识字"
               : "未获得摄像头权限，未采集图片");
     }
     if (request == 21) {
@@ -1769,6 +1876,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
             dotChats.close();
             preferenceMemory.close();
             recognitionLanguage.close();
+            if (imageQualityDialog != null) imageQualityDialog.dismiss();
             savedTasks.close();
             resultDetails.close();
             if (correctionDialog != null) correctionDialog.close();
@@ -2015,6 +2123,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     if (dotChats != null) dotChats.close();
     if (preferenceMemory != null) preferenceMemory.close();
     if (recognitionLanguage != null) recognitionLanguage.close();
+    if (imageQualityDialog != null) imageQualityDialog.dismiss();
     if (savedTasks != null) savedTasks.close();
     if (resultDetails != null) resultDetails.close();
     screen(false);
@@ -2098,6 +2207,11 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     Wire.put(
         ui, "camera_captured_after_preview_ms", eyes == null ? 0 : eyes.capturedAfterPreviewMs());
     Wire.put(ui, "camera_last_error", eyes == null ? "" : eyes.lastError());
+    Wire.put(ui, "camera_preview_width", eyes == null ? 0 : eyes.previewWidth());
+    Wire.put(ui, "camera_preview_height", eyes == null ? 0 : eyes.previewHeight());
+    Wire.put(ui, "camera_quality_fallback", eyes == null ? "" : eyes.qualityFallback());
+    Wire.put(ui, "camera_hd_requested", highDefinitionImage);
+    Wire.put(ui, "camera_review_requested", reviewCapturedImage);
     Wire.put(ui, "screen_sleeping", screenSleeping);
     Wire.put(ui, "orbit_clock_time", companion.clockTime());
     Wire.put(ui, "orbit_clock_timezone", companion.clockTimeZone());
