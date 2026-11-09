@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "recognition-controls-20261110.1",
+  "release_id": "saved-report-snapshots-recovery-20261110.1",
   "backend": {
     "version": "0.16.17"
   },
   "assistant": {
-    "version": "0.9.83",
-    "version_code": 120,
+    "version": "0.9.88",
+    "version_code": 125,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {
