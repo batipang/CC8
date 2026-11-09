@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "result-provenance-20261109.1",
+  "release_id": "receipt-owned-result-reading-20261109.1",
   "backend": {
-    "version": "0.16.3"
+    "version": "0.16.4"
   },
   "assistant": {
-    "version": "0.9.57",
-    "version_code": 94,
+    "version": "0.9.59",
+    "version_code": 96,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {

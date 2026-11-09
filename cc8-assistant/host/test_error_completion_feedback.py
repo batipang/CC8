@@ -505,7 +505,7 @@ class FeedbackCheck {
  final Object routeLock=new Object();long route=5, activeRoute=5,routeEpoch=5;
  static class CaptureWindow{static int count;final String id="capture"+(++count);boolean startConfirmed=true;}
  CaptureWindow captureWindow=new CaptureWindow();
- boolean dotChatSupported,savedTasksSupported,resultProvenanceSupported;
+ boolean dotChatSupported,savedTasksSupported,resultProvenanceSupported,resultReadingSupported;
  // The transport handshake itself is covered by the capture route tests.
  static class Link {}
  final Link source=new Link();
@@ -523,7 +523,7 @@ class FeedbackCheck {
   String optString(String k){return "phase".equals(k)?next:"listening_state".equals(k)?String.valueOf(listening):message;}
   String optString(String k,String fallback){return optString(k);}
   Object opt(String k){
-   if("supports_result_provenance".equals(k))return provenance;
+   if("supports_result_provenance".equals(k)||"supports_result_reading".equals(k))return provenance;
    if("request_start_failed".equals(k))return startFailure;
    if("listening_state".equals(k))return listening;
    if("capture_id".equals(k))return captureId;
@@ -670,17 +670,17 @@ class FeedbackCheck {
     def test_provenance_capability_requires_current_foreground_generation(self):
         self.compile_and_run("""c.minimumGeneration=9;c.suppliedResultProvenance=Boolean.TRUE;
  c.hello(8,"","late hello");
- yes(!c.resultProvenanceSupported,"old generation enabled file control");
+ yes(!c.resultProvenanceSupported&&!c.resultReadingSupported,"old generation enabled file control");
  c.hello(9,"","current hello");
- yes(c.resultProvenanceSupported,"current capability unavailable");
+ yes(c.resultProvenanceSupported&&c.resultReadingSupported,"current capability unavailable");
  c.suppliedResultProvenance=Boolean.FALSE;c.hello(8,"","late downgrade");
- yes(c.resultProvenanceSupported,"old generation disabled current capability");
+ yes(c.resultProvenanceSupported&&c.resultReadingSupported,"old generation disabled current capability");
  c.hello(9,"","current downgrade");
- yes(!c.resultProvenanceSupported,"current route cannot disable capability");
+ yes(!c.resultProvenanceSupported&&!c.resultReadingSupported,"current route cannot disable capability");
  c.foreground=false;c.suppliedResultProvenance=Boolean.TRUE;c.hello(9,"","background");
- yes(!c.resultProvenanceSupported,"background enabled file control");
+ yes(!c.resultProvenanceSupported&&!c.resultReadingSupported,"background enabled file control");
  c.foreground=true;c.activeRoute=6;c.hello(9,"","stale route");
- yes(!c.resultProvenanceSupported,"old route enabled file control");""")
+ yes(!c.resultProvenanceSupported&&!c.resultReadingSupported,"old route enabled file control");""")
 
     def test_route_interruption_notice_survives_rebind_and_clears_for_new_work(self):
         self.compile_and_run("""c.recording=true;c.hello(8,"notice","连接切换中断播报");

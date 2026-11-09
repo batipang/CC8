@@ -358,6 +358,7 @@ def build_device_events(host: Bridge) -> DeviceEventRouter:
         reminder_action=lambda args: host.reminder_action(args),
         touch_activity=lambda: host.touch_activity(),
         log=lambda name, **fields: host.log(name, **fields),
+        read_result=lambda data: host.response.request_read(data),
     )
 
 

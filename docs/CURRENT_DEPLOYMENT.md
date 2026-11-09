@@ -1219,3 +1219,7 @@ Android不保证允许versionCode降级，因此不把旧code33 APK当作可直�
 原0.14.12功能的metadata-only恢复源码`21b4934`已构建原签名APK0.9.8/code43，SHA256为`a9c9f90d0b7335c32aee1dbd27b27680852714e3d5949b6ece2e1fc745e69d3f`，assemble/lint通过。该包尚未安装；用于后续code42候选失败时的前向覆盖，保留已安装的code41当前基线和全部历史报告。工具启动等待新增两项回归，未修复源码出现两处子用例断言失败、零fixture error；修复后installer23 / host666（4项private skip）/ tooling100 / Java15与质量检查通过。
 
 PR70首轮macOS CI另暴露Endpoint测试夹具竞争：QuietWorker只抑制回答线程，识别线程仍会抢走测试拟自行discard的队列。未重跑原失败提交；夹具现在仅在构造期间关闭两种worker启动，实际Endpoint/队列方法照常运行，真实识别worker集成测试在其独立作用域仍启动线程。新增无后台消费者的不变量在旧夹具稳定复现一处断言失败，修复后installer23 / host667（4项private skip）/ tooling100 / Java15与质量检查通过。该修复只改变测试隔离，不改变设备软件。
+
+## 0.16.3／code94 结果来源部署
+
+PR451合入`68049d5`，PR42555575250／主分支42556137401八项CI均通过。原签名助手0.9.57／code94（SHA256 `29e03ab745b35d5e54433744ddc4965a867eb85df89e292ea46d16d8340d3edf`）与后台0.16.3已交付，九步维护65.434秒；独立核对同一干净源码、原诊断器7与全配置、实际Interactive服务、USB优先和Wi-Fi就绪，双端麦克风／摄像头／播放／校准关闭，零新模型请求。新来源／文件按钮有实际Java回调回归，未冒充新的实体交办或Finder动作验收。恢复95未安装，72小时未开始。下一0.16.4／code96仍为结果续读源码候选。

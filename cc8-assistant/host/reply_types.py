@@ -30,6 +30,12 @@ class TextReply(Reply):
     pass
 
 
+@dataclass
+class ResultRead(TextReply):
+    result_id: str = ''
+    restart: bool = False
+
+
 @dataclass(frozen=True)
 class BrainPreparation:
     """Connection-only work in the existing serial response queue."""

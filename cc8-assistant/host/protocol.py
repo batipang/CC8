@@ -96,6 +96,7 @@ def validate_device_event(value: object) -> JsonObject:
         'dot_chat_request': ('request_id', 'action'),
         'dot_chat_cancel': ('request_id',),
         'saved_task_request': ('request_id', 'action'),
+        'result_read_request': ('request_id', 'id', 'restart'),
         'playout_progress': (
             'generation',
             'playback_id',
@@ -110,6 +111,16 @@ def validate_device_event(value: object) -> JsonObject:
     for key in required:
         if key not in value:
             raise ValueError('Missing device event field: ' + key)
+    if name == 'result_read_request':
+        if (
+            set(value) != {'event', 'request_id', 'id', 'restart'}
+            or not isinstance(value['request_id'], str)
+            or not re.fullmatch('[a-f0-9]{32}', value['request_id'])
+            or not isinstance(value['id'], str)
+            or not re.fullmatch('[a-f0-9]{16}', value['id'])
+            or type(value['restart']) is not bool
+        ):
+            raise ValueError('Invalid result reading request')
     if name in ('dot_chat_request', 'dot_chat_cancel', 'saved_task_request'):
         request_id = value['request_id']
         if not isinstance(request_id, str) or not re.fullmatch('[a-f0-9]{32}', request_id):

@@ -158,6 +158,24 @@ def build_audio_pipeline(
             log=lambda name, **fields: host.log(name, **fields),
             failure=lambda message, error, **fields: host.failure(message, error, **fields),
             speak=lambda text, generation: host.speak(text, generation),
+            can_read_result=lambda: (
+                host.session.connection is not None
+                and not host.calibration.active
+                and not host.calibration.running
+                and not host.playback.playing
+                and host.playback.pause_state is None
+                and not host.response.busy
+                and host.response.queue.empty()
+                and not host.recognition.busy
+                and host.recognition.queue.empty()
+                and host.session.text_generation is None
+                and host.visual.generation is None
+                and host.announcements.generation is None
+                and not host.capture.endpoint.vad.talking
+            ),
+            submit_read=lambda ident, restart: host.session.submit_text(
+                '朗读已完成结果', result_id=ident, result_restart=restart
+            ),
         )
     )
     return capture, recognition, response

@@ -16,7 +16,9 @@ from diagnostics import ROUTE_COMPLETION_STAGES, TraceBook, error_kind
 from failure_feedback import FailureSink, feedback
 from dot_receipt import UnconfirmedTurnStart
 from operation_failure import OperationFailure, KINDS
-from reply_types import Reply, TextReply, VisualReply, BrainPreparation
+from reply_types import Reply, TextReply, VisualReply, BrainPreparation, ResultRead
+from result_reading import ResultReading, ReadingUnavailable, reading_command
+from saved_tasks import ident as result_ident
 from session_ports import EventSink, MetricSink
 from workspace import Workspace
 
@@ -42,6 +44,8 @@ class ResponseHooks:
     log: EventSink
     failure: FailureSink
     speak: Callable[[str, int], bool]
+    can_read_result: Callable[[], bool] = lambda: False
+    submit_read: Callable[[str, bool], object] | None = None
 
 
 class ResponseWorker:
@@ -52,6 +56,112 @@ class ResponseWorker:
         self.history = deque(maxlen=8)
         self.worker = None
         self.start_lock = threading.Lock()
+        self.reading = ResultReading()
+        self.read_requests = deque(maxlen=64)
+
+    def result_task(self, ident):
+        task = next(
+            (
+                t
+                for t in self.hooks.workspace().snapshot()['tasks']
+                if t['id'] == ident and t['status'] == 'completed'
+            ),
+            None,
+        )
+        if task is None:
+            raise ReadingUnavailable(
+                '仅能朗读本次后台仍持有的已完成结果；未确认的任务请先在电脑核对。'
+            )
+        return task
+
+    def request_read(self, data):
+        # The device supplies identity and mode only, never replacement text.
+        request_id, ident, restart = data['request_id'], result_ident(data['id']), data['restart']
+        with self.hooks.lock:
+            try:
+                if request_id in self.read_requests:
+                    raise ReadingUnavailable('这个朗读请求已处理或结果未确认，不会重复提交。')
+                if not self.hooks.can_read_result() or self.hooks.submit_read is None:
+                    raise ReadingUnavailable('请等待当前任务、播报或校准结束后再朗读结果。')
+                self.result_task(ident)
+                self.reading.available(ident, restart)
+            except ReadingUnavailable as error:
+                self.hooks.event(
+                    'workspace_result', request_id=request_id, ok=False, message=str(error)
+                )
+                return
+            self.read_requests.append(request_id)
+            try:
+                result = self.hooks.submit_read(ident, restart)
+                if isinstance(result, dict) and result.get('ok') is True:
+                    self.reading.select(ident)
+            except (OSError, RuntimeError, ValueError, queue.Full):
+                # The existing text admission transaction owns generation-bound
+                # startup failure UI/cleanup. Never publish a second late error
+                # over a newer request admitted from one of its callbacks.
+                return
+
+    def read_result(self, ident, restart, generation):
+        with self.hooks.lock:
+            if not self.hooks.valid(generation):
+                return
+            self.hooks.diagnostics().ensure(generation, 'text')
+            try:
+                self.result_task(ident)
+                plan = self.reading.plan(ident, restart)
+            except ReadingUnavailable as error:
+                self.hooks.status('error', str(error))
+                self.hooks.diagnostics().finish(generation, 'rejected')
+                return
+            self.hooks.status(
+                'thinking',
+                ('收到的结果已截短。' if plan.truncated else '')
+                + '正在朗读已完成结果；未确认的句段可能重复，不会重新执行任务。',
+            )
+        completed = False
+        failed = False
+        try:
+            for offset in range(0, len(plan.text), 120):
+                if not self.hooks.valid(generation):
+                    return
+                clause = plan.text[offset : offset + 120]
+                diagnostics = self.hooks.diagnostics()
+                before = diagnostics.confirmed_playback_count(generation)
+                confirmed = False
+                advanced = False
+                try:
+                    played = self.hooks.speak(clause, generation)
+                finally:
+                    confirmed = diagnostics.confirmed_playback_count(generation) > before
+                    if confirmed:
+                        advanced = self.reading.ack(plan, offset, clause)
+                if not played:
+                    return
+                if not confirmed or not advanced:
+                    failed = True
+                    with self.hooks.lock:
+                        if self.hooks.valid(generation):
+                            self.hooks.status(
+                                'error',
+                                '这一句的播完或续读进度未确认，已停止朗读；不会自动重试或重新执行任务。',
+                            )
+                    return
+            with self.hooks.lock:
+                completed = self.hooks.valid(generation)
+                if completed:
+                    self.hooks.status(
+                        'listening' if self.hooks.active() else 'idle',
+                        '已读完本次收到的结果摘录，原结果可能已截短。'
+                        if plan.truncated
+                        else '结果朗读完成；原任务状态保持不变。',
+                    )
+        except Exception:
+            failed = True
+            raise
+        finally:
+            self.hooks.diagnostics().finish(
+                generation, 'completed' if completed else 'failed' if failed else 'cancelled'
+            )
 
     def start(self):
         with self.start_lock:
@@ -135,7 +245,9 @@ class ResponseWorker:
             return
         self.busy = True
         try:
-            if isinstance(job, VisualReply):
+            if isinstance(job, ResultRead):
+                self.read_result(job.result_id, job.restart, job.generation)
+            elif isinstance(job, VisualReply):
                 self.hooks.answer_visual(job)
             else:
                 self.hooks.answer(job.text, job.generation)
@@ -143,6 +255,23 @@ class ResponseWorker:
             self.busy = False
 
     def answer(self, text, generation, image=None):
+        command = reading_command(text) if image is None else None
+        if command is not None:
+            with self.hooks.lock:
+                tasks = self.hooks.workspace().snapshot()['tasks']
+                task = self.reading.target(tasks)
+                if not self.hooks.valid(generation):
+                    return
+                if task is None:
+                    self.hooks.diagnostics().ensure(generation, 'text')
+                    self.hooks.diagnostics().finish(generation, 'rejected')
+                    self.hooks.status(
+                        'error',
+                        '最近任务没有可确认的完成结果，请在任务详情明确选择已完成结果；不会改读其他任务或重新执行。',
+                    )
+                    return
+            self.read_result(task['id'], command, generation)
+            return
         # 任务成功以大脑真实回执为准，后续停止朗读不能把已完成工作改为取消。
         with self.hooks.lock:
             if not self.hooks.valid(generation):
@@ -150,6 +279,7 @@ class ResponseWorker:
             self.hooks.diagnostics().ensure(generation, 'vision' if image is not None else 'text')
             self.hooks.diagnostics().mark(generation, 'brain_start')
             task_id = self.hooks.workspace().task_start(generation, text)
+            self.reading.begin(task_id, generation)
         result_text = ['']
         clauses = None
 
@@ -191,6 +321,7 @@ class ResponseWorker:
                     # remaining audio or device delivery. A disconnected display
                     # cannot turn successfully executed work into a failed task.
                     self.hooks.workspace().task_finish(task_id, 'completed', result_text[0])
+                    self.reading.complete(task_id, result_text[0], payload.get('truncated', False))
                     self.hooks.event('dot_result', generation=generation, **payload)
                     self.hooks.publish_workspace()
                 return
@@ -294,13 +425,15 @@ class ResponseWorker:
                 brain = self.hooks.brain()
                 delivery = getattr(brain, 'current_report_delivery', None)
                 diagnostics = self.hooks.diagnostics()
-                before = diagnostics.confirmed_playback_count(generation) if delivery else None
+                before = diagnostics.confirmed_playback_count(generation)
                 try:
                     played = self.hooks.speak(clause, generation)
                 finally:
-                    if delivery and diagnostics.confirmed_playback_count(generation) > before:
-                        owner, token = delivery
-                        owner.confirm(token)
+                    if diagnostics.confirmed_playback_count(generation) > before:
+                        self.reading.original_ack(task_id, generation, clause)
+                        if delivery:
+                            owner, token = delivery
+                            owner.confirm(token)
                 if not played:
                     completed = False
                     break
@@ -351,6 +484,8 @@ class ResponseWorker:
                 self.hooks.workspace().task_finish(
                     task_id, status, result_text[0] or ''.join(spoken)
                 )
+                if status == 'completed':
+                    self.reading.complete(task_id, result_text[0] or ''.join(spoken))
                 self.hooks.diagnostics().task_result(generation, status)
                 self.hooks.diagnostics().finish(generation, status)
                 try:
