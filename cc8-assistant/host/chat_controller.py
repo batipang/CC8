@@ -3,8 +3,11 @@
 from dataclasses import dataclass
 import re
 import threading
+import uuid
 from typing import Callable, ContextManager
 from dot_handoff import ChatCatalog
+from dot_client import Cancelled, DotError
+from report_voice import ReportVoice, ReportVoiceHooks
 
 
 @dataclass(frozen=True)
@@ -16,6 +19,7 @@ class ChatHooks:
     idle: Callable[[], bool]
     select: Callable[[object], None]
     event: Callable[..., None]
+    transport_revision: Callable[[], int] = lambda: 0
 
 
 class ChatController:
@@ -27,6 +31,43 @@ class ChatController:
         self.selection = None
         self.active_request = None
         self.worker = None
+        self.voice = ReportVoice(
+            ReportVoiceHooks(
+                lock=hooks.lock,
+                context=lambda: (self.selection, hooks.connection(), hooks.transport_revision()),
+                read=self.read_voice_report,
+            )
+        )
+
+    def read_voice_report(self, source, period, is_current):
+        with self.hooks.lock:
+            if not is_current() or self.selection is not source or self.hooks.connection() is None:
+                raise Cancelled('Work report cancelled')
+            if not self.hooks.available():
+                raise DotError('Work report is unavailable')
+            with self.lock:
+                if self.busy:
+                    raise DotError('Work report is busy')
+                self.busy = True
+                ident = self.active_request = uuid.uuid4().hex
+            connection = self.hooks.connection()
+
+        def current():
+            with self.hooks.lock:
+                with self.lock:
+                    return (
+                        is_current()
+                        and self.active_request == ident
+                        and self.selection is source
+                        and connection is self.hooks.connection()
+                    )
+
+        try:
+            return self.catalog.report(source, period, is_current=current)
+        finally:
+            with self.lock:
+                self.busy = False
+                self.active_request = None
 
     def cancel(self, request_id):
         with self.hooks.lock:
@@ -77,11 +118,12 @@ class ChatController:
                     return
                 self.busy = True
                 self.active_request = request_id
+            report_revision = self.voice.begin() if action == 'report' else None
             generation, connection = self.hooks.generation(), self.hooks.connection()
         # RPC may take seconds. Never block the packet/capture reader on it.
         worker = threading.Thread(
             target=self.run,
-            args=(request_id, action, data, generation, connection),
+            args=(request_id, action, data, generation, connection, report_revision),
             daemon=True,
             name='cc8-chat-catalog',
         )
@@ -94,7 +136,7 @@ class ChatController:
                 self.active_request = None
             raise
 
-    def run(self, request_id, action, data, generation, connection):
+    def run(self, request_id, action, data, generation, connection, report_revision=None):
         def current():
             with self.hooks.lock:
                 with self.lock:
@@ -133,8 +175,11 @@ class ChatController:
                         return
                     self.hooks.select(selected)
                     self.selection = selected
+                    self.voice.forget()
                     self.hooks.event('brain_provider', provider='dot')
                 self.publish(request_id, ok=True, action=action, **result)
+                if action == 'report':
+                    self.voice.remember(self.selection, result['report'], report_revision)
         except Exception:
             with self.hooks.lock:
                 if (

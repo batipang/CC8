@@ -20,6 +20,7 @@ class BrainRouter:
     def __init__(self, minimax, dot=None, selected='dot'):
         self.minimax = minimax
         self.dot = dot or DotBrain()
+        self.work_reports = None
         self.select(selected)
         self.last_metrics = {}
 
@@ -32,7 +33,11 @@ class BrainRouter:
         cleanup_all(self.minimax.cancel, self.dot.cancel)
 
     def close(self):
-        cleanup_all(self.cancel, self.dot.close)
+        cleanup_all(
+            self.cancel,
+            self.dot.close,
+            lambda: self.work_reports.forget() if self.work_reports else None,
+        )
 
     def prepare(self, is_current=lambda: True):
         if self.selected != 'dot':
@@ -55,6 +60,8 @@ class BrainRouter:
         return update
 
     def vision_clauses(self, text, image, history, is_current=lambda: True, on_web=None):
+        if self.work_reports:
+            self.work_reports.forget()
         self.last_metrics = {'provider': 'dot', 'vision': True}
         # Camera input always goes to Dot, regardless of the text-chat selector.
         try:
@@ -95,8 +102,43 @@ class BrainRouter:
         if not is_current():
             raise Cancelled('Turn cancelled')
         match = DELEGATE.match(text)
-        provider = 'dot' if match else self.selected
         prompt = text[match.end() :].strip() if match else text
+        command = self.work_reports.command(prompt) if self.work_reports else None
+        if command is not None:
+            self.last_metrics = {'provider': 'work_report', 'completed': False}
+            try:
+                if on_web:
+                    on_web('clear', {})
+                    on_web('progress', {'message': '正在读取所选聊天的工作汇报…'})
+                reply = self.work_reports.answer(command, is_current)
+                if not is_current():
+                    raise Cancelled('Report cancelled')
+                self.last_metrics = {
+                    'provider': 'work_report',
+                    'completed': True,
+                    'operation': reply.operation,
+                    'items': reply.items,
+                }
+                if on_web:
+                    on_web(
+                        'dot_result',
+                        {
+                            'text': reply.text,
+                            'truncated': False,
+                            'handoff_source_title': reply.source_title,
+                        },
+                    )
+                for clause in reply.spoken:
+                    if not is_current():
+                        raise Cancelled('Report cancelled')
+                    yield clause
+            except Exception:
+                self.last_metrics = {'provider': 'work_report', 'completed': False}
+                raise
+            return
+        if self.work_reports:
+            self.work_reports.forget()
+        provider = 'dot' if match else self.selected
         target = self.dot if provider == 'dot' else self.minimax
         self.last_metrics = {'provider': provider}
         if not prompt:

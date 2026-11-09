@@ -1,5 +1,12 @@
 # Changelog
 
+## Backend 0.16.1 — voice work reports and fixed-snapshot details
+
+- Recognize explicit half-hour, two-hour and Beijing-today work reports locally after source selection. Read bounded source results without a model turn or source-chat writes, then narrate a short overview with the existing MiniMax voice and expose all result cards in the existing full-result entry.
+- Bind ordinal detail queries to a copied RAM snapshot shared with the settings report. Later source changes, transport revisions, expiry or ordinary conversation invalidate follow-up; late UI reads cannot restore an older conversation context. Unknown source/range/period and unsupported original-chat continuation produce clear guidance without executing another task.
+- Keep report excerpts out of later model conversation history and status files. Report-read completion precedes narration, so stopping speech preserves the read receipt and fixed snapshot.
+- Record the preceding 0.16.0 / code92 deployment, six isolated physical UI checks and independent cleanup with this functional batch. Assistant APK remains 0.9.55 / code92. This backend is a software candidate until its deployment is recorded.
+
 ## Backend 0.16.0 / Assistant 0.9.55 — selected-chat work reports
 
 - Add an explicit read-only work report for the selected Dot chat: past half hour, past two hours or today in Beijing time. Use recorded turn completion timestamps with an inclusive start and exclusive end; never substitute thread update time. Read bounded turn metadata before fetching result items, without resuming or writing the source chat.

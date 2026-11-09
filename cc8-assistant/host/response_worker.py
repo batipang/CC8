@@ -345,9 +345,15 @@ class ResponseWorker:
             if not completed or not self.hooks.valid(generation):
                 return
             answer = ''.join(spoken)
-            self.history.extend(
-                [{'role': 'user', 'content': text}, {'role': 'assistant', 'content': answer}]
-            )
+            # Local report excerpts are not automatic context for a later model
+            # request. Follow-up binds the separate, fixed RAM snapshot instead.
+            if (
+                not self.hooks.brain()
+                or self.hooks.brain().last_metrics.get('provider') != 'work_report'
+            ):
+                self.history.extend(
+                    [{'role': 'user', 'content': text}, {'role': 'assistant', 'content': answer}]
+                )
             self.hooks.status(
                 'listening' if self.hooks.active() else 'idle',
                 '我在听' if self.hooks.active() else '回答已完成 · 麦克风关闭',
