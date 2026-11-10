@@ -18,7 +18,7 @@ class ProcessLease:
         fd = os.open(self.path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:
             info = os.fstat(fd)
-            if info.st_uid != os.getuid() or not stat.S_ISREG(info.st_mode):
+            if info.st_uid != os.getuid() or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
                 raise OSError('Unsafe process lease')
             os.fchmod(fd, 0o600)
             fcntl.flock(fd, fcntl.LOCK_EX | (0 if self.blocking else fcntl.LOCK_NB))

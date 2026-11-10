@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "release_id": "camera-route-checks-20261110.1",
+  "release_id": "login-recovery-receipt-20261110.1",
   "backend": {
-    "version": "0.16.25"
+    "version": "0.16.26"
   },
   "assistant": {
     "version": "0.9.97",

@@ -478,6 +478,11 @@ def main():
         from check_camera_routes import main as camera_routes_main
 
         return camera_routes_main(sys.argv[2:])
+
+    if sys.argv[1:2] == ['verify-login']:
+        from check_login import main as login_main
+
+        return login_main(sys.argv[2:])
     if sys.argv[1:2] == ['audit-device-suite']:
         from audit_device_suite import main as device_audit_main
 
@@ -559,6 +564,7 @@ def main():
     commands.add_parser(
         'verify-service', help='Plan or explicitly check managed backend crash recovery'
     )
+    commands.add_parser('verify-login', help='Plan or explicitly arm one passive post-login check')
     commands.add_parser(
         'upgrade',
         help='Offline source checks, explicit settings backup and restore staging; never deploys',
