@@ -39,6 +39,18 @@ public class SourceCheck {
  s=new SourcesPresentation(new JSONArray(page),"now","search_response",4,9);
  yes(s.at(0).label().contains("正文未核实")&&s.at(0).label().contains("来源标注日期：来源称 3 天前"),"operation or relative date promoted");
  yes(s.heading().startsWith("检索返回时间"),"actual search timestamp lost basis");
+ JSONObject read=new JSONObject("title","已读取页面","url",url,"access_evidence","page_body_received",
+  "observed_at","2026-11-10T20:00:00+08:00","page_bytes",577,"page_excerpt","实际页面文本",
+  "page_dates","2026-11-10；2026-11-09","final_url","https://other.example/final");
+ s=new SourcesPresentation(new JSONArray(read),"now","answer_completed",4,9);
+ yes(s.at(0).summary().contains("HTTP 页面已读取，事实仍需核对"),"HTTP receipt became fact verification or was hidden");
+ yes(s.at(0).label().contains("实际页面文本")&&s.at(0).label().contains("事件日期未知")&&s.at(0).label().contains("https://other.example/final"),"real text, unknown event date or redirect receipt lost");
+ read.data.put("page_excerpt","mutated");read.data.put("page_dates","mutated");
+ yes(!s.at(0).label().contains("mutated"),"mutable page data rewrote the source view");
+ read.data.put("page_bytes",true);
+ yes(!new SourcesPresentation(new JSONArray(read),"","",4,9).at(0).summary().contains("HTTP 页面已读取"),"malformed page receipt promoted");
+ read.data.put("page_bytes",577);read.data.put("page_details_limited",true);
+ yes(new SourcesPresentation(new JSONArray(read),"","",4,9).at(0).label().contains("受传输大小限制"),"omitted details were concealed");
  for(String bad:new String[]{"javascript:alert(1)","http://localhost/a","https://user:secret@example.com/a","https://127.0.0.1/a","https://0177.0.0.1/a","https://127.1/a","https://0x7f.0.0.1/a","https://[::ffff:127.0.0.1]/a","https://10.0.0.1/a","https://169.254.1.1/a","https://machine.local/a","https://machine.local./a","https://example.com:22/a","https://example.com/a b"})
   yes(!SourcesPresentation.safeUrl(bad),"unsafe URL accepted: "+bad);
  Object[] many=new Object[20];java.util.Arrays.fill(many,page);

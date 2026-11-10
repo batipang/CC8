@@ -1,6 +1,7 @@
 """No model citation, URL date or incomplete web action can invent verification."""
 
 import unittest
+import json
 
 from web_evidence import WebEvidence
 from dot_client import DotBrain
@@ -30,6 +31,79 @@ class WebEvidenceTests(unittest.TestCase):
         self.assertEqual(row['access_evidence'], 'answer_link_only')
         self.assertEqual((row['published_at'], row['event_at'], row['observed_at']), ('', '', ''))
         self.assertIs(row['body_verified'], False)
+
+    def page(self, **extra):
+        return dict(
+            ok=True,
+            url=self.url,
+            final_url=self.url,
+            text='Actual source text',
+            publication_labels=['2026-11-10'],
+            received_bytes=123,
+            http_status=200,
+            facts_verified=False,
+            untrusted_page=True,
+            **extra,
+        )
+
+    def test_actual_reader_receipt_exposes_text_and_labels_without_verifying_facts(self):
+        receipt = self.page()
+        self.evidence.page(receipt)
+        receipt['text'] = 'Mutated after receipt'
+        receipt['publication_labels'].append('mutated')
+        row = self.sources()[0]
+        self.assertEqual(row['access_evidence'], 'page_body_received')
+        self.assertEqual(row['page_excerpt'], 'Actual source text')
+        self.assertEqual(row['page_dates'], '2026-11-10')
+        self.assertEqual(row['published_at'], '')
+        self.assertIs(row['body_verified'], False)
+        self.assertEqual(row['event_at'], '')
+
+    def test_redirect_final_citation_is_bound_to_the_original_real_read(self):
+        receipt = self.page()
+        receipt['final_url'] = 'https://other.example/final'
+        self.evidence.page(receipt)
+        row = self.evidence.sources([dict(title='Final', url=receipt['final_url'])])[0]
+        self.assertEqual(row['access_evidence'], 'page_body_received')
+
+    def test_model_links_and_malformed_reader_data_cannot_manufacture_body_evidence(self):
+        for field, value in [
+            ('facts_verified', True),
+            ('received_bytes', True),
+            ('received_bytes', 1048577),
+            ('http_status', 302),
+            ('final_url', 'http://127.0.0.1'),
+            ('text', ''),
+            ('publication_labels', [5]),
+        ]:
+            receipt = self.page()
+            receipt[field] = value
+            self.evidence.page(receipt)
+        self.assertEqual(self.sources()[0]['access_evidence'], 'answer_link_only')
+
+    def test_later_failed_read_does_not_keep_the_old_success_label(self):
+        self.evidence.page(self.page())
+        self.evidence.page(dict(ok=False, url=self.url, error='http_error'))
+        row = self.sources()[0]
+        self.assertEqual(row['access_evidence'], 'page_fetch_failed')
+        self.assertEqual(row['page_excerpt'], '')
+
+    def test_unicode_large_source_metadata_cannot_overflow_authenticated_packets(self):
+        links = []
+        for i in range(6):
+            url = 'https://example.com/' + str(i) + '\U0001f600' * 2000
+            links.append(dict(title='\U0001f600' * 160, url=url))
+            receipt = self.page()
+            receipt.update(
+                url=url,
+                final_url=url,
+                text='\U0001f600' * 20000,
+                publication_labels=['\U0001f600' * 64] * 8,
+            )
+            self.evidence.page(receipt)
+        rows = self.evidence.sources(links)
+        self.assertLessEqual(len(json.dumps(rows, ensure_ascii=False).encode()), 56000)
+        self.assertTrue(any(row.get('page_details_limited') for row in rows))
 
     def test_completed_page_action_has_receipt_time_without_inventing_body_or_dates(self):
         self.evidence.completed(self.action())
