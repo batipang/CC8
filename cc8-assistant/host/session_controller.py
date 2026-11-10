@@ -225,10 +225,16 @@ class SessionController:
                 self.pending_screen_event = 'screen_sleep'
                 self.flush_screen_event()
 
-    def submit_text(self, text, *, result_id=None, result_restart=False, corrected=False):
+    def submit_text(
+        self, text, *, result_id=None, result_restart=False, corrected=False, _job_factory=None
+    ):
         text = validate_request_text(text, 6000)
         if type(corrected) is not bool or corrected and result_id is not None:
             raise ValueError('Invalid corrected input mode')
+        if _job_factory is not None and (
+            not callable(_job_factory) or corrected or result_id is not None
+        ):
+            raise ValueError('Invalid trusted text work factory')
         if result_id is not None:
             result_ident(result_id)
             if type(result_restart) is not bool:
@@ -281,11 +287,24 @@ class SessionController:
                 if self.connection is None:
                     raise RuntimeError('Text request unavailable')
                 stage = 'runtime'
-                self.hooks.enqueue_response(
-                    (CorrectedReply if corrected else TextReply)(generation, text)
-                    if result_id is None
-                    else ResultRead(generation, text, result_id, result_restart)
+                job = (
+                    _job_factory(generation)
+                    if _job_factory is not None
+                    else (
+                        (CorrectedReply if corrected else TextReply)(generation, text)
+                        if result_id is None
+                        else ResultRead(generation, text, result_id, result_restart)
+                    )
                 )
+                if (
+                    not isinstance(job, TextReply)
+                    or job.generation != generation
+                    or job.text != text
+                ):
+                    raise ValueError('Invalid trusted response job')
+                if not current():
+                    return superseded()
+                self.hooks.enqueue_response(job)
                 if not current():
                     return superseded()
             except Exception as error:
@@ -376,6 +395,7 @@ class SessionController:
             if reason == 'transport_switch' and was_playing and not self.hooks.calibration().active:
                 self.playback_interrupted_by_transport = True
             self.hooks.announcements().invalidate()
+            self.hooks.invalidate_workflows(reason)
             self.text_generation = None
             self.hooks.visual().invalidate(
                 reason=reason, new_generation=generation, capture_owner=self.capture_owner()

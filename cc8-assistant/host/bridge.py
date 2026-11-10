@@ -129,6 +129,7 @@ class Bridge:
         self.saved_tasks = components.saved_tasks
         self.preferences = components.preferences
         self.vocabulary = components.vocabulary
+        self.workflows = components.workflows
         if isinstance(self.brain, BrainRouter):
             self.brain.preferences = self.preferences
             self.brain.work_reports = self.chats.voice
@@ -213,6 +214,7 @@ class Bridge:
         scheduler = self.chats.watch_ui.scheduler
         if scheduler is not None:
             scheduler.tick()
+        self.workflows.scheduler.tick()
         return result
 
     def control_device(self, action, percent=None):

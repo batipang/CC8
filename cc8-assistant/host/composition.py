@@ -44,6 +44,9 @@ from preference_memory import PreferenceMemory
 from preference_controller import PreferenceController, PreferenceHooks
 from recognition_vocabulary import VocabularyStore
 from vocabulary_controller import VocabularyController, VocabularyHooks
+from workflow_store import WorkflowStore
+from workflow_controller import WorkflowController, WorkflowHooks
+from workflow_scheduler import ScheduleHooks
 
 if TYPE_CHECKING:
     from bridge import Bridge
@@ -66,6 +69,7 @@ class Components:
     saved_tasks: SavedTaskController
     preferences: PreferenceController
     vocabulary: VocabularyController
+    workflows: WorkflowController
 
 
 def voice_busy(host: Bridge) -> bool:
@@ -418,6 +422,82 @@ def build_components(
         if vocabulary_store is not None
         else VocabularyStore(private_directory() / 'recognition-vocabulary.json'),
     )
+    workflows = WorkflowController(
+        WorkflowHooks(
+            lock=host.session.guard,
+            owner=lambda: (
+                (
+                    host.session.connection,
+                    host.session.bound_route_token,
+                    host.session.generation,
+                    host.brain,
+                    getattr(host.brain, 'selected', None),
+                )
+                if host.session.connection is not None
+                else None
+            ),
+            idle=lambda: (
+                not host.session.active
+                and host.session.text_generation is None
+                and not voice_busy(host)
+                and not host.chats.busy
+                and host.reminders.job is None
+            ),
+            valid=host.valid,
+            source=lambda: host.chats.report_context_source(),
+            brain=lambda: host.brain,
+            read_report=lambda source, period, current: host.chats.read_workflow_report(
+                source, period, current
+            ),
+            source_current=lambda source: host.chats.scope_current(source),
+            submit=lambda run, nonce, config_hash: host.session.submit_text(
+                '运行流程：' + run.flow['name'],
+                _job_factory=lambda generation: host.workflows.bind(
+                    run, generation, nonce, config_hash
+                ),
+            ),
+            cancel=lambda reason: host.cancel(reason),
+            capture=lambda generation, nonce, current: host.visual.capture_workflow(
+                generation, nonce, current
+            ),
+            workspace=lambda: host.workspace,
+            reading=lambda: host.response.reading,
+            diagnostics=lambda: host.diagnostics,
+            speak=lambda text, generation: host.speak(text, generation),
+            event=lambda name, **fields: host.event(name, **fields),
+            publish_workspace=lambda: host.publish_workspace(),
+            status=host.status,
+            active=lambda: host.session.active,
+        ),
+        WorkflowStore(private_directory() / 'workflows.json'),
+    )
+    workflows.bind_scheduler(
+        ScheduleHooks(
+            lock=host.session.guard,
+            owner=lambda: (
+                (
+                    host.session.connection,
+                    host.session.bound_route_token,
+                    host.brain,
+                    getattr(host.brain, 'selected', None),
+                )
+                if host.session.connection is not None
+                else None
+            ),
+            activation=lambda: host.session.capture_id if host.session.active else None,
+            blocked=lambda: automation_active(private_directory() / 'automation-test.lock'),
+            ready=lambda: (
+                not voice_busy(host)
+                and host.session.text_generation is None
+                and not host.chats.busy
+                and host.reminders.job is None
+                and not quiet(host.workspace.reminder_policy, host.workspace.now())
+                and host.response.corrections.draft is None
+            ),
+            submit=workflows.submit_scheduled,
+            error=lambda kind: host.log('workflow_schedule_error', error_type=kind),
+        )
+    )
     reporting = StatusReporter(
         ReportingHooks(
             session=lambda: host.session.snapshot(),
@@ -460,6 +540,7 @@ def build_components(
         saved_tasks,
         preferences,
         vocabulary,
+        workflows,
     )
 
 
@@ -486,6 +567,7 @@ def build_device_events(host: Bridge) -> DeviceEventRouter:
         correction_action=lambda data: host.response.request_correction(data),
         preference_action=lambda data: host.preferences.request(data),
         vocabulary_action=lambda data: host.vocabulary.request(data),
+        workflow_action=lambda data: host.workflows.request(data),
     )
 
 
@@ -527,6 +609,7 @@ def build_session(host: Bridge, *, capture_frontend: str = 'mono') -> SessionCon
             discard_corrections=lambda preserve: host.response.clear_corrections(
                 preserve_source=preserve, publish=False
             ),
+            invalidate_workflows=lambda reason: host.workflows.invalidate(reason),
         ),
         capture_frontend=capture_frontend,
     )

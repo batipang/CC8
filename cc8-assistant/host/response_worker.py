@@ -16,7 +16,15 @@ from diagnostics import ROUTE_COMPLETION_STAGES, TraceBook, error_kind
 from failure_feedback import FailureSink, feedback
 from dot_receipt import UnconfirmedTurnStart
 from operation_failure import OperationFailure, KINDS
-from reply_types import Reply, TextReply, VisualReply, BrainPreparation, ResultRead, CorrectedReply
+from reply_types import (
+    Reply,
+    TextReply,
+    VisualReply,
+    BrainPreparation,
+    ResultRead,
+    CorrectedReply,
+    WorkflowReply,
+)
 from speech_correction import (
     SpeechCorrection,
     CorrectionUnavailable,
@@ -55,6 +63,7 @@ class ResponseHooks:
     correction_owner: Callable[[], tuple | None] = lambda: None
     submit_corrected: Callable[[str], object] | None = None
     cancel_correction: Callable[[], object] = lambda: None
+    run_workflow: Callable[[WorkflowReply], None] | None = None
 
 
 class ResponseWorker:
@@ -384,6 +393,10 @@ class ResponseWorker:
         try:
             if type(job) is Reply and self.handle_correction_voice(job):
                 pass
+            elif isinstance(job, WorkflowReply):
+                if self.hooks.run_workflow is None:
+                    raise RuntimeError('Workflow executor unavailable')
+                self.hooks.run_workflow(job)
             elif isinstance(job, ResultRead):
                 self.read_result(job.result_id, job.restart, job.generation)
             elif isinstance(job, VisualReply):

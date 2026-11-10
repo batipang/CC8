@@ -666,7 +666,17 @@ class MiniMaxBrain:
             characters=len(all_text),
             web_results=len(items),
             retrieved_at=retrieved,
+            completed=True,
         )
+        if on_web:
+            on_web(
+                'dot_result',
+                {
+                    'text': all_text[:10000],
+                    'truncated': len(all_text) > 10000,
+                    'handoff_source_title': '',
+                },
+            )
 
     def reply(self, text, history):
         return ''.join(self.clauses(text, history))
