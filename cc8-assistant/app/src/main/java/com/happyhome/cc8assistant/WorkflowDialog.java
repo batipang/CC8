@@ -101,7 +101,7 @@ final class WorkflowDialog {
     pendingCamera = !data.optString("camera_nonce").isEmpty();
     final String id = pending;
     show(
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("工作流程")
             .setMessage("正在核对。关闭等待不会撤回已提交的操作；未确认时请重新查看，不会自动重试。运行中的流程可用主界面的停止按钮打断。")
             .setNegativeButton("关闭等待", (d, n) -> close())
@@ -225,7 +225,7 @@ final class WorkflowDialog {
     labels[rows.length()] = "最近一次运行与单步结果";
     final long owner = epoch + 1;
     show(
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("工作流程 · " + rows.length() + "/8")
             .setItems(
                 labels,
@@ -268,7 +268,7 @@ final class WorkflowDialog {
   private void detail(JSONObject flow, int revision) {
     final long owner = epoch + 1;
     show(
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle(flow.optString("name"))
             .setItems(
                 new String[] {
@@ -282,7 +282,7 @@ final class WorkflowDialog {
                   } else if (n == 1) {
                     final long viewOwner = epoch + 1;
                     show(
-                        new AlertDialog.Builder(activity)
+                        new LargeDialogBuilder(activity)
                             .setTitle(flow.optString("name"))
                             .setMessage(WorkflowModel.describe(flow))
                             .setPositiveButton(
@@ -331,7 +331,7 @@ final class WorkflowDialog {
       String action, String id, int revision, String message, JSONObject body) {
     final long owner = epoch + 1;
     show(
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("确认修改流程")
             .setMessage(message + "\n请先暂停语音，等待任务和播报结束。")
             .setPositiveButton(
@@ -367,7 +367,7 @@ final class WorkflowDialog {
     String id = offer.optString("id");
     final long owner = epoch + 1;
     show(
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle(camera ? "确认本次取景并运行" : "确认运行一次")
             .setMessage(
                 WorkflowModel.describe(flow)
@@ -407,7 +407,7 @@ final class WorkflowDialog {
               + WorkflowModel.stateName(steps.optJSONObject(i).optString("state"));
     final long owner = epoch + 1;
     show(
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle(
                 run.optString("name") + " · " + WorkflowModel.stateName(run.optString("state")))
             .setItems(
@@ -464,7 +464,7 @@ final class WorkflowDialog {
     final String body = text;
     final long owner = epoch + 1;
     show(
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle(
                 row.optString("title") + " · " + WorkflowModel.stateName(row.optString("state")))
             .setMessage(body)
@@ -517,7 +517,7 @@ final class WorkflowDialog {
     }
     final long owner = epoch + 1;
     show(
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("定时记录与管理")
             .setMessage(text.toString())
             .setPositiveButton(

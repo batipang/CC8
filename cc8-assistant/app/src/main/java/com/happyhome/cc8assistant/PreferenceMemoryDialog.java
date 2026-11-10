@@ -66,7 +66,7 @@ final class PreferenceMemoryDialog {
     pending = id;
     pendingRoute = route;
     dialog =
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("偏好记忆")
             .setMessage("正在核对 Mac 本机记录。关闭等待不会撤销已提交的修改；状态未确认时请刷新，不会自动重试。")
             .setNegativeButton("关闭等待", (d, n) -> close())
@@ -124,7 +124,7 @@ final class PreferenceMemoryDialog {
     }
     int revision = state.optInt("revision", -1);
     AlertDialog.Builder builder =
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle(
                 "偏好记忆 · "
                     + (state.optBoolean("enabled") ? "已开启" : "已关闭")
@@ -145,7 +145,7 @@ final class PreferenceMemoryDialog {
     if (item == null || !available(route)) return;
     close();
     dialog =
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle(item.optString("key"))
             .setMessage(
                 item.optString("value")
@@ -173,7 +173,7 @@ final class PreferenceMemoryDialog {
     int revision = state.optInt("revision", -1);
     boolean enabled = state.optBoolean("enabled");
     dialog =
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("记忆设置")
             .setMessage(
                 "本机独立保存最多24条明确偏好。开启后会随新问题交给所选模型；关闭保留记录，但不再注入。修改会更新独立语音上下文，原桌面聊天和权限不变。删除无法同步清除第三方聊天历史。")
@@ -189,7 +189,7 @@ final class PreferenceMemoryDialog {
                 (d, n) -> {
                   close();
                   dialog =
-                      new AlertDialog.Builder(activity)
+                      new LargeDialogBuilder(activity)
                           .setTitle("清空全部偏好？")
                           .setMessage("仅清空大黄蜂在这台 Mac 的偏好库，不能撤回已发送给模型的文字。")
                           .setPositiveButton(
@@ -210,12 +210,12 @@ final class PreferenceMemoryDialog {
     form.setOrientation(LinearLayout.VERTICAL);
     form.setPadding(24, 16, 24, 16);
     EditText key = new EditText(activity);
-    key.setTextSize(22);
+    key.setTextSize(26);
     key.setHint("偏好名称，例如称呼");
     key.setSingleLine(true);
     key.setFilters(new InputFilter[] {new InputFilter.LengthFilter(40)});
     EditText value = new EditText(activity);
-    value.setTextSize(22);
+    value.setTextSize(26);
     value.setHint("内容，例如老王；开启后会提供给模型");
     value.setMinLines(2);
     value.setFilters(new InputFilter[] {new InputFilter.LengthFilter(200)});
@@ -230,7 +230,7 @@ final class PreferenceMemoryDialog {
     ScrollView scroll = new ScrollView(activity);
     scroll.addView(form);
     AlertDialog editor =
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("明确保存偏好")
             .setView(scroll)
             .setPositiveButton("保存", null)

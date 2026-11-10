@@ -36,8 +36,8 @@ def stubs():
     result['android/content/ClipData.java'] = (
         'package android.content;public class ClipData{public static ClipData newPlainText(String a,String b){return new ClipData();}}'
     )
-    result['android/R.java'] = (
-        'package android;public class R{public static class layout{public static int simple_spinner_dropdown_item=1;}}'
+    result['com/happyhome/cc8assistant/R.java'] = (
+        'package com.happyhome.cc8assistant;public class R{public static class layout{public static int dialog_spinner_item=1;}}'
     )
     result['android/widget/ArrayAdapter.java'] = (
         'package android.widget;public class ArrayAdapter<T>{public ArrayAdapter(android.content.Context c,int n,T[] values){}}'

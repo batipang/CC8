@@ -41,7 +41,7 @@ final class RecognitionEnvironmentDialog {
     content.setOrientation(LinearLayout.VERTICAL);
     content.setPadding(24, 12, 24, 12);
     TextView help = new TextView(activity);
-    help.setTextSize(22);
+    help.setTextSize(26);
     help.setText(
         "先暂停语音，等任务和播报结束后应用。普通保持原来的灵敏度；安静更容易接收轻声，也更容易被微小声音触发。电视背景更严格，轻声或远处讲话可能漏掉。\n"
             + "这不是说话人识别，不能保证排除电视人声。保留回声与停止指令门控，识别原文不改写。仅本次 Mac 服务有效，重启恢复普通；应用不会开启麦克风。");
@@ -53,7 +53,7 @@ final class RecognitionEnvironmentDialog {
     for (int i = 0; i < values.length; i++) {
       RadioButton button = new RadioButton(activity);
       button.setId(ids[i]);
-      button.setTextSize(24);
+      button.setTextSize(26);
       button.setText(labels[i]);
       group.addView(button);
       if (values[i].equals(current.optString("environment_profile"))) group.check(ids[i]);
@@ -62,7 +62,7 @@ final class RecognitionEnvironmentDialog {
     ScrollView scroll = new ScrollView(activity);
     scroll.addView(content);
     AlertDialog editor =
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("听音环境")
             .setView(scroll)
             .setNegativeButton("取消", null)

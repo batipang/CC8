@@ -155,7 +155,7 @@ final class ReportSourcesDialog {
     action = arguments.optString("action");
     final String ident = pending;
     show(
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("工作汇报来源")
             .setMessage("正在核对。未确认的修改请刷新查看，不会自动重试。")
             .setNegativeButton("关闭等待", (d, n) -> close())
@@ -223,7 +223,7 @@ final class ReportSourcesDialog {
       final String text = (String) body;
       final long owner = epoch + 1;
       show(
-          new AlertDialog.Builder(activity)
+          new LargeDialogBuilder(activity)
               .setTitle("原聊天待办 · 只读")
               .setMessage(text)
               .setNegativeButton("关闭", null)
@@ -271,7 +271,7 @@ final class ReportSourcesDialog {
     for (int i = 0; i < labels.length; i++)
       labels[i] = value.sources.get(i).title + " · " + value.sources.get(i).project;
     AlertDialog.Builder builder =
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("已登记来源 · " + labels.length + "/8")
             .setPositiveButton(
                 "添加来源",
@@ -332,7 +332,7 @@ final class ReportSourcesDialog {
       labels[i] = frozen.get(i).title + " · " + frozen.get(i).project;
     final long owner = epoch + 1;
     AlertDialog.Builder builder =
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("选择登记来源 · 只读元数据")
             .setItems(
                 labels,
@@ -367,7 +367,7 @@ final class ReportSourcesDialog {
   private void register(Snapshot value, Source item) {
     final long owner = epoch + 1;
     show(
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("登记：" + item.title)
             .setMessage(
                 "仅保存名称、项目简称和聊天标识，最多8个，保留至手动删除。不会读取正文、启动模型或追加原聊天；只有明确请求汇报或查看待办队列才读取所选来源。\n\n"
@@ -387,7 +387,7 @@ final class ReportSourcesDialog {
   private void remove(Snapshot value, Source item) {
     final long owner = epoch + 1;
     AlertDialog.Builder builder =
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle(item.title + " · 本机 Codex")
             .setMessage("项目：" + item.project + "\n只删除本机来源登记，不删除原聊天。\n\n" + changeNotice())
             .setPositiveButton(
@@ -425,7 +425,7 @@ final class ReportSourcesDialog {
         "补播进度：明确保存／恢复");
     if (watchAvailable) labels.add("定时工作进展提示");
     show(
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("工作汇报范围")
             .setItems(
                 labels.toArray(new String[0]),
@@ -456,7 +456,7 @@ final class ReportSourcesDialog {
     final long owner = epoch + 1;
     String[] periods = {"half_hour", "two_hours", "today"};
     show(
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("读取当前汇报范围 · 北京时间")
             .setItems(
                 new String[] {"过去半小时", "过去两小时", "今天"},
@@ -473,7 +473,7 @@ final class ReportSourcesDialog {
   private void clear(Snapshot value) {
     final long owner = epoch + 1;
     show(
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("清空本机来源登记？")
             .setMessage("只清除来源元数据，原聊天和任务保持。\n\n" + changeNotice())
             .setPositiveButton(
@@ -528,7 +528,7 @@ final class ReportSourcesDialog {
             : -1;
     final long owner = epoch + 1;
     AlertDialog.Builder builder =
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("工作汇报 · 当前范围只读快照")
             .setMessage(page.text)
             .setNegativeButton("关闭", null);
@@ -553,7 +553,7 @@ final class ReportSourcesDialog {
             if (!live(owner, null)) return;
             final long menu = epoch + 1;
             show(
-                new AlertDialog.Builder(activity)
+                new LargeDialogBuilder(activity)
                     .setTitle("汇报页面操作")
                     .setItems(
                         new String[] {"上一页", "保存完整快照"},
@@ -573,7 +573,7 @@ final class ReportSourcesDialog {
   private void confirmSave(String id, int revision) {
     final long owner = epoch + 1;
     show(
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("保存本次工作汇报？")
             .setMessage(
                 "只保存本次汇报的摘录、来源标识、完成时间和覆盖提示，不保存完整聊天或录音。最多16份、总计256KiB，保留至手动删除，不自动淘汰。重启只供查看，不恢复语音编号、已播账本、自动播报或原任务。请先暂停语音。")
@@ -639,7 +639,7 @@ final class ReportSourcesDialog {
     final String savedId = data.optString("saved_id");
     final long owner = epoch + 1;
     AlertDialog.Builder builder =
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("已保存汇报 · " + ids.size() + "/16")
             .setNegativeButton("关闭", null);
     if ("saved_report".equals(data.optString("action"))) {
@@ -676,7 +676,7 @@ final class ReportSourcesDialog {
               if (!live(owner, null)) return;
               final long menu = epoch + 1;
               show(
-                  new AlertDialog.Builder(activity)
+                  new LargeDialogBuilder(activity)
                       .setTitle("历史快照操作")
                       .setItems(
                           new String[] {"上一页", "复制本页", "复制完整快照", "删除快照"},
@@ -723,7 +723,7 @@ final class ReportSourcesDialog {
   private void confirmArchiveDelete(String id, int revision) {
     final long owner = epoch + 1;
     show(
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle(id.isEmpty() ? "清空已保存汇报？" : "删除本份汇报快照？")
             .setMessage("只删除本机保存的汇报摘录和索引，不删除来源登记、原聊天或任务。请先暂停语音；未确认时刷新查看，不自动重试。")
             .setPositiveButton(
@@ -794,7 +794,7 @@ final class ReportSourcesDialog {
     }
     final long owner = epoch + 1;
     AlertDialog.Builder builder =
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("补播进度 · " + ids.size() + "/8")
             .setNegativeButton("关闭", null);
     if (completed.equals("progress_checkpoint")) {
@@ -872,7 +872,7 @@ final class ReportSourcesDialog {
   private void confirmProgress(String action, String id, int revision, String text) {
     final long owner = epoch + 1;
     show(
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("确认修改补播进度？")
             .setMessage(text + "\n\n请先暂停语音。未确认时重新查看，不自动重试。")
             .setPositiveButton(

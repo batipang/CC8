@@ -28,7 +28,7 @@ final class SpeechCorrectionDialog {
     close();
     if (!Boolean.TRUE.equals(state.opt("pending"))) return;
     TextView content = new TextView(activity);
-    content.setTextSize(24);
+    content.setTextSize(26);
     content.setPadding(24, 16, 24, 16);
     content.setText(
         "原问题：\n"
@@ -41,7 +41,7 @@ final class SpeechCorrectionDialog {
     ScrollView scroll = new ScrollView(activity);
     scroll.addView(content);
     AlertDialog created =
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("更正草稿 · 尚未提交")
             .setView(scroll)
             .setNegativeButton("撤回更正", null)

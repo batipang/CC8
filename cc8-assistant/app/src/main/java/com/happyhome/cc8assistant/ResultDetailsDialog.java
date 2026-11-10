@@ -83,7 +83,7 @@ final class ResultDetailsDialog {
       }
     TextView text = new TextView(activity);
     text.setText(body.toString());
-    text.setTextSize(22);
+    text.setTextSize(26);
     text.setTextIsSelectable(true);
     text.setPadding(24, 18, 24, 18);
     LinearLayout content = new LinearLayout(activity);
@@ -92,12 +92,13 @@ final class ResultDetailsDialog {
     if (files != null && files.length() > 0 && session.supportsResultProvenance()) {
       Button locate = new Button(activity);
       locate.setText("在 Mac 定位文件");
+      locate.setTextSize(24);
       locate.setOnClickListener(v -> chooseFile(record.optString("id"), files, saved, route));
       content.addView(locate);
     }
     ScrollView scroll = new ScrollView(activity);
     scroll.addView(content);
-    new AlertDialog.Builder(activity)
+    new LargeDialogBuilder(activity)
         .setTitle("来源与文件 · 实际回执")
         .setView(scroll)
         .setPositiveButton("关闭", null)
@@ -118,7 +119,7 @@ final class ResultDetailsDialog {
       JSONObject file = files.optJSONObject(i);
       names[i] = file == null ? "未确认文件" : file.optString("path");
     }
-    new AlertDialog.Builder(activity)
+    new LargeDialogBuilder(activity)
         .setTitle("选择文件 · 仅在 Finder 定位")
         .setItems(
             names,
@@ -148,7 +149,7 @@ final class ResultDetailsDialog {
     pendingRoute = route;
     String requestId = pending;
     progress =
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("正在 Mac 定位文件")
             .setMessage("仅定位，不打开文件内容。关闭等待不会撤销已经提交的定位；未确认时不会自动重试。")
             .setNegativeButton("关闭等待", (d, n) -> close())

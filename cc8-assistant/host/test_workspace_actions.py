@@ -17,6 +17,8 @@ SAVED = JAVA / 'SavedTasksDialog.java'
 # These interfaces only hold widget values/callbacks and record transport offers.
 # Task/reminder/save behavior comes from compiled production methods/classes.
 FIXTURES = {
+    'com/happyhome/cc8assistant/LargeDialogBuilder.java': 'package com.happyhome.cc8assistant;public class LargeDialogBuilder extends android.app.AlertDialog.Builder{public LargeDialogBuilder(android.app.Activity a){super(a);}}',
+    'com/happyhome/cc8assistant/R.java': 'package com.happyhome.cc8assistant;public class R{public static class layout{public static int dialog_spinner_item=1;}}',
     'org/json/JSONObject.java': r"""
 package org.json;
 public class JSONObject {

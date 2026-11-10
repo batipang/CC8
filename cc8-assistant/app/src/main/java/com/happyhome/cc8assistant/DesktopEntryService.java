@@ -55,7 +55,7 @@ public final class DesktopEntryService extends Service {
             : "桌面入口已关闭。开启后，返回桌面仍可一键打开助手。";
     if (!permitted(activity)) message += "\n\n需要允许显示在其他应用上层，才能显示悬浮按钮。通知入口仍可使用。";
     AlertDialog.Builder dialog =
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("大黄蜂桌面入口")
             .setMessage(message)
             .setPositiveButton(

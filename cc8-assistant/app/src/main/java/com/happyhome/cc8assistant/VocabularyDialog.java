@@ -77,7 +77,7 @@ final class VocabularyDialog {
     pending = id;
     pendingRoute = route;
     dialog =
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("用户词表")
             .setMessage("正在核对 Mac 词表。关闭等待不会撤销已提交的修改；未确认时请重新查看，不会自动重试。")
             .setNegativeButton("关闭等待", (d, n) -> close())
@@ -133,7 +133,7 @@ final class VocabularyDialog {
     String[] labels = new String[state.items.size()];
     for (int i = 0; i < labels.length; i++) labels[i] = state.items.get(i).term;
     AlertDialog.Builder builder =
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("用户词表 · " + labels.length + "/64 · 手动纠错参考")
             .setPositiveButton(
                 "新增词语",
@@ -169,7 +169,7 @@ final class VocabularyDialog {
     labels[item.aliases.size()] = "编辑误听写法";
     labels[item.aliases.size() + 1] = "删除这个词语";
     dialog =
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle(item.term + " · " + item.updatedAt)
             .setItems(
                 labels,
@@ -202,7 +202,7 @@ final class VocabularyDialog {
     close();
     final long owner = epoch;
     dialog =
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("用户词表说明")
             .setMessage(
                 "正确词与误听写法只保存在这台 Mac，最多64条，每条最多4个误听词，各40字。不自动采集聊天或录音，不作为模型记忆或工具授权。当前 MiniMax 没有已确认的热词参数，词表不会改善云端听写本身。\n\n使用：先开启语音说一个问题，在同一语音会话的两分钟内选一个误听词。只有原文中能唯一定位该完整词时才生成更正草稿；核对后明确确认才提交。关闭语音／Home／换线后请重新提问。")
@@ -213,7 +213,7 @@ final class VocabularyDialog {
                   close();
                   final long confirmation = epoch;
                   dialog =
-                      new AlertDialog.Builder(activity)
+                      new LargeDialogBuilder(activity)
                           .setTitle("清空本机用户词表？")
                           .setMessage("只删除本机词表，不修改原来的识别记录或已执行任务。")
                           .setPositiveButton(
@@ -239,12 +239,12 @@ final class VocabularyDialog {
     form.setPadding(24, 16, 24, 16);
     form.setFocusableInTouchMode(true);
     EditText term = new EditText(activity);
-    term.setTextSize(22);
+    term.setTextSize(26);
     term.setHint("正确词语，例如常州");
     term.setSingleLine(true);
     term.setFilters(new InputFilter[] {new InputFilter.LengthFilter(80)});
     EditText aliases = new EditText(activity);
-    aliases.setTextSize(22);
+    aliases.setTextSize(26);
     aliases.setHint("常见误听写法，一行一个，最多4个；可留空");
     aliases.setMinLines(4);
     aliases.setFilters(new InputFilter[] {new InputFilter.LengthFilter(324)});
@@ -258,7 +258,7 @@ final class VocabularyDialog {
     ScrollView scroll = new ScrollView(activity);
     scroll.addView(form);
     AlertDialog editor =
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("明确保存词语")
             .setView(scroll)
             .setPositiveButton("保存", null)

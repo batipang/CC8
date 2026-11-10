@@ -83,7 +83,7 @@ final class ReportWatchDialog {
     pendingPage = value.optInt("page");
     final String id = pending;
     show(
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("定时工作进展提示")
             .setMessage("正在核对；未确认的修改不会自动重试。")
             .setNegativeButton("关闭等待", (d, n) -> close())
@@ -156,7 +156,7 @@ final class ReportWatchDialog {
     final boolean summarySupported = Boolean.TRUE.equals(data.opt("watch_summary_supported"));
     final long owner = epoch + 1;
     AlertDialog.Builder builder =
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("定时工作进展提示")
             .setMessage((String) body)
             .setNegativeButton("关闭", null);
@@ -173,7 +173,7 @@ final class ReportWatchDialog {
             if (!live(owner)) return;
             final long menu = epoch + 1;
             show(
-                new AlertDialog.Builder(activity)
+                new LargeDialogBuilder(activity)
                     .setTitle("管理定时提示")
                     .setItems(
                         hasResults
@@ -208,7 +208,7 @@ final class ReportWatchDialog {
   private void showResult(String id, ReportTextPage page, int ttl) {
     final long owner = epoch + 1;
     AlertDialog.Builder builder =
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("最近定时检查 · " + (page.index + 1) + "/" + page.count)
             .setMessage(page.text)
             .setNegativeButton("关闭", null);
@@ -239,7 +239,7 @@ final class ReportWatchDialog {
     final long owner = epoch + 1;
     final int[] periods = {300, 900, 1800};
     show(
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("检查周期")
             .setItems(
                 new String[] {"每5分钟", "每15分钟", "每30分钟"},
@@ -254,7 +254,7 @@ final class ReportWatchDialog {
       String offer, String source, int revision, int period, boolean summarySupported) {
     final long owner = epoch + 1;
     show(
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("提示渠道")
             .setItems(
                 new String[] {"CC8播报", "Mac桌面通知"},
@@ -277,7 +277,7 @@ final class ReportWatchDialog {
   private void modes(String offer, String source, int revision, int period) {
     final long owner = epoch + 1;
     show(
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("CC8播报内容")
             .setItems(
                 new String[] {"只提示数量和来源", "朗读原答复摘要"},
@@ -325,7 +325,7 @@ final class ReportWatchDialog {
                 ? "暂停后不再检查或发送新提示；保留配置和提示索引，不取消原工作。"
                 : "只清除定时提示的配置和提示索引，不删除来源登记、历史快照、手动补播账本或原工作。";
     show(
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("确认修改定时提示？")
             .setMessage(text + "\n\n请先暂停语音。未确认时重新查看，不自动重试。")
             .setPositiveButton(

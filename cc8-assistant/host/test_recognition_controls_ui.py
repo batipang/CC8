@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 JAVA = ROOT / 'cc8-assistant/app/src/main/java/com/happyhome/cc8assistant'
 
 STUBS = {
+    'com/happyhome/cc8assistant/LargeDialogBuilder.java': 'package com.happyhome.cc8assistant;public class LargeDialogBuilder extends android.app.AlertDialog.Builder{public LargeDialogBuilder(android.app.Activity a){super(a);}}',
     'android/content/Context.java': 'package android.content;public class Context{}',
     'android/app/Activity.java': 'package android.app;public class Activity extends android.content.Context{}',
     'android/content/DialogInterface.java': """package android.content;public interface DialogInterface{

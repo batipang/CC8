@@ -38,7 +38,7 @@ final class SavedTasksDialog {
 
   void save(String id, long route) {
     if (!available(route)) return;
-    new AlertDialog.Builder(activity)
+    new LargeDialogBuilder(activity)
         .setTitle("保存这条任务结果？")
         .setMessage(
             "在这台 Mac 保存任务标题、结束状态与时间、最近五个步骤、最多 1600 字结果摘录，以及可用的会话来源和最多 8 条文件变更回执（含本机路径）。重启后可查看、复制、定位文件或删除记录；不保存录音或全部聊天。")
@@ -74,7 +74,7 @@ final class SavedTasksDialog {
     action = nextAction;
     String requestId = pending;
     progress =
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("已保存结果")
             .setMessage("正在处理…关闭等待不会撤销已经提交的保存或删除。")
             .setNegativeButton("关闭等待", (d, n) -> close())
@@ -117,7 +117,7 @@ final class SavedTasksDialog {
 
   private void showList(JSONArray items, long route) {
     if (items == null || items.length() == 0) {
-      new AlertDialog.Builder(activity)
+      new LargeDialogBuilder(activity)
           .setTitle("已保存结果")
           .setMessage("还没有保存的结果。请在任务详情中明确选择“保存结果”；日常任务不会自动保存。")
           .setPositiveButton("关闭", null)
@@ -130,7 +130,7 @@ final class SavedTasksDialog {
       labels[i] =
           item == null ? "保存记录" : label(item.optString("status")) + " · " + item.optString("title");
     }
-    new AlertDialog.Builder(activity)
+    new LargeDialogBuilder(activity)
         .setTitle("已保存结果 · Mac 本机")
         .setItems(
             labels,
@@ -166,7 +166,7 @@ final class SavedTasksDialog {
     body.append("\n\n结果摘录：\n").append(item.optString("result"));
     TextView detail = new TextView(activity);
     detail.setText(body.toString());
-    detail.setTextSize(22);
+    detail.setTextSize(26);
     detail.setTextIsSelectable(true);
     detail.setPadding(24, 18, 24, 18);
     LinearLayout content = new LinearLayout(activity);
@@ -175,12 +175,13 @@ final class SavedTasksDialog {
     if (item.optJSONObject("provenance") != null) {
       Button source = new Button(activity);
       source.setText("来源与文件");
+      source.setTextSize(24);
       source.setOnClickListener(v -> resultDetails.open(item, true, route));
       content.addView(source);
     }
     ScrollView scroll = new ScrollView(activity);
     scroll.addView(content);
-    new AlertDialog.Builder(activity)
+    new LargeDialogBuilder(activity)
         .setTitle(item.optString("title"))
         .setView(scroll)
         .setPositiveButton("关闭", null)
@@ -196,7 +197,7 @@ final class SavedTasksDialog {
         .setNegativeButton(
             "删除保存记录",
             (d, n) ->
-                new AlertDialog.Builder(activity)
+                new LargeDialogBuilder(activity)
                     .setTitle("删除这条保存记录？")
                     .setMessage("仅删除 Mac 上的这份结果快照，不撤销已执行操作，也不删除结果文件或桌面聊天。")
                     .setPositiveButton(
