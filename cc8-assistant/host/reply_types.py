@@ -45,6 +45,13 @@ class CorrectedReply(TextReply):
 
 
 @dataclass
+class WorkflowReply(TextReply):
+    """A frozen, explicitly confirmed workflow in the existing serial queue."""
+
+    run: object = field(default=None, repr=False)
+
+
+@dataclass
 class ResultRead(TextReply):
     result_id: str = ''
     restart: bool = False

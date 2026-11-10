@@ -115,6 +115,10 @@ def validate_device_event(value: object) -> JsonObject:
         from preference_protocol import validate_request
 
         validate_request(value)
+    if name == 'workflow_request':
+        from workflow_protocol import validate_request as validate_workflow_request
+
+        validate_workflow_request(value)
     if name == 'vocabulary_request':
         from recognition_vocabulary import validate_request as validate_vocabulary_request
 

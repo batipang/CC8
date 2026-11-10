@@ -9,11 +9,11 @@ import uuid
 
 from dot_handoff import Handoff
 from report_sources import ReportSources, ReportScope, ReportMember
-from report_archive import stamp, label
+from report_archive import stamp
 from report_archive_protocol import token, REVISION_LIMIT
 from reminder_store import ReminderStore, MAX_BYTES
 from report_progress import ReportProgress, Entry, key, version, MAX_RECORDS
-from source_identity import identifier
+from report_source_metadata import validate as validate_source_metadata
 from work_reports import ReportWindow, MAX_CARDS
 
 LIMIT = 8
@@ -72,40 +72,11 @@ def describe(source):
 
 
 def source_from(value):
-    if not isinstance(value, dict) or set(value) != {
-        'kind',
-        'source_id',
-        'source_title',
-        'members',
-    }:
-        raise ValueError('Invalid saved progress source')
-    identifier(value['source_id'])
-    label(value['source_title'])
+    validate_source_metadata(value)
     members = value['members']
-    if not isinstance(members, list) or len(members) > 8:
-        raise ValueError('Invalid saved progress members')
     if value['kind'] == 'selected' and not members:
         return Handoff(value['source_id'], value['source_title'], (), False)
-    if value['kind'] != 'registered' or not members:
-        raise ValueError('Invalid saved progress source kind')
-    ids, threads, result = set(), set(), []
-    for m in members:
-        if not isinstance(m, dict) or set(m) != {
-            'registration_id',
-            'thread_id',
-            'title',
-            'project',
-        }:
-            raise ValueError('Invalid saved progress member')
-        token(m['registration_id'], 16)
-        identifier(m['thread_id'])
-        label(m['title'])
-        label(m['project'])
-        if m['registration_id'] in ids or m['thread_id'] in threads:
-            raise ValueError('Duplicate saved progress member')
-        ids.add(m['registration_id'])
-        threads.add(m['thread_id'])
-        result.append(ReportMember(**m))
+    result = [ReportMember(**m) for m in members]
     return ReportScope(0, tuple(result), value['source_id'], value['source_title'])
 
 

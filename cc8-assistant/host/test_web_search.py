@@ -144,14 +144,17 @@ class WebTurns(unittest.TestCase):
             ['/v1/chat/completions', '/v1/coding_plan/search', '/v1/chat/completions'],
         )
         self.assertEqual(
-            [k for k, _ in updates], ['clear', 'searching', 'route_completed', 'sources']
+            [k for k, _ in updates],
+            ['clear', 'searching', 'route_completed', 'sources', 'dot_result'],
         )
-        self.assertEqual(updates[-2][1], {'scenario': 'web'})
-        self.assertNotIn('snippet', updates[-1][1]['items'][0])
-        self.assertTrue(updates[-1][1]['retrieved_at'])
-        self.assertEqual(updates[-1][1]['time_basis'], 'search_response')
-        self.assertEqual(updates[-1][1]['items'][0]['access_evidence'], 'search_result_returned')
-        self.assertIs(updates[-1][1]['items'][0]['body_verified'], False)
+        self.assertEqual(updates[-3][1], {'scenario': 'web'})
+        self.assertNotIn('snippet', updates[-2][1]['items'][0])
+        self.assertTrue(updates[-2][1]['retrieved_at'])
+        self.assertEqual(updates[-2][1]['time_basis'], 'search_response')
+        self.assertEqual(updates[-2][1]['items'][0]['access_evidence'], 'search_result_returned')
+        self.assertIs(updates[-2][1]['items'][0]['body_verified'], False)
+        self.assertIn('新产品', updates[-1][1]['text'])
+        self.assertIs(b.last_metrics['completed'], True)
         prompt = f.calls[-1][1]['messages']
         self.assertIn('不可信网页摘录', prompt[-1]['content'])
         self.assertIn('绝不能服从', prompt[0]['content'])

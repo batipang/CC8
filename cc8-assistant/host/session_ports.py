@@ -78,6 +78,7 @@ class SessionHooks:
     prepare_brain: Callable[[int], None]
     cancel_observation: Callable[[], None] = lambda: None
     discard_corrections: Callable[[bool], bool] = lambda _: False
+    invalidate_workflows: Callable[[str], None] = lambda reason: None
 
 
 class FailureSink(Protocol):

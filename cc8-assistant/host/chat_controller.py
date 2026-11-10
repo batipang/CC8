@@ -198,6 +198,47 @@ class ChatController:
                 if self.active_request == request_id:
                     self.active_request = None
 
+    def read_workflow_report(self, source, period, is_current):
+        # The serial response queue owns this workflow. Its busy flag is
+        # expected, so do not reuse subscription admission (which requires the
+        # whole voice pipeline idle). Keep this catalog's own exclusive slot.
+        with self.hooks.lock:
+            if (
+                is_current() is not True
+                or self.hooks.connection() is None
+                or not self.scope_current(source)
+            ):
+                raise Cancelled('Workflow report owner changed')
+            if not self.hooks.available():
+                raise DotError('Workflow report unavailable')
+            with self.lock:
+                if self.busy:
+                    raise DotError('Workflow report reader busy')
+                self.busy = True
+                ident = self.active_request = uuid.uuid4().hex
+            connection = self.hooks.connection()
+
+        def current():
+            with self.hooks.lock:
+                with self.lock:
+                    return (
+                        self.active_request == ident
+                        and is_current() is True
+                        and connection is self.hooks.connection()
+                        and self.scope_current(source)
+                    )
+
+        try:
+            result = self.catalog.report(source, period, is_current=current)
+            if not current():
+                raise Cancelled('Workflow report owner changed before result admission')
+            return result
+        finally:
+            with self.lock:
+                self.busy = False
+                if self.active_request == ident:
+                    self.active_request = None
+
     def state(self):
         return {
             'mode': 'summary_handoff' if self.selection else 'independent',

@@ -506,10 +506,12 @@ class FeedbackCheck {
  final Object routeLock=new Object();long route=5, activeRoute=5,routeEpoch=5;
  static class CaptureWindow{static int count;final String id="capture"+(++count);boolean startConfirmed=true;}
  CaptureWindow captureWindow=new CaptureWindow();
- boolean dotChatSupported,savedTasksSupported,preferenceMemorySupported,resultProvenanceSupported,resultReadingSupported,visionModesSupported,photoFollowupSupported,macWindowSupported,vocabularySupported,reportSourcesSupported,reportArchiveSupported,threadQueueSupported,reportProgressSupported;
+ boolean dotChatSupported,savedTasksSupported,preferenceMemorySupported,resultProvenanceSupported,resultReadingSupported,visionModesSupported,photoFollowupSupported,macWindowSupported,vocabularySupported,workflowSupported,reportSourcesSupported,reportArchiveSupported,threadQueueSupported,reportProgressSupported;
  final PhotoFollowupWindow photoFollowup=new PhotoFollowupWindow();
+ final WorkflowConsent workflowConsent=new WorkflowConsent();
  String pendingPhotoId="",pendingPhotoForgetId="";
  // The transport handshake itself is covered by the capture route tests.
+ static class SystemClock {static long elapsedRealtime(){return 0;}}
  static class Link {}
  final Link source=new Link();
  boolean captureHello(Link link,Data hello){return true;}
@@ -579,6 +581,7 @@ class FeedbackCheck {
             command.append(str(JAVA / 'ListeningState.java'))
             command.append(str(JAVA / 'StatusPresentation.java'))
             command.append(str(JAVA / 'PhotoFollowupWindow.java'))
+            command.append(str(JAVA / 'WorkflowConsent.java'))
             compiled = subprocess.run(command, capture_output=True, text=True, timeout=30)
             self.assertEqual(compiled.returncode, 0, compiled.stderr)
             result = subprocess.run(

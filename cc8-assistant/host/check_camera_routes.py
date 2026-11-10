@@ -120,6 +120,7 @@ def execute(runtime, selected):
                 'work-report-archive.json',
                 'work-report-progress.json',
                 'work-report-watch.json',
+                'workflows.json',
             )
         ]
         identities = [store_identity(path) for path in paths]

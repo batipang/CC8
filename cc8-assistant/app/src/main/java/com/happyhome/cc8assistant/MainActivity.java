@@ -52,6 +52,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   private RecognitionLanguageDialog recognitionLanguage;
   private RecognitionEnvironmentDialog recognitionEnvironment;
   private VocabularyDialog vocabulary;
+  private WorkflowDialog workflows;
   private AlertDialog imageQualityDialog;
   private boolean highDefinitionImage;
   private boolean reviewCapturedImage;
@@ -176,6 +177,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     recognitionLanguage = new RecognitionLanguageDialog(this, session);
     recognitionEnvironment = new RecognitionEnvironmentDialog(this, session);
     vocabulary = new VocabularyDialog(this, session);
+    workflows = new WorkflowDialog(this, session);
     resultDetails = new ResultDetailsDialog(this, session);
     savedTasks = new SavedTasksDialog(this, session, resultDetails);
     requestOpenVoice(getIntent());
@@ -1278,7 +1280,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
               "追问最近照片",
               "听音环境",
               "用户词表／选词纠错",
-              "工作汇报来源"
+              "工作汇报来源",
+              "工作流程／定时简报"
             },
             (d, n) -> {
               if (n == 0) {
@@ -1332,6 +1335,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
               else if (n == 16) recognitionEnvironment.open();
               else if (n == 17) vocabulary.open();
               else if (n == 18) reportSources.open();
+              else if (n == 19) workflows.open();
               else showReminderHistory();
             })
         .setNegativeButton("关闭", null)
@@ -1600,6 +1604,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   public void vision(boolean busy, String message, boolean preserveError) {
     runOnUiThread(
         () -> {
+          if (busy && workflows != null) workflows.close();
           if (!busy && eyes != null) eyes.cancel();
           if (visionButton != null) {
             visionButton.setText(busy ? "停止看图" : "看一看");
@@ -1827,6 +1832,15 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   }
 
   @Override
+  public void workflowResult(JSONObject data, long route) {
+    runOnUiThread(
+        () -> {
+          if (foreground && session.currentRoute(route) && workflows != null)
+            workflows.accept(data, route);
+        });
+  }
+
+  @Override
   public void speechCorrection(JSONObject data, long route) {
     runOnUiThread(
         () -> {
@@ -1933,7 +1947,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
       state(
           "idle",
           results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED
-              ? "摄像头已授权，请重新选择看图或识字"
+              ? "摄像头已授权，请重新确认看图、识字或取景流程"
               : "未获得摄像头权限，未采集图片");
     }
     if (request == 21) {
@@ -2021,6 +2035,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
             recognitionLanguage.close();
             recognitionEnvironment.close();
             vocabulary.close();
+            workflows.close();
             if (imageQualityDialog != null) imageQualityDialog.dismiss();
             savedTasks.close();
             resultDetails.close();
@@ -2282,6 +2297,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     if (recognitionLanguage != null) recognitionLanguage.close();
     if (recognitionEnvironment != null) recognitionEnvironment.close();
     if (vocabulary != null) vocabulary.close();
+    if (workflows != null) workflows.close();
     if (imageQualityDialog != null) imageQualityDialog.dismiss();
     if (savedTasks != null) savedTasks.close();
     if (resultDetails != null) resultDetails.close();

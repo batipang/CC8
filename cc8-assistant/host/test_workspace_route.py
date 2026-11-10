@@ -19,8 +19,9 @@ SESSION_INTERFACES = r"""
   final Object routeLock=new Object();
   SourcesPresentation sourcesPresentation;
   boolean foreground=true,recording,visual,announcement,textSession,receiverRegistered;
-  boolean dotChatSupported,savedTasksSupported,preferenceMemorySupported,resultProvenanceSupported,resultReadingSupported,visionModesSupported,photoFollowupSupported,macWindowSupported,vocabularySupported,reportSourcesSupported,reportArchiveSupported,threadQueueSupported,reportProgressSupported;
+  boolean dotChatSupported,savedTasksSupported,preferenceMemorySupported,resultProvenanceSupported,resultReadingSupported,visionModesSupported,photoFollowupSupported,macWindowSupported,vocabularySupported,workflowSupported,reportSourcesSupported,reportArchiveSupported,threadQueueSupported,reportProgressSupported;
   final PhotoFollowupWindow photoFollowup=new PhotoFollowupWindow();
+ final WorkflowConsent workflowConsent=new WorkflowConsent();
   String pendingPhotoId="",pendingPhotoForgetId="";
   JSONObject voicePreferences,speechCorrection;
   int speechCorrectionRevision=-1;
@@ -119,6 +120,9 @@ SESSION_INTERFACES = r"""
  void preferenceResult(JSONObject data,long route){preferenceReceipts++;}
  int vocabularyReceipts;
  void vocabularyResult(JSONObject data,long route){vocabularyReceipts++;}
+ int workflowReceipts;
+ void workflowResult(JSONObject data,long route){workflowReceipts++;}
+ void heard(String value){}
  void announcement(){}
  void captureRejected(int stoppedEpoch){}
  void playback(boolean active){}void caption(String value,String mood){}void state(String value,String message){}
@@ -586,6 +590,25 @@ SCENARIOS = r"""
     Link next=new Link("wifi");activate(c,next);yes(!s.setEnvironmentProfile("quiet",4,route),"old environment dialog wrote through handover");
     s.deliver(receipt,next);s.pause();yes(!s.setEnvironmentProfile("normal",4,s.routeEpoch)&&!s.recording,"Home retained settings or opened mic");break;
    }
+   case "workflow_camera":{
+    long route=s.routeEpoch;String nonce="d".repeat(32);SystemClock.now=100;
+    JSONObject value=new JSONObject("action","run","offer_id","e".repeat(32),"confirmed",true,"camera_nonce",nonce);
+    yes(!s.workflowRequest("a".repeat(32),value,route),"unsupported workflow accepted");s.workflowSupported=true;
+    value.values.put("event","session_start");yes(!s.workflowRequest("a".repeat(32),value,route),"workflow overrode reserved event");value.values.remove("event");
+    yes(s.workflowRequest("a".repeat(32),value,route)&&!s.recording,"explicit workflow not sent or opened mic");
+    s.deliver(new Wire.Packet(new JSONObject("event","vision_begin","origin","workflow","nonce",nonce)),old);yes(!s.visual,"unbound workflow opened camera");
+    s.deliver(new Wire.Packet(new JSONObject("event","text_begin","input_origin","workflow","workflow_camera_nonce",nonce,"text","运行流程")),old);
+    yes(s.textSession&&s.speakerOwner.forPlayback(7)!=null,"workflow text owner missing");
+    s.deliver(new Wire.Packet(new JSONObject("event","vision_begin","origin","workflow","nonce",nonce)),old);yes(s.visual,"matching workflow camera denied");
+    s.deliver(new Wire.Packet(new JSONObject("event","camera_capture","origin","workflow","nonce",nonce,"request_id","f".repeat(32))),old);
+    yes(c.cameraRequest!=null&&s.pendingVisionNonce.isEmpty(),"fresh nonce not consumed by camera");
+    s.deliver(new Wire.Packet(new JSONObject("event","vision_done","origin","workflow","result","completed")),old);
+    yes(!s.visual&&s.textSession&&s.speakerOwner.forPlayback(7)!=null,"camera completion lost workflow speaker ownership");
+    s.deliver(new Wire.Packet(new JSONObject("event","workflow_result")),old);yes(c.workflowReceipts==1,"workflow receipt missing");
+    Link next=new Link("wifi");activate(c,next);yes(!s.workflowSupported&&!s.workflowRequest("b".repeat(32),value,route),"handover retained workflow grant");
+    s.deliver(new Wire.Packet(new JSONObject("event","workflow_result")),old);yes(c.workflowReceipts==1,"old route workflow receipt reached UI");
+    s.workflowSupported=true;s.pause();yes(!s.workflowSupported,"Home retained workflow capability");break;
+   }
    case "vocabulary_request":{
     long route=s.routeEpoch;JSONObject argsValue=new JSONObject("action","list");int count=old.events.size();
     yes(!s.vocabularyRequest("a".repeat(32),argsValue,route),"unsupported vocabulary accepted");s.vocabularySupported=true;
@@ -812,6 +835,7 @@ class WorkspaceRouteTests(unittest.TestCase):
                 'boolean setRecognitionLanguage(',
                 'boolean setEnvironmentProfile(',
                 'boolean vocabularyRequest(',
+                'boolean workflowRequest(',
                 'boolean reportSourcesRequest(',
                 'boolean preferenceRequest(',
                 'private boolean sendWorkspace(',
@@ -869,6 +893,12 @@ class WorkspaceRouteTests(unittest.TestCase):
             + branch(session, 'preference_result')
             + '}else if("vocabulary_result".equals(event)){'
             + branch(session, 'vocabulary_result')
+            + '}else if("workflow_result".equals(event)){'
+            + branch(session, 'workflow_result')
+            + '}else if("text_begin".equals(event)){'
+            + branch(session, 'text_begin')
+            + '}else if("vision_done".equals(event)){'
+            + branch(session, 'vision_done')
             + '}else if("speech_correction".equals(event)){'
             + branch(session, 'speech_correction')
             + '}else if("announcement_begin".equals(event)){'
@@ -1004,6 +1034,7 @@ class WorkspaceRouteTests(unittest.TestCase):
                 str(JAVA / 'SpeakerOwner.java'),
                 str(JAVA / 'SpeakerSession.java'),
                 str(JAVA / 'PhotoFollowupWindow.java'),
+                str(JAVA / 'WorkflowConsent.java'),
                 str(presentation),
                 str(test),
                 str(handler),
@@ -1048,6 +1079,9 @@ class WorkspaceRouteTests(unittest.TestCase):
 
     def test_vocabulary_requests_cannot_override_events_or_cross_route_and_home(self):
         self.scenario('vocabulary_request')
+
+    def test_workflow_camera_needs_bound_consent_and_restores_text_speaker_after_preview(self):
+        self.scenario('workflow_camera')
 
     def test_report_sources_requests_cannot_override_nonce_or_event_or_cross_route_and_home(self):
         self.scenario('report_sources_request')

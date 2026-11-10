@@ -1,6 +1,6 @@
 # 大黄蜂统一待办：功能与工程质量
 
-更新于 2026-11-10。原排期基线为 Android 0.8.6 / 后台 0.11.0。当前部署为后台 0.16.24 / 原签名 APK 0.9.97（code134），源码 `b18393f`，本机已明确选择 `sensevoice_complete`，默认单声道，英文增强仍关闭。部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)。P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)。复选框按完整验收标准关闭。
+更新于 2026-11-10。原排期基线为 Android 0.8.6 / 后台 0.11.0。当前部署为后台 0.16.26 / 原签名 APK 0.9.97（code134），源码 `4c4473b`，本机已明确选择 `sensevoice_complete`，默认单声道，英文增强仍关闭。部署与验收范围见 [当前部署](CURRENT_DEPLOYMENT.md)。P0-01 / P0-02 的第一批基础见 [P0 第一批记录](P0_FOUNDATION.md)。软件交接见 [P0_SOFTWARE_HANDOFF](P0_SOFTWARE_HANDOFF.md)，自动设备检查见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)。复选框按完整验收标准关闭。
 
 依据：[竞品复盘](COMPETITOR_REVIEW_2026-11-01.md)、[当前架构](ARCHITECTURE.md)、[实机与回归记录](VALIDATION.md)。本次已合并 [ToFix](ToFix.md) 的 20 个工程条目；这是功能与工程质量的唯一详细清单；[ROADMAP](ROADMAP.md)保留完成情况和阶段概览。
 
@@ -540,6 +540,7 @@
 ## P2：有明确需求再扩展
 
 - [ ] **P2-01 — 命名工作流程与模板**
+  - 软件开发中：已实现后台定义与私有配置、一次性运行确认、原有串行响应队列、逐步真实回执、失败／取消不重跑、只读定时领取及摘录送达分离；原生编辑／确认／结果入口与取景后继续播报已接入；只读定时可选北京时间钟点／星期或间隔，连接和旧窗口隔离有离线回归，Android 调试构建／lint 已通过。完整组合验证、受保护 CI 和部署仍待完成。见[命名工作流程](NAMED_WORKFLOWS.md)。此开发记录不关闭整项验收。
   - 交付：从已有 Dot 技能挑选“晨间简报、任务进展汇总、看图识字”三类候选，提供可编辑步骤、输入与结果入口；用户选择后才启用定时。
   - 验收：每个选定流程成功 / 中途失败 / 取消各跑通一次；真实执行状态可查；运行失败不自动重复有副作用步骤。
   - 依赖：P1-02、P1-03；个性化依赖 P1-06。范围：Mac 编排与 CC8 入口。

@@ -435,6 +435,67 @@ class VisionController:
             self.hooks.enqueue(VisualReply(generation, text, origin, nonce))
         self.hooks.save_status()
 
+    def capture_workflow(self, generation, nonce, current):
+        """One explicit foreground workflow frame, using the existing 5s UI.
+
+        The device sets its pending camera nonce only on the owner's fresh
+        workflow confirmation. A saved definition, timer or model cannot do so.
+        Unlike desktop photos, this path never saves or exports the JPEG.
+        """
+        capture = None
+        outcome = 'failed'
+        try:
+            with self.hooks.lock:
+                if (
+                    not re.fullmatch('[a-f0-9]{32}', nonce)
+                    or current() is not True
+                    or not self.hooks.valid(generation)
+                    or self.generation is not None
+                    or self.snapshot_job is not None
+                    or not self.hooks.connected()
+                ):
+                    raise VisionError('request_not_authorized')
+                self.generation, self.nonce = generation, nonce
+                self.hooks.event(
+                    'vision_begin', generation=generation, nonce=nonce, origin='workflow'
+                )
+                if current() is not True or self.generation != generation:
+                    raise VisionError('capture_cancelled')
+                capture = self.inbox.begin(
+                    generation, policy=self.image_policy, review=False, followup=False
+                )
+                self.hooks.event(
+                    'camera_capture',
+                    generation=generation,
+                    request_id=capture.ident,
+                    origin='workflow',
+                    nonce=nonce,
+                    **capture.policy.fields(),
+                    review_allowed=False,
+                    review_window_ms=0,
+                    followup_allowed=False,
+                )
+            image = self.inbox.wait(capture, current)
+            with self.hooks.lock:
+                if current() is not True or self.generation != generation:
+                    raise VisionError('capture_cancelled')
+                self.hooks.metric('vision_frames_received', increment=True)
+                outcome = 'completed'
+                return image
+        finally:
+            if capture is not None:
+                self.inbox.cancel_capture(capture)
+            with self.hooks.lock:
+                if self.generation == generation and self.nonce == nonce:
+                    self.generation, self.nonce = None, ''
+                    if self.hooks.valid(generation):
+                        self.hooks.event(
+                            'vision_done',
+                            generation=generation,
+                            result=outcome,
+                            origin='workflow',
+                        )
+
     def answer_visual(self, job):
         generation = job.generation
         outcome = 'cancelled'

@@ -69,6 +69,8 @@ final class VoiceSession {
     default void preferenceResult(JSONObject data, long route) {}
 
     default void vocabularyResult(JSONObject data, long route) {}
+
+    default void workflowResult(JSONObject data, long route) {}
   }
 
   private final Context context;
@@ -116,11 +118,13 @@ final class VoiceSession {
   private volatile boolean resultReadingSupported;
   private volatile boolean visionModesSupported, photoFollowupSupported, macWindowSupported;
   private volatile boolean vocabularySupported,
+      workflowSupported,
       reportSourcesSupported,
       reportArchiveSupported,
       threadQueueSupported,
       reportProgressSupported;
   private volatile JSONObject voicePreferences;
+  private final WorkflowConsent workflowConsent = new WorkflowConsent();
   private volatile JSONObject speechCorrection;
   private int speechCorrectionRevision = -1;
 
@@ -142,6 +146,10 @@ final class VoiceSession {
 
   boolean supportsVocabulary() {
     return vocabularySupported;
+  }
+
+  boolean supportsWorkflows() {
+    return workflowSupported;
   }
 
   boolean supportsReportSources() {
@@ -314,20 +322,22 @@ final class VoiceSession {
       route = routeEpoch;
       sourcesPresentation = null;
       photoFollowup.clear();
+      workflowConsent.clear();
       pendingPhotoId = pendingPhotoForgetId = "";
       photoFollowupSupported =
           visionModesSupported =
               macWindowSupported =
                   vocabularySupported =
-                      reportSourcesSupported =
-                          reportArchiveSupported =
-                              reportProgressSupported =
-                                  threadQueueSupported =
-                                      dotChatSupported =
-                                          savedTasksSupported =
-                                              preferenceMemorySupported =
-                                                  resultProvenanceSupported =
-                                                      resultReadingSupported = false;
+                      workflowSupported =
+                          reportSourcesSupported =
+                              reportArchiveSupported =
+                                  reportProgressSupported =
+                                      threadQueueSupported =
+                                          dotChatSupported =
+                                              savedTasksSupported =
+                                                  preferenceMemorySupported =
+                                                      resultProvenanceSupported =
+                                                          resultReadingSupported = false;
       voicePreferences = null;
       speechCorrection = null;
       speechCorrectionRevision = -1;
@@ -464,20 +474,22 @@ final class VoiceSession {
         next.captureStartToken = null;
         next.pairedCaptureRequested = false;
         photoFollowup.clear();
+        workflowConsent.clear();
         pendingPhotoId = pendingPhotoForgetId = "";
         photoFollowupSupported =
             visionModesSupported =
                 macWindowSupported =
                     vocabularySupported =
-                        reportSourcesSupported =
-                            reportArchiveSupported =
-                                reportProgressSupported =
-                                    threadQueueSupported =
-                                        dotChatSupported =
-                                            savedTasksSupported =
-                                                preferenceMemorySupported =
-                                                    resultProvenanceSupported =
-                                                        resultReadingSupported = false;
+                        workflowSupported =
+                            reportSourcesSupported =
+                                reportArchiveSupported =
+                                    reportProgressSupported =
+                                        threadQueueSupported =
+                                            dotChatSupported =
+                                                savedTasksSupported =
+                                                    preferenceMemorySupported =
+                                                        resultProvenanceSupported =
+                                                            resultReadingSupported = false;
         voicePreferences = null;
         speechCorrection = null;
         speechCorrectionRevision = -1;
@@ -593,20 +605,22 @@ final class VoiceSession {
       routeEpoch++;
       sourcesPresentation = null;
       photoFollowup.clear();
+      workflowConsent.clear();
       pendingPhotoId = pendingPhotoForgetId = "";
       photoFollowupSupported =
           visionModesSupported =
               macWindowSupported =
                   vocabularySupported =
-                      reportSourcesSupported =
-                          reportArchiveSupported =
-                              reportProgressSupported =
-                                  threadQueueSupported =
-                                      dotChatSupported =
-                                          savedTasksSupported =
-                                              preferenceMemorySupported =
-                                                  resultProvenanceSupported =
-                                                      resultReadingSupported = false;
+                      workflowSupported =
+                          reportSourcesSupported =
+                              reportArchiveSupported =
+                                  reportProgressSupported =
+                                      threadQueueSupported =
+                                          dotChatSupported =
+                                              savedTasksSupported =
+                                                  preferenceMemorySupported =
+                                                      resultProvenanceSupported =
+                                                          resultReadingSupported = false;
       voicePreferences = null;
       speechCorrection = null;
       speechCorrectionRevision = -1;
@@ -811,6 +825,7 @@ final class VoiceSession {
             if (!foreground || !currentRoute(route) || p.generation < minimumGeneration) return;
             preferenceMemorySupported = Boolean.TRUE.equals(j.opt("supports_preference_memory"));
             vocabularySupported = Boolean.TRUE.equals(j.opt("supports_vocabulary"));
+            workflowSupported = Boolean.TRUE.equals(j.opt("supports_workflows"));
             reportSourcesSupported = Boolean.TRUE.equals(j.opt("supports_report_sources"));
             reportArchiveSupported = Boolean.TRUE.equals(j.opt("supports_report_archive"));
             threadQueueSupported = Boolean.TRUE.equals(j.opt("supports_thread_queue"));
@@ -858,6 +873,15 @@ final class VoiceSession {
               && statusFeedback.begin(p.generation)) {
             textSession = true;
             textGeneration = p.generation;
+            if (!("workflow".equals(j.optString("input_origin"))
+                && workflowConsent.bind(
+                    j.optString("workflow_camera_nonce"),
+                    route,
+                    p.generation,
+                    SystemClock.elapsedRealtime()))) {
+              String revoked = workflowConsent.clear();
+              if (!revoked.isEmpty() && revoked.equals(pendingVisionNonce)) pendingVisionNonce = "";
+            }
             beginTaskOutput("text", p.generation);
             listener.playback(true);
             boolean corrected = "correction".equals(j.optString("input_origin"));
@@ -946,6 +970,10 @@ final class VoiceSession {
               || p.generation < minimumGeneration
               || (visual && p.generation == visualGeneration)) return;
           boolean desktop = "desktop".equals(j.optString("origin"));
+          boolean workflow = "workflow".equals(j.optString("origin"));
+          if (workflow
+              && !workflowConsent.accepts(
+                  nonce, route, p.generation, SystemClock.elapsedRealtime())) return;
           boolean macWindow = "mac_window".equals(j.optString("origin"));
           if (macWindow
               && (!macWindowSupported
@@ -970,7 +998,15 @@ final class VoiceSession {
           if (!desktop
               && ((!recording && !nonce.equals(pendingVisionNonce))
                   || (nonce.isEmpty() && !recording))) return;
-          if (!statusFeedback.begin(p.generation)) return;
+          if (workflow) {
+            // This is a camera stage inside the already admitted text request,
+            // not a second begin that can reopen an unrelated/failed task.
+            if (!textSession
+                || textGeneration != p.generation
+                || !statusFeedback.current(p.generation)
+                || statusFeedback.failed(p.generation)
+                || statusFeedback.cancelled(p.generation)) return;
+          } else if (!statusFeedback.begin(p.generation)) return;
           desktopVisionNonce = desktop ? nonce : "";
           visual = true;
           visualGeneration = p.generation;
@@ -1029,11 +1065,15 @@ final class VoiceSession {
           Wire.put(j, "vision_generation", p.generation);
           Wire.put(j, "vision_route", route);
           boolean allowed =
-              "desktop".equals(j.optString("origin"))
-                  ? !nonce.isEmpty() && nonce.equals(desktopVisionNonce) && ident.equals(nonce)
-                  : "button".equals(j.optString("origin"))
-                      ? !nonce.isEmpty() && nonce.equals(pendingVisionNonce)
-                      : "voice".equals(j.optString("origin")) && recording;
+              "workflow".equals(j.optString("origin"))
+                  ? nonce.equals(pendingVisionNonce)
+                      && workflowConsent.consume(
+                          nonce, route, p.generation, SystemClock.elapsedRealtime())
+                  : "desktop".equals(j.optString("origin"))
+                      ? !nonce.isEmpty() && nonce.equals(desktopVisionNonce) && ident.equals(nonce)
+                      : "button".equals(j.optString("origin"))
+                          ? !nonce.isEmpty() && nonce.equals(pendingVisionNonce)
+                          : "voice".equals(j.optString("origin")) && recording;
           pendingVisionNonce = "";
           desktopVisionNonce = "";
           if (!allowed) {
@@ -1045,6 +1085,11 @@ final class VoiceSession {
           if (visual && p.generation == visualGeneration) {
             visual = false;
             speakerOwner.endTask(p.generation);
+            if ("workflow".equals(j.optString("origin"))
+                && textSession
+                && p.generation == textGeneration
+                && foreground
+                && p.generation >= minimumGeneration) beginTaskOutput("text", p.generation);
             pendingVisionNonce = "";
             desktopVisionNonce = "";
             if (!foreground
@@ -1167,6 +1212,8 @@ final class VoiceSession {
           if (foreground) listener.preferenceResult(j, route);
         } else if ("vocabulary_result".equals(event)) {
           if (foreground) listener.vocabularyResult(j, route);
+        } else if ("workflow_result".equals(event)) {
+          if (foreground && workflowSupported) listener.workflowResult(j, route);
         } else if ("saved_task_result".equals(event)) {
           if (foreground) listener.savedTasks(j);
         } else if ("web_sources".equals(event)) {
@@ -1188,6 +1235,8 @@ final class VoiceSession {
               || !statusFeedback.cancel(
                   p.generation, recording || announcement || visual || textSession)) return;
           minimumGeneration = Math.max(minimumGeneration, p.generation);
+          String revoked = workflowConsent.cancel(p.generation);
+          if (!revoked.isEmpty() && revoked.equals(pendingVisionNonce)) pendingVisionNonce = "";
           photoFollowup.clear();
           pendingPhotoForgetId = "";
           sourcesPresentation = new SourcesPresentation(null, "", "", route, p.generation);
@@ -1485,6 +1534,64 @@ final class VoiceSession {
     }
   }
 
+  boolean workflowRequest(String requestId, JSONObject args, long route) {
+    synchronized (routeLock) {
+      if (!workflowSupported
+          || !foreground
+          || !currentRoute(route)
+          || requestId == null
+          || !requestId.matches("[a-f0-9]{32}")
+          || args == null) return false;
+      JSONObject request = Wire.event("workflow_request");
+      Wire.put(request, "request_id", requestId);
+      java.util.Iterator<String> keys = args.keys();
+      while (keys.hasNext()) {
+        String key = keys.next();
+        if (!("action".equals(key)
+            || "revision".equals(key)
+            || "id".equals(key)
+            || "value".equals(key)
+            || "confirmed".equals(key)
+            || "offer_id".equals(key)
+            || "run_id".equals(key)
+            || "step_id".equals(key)
+            || "camera_nonce".equals(key))) return false;
+        Wire.put(request, key, args.opt(key));
+      }
+      String nonce = args.optString("camera_nonce");
+      if (!nonce.isEmpty()) {
+        if (!"run".equals(args.optString("action"))
+            || !Boolean.TRUE.equals(args.opt("confirmed"))
+            || recording
+            || visual
+            || !pendingVisionNonce.isEmpty()
+            || !workflowConsent.offer(nonce, route, SystemClock.elapsedRealtime())) return false;
+        pendingVisionNonce = nonce;
+        new android.os.Handler(android.os.Looper.getMainLooper())
+            .postDelayed(
+                () -> {
+                  synchronized (routeLock) {
+                    if (foreground
+                        && currentRoute(route)
+                        && nonce.equals(pendingVisionNonce)
+                        && !visual) {
+                      workflowConsent.clear();
+                      pendingVisionNonce = "";
+                      listener.workspaceResult(false, "本次取景确认已过期，请重新核对流程后确认。", route);
+                    }
+                  }
+                },
+                15000);
+      }
+      if (sendWorkspace(request, route)) return true;
+      if (!nonce.isEmpty()) {
+        workflowConsent.clear();
+        if (nonce.equals(pendingVisionNonce)) pendingVisionNonce = "";
+      }
+      return false;
+    }
+  }
+
   boolean reportSourcesRequest(String requestId, JSONObject args, long route) {
     synchronized (routeLock) {
       if (!reportSourcesSupported
@@ -1722,6 +1829,7 @@ final class VoiceSession {
 
   void cancelVision() {
     synchronized (routeLock) {
+      workflowConsent.clear();
       photoFollowup.clear();
       pendingPhotoId = "";
       boolean had = visual || !pendingVisionNonce.isEmpty();
