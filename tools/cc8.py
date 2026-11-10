@@ -473,6 +473,11 @@ def main():
         from device_smoke import main as device_main
 
         return device_main(sys.argv[2:])
+
+    if sys.argv[1:2] == ['verify-camera-routes']:
+        from check_camera_routes import main as camera_routes_main
+
+        return camera_routes_main(sys.argv[2:])
     if sys.argv[1:2] == ['audit-device-suite']:
         from audit_device_suite import main as device_audit_main
 
@@ -542,6 +547,10 @@ def main():
     )
     commands.add_parser('watch-handover', help='Observe USB bus changes and idle route selection')
     commands.add_parser('verify-device', help='Plan or explicitly run bounded CC8 hardware checks')
+    commands.add_parser(
+        'verify-camera-routes',
+        help='Plan or explicitly check visible camera interruption on logical route changes',
+    )
     commands.add_parser('audit-device-suite', help='Recheck a saved device batch offline')
     commands.add_parser('verify-failure-ui', help='Plan or check isolated CC8 error/recovery UI')
     commands.add_parser(
