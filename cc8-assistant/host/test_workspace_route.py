@@ -977,9 +977,10 @@ class WorkspaceRouteTests(unittest.TestCase):
             'java.util.Iterator<String> keys(){return values.keySet().iterator();}Object opt(String key){return values.get(key);}JSONObject getJSONObject(String key){return (JSONObject)values.get(key);}boolean optBoolean(String key){return Boolean.TRUE.equals(values.get(key));}String optString(String key,String fallback){String value=optString(key);return value.isEmpty()?fallback:value;}String optString(String key)',
         )
         harness = harness.replace(method(harness, 'static class Session'), SESSION_INTERFACES)
+        harness = harness.replace('Object peerRelease;', 'VersionPresentation.Peer peerRelease;')
         harness = harness.replace(
             'String brainProvider="dot";',
-            'VersionPresentation.Peer peerRelease;boolean foreground=true;SourcesPresentation displayedSources;AlertDialog sourcesDialog;'
+            'boolean foreground=true;SourcesPresentation displayedSources;AlertDialog sourcesDialog;'
             'final TextView sourceText=new TextView();static class View{static final int GONE=8,VISIBLE=0;}String brainProvider="dot";',
         )
         harness = harness.replace(
