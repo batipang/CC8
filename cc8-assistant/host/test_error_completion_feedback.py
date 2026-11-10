@@ -549,6 +549,7 @@ class FeedbackCheck {
  SourcesPresentation sourcesPresentation;
  class Listener{String phase="idle",message="";boolean playing;int visionCalls;boolean preserveVisionError;
   void sources(SourcesPresentation update){}
+  void releaseInfo(Object data,long route){}
   final ListeningState listeningState=new ListeningState();
   void state(String p,String m){listeningState.localPhase(p);phase=p;message=m;}
   void status(StatusPresentation update){

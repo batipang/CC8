@@ -59,6 +59,7 @@ public class AvailabilityCheck {
  static class TextView {String text;CharSequence getText(){return text;}}
  static class android {static class R {static class id {static final int message=1;}}}
  static class Wire {static void put(JSONObject j,String k,Object v){j.values.put(k,v);}static JSONObject event(String e){JSONObject j=new JSONObject();put(j,"event",e);return j;}}
+ static class BuildConfig{static final String VERSION_NAME="0.9.123";static final int VERSION_CODE=160,CC8_PROTOCOL=2;}
  static class SystemClock {static long now;static long elapsedRealtime(){return now;}}
  static class Link {boolean ready,closed;}
  static class SpeakerOwner {void endTasksThrough(int generation){}}
@@ -157,7 +158,11 @@ public class AvailabilityCheck {
     JSONObject request=new JSONObject();Wire.put(request,"request_id","1");Wire.put(request,"action","status");s.deviceControl(request);
     yes(s.sent.optBoolean("ok")&&!s.sent.optBoolean("microphone_active"),"Status query changed capture or failed");
     yes(s.sent.optJSONObject("connection_availability").values.get("unavailable_ms").equals(7000L),"Status omitted actual device-local interval");
+    JSONObject version=s.sent.optJSONObject("device_release");
+    yes(version!=null&&version.values.size()==4&&"0.9.123".equals(version.values.get("assistant_version"))&&Integer.valueOf(160).equals(version.values.get("assistant_code")),"Status omitted actual running APK identity");
+    yes(Integer.valueOf(1).equals(version.values.get("schema_version"))&&Integer.valueOf(2).equals(version.values.get("protocol_version")),"Status version schema/protocol mismatch");
     Wire.put(request,"action","wake_screen");s.deviceControl(request);
+    yes(s.sent.optJSONObject("device_release")==null,"Non-status control claimed a fresh release receipt");
     yes(s.sent.optJSONObject("connection_availability")==null,"Unrelated control claimed fresh connection diagnostic");break;
    }
    default:throw new AssertionError("Unknown test");

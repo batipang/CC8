@@ -54,6 +54,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   private VocabularyDialog vocabulary;
   private WorkflowDialog workflows;
   private MeetingDialog meetings;
+  private VersionDialog versions;
+  private VersionPresentation.Peer peerRelease;
   private AlertDialog imageQualityDialog;
   private boolean highDefinitionImage;
   private boolean reviewCapturedImage;
@@ -182,6 +184,22 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     vocabulary = new VocabularyDialog(this, session);
     workflows = new WorkflowDialog(this, session);
     meetings = new MeetingDialog(this, session);
+    versions =
+        new VersionDialog(
+            this,
+            new VersionDialog.Port() {
+              public boolean foreground() {
+                return MainActivity.this.foreground && !screenSleeping;
+              }
+
+              public long route() {
+                return session.connectedRoute();
+              }
+
+              public VersionPresentation.Peer peer() {
+                return peerRelease;
+              }
+            });
     resultDetails = new ResultDetailsDialog(this, session);
     savedTasks = new SavedTasksDialog(this, session, resultDetails);
     requestOpenVoice(getIntent());
@@ -1286,7 +1304,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
               "用户词表／选词纠错",
               "工作汇报来源",
               "工作流程／定时简报",
-              "会议录音／转写"
+              "会议录音／转写",
+              "版本与更新"
             },
             (d, n) -> {
               if (n == 0) {
@@ -1347,7 +1366,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
                 handler.removeCallbacks(autoVoiceTick);
                 if (session.isRecording()) session.stopMicrophone();
                 meetings.open();
-              } else showReminderHistory();
+              } else if (n == 21) versions.open();
+              else showReminderHistory();
             })
         .setNegativeButton("关闭", null)
         .show();
@@ -1854,6 +1874,16 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   }
 
   @Override
+  public void releaseInfo(JSONObject data, long route) {
+    // Snapshot before queuing; a mutable network JSON object cannot rewrite the view.
+    final VersionPresentation.Peer update = new VersionPresentation.Peer(data, route);
+    runOnUiThread(
+        () -> {
+          if (foreground && session.currentRoute(route)) peerRelease = update;
+        });
+  }
+
+  @Override
   public void meetingResult(JSONObject data, long route) {
     runOnUiThread(
         () -> {
@@ -2054,6 +2084,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
           if (!session.currentRoute(route)) return;
           linked = connected;
           if (workspaceRoute != route || !connected) {
+            peerRelease = null;
             clearSources();
             workspaceRoute = route;
             workspaceRevision = -1;
@@ -2336,6 +2367,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   protected void onPause() {
+    if (versions != null) versions.close();
+    peerRelease = null;
     clearSources();
     if (correctionDialog != null) correctionDialog.close();
     if (reminderPolicyDialog != null) reminderPolicyDialog.dismiss();

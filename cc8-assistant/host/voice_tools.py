@@ -31,7 +31,7 @@ TOOLS = [
     ),
     spec(
         'cc8_control',
-        '按用户要求查询 CC8 状态、设置媒体音量（0-100）、停止播报或亮屏。没有开启麦克风、刷机或重启功能。',
+        '按用户要求查询 CC8 状态及当前助手／后台／协议版本、设置媒体音量（0-100）、停止播报或亮屏。没有开启麦克风、刷机或重启功能。',
         {
             'action': {'type': 'string', 'enum': ['status', 'volume', 'stop', 'wake_screen']},
             'percent': {'type': 'integer', 'minimum': 0, 'maximum': 100},

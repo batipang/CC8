@@ -73,6 +73,8 @@ final class VoiceSession {
     default void workflowResult(JSONObject data, long route) {}
 
     default void meetingResult(JSONObject data, long route) {}
+
+    default void releaseInfo(JSONObject data, long route) {}
   }
 
   private final Context context;
@@ -862,6 +864,7 @@ final class VoiceSession {
           listener.recognition(j.optString("asr_engine", "sensevoice"));
           synchronized (routeLock) {
             if (!foreground || !currentRoute(route) || p.generation < minimumGeneration) return;
+            listener.releaseInfo(j.optJSONObject("release_info"), route);
             preferenceMemorySupported = Boolean.TRUE.equals(j.opt("supports_preference_memory"));
             vocabularySupported = Boolean.TRUE.equals(j.opt("supports_vocabulary"));
             workflowSupported = Boolean.TRUE.equals(j.opt("supports_workflows"));
@@ -2912,6 +2915,12 @@ final class VoiceSession {
       Wire.put(result, "transport", transportName());
       Wire.put(result, "wifi_ready", wifiLink != null && wifiLink.ready && !wifiLink.closed);
       if ("status".equals(action)) {
+        JSONObject release = new JSONObject();
+        Wire.put(release, "schema_version", 1);
+        Wire.put(release, "assistant_version", BuildConfig.VERSION_NAME);
+        Wire.put(release, "assistant_code", BuildConfig.VERSION_CODE);
+        Wire.put(release, "protocol_version", BuildConfig.CC8_PROTOCOL);
+        Wire.put(result, "device_release", release);
         synchronized (routeLock) {
           Wire.put(
               result,

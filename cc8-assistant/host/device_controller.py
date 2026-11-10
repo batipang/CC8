@@ -6,6 +6,7 @@ import queue
 from typing import Callable, ContextManager
 from session_ports import EventSink
 from connection_observation import availability
+from runtime_versions import device_release, status_versions
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,8 @@ class DeviceController:
             self.hooks.event('device_control', **fields)
             try:
                 result = waiter.get(timeout=timeout)
+                if action == 'status' and result.get('ok') is True:
+                    result = status_versions(result)
                 if result.get('ok') and action == 'wake_screen':
                     self.hooks.touch()
                 return result
@@ -73,6 +76,9 @@ class DeviceController:
                     )
                 }
                 sample = availability(j.get('connection_availability'))
+                version = device_release(j.get('device_release'))
+                if version is not None:
+                    result['device_release'] = version
                 if sample is not None:
                     result['connection_availability'] = sample
                 waiter.put_nowait(result)

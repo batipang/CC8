@@ -25,6 +25,7 @@ SESSION_INTERFACES = r"""
   boolean meetingSupported,meetingHostReserved;int meetingRevocations;
   String revokeMeeting(){meetingRevocations++;return "";}
   void cancelMeetingForGeneration(int generation){}
+  void meetingHello(JSONObject value){}
   String pendingPhotoId="",pendingPhotoForgetId="";
   JSONObject voicePreferences,speechCorrection;
   int speechCorrectionRevision=-1;
@@ -125,6 +126,7 @@ SESSION_INTERFACES = r"""
  void vocabularyResult(JSONObject data,long route){vocabularyReceipts++;}
  int workflowReceipts;
  void workflowResult(JSONObject data,long route){workflowReceipts++;}
+ void recognition(String value){}
  void heard(String value){}
  void announcement(){}
  void captureRejected(int stoppedEpoch){}
@@ -150,6 +152,27 @@ SCENARIOS = r"""
   Link old=new Link("usb");activate(c,old);c.drain();
   c.snapshot(1,task("running"));c.drain();
   try{switch(args[0]){
+   case "version_receipts":{
+    long route=s.routeEpoch;JSONObject release=new JSONObject("schema_version",1,"release_id","versions-test",
+     "backend_version","0.16.33","expected_assistant_version","0.9.123","expected_assistant_code",160,
+     "protocol_version",2,"device_protocol_min",2,"device_protocol_max",2);
+    s.deliver(new Wire.Packet(new JSONObject("event","hello","release_info",release)),old);
+    release.values.put("backend_version","9.9.9");c.drain();
+    yes(c.peerRelease.known&&c.peerRelease.backend.equals("0.16.33"),"hello data mutated after UI enqueue");
+    s.minimumGeneration=8;
+    s.deliver(new Wire.Packet(new JSONObject("event","hello","release_info",release)),old);c.drain();
+    yes(c.peerRelease.backend.equals("0.16.33"),"stale generation changed declaration");
+    s.minimumGeneration=0;c.releaseInfo(release,route);
+    Link fresh=new Link("wifi");activate(c,fresh);c.drain();
+    yes(c.peerRelease==null,"old queued declaration survived handover");
+    c.releaseInfo(release,route);c.drain();yes(c.peerRelease==null,"old route callback published");
+    s.deliver(new Wire.Packet(new JSONObject("event","hello","release_info",release)),fresh);c.drain();
+    yes(c.peerRelease.known,"current hello missing");
+    s.deliver(new Wire.Packet(new JSONObject("event","hello")),fresh);c.drain();
+    yes(!c.peerRelease.known,"legacy hello borrowed previous declaration");
+    c.releaseInfo(release,s.routeEpoch);c.foreground=false;c.drain();
+    yes(!c.peerRelease.known,"background accepted queued declaration");break;
+   }
    case "preference_requests":{
     long route=s.routeEpoch;int sent=old.events.size();
     JSONObject argsValue=new JSONObject("action","put","revision",0,"key","称呼","value","固定公开值");
@@ -784,6 +807,9 @@ SCENARIOS = r"""
 
 
 class WorkspaceRouteTests(unittest.TestCase):
+    def test_real_hello_version_receipt_is_immutable_and_scoped(self):
+        self.scenario('version_receipts')
+
     def test_availability_preserves_continuous_ready_fallback(self):
         self.scenario('availability_handover')
 
@@ -802,6 +828,7 @@ class WorkspaceRouteTests(unittest.TestCase):
         methods = [
             method(activity, signature)
             for signature in (
+                'public void releaseInfo(',
                 'public void workspace(',
                 'public void workspaceResult(',
                 'public void link(',
@@ -894,7 +921,9 @@ class WorkspaceRouteTests(unittest.TestCase):
                 else 'void deliver(Wire.Packet p,Link source)throws Exception{'
             )
             + session[start:end]
-            + 'if("workspace".equals(event)){'
+            + 'if("hello".equals(event)){'
+            + branch(session, 'hello')
+            + '}else if("workspace".equals(event)){'
             + branch(session, 'workspace')
             + '}else if("workspace_result".equals(event)){'
             + branch(session, 'workspace_result')
@@ -950,7 +979,7 @@ class WorkspaceRouteTests(unittest.TestCase):
         harness = harness.replace(method(harness, 'static class Session'), SESSION_INTERFACES)
         harness = harness.replace(
             'String brainProvider="dot";',
-            'boolean foreground=true;SourcesPresentation displayedSources;AlertDialog sourcesDialog;'
+            'VersionPresentation.Peer peerRelease;boolean foreground=true;SourcesPresentation displayedSources;AlertDialog sourcesDialog;'
             'final TextView sourceText=new TextView();static class View{static final int GONE=8,VISIBLE=0;}String brainProvider="dot";',
         )
         harness = harness.replace(
@@ -1019,6 +1048,15 @@ class WorkspaceRouteTests(unittest.TestCase):
                 'import com.happyhome.cc8assistant.ActivityCheck.JSONObject;',
             )
         )
+        version = cls.folder / 'VersionPresentation.java'
+        version.write_text(
+            (JAVA / 'VersionPresentation.java')
+            .read_text()
+            .replace(
+                'import org.json.JSONObject;',
+                'import com.happyhome.cc8assistant.ActivityCheck.JSONObject;',
+            )
+        )
         test = cls.folder / 'ActivityCheck.java'
         test.write_text(harness)
         handler = cls.folder / 'Handler.java'
@@ -1047,6 +1085,7 @@ class WorkspaceRouteTests(unittest.TestCase):
                 str(JAVA / 'PhotoFollowupWindow.java'),
                 str(JAVA / 'WorkflowConsent.java'),
                 str(presentation),
+                str(version),
                 str(test),
                 str(handler),
                 str(looper),
