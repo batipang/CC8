@@ -16,6 +16,7 @@ def validate_request(value: object) -> None:
         'get': {'id'},
         'put': {'revision', 'value', 'confirmed'},
         'delete': {'revision', 'id', 'confirmed'},
+        'bind_source': {'revision', 'id', 'confirmed'},
         'reset': {'revision', 'confirmed'},
         'clear_history': {'revision', 'confirmed'},
         'prepare': {'revision', 'id'},

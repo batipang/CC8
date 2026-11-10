@@ -174,6 +174,7 @@ class LoginProbe:
                 'work-report-archive.json',
                 'work-report-progress.json',
                 'work-report-watch.json',
+                'workflows.json',
             )
         ]
         return dict(

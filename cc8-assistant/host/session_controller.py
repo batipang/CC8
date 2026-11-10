@@ -10,6 +10,7 @@ from collections import deque
 import threading
 import time
 import uuid
+import re
 from protocol import Packet
 from reply_types import TextReply, ResultRead, CorrectedReply
 from saved_tasks import ident as result_ident
@@ -226,7 +227,14 @@ class SessionController:
                 self.flush_screen_event()
 
     def submit_text(
-        self, text, *, result_id=None, result_restart=False, corrected=False, _job_factory=None
+        self,
+        text,
+        *,
+        result_id=None,
+        result_restart=False,
+        corrected=False,
+        _job_factory=None,
+        _workflow_nonce='',
     ):
         text = validate_request_text(text, 6000)
         if type(corrected) is not bool or corrected and result_id is not None:
@@ -235,6 +243,12 @@ class SessionController:
             not callable(_job_factory) or corrected or result_id is not None
         ):
             raise ValueError('Invalid trusted text work factory')
+        if (
+            not isinstance(_workflow_nonce, str)
+            or _workflow_nonce
+            and (_job_factory is None or not re.fullmatch('[a-f0-9]{32}', _workflow_nonce))
+        ):
+            raise ValueError('Invalid workflow camera confirmation')
         if result_id is not None:
             result_ident(result_id)
             if type(result_restart) is not bool:
@@ -280,7 +294,13 @@ class SessionController:
                     'text_begin',
                     generation=generation,
                     text=text,
-                    **({'input_origin': 'correction'} if corrected else {}),
+                    **(
+                        {'input_origin': 'workflow', 'workflow_camera_nonce': _workflow_nonce}
+                        if _job_factory is not None
+                        else {'input_origin': 'correction'}
+                        if corrected
+                        else {}
+                    ),
                 )
                 if not current():
                     return superseded()

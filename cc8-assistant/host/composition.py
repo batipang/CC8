@@ -452,6 +452,7 @@ def build_components(
             source_current=lambda source: host.chats.scope_current(source),
             submit=lambda run, nonce, config_hash: host.session.submit_text(
                 '运行流程：' + run.flow['name'],
+                _workflow_nonce=nonce,
                 _job_factory=lambda generation: host.workflows.bind(
                     run, generation, nonce, config_hash
                 ),

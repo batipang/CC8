@@ -456,7 +456,9 @@ class VisionController:
                 ):
                     raise VisionError('request_not_authorized')
                 self.generation, self.nonce = generation, nonce
-                self.hooks.event('vision_begin', generation=generation, nonce=nonce)
+                self.hooks.event(
+                    'vision_begin', generation=generation, nonce=nonce, origin='workflow'
+                )
                 if current() is not True or self.generation != generation:
                     raise VisionError('capture_cancelled')
                 capture = self.inbox.begin(
@@ -466,7 +468,7 @@ class VisionController:
                     'camera_capture',
                     generation=generation,
                     request_id=capture.ident,
-                    origin='button',
+                    origin='workflow',
                     nonce=nonce,
                     **capture.policy.fields(),
                     review_allowed=False,

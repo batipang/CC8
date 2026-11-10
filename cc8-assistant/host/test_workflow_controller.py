@@ -14,6 +14,8 @@ import test_dot_handoff as bridge_fixtures
 from test_workflow_run import flow
 from test_workflow_store import scheduled
 from test_vision import events as camera_events, jpeg
+from test_report_voice import SOURCE
+from dot_handoff import Handoff
 from workflow_definition import builtins
 from workflow_store import WorkflowStore
 
@@ -217,6 +219,43 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(b.brain.calls, [])
         self.assertTrue(b.response.queue.empty())
 
+    def test_explicit_source_binding_persists_only_metadata_and_disables_prior_schedule(self):
+        b = self.bridge
+        value = builtins()[0]
+        self.assertTrue(self.request('put', revision=0, value=value, confirmed=True)['ok'])
+        b.chats.selection = Handoff(
+            SOURCE.source_id,
+            SOURCE.source_title,
+            (('assistant', 'PRIVATE_HISTORY_NOT_A_WORKFLOW_INPUT'),),
+            False,
+            '/private/project',
+        )
+        result = self.request('bind_source', id=value['id'], revision=1, confirmed=True)
+        self.assertTrue(result['ok'])
+        source = result['definition']['steps'][1]['source']
+        self.assertEqual(source['source_id'], SOURCE.source_id)
+        self.assertEqual(set(source), {'kind', 'source_id', 'source_title', 'members'})
+        self.assertIsNone(result['definition']['schedule'])
+        raw = b.workflows.store.path.read_text()
+        self.assertNotIn('PRIVATE_HISTORY', raw)
+        self.assertNotIn('/private/project', raw)
+        self.assertEqual(b.brain.calls, [])
+        self.assertFalse(
+            self.request('bind_source', id=value['id'], revision=1, confirmed=True)['ok']
+        )
+
+    def test_missing_binding_source_and_untrusted_camera_metadata_have_no_effect(self):
+        b = self.bridge
+        self.assertFalse(
+            self.request('bind_source', id=builtins()[0]['id'], revision=0, confirmed=True)['ok']
+        )
+        self.assertFalse(b.workflows.store.path.exists())
+        generation = b.session.generation
+        with self.assertRaises(ValueError):
+            b.session.submit_text('普通文字', _workflow_nonce='c' * 32)
+        self.assertEqual(b.session.generation, generation)
+        self.assertTrue(b.response.queue.empty())
+
     def test_get_and_result_stay_bounded_and_new_connection_cannot_use_old_offer(self):
         offer = self.prepare()
         b = self.bridge
@@ -316,7 +355,7 @@ class ControllerTests(unittest.TestCase):
             original(name, **fields)
             if name == 'camera_capture':
                 self.assertEqual(fields['nonce'], 'c' * 32)
-                self.assertEqual(fields['origin'], 'button')
+                self.assertEqual(fields['origin'], 'workflow')
                 self.assertFalse(fields['followup_allowed'])
                 for data in camera_events(b.visual.inbox.pending):
                     b.on_event(data)
@@ -332,6 +371,9 @@ class ControllerTests(unittest.TestCase):
         self.assertIsNone(b.visual.inbox.pending)
         self.assertIsNone(b.visual.generation)
         self.assertEqual(b.metrics.get('desktop_snapshots_captured', 0), 0)
+        begin = [v for k, v in b.events if k == 'text_begin']
+        self.assertEqual(begin[-1]['input_origin'], 'workflow')
+        self.assertEqual(begin[-1]['workflow_camera_nonce'], 'c' * 32)
 
     def test_camera_error_cannot_publish_a_completed_frame_or_run_vision_model(self):
         b = self.bridge

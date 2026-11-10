@@ -1,5 +1,15 @@
 # 当前 CC8 部署与验收范围
 
+## 0.16.26／code134 已部署：相机检查与登录恢复收据（后台）
+
+当前后台 0.16.26，原签名助手 0.9.97 code134；源码 `4c4473b74cd9ac03689fdd70f2fac6a501fd4c9b`，tree `1985767b591084517aef44283f2463ee50770cca`。APK 未重建或重装，保持 SHA-256 `0db97578c1ad37794ffc7a860bb899358ce57fb64f8781b6e0ab5dd806468b73`。[PR475](https://github.com/batipang/CC8/pull/475)、[精确 PR 头八项 CI](https://github.com/batipang/CC8/actions/runs/42730522678) 与 [主分支八项 CI](https://github.com/batipang/CC8/actions/runs/42731465429) 通过；双平台 host 各 2396 项、24 项安装器、179 项工具及 76 项 Java 检查通过，4 项私人音频明确未选。
+
+维护从原厂后台开始，保留原有管理员配置、完整 ENV、实际 Interactive 策略、所有既有私有存储和原启动代理字节，仅切换已审查的后台源码并启动原代理。只读预检 8.617 秒、七步更新 24.811 秒；独立进程通过公开 LoginProbe.sample/identity 复核同一新实例与原厂后台身份、配置和组件保持，双端采集／播放／校准关闭，无新增模型或 ASR 请求。未打开相机、麦克风或测试界面。
+
+私有证据位于 `device-access/private/deployments/01626-host-tools-grouped/`；首次实际执行 `deployment-def581d3.json` 成功，独立审计 `independent-audit-1e1b617a.json` 通过。回退路径已保留，未执行回退演练。登录恢复检查仍为 not_armed，真实前台相机路线检查、真实登录／待机事件和完整 P0／P1 验收仍未完成。最终 72 小时验收未开始，继续最低优先级。
+
+命名工作流程处于后续开发分支，尚未包含在当前运行组合内。以下保留各次部署发生时的历史记录，旧段落中的“下一候选”不代表当前状态。
+
 ## 0.16.24／code134 已部署：定时原答复摘要与最近结果
 
 后台0.16.24／原签名助手0.9.97 code134已组合部署，源码`b18393f0cc0a7381851248746d6fcb2a537531d2`，tree`471fdf89f761e35c55695d2a1cd01f926dfbfff0`。实际main APK SHA-256 `0db97578c1ad37794ffc7a860bb899358ce57fb64f8781b6e0ab5dd806468b73`；功能分支APK `5e6ef5e3…`不是安装摘要。[PR473](https://github.com/batipang/CC8/pull/473)、[主分支八项CI](https://github.com/batipang/CC8/actions/runs/42718572753)、[原行为恢复135八项CI](https://github.com/batipang/CC8/actions/runs/42717639459)全部通过。恢复135保留此前实际0.16.23行为，只改版本声明，未安装。

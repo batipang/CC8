@@ -123,6 +123,7 @@ public class VoiceSession implements AutoCloseable {
  String pendingVisionNonce="",desktopVisionNonce="",visionRequestId="",pendingPhotoId="";
  boolean photoFollowupSupported,macWindowSupported,vocabularySupported;
  final PhotoFollowupWindow photoFollowup=new PhotoFollowupWindow();
+ final WorkflowConsent workflowConsent=new WorkflowConsent();
  final Object desktopCameraAuth=new Object();
  static class Lan {boolean authorizeDesktopCamera(Object auth,String nonce,int generation,String proof){return true;}}
  final Lan lan=new Lan();
@@ -447,7 +448,7 @@ class SpeakerHarness:
                     + '}\n'
                 )
             actual += (
-                '\nvoid vision_begin(int gen,String origin){class Packet{int generation=gen;}Packet p=new Packet();'
+                '\nvoid vision_begin(int gen,String origin){long route=routeEpoch;class Packet{int generation=gen;}Packet p=new Packet();'
                 + 'JSONObject j=new JSONObject();j.put("origin",origin);j.put("nonce","public-test-nonce");'
                 + branch(source, 'vision_begin')
                 + '}\n'
@@ -476,6 +477,7 @@ class SpeakerHarness:
                     'CaptureWindow',
                     'CaptureClockStats',
                     'PhotoFollowupWindow',
+                    'WorkflowConsent',
                 )
             ]
             result = subprocess.run(

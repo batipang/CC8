@@ -356,6 +356,7 @@ class VisionUiTests(unittest.TestCase):
  static class Eyes {int cancelled;void cancel(){cancelled++;}}
  static class Button {String text;void setText(String t){text=t;}void setContentDescription(String t){}}
  Eyes eyes=new Eyes();Button visionButton=new Button();
+ static class Workflows {int closed;void close(){closed++;}} Workflows workflows=new Workflows();
  void runOnUiThread(Runnable call){call.run();}
  void state(String p,String m){phase=p;message=m;}
  """
@@ -367,6 +368,7 @@ class VisionUiTests(unittest.TestCase):
  c.vision(false,"new unavailable message",false);
  if(!c.message.equals("new unavailable message"))throw new AssertionError("old error hid new unavailable message");
  c.vision(true,"new picture",false);if(!c.phase.equals("thinking"))throw new AssertionError("new picture kept old error");
+ if(c.workflows.closed!=1)throw new AssertionError("workflow modal covered live camera preview");
  c.vision(false,"done",false);if(!c.phase.equals("idle"))throw new AssertionError("normal cleanup failed");}}
 """
         )

@@ -17,6 +17,10 @@ from workflow_scheduler import WorkflowScheduler
 from web_search import SpeechClauses
 
 
+class RequestRejected(ValueError):
+    """Only fixed local guidance, never provider/transport exception content."""
+
+
 @dataclass(frozen=True)
 class WorkflowHooks:
     lock: ContextManager
@@ -167,14 +171,17 @@ class WorkflowController:
 
     def prepare(self, request):
         if not self.hooks.idle():
-            raise ValueError('Pause voice and wait for all work before preparing a workflow')
+            raise RequestRejected('请先暂停语音，等待当前任务和播报结束，再核对运行流程。')
         state, flow = self.selected(request['id'])
         if state['revision'] != request['revision']:
             raise ValueError('Workflow edited')
         frozen = deepcopy(flow)
         for step in frozen['steps']:
             if step['kind'] == 'work_report' and step['source'] is None:
-                step['source'] = describe(self.hooks.source())
+                source = self.hooks.source()
+                if source is None:
+                    raise RequestRejected('请先在“工作汇报来源”明确选择来源，再核对流程。')
+                step['source'] = describe(source)
         self.offer = dict(
             id=uuid.uuid4().hex,
             owner=self.owner(),
@@ -203,23 +210,45 @@ class WorkflowController:
                 if request_id in self.requests:
                     raise ValueError('Already handled')
                 self.requests.append(request_id)
-                if action in ('put', 'delete', 'reset', 'clear_history'):
+                if action in ('put', 'delete', 'reset', 'clear_history', 'bind_source'):
                     if not self.hooks.idle():
-                        raise ValueError('Workflow editing requires stopped capture and idle work')
+                        raise RequestRejected('请先暂停语音，等待任务和播报结束，再修改流程。')
                     if self.scheduler is None and (
                         action == 'put'
                         and data['value']['schedule'] is not None
                         and data['value']['schedule']['enabled']
                     ):
                         raise ValueError('Workflow scheduler not enabled')
-                    self.store.apply(
-                        action,
+                    mutation, value, ident = action, data.get('value'), data.get('id')
+                    if action == 'bind_source':
+                        state, value = self.selected(data['id'])
+                        if state['revision'] != data['revision']:
+                            raise ValueError('Workflow edited')
+                        selected = self.hooks.source()
+                        if selected is None:
+                            raise RequestRejected(
+                                '请先在“工作汇报来源”明确选择来源，再绑定汇报步骤。'
+                            )
+                        source = describe(selected)
+                        reports = [s for s in value['steps'] if s['kind'] == 'work_report']
+                        if not reports:
+                            raise RequestRejected('这个流程没有工作汇报步骤，无需绑定来源。')
+                        for step in reports:
+                            step['source'] = deepcopy(source)
+                        value['schedule'] = None
+                        mutation, ident = 'put', None
+                    changed = self.store.apply(
+                        mutation,
                         data['revision'],
-                        value=data.get('value'),
-                        ident=data.get('id'),
+                        value=value,
+                        ident=ident,
                         current=lambda: self.owner() == owner,
                     )
                     self.offer = None
+                    if action == 'bind_source':
+                        fields['definition'] = next(
+                            f for f in changed['items'] if f['id'] == data['id']
+                        )
                     if self.scheduler is not None:
                         self.scheduler.arm()
                 elif action == 'get':
@@ -235,7 +264,9 @@ class WorkflowController:
                         or self.clock() >= offer['expires']
                         or not self.hooks.idle()
                     ):
-                        raise ValueError('Workflow offer expired')
+                        raise RequestRejected(
+                            '运行确认已过期、已使用或当前连接／任务状态已变化，请重新核对流程。'
+                        )
                     if fingerprint(self.selected(offer['flow']['id'])[1]) != offer['config_hash']:
                         raise ValueError('Workflow definition changed')
                     camera = any(s['kind'] == 'ocr' for s in offer['flow']['steps'])
@@ -274,6 +305,8 @@ class WorkflowController:
                 message = (
                     '流程状态已核对。结果仅在本次后台内存中保存；已执行的操作不会因停止而撤回。'
                 )
+            except RequestRejected as error:
+                message = str(error)
             except (OSError, ValueError, RuntimeError):
                 pass
             if self.owner() != owner:
@@ -348,6 +381,11 @@ class WorkflowController:
                 if current():
                     self.hooks.publish_workspace()
                     self.hooks.event('workflow_progress', generation=generation, run=state)
+                    active = next(
+                        (row for row in state['steps'] if row['state'] == 'running'), None
+                    )
+                    if active is not None and current():
+                        self.hooks.status('thinking', '正在执行：' + active['title'])
 
         def execute_step(step, owned, deadline, accepted):
             nonlocal image
@@ -364,6 +402,9 @@ class WorkflowController:
                     actions.preflight(run.flow, owned)
                 if step['kind'] == 'ocr':
                     image = self.hooks.capture(generation, self.camera_nonce, owned)
+                    with self.hooks.lock:
+                        if owned():
+                            self.hooks.status('thinking', '摄像头已关闭，正在分析本次画面。')
                 return actions.execute(step, owned, deadline, accepted)
             finally:
                 image = None
