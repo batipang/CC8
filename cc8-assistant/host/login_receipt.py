@@ -199,6 +199,10 @@ class LoginRecoveryRun:
                         require(self.clock() - stable[2] <= 2, 'login_final_readiness_changed')
                         require(self.clock() < deadline, 'login_ready_deadline')
                         require(not self.stop.is_set(), 'login_check_stopped')
+                        require(
+                            value['armed_at'] <= self.wall() < value['expires_at'],
+                            'login_check_expired',
+                        )
                         value.update(
                             state='passed',
                             backend_ready=True,

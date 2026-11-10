@@ -120,7 +120,7 @@ class Scenario:
                 900
                 if self.fault == 'clock_back'
                 else 2001
-                if self.fault == 'expired'
+                if self.fault == 'expired' or self.fault == 'final_expiry' and self.samples >= 8
                 else 1000 + self.now
             ),
             wait=self.wait,
@@ -171,6 +171,7 @@ class LoginReceiptTests(unittest.TestCase):
             'final_work',
             'clock_back',
             'expired',
+            'final_expiry',
         ):
             with self.subTest(fault=fault):
                 scenario = Scenario(fault)
