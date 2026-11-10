@@ -2528,7 +2528,8 @@ final class VoiceSession {
     final int id;
     final String text;
     final String mood;
-    final float position, level;
+    final Object speechOwner;
+    final float position, level, speechDetail;
     final boolean timed, playing, paused;
     final long elapsedMs, totalMs;
 
@@ -2543,6 +2544,22 @@ final class VoiceSession {
         long total,
         float level,
         String mood) {
+      this(id, text, position, timed, playing, paused, elapsed, total, level, 0, null, mood);
+    }
+
+    CaptionProgress(
+        int id,
+        String text,
+        float position,
+        boolean timed,
+        boolean playing,
+        boolean paused,
+        long elapsed,
+        long total,
+        float level,
+        float speechDetail,
+        Object speechOwner,
+        String mood) {
       this.id = id;
       this.text = text;
       this.position = position;
@@ -2552,6 +2569,8 @@ final class VoiceSession {
       this.elapsedMs = elapsed;
       this.totalMs = total;
       this.level = level;
+      this.speechDetail = speechDetail;
+      this.speechOwner = speechOwner;
       this.mood = mood;
     }
 
@@ -2637,6 +2656,9 @@ final class VoiceSession {
     final RenderClockStats clockStats;
     final PlayoutProbe playout = new PlayoutProbe();
     final String text, mood, role;
+    // A content-free local token separates even reused server IDs after reconnect.
+    // Do not retain the Player (and its PCM queue) in the view's pose state.
+    final Object speechOwner = new Object();
     final SpeakerOwner.Ticket outputOwner;
     volatile CaptionTimeline timings;
     long renderSequence;
@@ -2806,13 +2828,13 @@ final class VoiceSession {
 
     private CaptionProgress sampleFrame(AudioTrack t, boolean freeze) {
       long head = 0;
-      float level = 0;
+      Envelope speech = null;
       try {
         if (t != null) {
           head = localHead(t);
           // A running track may still be playing zeros before this clause's physical origin.
           if (!freeze && head > 0 && t.getPlayState() == AudioTrack.PLAYSTATE_PLAYING)
-            level = levelAt(head);
+            speech = envelopeAt(head);
         }
       } catch (IllegalStateException ignored) {
       }
@@ -2826,17 +2848,19 @@ final class VoiceSession {
           freeze,
           head / 16,
           ended && queue.isEmpty() ? written / 16 : 0,
-          level,
+          speech == null ? 0 : speech.value,
+          speech == null ? 0 : speech.detail,
+          speechOwner,
           mood);
     }
 
-    private float levelAt(long head) {
+    private Envelope envelopeAt(long head) {
       Envelope e = envelopes.peek();
       while (e != null && head >= e.end) {
         envelopes.poll();
         e = envelopes.peek();
       }
-      return e != null && head >= e.start ? e.value : 0;
+      return e != null && head >= e.start ? e : null;
     }
 
     public boolean allowed() {
@@ -2883,12 +2907,9 @@ final class VoiceSession {
             count,
             speakerTime,
             PlaybackClock.source(now, target, valid, position, stamp.nanoTime));
-      double power = 0;
       short[] accepted = new short[count];
       System.arraycopy(samples, offset, accepted, 0, count);
-      for (short v : accepted) power += (double) v * v;
-      float value = (float) Math.sqrt(power / Math.max(1, count)) / 32768;
-      envelopes.add(new Envelope(written, written + count, value));
+      envelopes.add(new Envelope(written, accepted));
       sendPacket(
           Wire.RENDER,
           generation,
@@ -3073,12 +3094,24 @@ final class VoiceSession {
 
   private static final class Envelope {
     final long start, end;
-    final float value;
+    final float value, detail;
 
-    Envelope(long s, long e, float v) {
+    Envelope(long s, short[] samples) {
       start = s;
-      end = e;
-      value = v;
+      end = s + samples.length;
+      double power = 0, changes = 0;
+      for (int i = 0; i < samples.length; i++) {
+        double v = samples[i];
+        power += v * v;
+        if (i > 0) {
+          double difference = v - samples[i - 1];
+          changes += difference * difference;
+        }
+      }
+      value = (float) Math.sqrt(power / Math.max(1, samples.length)) / 32768;
+      // Cheap bounded signal variation changes shape, not the playback timing.
+      // It is deliberately not a vowel, consonant or phoneme classifier.
+      detail = power == 0 ? 0 : (float) Math.min(1, Math.sqrt(changes / (4 * power)));
     }
   }
 }

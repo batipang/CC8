@@ -37,7 +37,7 @@ final class BumblebeeAvatar {
     rightEye.close();
   }
 
-  void draw(Canvas canvas, float playback, String mood, long milliseconds) {
+  void draw(Canvas canvas, float articulation, float spread, String mood, long milliseconds) {
     paint.setShader(null);
     paint.setStyle(Paint.Style.FILL);
     paint.setAlpha(255);
@@ -50,12 +50,16 @@ final class BumblebeeAvatar {
     eyelid(canvas, leftEye, 650, 745, Math.max(blink, upper), lower);
     eyelid(canvas, rightEye, 718, 800, Math.max(blink, upper), lower);
     // Only actual rendered PCM opens the mouth; idle reproduces the approved smile.
-    float opening = Math.min(1, Math.max(0, (playback - .003f) * 18)) * 66;
+    float opening = articulation * 66;
     if (opening < 2) return;
+    // Reuse the approved mouth's anchors. Signal detail adjusts only its inner
+    // opening: no head motion, layout change or inferred phoneme is introduced.
+    float inset = (1 - spread) * 12 * articulation;
+    float left = 520 + inset, right = 766 - inset;
     mouth.reset();
-    mouth.moveTo(520, 923);
-    mouth.quadTo(624, 974 - opening * .28f, 766, 967);
-    mouth.quadTo(641, 974 + opening, 520, 923);
+    mouth.moveTo(left, 923 + inset * .18f);
+    mouth.quadTo(624, 974 - opening * (.20f + spread * .10f), right, 967 - inset * .12f);
+    mouth.quadTo(641, 974 + opening * (1 - spread * .16f), left, 923 + inset * .18f);
     mouth.close();
     paint.setColor(Color.rgb(27, 34, 46));
     canvas.drawPath(mouth, paint);

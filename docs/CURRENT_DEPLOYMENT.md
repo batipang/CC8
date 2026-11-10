@@ -1,5 +1,17 @@
 # 当前 CC8 部署与验收范围
 
+## 0.16.27／code136 已部署：命名工作流程
+
+当前后台0.16.27，原签名助手0.9.99 code136；主分支源码`1f56ca864cdcf5bfce61e6e5fe5b84f491309c43`，tree `ef1be6d2ccb42f4c3b66c3189e44bc0d283bd5b2`。实际安装的主分支APK SHA-256为`1854a66cea2c01f5a123c3dbb9c367a2b4366a951d74f6c41147f8d5e4b87221`，开发分支APK不是安装摘要。[PR476](https://github.com/batipang/CC8/pull/476)、[精确PR检查](https://github.com/batipang/CC8/actions/runs/42747930250)与[主分支检查](https://github.com/batipang/CC8/actions/runs/42749570522)各八项全部通过。24项安装器、179项工具、76项Java检查及2476项后台检查通过（2472成功、4项私人音频明确未选）；567个Python文件／24个严格类型根及原签名Android构建／lint通过。
+
+正常USB更新11步／67.949秒，系统安装回调与实际安装APK摘要核对通过，API27原证书连续。正式界面自动检查59.721秒，读取“设置→工作流程／定时简报”的三类模板、确认全部定时关闭，打开并放弃新草稿。没有保存工作流程文件或执行流程，没有打开麦克风、摄像头或播报。独立进程再次通过公开LoginProbe和实际进程／设备状态确认同一新实例、原厂后台恢复、双端停采；原配置、完整ENV、Interactive策略、八类私有存储和本机组件保持。私有记录见`device-access/private/deployments/01627-named-workflows-grouped/`中的`deployment-67bb2d89.json`、`UI-ffb1d017.json`与`independent-audit-1b10516c.json`。
+
+预检曾发现现有mlx／mlx-metal为0.29.3，而源码清单为0.29.4，在任何设备／服务改动前停止并保留记录。当前环境`pip check`通过，本批没有修改运行依赖；实际包版本与RECORD指纹在升级前后核对一致，没有自动升级模型运行库。该环境差异须在明确的依赖维护批次处理，不能把本次部署写成已消除差异。
+
+恢复包保留此前实际0.16.26行为，仅改助手声明为0.9.100 code137，避免降级安装；[恢复检查](https://github.com/batipang/CC8/actions/runs/42748453696)八项通过、原证书及三源构建回执核对通过，[PR477](https://github.com/batipang/CC8/pull/477)已关闭且未合入。恢复包未安装，也不是一次实际回退演练。真实流程生产者、原聊天续办、ChatGPT接入、环境／人工条件与完整P0／P1验收仍开放，72小时仍排最后。下一口型候选0.16.28／code138尚未部署。
+
+以下是各次部署发生时的历史记录，其中的“当前／候选”以该节日期与版本为准。
+
 ## 0.16.26／code134 已部署：相机检查与登录恢复收据（后台）
 
 当前后台 0.16.26，原签名助手 0.9.97 code134；源码 `4c4473b74cd9ac03689fdd70f2fac6a501fd4c9b`，tree `1985767b591084517aef44283f2463ee50770cca`。APK 未重建或重装，保持 SHA-256 `0db97578c1ad37794ffc7a860bb899358ce57fb64f8781b6e0ab5dd806468b73`。[PR475](https://github.com/batipang/CC8/pull/475)、[精确 PR 头八项 CI](https://github.com/batipang/CC8/actions/runs/42730522678) 与 [主分支八项 CI](https://github.com/batipang/CC8/actions/runs/42731465429) 通过；双平台 host 各 2396 项、24 项安装器、179 项工具及 76 项 Java 检查通过，4 项私人音频明确未选。

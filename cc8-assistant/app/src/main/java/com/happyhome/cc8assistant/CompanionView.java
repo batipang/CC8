@@ -29,7 +29,7 @@ final class CompanionView extends View {
           300,
           new int[] {Color.TRANSPARENT, CYAN, Color.TRANSPARENT},
           new float[] {0, .033333f, .033334f});
-  private float playback;
+  private final SpeechMotion speech = new SpeechMotion();
   private boolean linked;
   private String mood = "friendly";
   private long clockSecond = Long.MIN_VALUE;
@@ -58,10 +58,21 @@ final class CompanionView extends View {
 
   void update(
       float playback, float input, String mood, String phase, boolean linked, boolean active) {
-    this.playback = playback;
+    if (playback <= 0) speech.clear();
     this.mood = mood;
     this.linked = linked;
     invalidate();
+  }
+
+  void playback(
+      Object owner,
+      int id,
+      long playedMs,
+      float level,
+      float detail,
+      boolean playing,
+      boolean paused) {
+    speech.update(owner, id, playedMs, level, detail, playing, paused);
   }
 
   private void refreshClock(long millis) {
@@ -183,7 +194,7 @@ final class CompanionView extends View {
     c.save();
     c.translate(70, 89);
     c.scale(430f / 1254, 400f / 1254);
-    avatar.draw(c, playback, mood, SystemClock.uptimeMillis());
+    avatar.draw(c, speech.opening, speech.spread, mood, SystemClock.uptimeMillis());
     c.restore();
     c.restore();
   }
