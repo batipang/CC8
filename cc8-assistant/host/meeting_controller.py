@@ -12,6 +12,7 @@ from meeting_session import CaptureOwner, MeetingSession, token
 from meeting_view import checked, index_page, status, text_page
 from meeting_protocol import validate_request
 from meeting_worker import MeetingWorker
+from meeting_export import MeetingExports, CommitUncertain
 from protocol import MEETING
 
 
@@ -41,7 +42,7 @@ class MeetingHooks:
 class MeetingController:
     """Use the shared reentrant session guard, as other device controllers do."""
 
-    def __init__(self, hooks, *, client_factory=MeetingAsr, clock=time.monotonic):
+    def __init__(self, hooks, *, client_factory=MeetingAsr, clock=time.monotonic, exports=None):
         self.hooks, self.clock = hooks, clock
         self.model = None
         self.peer_owner = self.run_owner = self.offer = None
@@ -49,6 +50,7 @@ class MeetingController:
         self.route_serial = 0
         self.seen = deque(maxlen=64)
         self.changed = threading.Event()
+        self.exports: MeetingExports | None = exports
         self.worker = MeetingWorker(hooks.lock, client_factory, changed=self.changed.set)
         # No recording, thread, request, credential read or persistence here.
 
@@ -180,6 +182,34 @@ class MeetingController:
         action = request['action']
         if action == 'status':
             return {}
+        if action in ('exports', 'delete_export', 'export'):
+            if self.exports is None:
+                raise Rejected('此后台尚未配置会议导出目录，未保存或删除文件。')
+            if (
+                not self.hooks.idle()
+                or self.worker.busy()
+                or self.model is not None
+                and self.model.state == 'capturing'
+            ):
+                raise Rejected('请先暂停录音，等待当前任务、播报与转写结束，再管理导出文件。')
+            current = lambda: same_owner(owner, self.hooks.owner())
+            if action == 'exports':
+                return dict(exports=self.exports.snapshot())
+            if action == 'delete_export':
+                return dict(
+                    deleted_export=self.exports.delete(
+                        request['export_id'], request['sha256'], current=current
+                    )
+                )
+            receipt = self.exports.save(
+                self.model, request['id'], request['revision'], request['format'], current=current
+            )
+            return dict(
+                export=receipt,
+                local_path=str(
+                    self.exports.path / receipt['id'] / ('meeting.' + request['format'])
+                ),
+            )
         if action in ('prepare', 'prepare_resume'):
             return self._prepare(request, owner)
         if action in ('start', 'resume'):
@@ -260,6 +290,8 @@ class MeetingController:
                 result.update(self._action(request, owner), ok=True)
             except Rejected as error:
                 result['message'] = str(error)
+            except CommitUncertain:
+                result['message'] = '导出或删除结果未确认，请查看已导出文件核对；不会自动重试。'
             except (OSError, ValueError, RuntimeError):
                 result['message'] = '会议状态未确认，请刷新查看；不会自动重试或开始录音。'
             target = self.hooks.owner() if request['action'] in ('start', 'resume') else owner

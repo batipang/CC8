@@ -1663,6 +1663,7 @@ final class VoiceSession {
   }
 
   private void acceptMeeting(JSONObject data, long route, int generation) {
+    if (generation < minimumGeneration) return;
     String requestId = data.optString("request_id");
     JSONObject state = data.optJSONObject("state");
     JSONObject capture = data.optJSONObject("capture");

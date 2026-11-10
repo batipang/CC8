@@ -1,6 +1,8 @@
 """Actual Bridge routing/admission and real meeting worker, without device/cloud I/O."""
 
 from dataclasses import replace
+from pathlib import Path
+import tempfile
 import threading
 import time
 from types import SimpleNamespace
@@ -9,6 +11,7 @@ from unittest.mock import patch
 import uuid
 
 from protocol import MEETING, Packet, receive
+from meeting_export import MeetingExports, CommitUncertain
 import test_dot_handoff as bridge_fixtures
 from test_meeting_worker import Client
 from test_protocol_fuzz import Fragmented
@@ -392,6 +395,87 @@ class MeetingControllerTests(unittest.TestCase):
         self.assertTrue(
             self.request('resume', id=model.ident, offer_id=offer['id'], confirmed=True)['ok']
         )
+
+    def export_store(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        store = MeetingExports(Path(directory.name) / 'exports')
+        self.bridge.meetings.exports = store
+        return store
+
+    def test_real_wire_export_list_delete_preserves_separate_ram_meeting_and_files(self):
+        store = self.export_store()
+        self.assertEqual(self.request('exports')['exports']['items'], [])
+        self.assertFalse(store.path.exists())
+        capture = self.start()
+        self.audio(capture)
+        self.request('end', id=capture['id'])
+        self.idle()
+        model = self.bridge.meetings.model
+        saved = self.request(
+            'export', id=model.ident, revision=model.revision, format='json', confirmed=True
+        )
+        self.assertTrue(saved['ok'], saved)
+        self.assertTrue(Path(saved['local_path']).is_file())
+        self.assertEqual(self.request('exports')['exports']['items'], [saved['export']])
+        self.assertTrue(
+            self.request('delete', id=model.ident, revision=model.revision, confirmed=True)['ok']
+        )
+        self.assertEqual(len(self.request('exports')['exports']['items']), 1)
+        file = saved['export']
+        removed = self.request(
+            'delete_export', export_id=file['id'], sha256=file['sha256'], confirmed=True
+        )
+        self.assertTrue(removed['ok'], removed)
+        self.assertEqual(self.request('exports')['exports']['items'], [])
+        self.assertEqual(self.clients[0].calls, 1)
+
+    def test_file_management_cannot_delay_live_capture_or_export_stale_transcript(self):
+        store = self.export_store()
+        capture = self.start()
+        model = self.bridge.meetings.model
+        self.assertFalse(self.request('exports')['ok'])
+        self.assertFalse(
+            self.request(
+                'export', id=model.ident, revision=model.revision, format='txt', confirmed=True
+            )['ok']
+        )
+        self.assertFalse(store.path.exists())
+        self.audio(capture)
+        self.request('end', id=model.ident)
+        self.idle()
+        self.assertFalse(
+            self.request(
+                'export', id=model.ident, revision=model.revision - 1, format='txt', confirmed=True
+            )['ok']
+        )
+        self.assertFalse(store.path.exists())
+
+    def test_uncertain_export_never_claims_success_or_retries_and_changed_file_is_not_deleted(self):
+        store = self.export_store()
+        capture = self.start()
+        self.audio(capture)
+        self.request('end', id=capture['id'])
+        self.idle()
+        model = self.bridge.meetings.model
+        with patch.object(store, 'save', side_effect=CommitUncertain('private path')) as write:
+            result = self.request(
+                'export', id=model.ident, revision=model.revision, format='txt', confirmed=True
+            )
+        self.assertFalse(result['ok'])
+        self.assertEqual(write.call_count, 1)
+        self.assertNotIn('private path', repr(result))
+        self.assertIn('未确认', result['message'])
+        saved = self.request(
+            'export', id=model.ident, revision=model.revision, format='txt', confirmed=True
+        )
+        file = saved['export']
+        Path(saved['local_path']).write_text('another document')
+        result = self.request(
+            'delete_export', export_id=file['id'], sha256=file['sha256'], confirmed=True
+        )
+        self.assertFalse(result['ok'])
+        self.assertEqual(Path(saved['local_path']).read_text(), 'another document')
 
 
 if __name__ == '__main__':

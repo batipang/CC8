@@ -95,6 +95,9 @@ public class MeetingEntryCheck {
    case "old_close":arm(s);s.routeEpoch=2;String next=s.meetingConsent.clear();need(!next.isEmpty(),"Fixture lost initial grant");
     need(s.meetingConsent.arm("dddddddddddddddddddddddddddddddd",2,100),"Fresh route did not grant");s.leaveMeeting(1);
     need(s.meetingConsent.take("dddddddddddddddddddddddddddddddd",2,101),"Old dialog closed new route grant");break;
+   case "old_state":s.minimumGeneration=101;
+    s.acceptMeeting(new JSONObject("event","meeting_update","state",new JSONObject("state","paused")),1,100);
+    need(!s.meetingHostReserved&&s.listener.updates==0,"Old generation changed native reservation or current UI");break;
    case "hello":s.meetingHello(new JSONObject("supports_meetings",true,"meeting_state",new JSONObject("state","paused")));
     need(s.meetingReserved()&&AudioRecord.opens==0,"Reconnect forgot reservation or resumed recording");break;
    default:throw new AssertionError("Unknown scenario");
@@ -170,6 +173,7 @@ class MeetingEntryTests(unittest.TestCase):
             'late_old',
             'release_unknown',
             'old_close',
+            'old_state',
             'hello',
         ):
             with self.subTest(case=case):

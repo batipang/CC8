@@ -48,6 +48,7 @@ from workflow_store import WorkflowStore
 from workflow_controller import WorkflowController, WorkflowHooks
 from workflow_scheduler import ScheduleHooks
 from meeting_controller import MeetingController, MeetingHooks
+from meeting_export import MeetingExports
 
 if TYPE_CHECKING:
     from bridge import Bridge
@@ -524,7 +525,8 @@ def build_components(
             event=lambda name, **fields: host.event(name, **fields),
             touch=lambda: host.touch_activity(),
             claim=lambda: host.session.claim_meeting_generation(),
-        )
+        ),
+        exports=MeetingExports(private_directory() / 'meeting-exports'),
     )
     reporting = StatusReporter(
         ReportingHooks(

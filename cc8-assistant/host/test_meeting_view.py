@@ -118,6 +118,10 @@ class MeetingViewTests(unittest.TestCase):
             ),
             self.request('delete', id='a' * 32, revision=7, confirmed=True),
             self.request('export', id='a' * 32, revision=7, format='txt', confirmed=True),
+            self.request('exports'),
+            self.request(
+                'delete_export', export_id='a' * 32 + '_r7.txt', sha256='b' * 64, confirmed=True
+            ),
             self.request('summarize', id='a' * 32, revision=7, confirmed=True),
             self.request('translate', id='a' * 32, revision=7, language='en', confirmed=True),
         ]
@@ -148,6 +152,10 @@ class MeetingViewTests(unittest.TestCase):
                 'translate', id='a' * 32, revision=7, language='system:run', confirmed=True
             ),
             self.request('export', id='a' * 32, revision=7, format='../file', confirmed=True),
+            self.request('delete_export', export_id='../outside', sha256='b' * 64, confirmed=True),
+            self.request(
+                'delete_export', export_id='a' * 32 + '_r7.txt', sha256=True, confirmed=True
+            ),
             self.request('auto_record'),
             self.request([]),
         ]

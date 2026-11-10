@@ -5,6 +5,19 @@ import re
 MAX_ROWS = 256
 MAX_TEXT = 12000
 MAX_REVISION = 2**63 - 1
+EXPORT_NAME = re.compile(r'([a-f0-9]{32})_r(0|[1-9][0-9]{0,18})\.(txt|json)')
+PENDING_EXPORT = re.compile(r'pending-[a-f0-9]{32}')
+
+
+def export_name(value: object) -> bool:
+    if type(value) is not str:
+        return False
+    match = EXPORT_NAME.fullmatch(value)
+    return bool(match and int(match[2]) <= MAX_REVISION or PENDING_EXPORT.fullmatch(value))
+
+
+def sha256(value: object) -> bool:
+    return type(value) is str and re.fullmatch(r'[a-f0-9]{64}', value) is not None
 
 
 def token(value: object) -> bool:
@@ -52,6 +65,8 @@ def validate_request(value: object) -> None:
         'edit': {'id', 'revision', 'row_id', 'text', 'confirmed'},
         'delete': {'id', 'revision', 'confirmed'},
         'export': {'id', 'revision', 'format', 'confirmed'},
+        'exports': set(),
+        'delete_export': {'export_id', 'sha256', 'confirmed'},
         'summarize': {'id', 'revision', 'confirmed'},
         'translate': {'id', 'revision', 'language', 'confirmed'},
     }
@@ -73,6 +88,10 @@ def validate_request(value: object) -> None:
         text_value(value['text'])
     if action == 'export' and value['format'] not in ('txt', 'json'):
         raise ValueError('Unsupported meeting export')
+    if action == 'delete_export' and (
+        not export_name(value['export_id']) or not sha256(value['sha256'])
+    ):
+        raise ValueError('Invalid meeting export receipt')
     if action == 'translate' and value['language'] not in ('zh', 'en'):
         raise ValueError('Unsupported meeting translation language')
     if action == 'capture_failed' and value['reason'] not in (
