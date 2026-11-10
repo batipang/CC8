@@ -10,6 +10,11 @@ def stdout_hierarchy(raw):
     """Accept Android's fixed stdout wrapper, including canonicalized proc PID."""
     if type(raw) is not str or len(raw.encode()) > 256 * 1024:
         raise ValueError('Unsafe UI hierarchy stream')
+    # Verified SDK27 launcher warning does not invalidate the following XML.
+    # Accept this exact prefix once; unknown output still fails XML validation.
+    warning = "mkdir: '/data/local/tmp/dalvik-cache': Permission denied\n"
+    if raw.startswith(warning):
+        raw = raw[len(warning) :]
     # Some versions print the canonical /proc/<pid>/fd/1 instead of /proc/self.
     wrapper = r'UI (?:hierarchy|hierchary) dumped to: /proc/(?:self|[0-9]+)/fd/1'
     raw = re.sub(wrapper, '', raw).strip()
