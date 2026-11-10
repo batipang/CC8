@@ -65,3 +65,6 @@ class SpeakerIntegrationTests(unittest.TestCase):
 
     def test_mouth_stays_closed_while_warm_samples_are_still_ahead_of_content(self):
         self.check('prefix_visuals')
+
+    def test_shape_uses_accepted_physical_audio_and_closes_on_pause_and_cancel(self):
+        self.check('avatar_motion')

@@ -121,6 +121,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
           float level = cp.level;
           companion.update(
               level, session.microphoneLevel(), level > 0 ? cp.mood : mood, phase, linked, active);
+          companion.playback(
+              cp.speechOwner, cp.id, cp.elapsedMs, level, cp.speechDetail, cp.playing, cp.paused);
           waveform.update(level, cp.playing, cp.paused);
           if (cp.id > 0 && cp.text.equals(captionText.getText().toString())) {
             if (captionId != cp.id) {

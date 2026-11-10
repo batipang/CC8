@@ -374,12 +374,47 @@ public class VoiceSession implements AutoCloseable {
    s.vision_done(7);yes(s.speakerOwner.forPlayback(7)==null,"scene analysis output leaked");
   }
  }
+ static void avatarMotion()throws Exception{
+  try(VoiceSession s=new VoiceSession()){
+   Player p=s.make(2,3,false);AudioTrack track=s.attach(p);
+   short[] pcm=new short[700];
+   for(int i=0;i<pcm.length;i++)pcm[i]=(short)(i<300||i%2==0?8192:-8192);
+   yes(PcmPump.writeAll(pcm,p),"accepted articulation fixture");
+   SpeechMotion motion=new SpeechMotion();
+   track.manualHead=p.lease.base-160;
+   CaptionProgress warm=p.visualFrame();
+   motion.update(warm.speechOwner,warm.id,warm.elapsedMs,warm.level,warm.speechDetail,warm.playing,warm.paused);
+   yes(motion.opening==0&&warm.speechDetail==0,"queued PCM animated before physical origin");
+   track.manualHead=p.lease.base+100;
+   CaptionProgress low=p.visualFrame();
+   motion.update(low.speechOwner,low.id,low.elapsedMs,low.level,low.speechDetail,low.playing,low.paused);
+   yes(low.level==.25f&&low.speechDetail==0&&motion.opening>0,"accepted low-detail speech missing");
+   track.manualHead=p.lease.base+500;
+   CaptionProgress high=p.visualFrame();
+   yes(high.level==.25f&&high.speechDetail>.9f,"shape did not use the same physical envelope");
+   motion.update(high.speechOwner,high.id,high.elapsedMs,high.level,high.speechDetail,high.playing,high.paused);
+   yes(motion.spread>0&&motion.spread<1,"shape did not transition smoothly");
+   p.pauseForVoice(31);CaptionProgress pause=p.visualFrame();
+   motion.update(pause.speechOwner,pause.id,pause.elapsedMs,pause.level,pause.speechDetail,pause.playing,pause.paused);
+   yes(pause.level==0&&pause.speechDetail==0&&motion.opening==0&&motion.spread==0,"paused mouth not closed");
+   p.resumeAfterNoise(31);CaptionProgress resume=p.visualFrame();
+   motion.update(resume.speechOwner,resume.id,resume.elapsedMs,resume.level,resume.speechDetail,resume.playing,resume.paused);
+   yes(motion.opening>0,"resume did not follow actual still-owned audio");
+   p.cancel();CaptionProgress cancelled=p.visualFrame();
+   motion.update(cancelled.speechOwner,cancelled.id,cancelled.elapsedMs,cancelled.level,cancelled.speechDetail,cancelled.playing,cancelled.paused);
+   yes(cancelled.id==0&&motion.opening==0&&motion.spread==0,"cancel retained articulation");
+   Player replacement=s.make(2,3,false);
+   yes(replacement.playbackId==p.playbackId&&replacement.speechOwner!=p.speechOwner,
+    "reused server playback ID shared a local speech owner");
+  }
+ }
  public static void main(String[] args)throws Exception{
   switch(args[0]){
    case "controls":controls();break;
    case "visuals":visuals();break;
    case "accounting":accounting();break;
    case "prefix_visuals":prefixVisuals();break;
+   case "avatar_motion":avatarMotion();break;
    case "handover":handover();break;
    case "stopped":stopped();break;
    case "tasks":tasks();break;
@@ -478,6 +513,7 @@ class SpeakerHarness:
                     'CaptureClockStats',
                     'PhotoFollowupWindow',
                     'WorkflowConsent',
+                    'SpeechMotion',
                 )
             ]
             result = subprocess.run(
