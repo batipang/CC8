@@ -682,7 +682,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   private void inputTask() {
     EditText input = new EditText(this);
-    input.setTextSize(26);
+    input.setTextSize(30);
     input.setHint("输入要交给大黄蜂的指令");
     input.setTextColor(INK);
     input.setHintTextColor(MUTED);
@@ -803,7 +803,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
       }
     String result = task.optString("result");
     if (!result.isEmpty()) body.append("\n\n结果摘录：\n").append(result);
-    TextView detail = text(body.toString(), 26, INK);
+    TextView detail = text(body.toString(), 30, INK);
     detail.setTextIsSelectable(true);
     detail.setPadding(dp(24), dp(18), dp(24), dp(18));
     LinearLayout content = new LinearLayout(this);
@@ -813,7 +813,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
       for (boolean restart : new boolean[] {false, true}) {
         Button read = new Button(this);
         read.setText(restart ? "从头朗读结果" : "继续朗读结果");
-        read.setTextSize(24);
+        read.setTextSize(28);
         read.setOnClickListener(
             v -> {
               if (!session.readResult(task.optString("id"), restart, route)) workspaceNotSent();
@@ -971,11 +971,11 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     help.setText(
         "设置保存在 Mac。安静时段限制新提醒，不中断已经开始的播报。\n"
             + "迟到从原定时间计算；选择跳过后，安静时段中的提醒也可能错过。送达未确认不会自动重播，可重新安排或取消。");
-    help.setTextSize(26);
+    help.setTextSize(30);
     form.addView(help);
     Switch quiet = new Switch(this);
     quiet.setText("启用安静时段（北京时间）");
-    quiet.setTextSize(26);
+    quiet.setTextSize(30);
     quiet.setChecked(current.optBoolean("quiet_enabled"));
     form.addView(quiet);
     EditText start = new EditText(this), end = new EditText(this);
@@ -985,13 +985,13 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     end.setSingleLine(true);
     start.setText(current.optString("quiet_start"));
     end.setText(current.optString("quiet_end"));
-    start.setTextSize(26);
-    end.setTextSize(26);
+    start.setTextSize(30);
+    end.setTextSize(30);
     form.addView(start);
     form.addView(end);
     Switch skip = new Switch(this);
     skip.setText("超过迟到时限则跳过（关闭为补报）");
-    skip.setTextSize(26);
+    skip.setTextSize(30);
     skip.setChecked("skip".equals(current.optString("late_policy")));
     form.addView(skip);
     EditText minutes = new EditText(this);
@@ -999,7 +999,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     minutes.setSingleLine(true);
     minutes.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
     minutes.setText(String.valueOf(current.optInt("max_late_minutes", 60)));
-    minutes.setTextSize(26);
+    minutes.setTextSize(30);
     form.addView(minutes);
     ScrollView scroll = new ScrollView(this);
     scroll.addView(form);
@@ -1130,7 +1130,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     form.setPadding(dp(24), dp(16), dp(24), dp(8));
     EditText title = new EditText(this);
     title.setTextColor(INK);
-    title.setTextSize(26);
+    title.setTextSize(30);
     title.setHintTextColor(MUTED);
     title.setHint("提醒内容");
     title.setSingleLine(true);
@@ -1153,8 +1153,9 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
       }
     Button time =
         action(dateLabel(formatDue(date.getTimeInMillis())), android.R.drawable.ic_menu_today);
-    time.setTextSize(24);
-    form.addView(time, new LinearLayout.LayoutParams(-1, dp(58)));
+    time.setTextSize(28);
+    form.addView(time, new LinearLayout.LayoutParams(-1, -2));
+    time.setMinHeight(dp(64));
     time.setOnClickListener(
         v ->
             new android.app.DatePickerDialog(
@@ -1200,7 +1201,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     TextView note =
         text(
             "两种渠道都需 Mac 运行、CC8 前台连接且空闲。桌面通知需先在 Mac 完成安装和授权；未授权时显示未确认，不自动改成播报。修改收到 Mac 保存回执后生效。",
-            24,
+            28,
             INK);
     form.addView(note);
     ScrollView scroll = new ScrollView(this);
@@ -1368,7 +1369,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
         "请先暂停语音并等待任务结束，再应用设置。\n"
             + "语速相对当前音色调整，标准可恢复原语速。关闭自然插话后，播报时的新问题不会打断；仍可说“停一下”或点击停止。\n"
             + "设置在本次 Mac 服务内有效；更改不会开启麦克风。");
-    help.setTextSize(26);
+    help.setTextSize(30);
     content.addView(help);
     RadioGroup rates = new RadioGroup(this);
     rates.setOrientation(RadioGroup.HORIZONTAL);
@@ -1379,14 +1380,14 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
       RadioButton option = new RadioButton(this);
       option.setId(ids[i]);
       option.setText(labels[i]);
-      option.setTextSize(26);
+      option.setTextSize(30);
       rates.addView(option);
       if (values[i].equals(current.optString("speech_rate"))) rates.check(ids[i]);
     }
     content.addView(rates);
     CheckBox barge = new CheckBox(this);
     barge.setText("允许说新问题打断播报");
-    barge.setTextSize(26);
+    barge.setTextSize(30);
     barge.setChecked(current.optBoolean("natural_barge"));
     content.addView(barge);
     ScrollView scroll = new ScrollView(this);
@@ -1437,30 +1438,30 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     content.setOrientation(LinearLayout.VERTICAL);
     content.setPadding(dp(24), dp(12), dp(24), dp(12));
     TextView help =
-        text("默认预览 5 秒后直接分析。开启拍后核对后，可发送、重拍和裁剪；最多三张，等待最长 70 秒，拍完即关闭相机。设置仅本次界面有效，不会打开相机。", 26, INK);
+        text("默认预览 5 秒后直接分析。开启拍后核对后，可发送、重拍和裁剪；最多三张，等待最长 70 秒，拍完即关闭相机。设置仅本次界面有效，不会打开相机。", 30, INK);
     content.addView(help);
     RadioGroup quality = new RadioGroup(this);
     int standardId = View.generateViewId(), hdId = View.generateViewId();
     RadioButton standard = new RadioButton(this);
     standard.setId(standardId);
     standard.setText("标准（默认）");
-    standard.setTextSize(26);
+    standard.setTextSize(30);
     quality.addView(standard);
     RadioButton hd = new RadioButton(this);
     hd.setId(hdId);
     hd.setText("高清（需相机和 Mac 后台支持）");
-    hd.setTextSize(26);
+    hd.setTextSize(30);
     quality.addView(hd);
     quality.check(highDefinitionImage ? hdId : standardId);
     content.addView(quality);
     CheckBox review = new CheckBox(this);
     review.setText("拍后核对，可重拍／裁剪");
-    review.setTextSize(26);
+    review.setTextSize(30);
     review.setChecked(reviewCapturedImage);
     content.addView(review);
     CheckBox keep = new CheckBox(this);
     keep.setText("允许追问：首次回答后在 Mac 内存保留这张照片 2 分钟");
-    keep.setTextSize(26);
+    keep.setTextSize(30);
     keep.setChecked(retainCapturedPhoto);
     content.addView(keep);
     ScrollView scroll = new ScrollView(this);
@@ -1516,10 +1517,10 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
                 + "×"
                 + picture.height
                 + "。本次会把同一张照片交给 Dot，不重新打开相机；追问不会延长原保留窗口。语音已开启时，也可说‘追问这张照片，……’。",
-            26,
+            30,
             INK));
     EditText question = new EditText(this);
-    question.setTextSize(26);
+    question.setTextSize(30);
     question.setHint("例如：这张照片上的文字是什么意思？");
     question.setInputType(
         android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE);
@@ -1766,7 +1767,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     String displayed =
         (dotResultSource.isEmpty() ? "" : "摘要接续来源：" + dotResultSource + "\n结果未追加原桌面聊天\n\n")
             + dotResult;
-    TextView detail = text(displayed, 26, INK);
+    TextView detail = text(displayed, 30, INK);
     detail.setTextIsSelectable(true);
     detail.setPadding(dp(22), dp(16), dp(22), dp(16));
     ScrollView scroll = new ScrollView(this);
@@ -2208,7 +2209,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
                   try {
                     startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
                   } catch (ActivityNotFoundException | SecurityException e) {
-                    TextView link = text(url, 26, INK);
+                    TextView link = text(url, 30, INK);
                     link.setTextIsSelectable(true);
                     link.setPadding(dp(24), dp(20), dp(24), dp(20));
                     final AlertDialog fallback =

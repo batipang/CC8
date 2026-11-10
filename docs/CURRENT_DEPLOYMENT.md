@@ -1,5 +1,11 @@
 # 当前 CC8 部署与验收范围
 
+## 0.16.31／code154 已部署：会议文字处理
+
+实际后台 0.16.31、原签名助手 0.9.117 code154，运行源码 `b662202dd4d3afa74f88aceaed7f4accff6d01b1`。安装 APK SHA-256 `772cf1d862dd34c00f7b8f3b2d8f85a0434ea55f5ce9550e2f7dc996ba60c7be`。会议转写校对、Dot 总结、中英翻译、完整分页和 TXT／JSON 导出已交付软件；[PR487](https://github.com/batipang/CC8/pull/487) 八项必需 CI 通过。原签名组合部署、空会议实机控件检查和独立审计均通过，恢复原后台，未启动录音、拍照或模型处理；配置、完整 ENV、Interactive 策略和八类私有存储保持。证据保留于忽略的 `device-access/private/deployments/01631-meeting-labels154/`。
+
+当前大字候选 code156 只调整 Android 对话框，后台版本保持 0.16.31。真实会议、环境及人工验收仍开放，72 小时验收继续排在最后。以下保留先前部署发生时的记录。
+
 ## 0.16.27／code139 当前运行：首次口型更新后的自动回退
 
 实际运行源码`dd8399d82c46b20bbfbc9e68155372f66ac7202b`，后台0.16.27／助手0.9.102 code139，APK SHA-256 `1cb79a63df5b159f8cdd3b576b1e6e0bd2f7413ef86762ff092fe962010b705b`。这是已部署136行为的原签名更高版本号恢复包，仅release声明不同；保留工作流程及全部原数据。

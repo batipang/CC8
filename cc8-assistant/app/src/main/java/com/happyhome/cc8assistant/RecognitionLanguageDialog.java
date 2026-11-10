@@ -41,7 +41,7 @@ final class RecognitionLanguageDialog {
     content.setOrientation(LinearLayout.VERTICAL);
     content.setPadding(24, 12, 24, 12);
     TextView help = new TextView(activity);
-    help.setTextSize(26);
+    help.setTextSize(30);
     help.setText(
         "先暂停语音并等待任务结束，再应用。自动适合中英混合；中文或英文向 MiniMax 提供语言提示，不能保证听写更准确。\n"
             + "不改写识别原文，不改变本地唤醒、回声处理或音色。仅本次 Mac 服务有效，重启恢复自动；应用不会开启麦克风。");
@@ -53,7 +53,7 @@ final class RecognitionLanguageDialog {
     for (int i = 0; i < values.length; i++) {
       RadioButton button = new RadioButton(activity);
       button.setId(ids[i]);
-      button.setTextSize(26);
+      button.setTextSize(30);
       button.setText(labels[i]);
       group.addView(button);
       if (values[i].equals(current.optString("recognition_language"))) group.check(ids[i]);

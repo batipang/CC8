@@ -22,7 +22,7 @@ final class LargeDialogBuilder extends AlertDialog.Builder {
               @Override
               public void onViewAttachedToWindow(View view) {
                 TextView message = dialog.findViewById(android.R.id.message);
-                if (message != null) message.setTextSize(26);
+                if (message != null) message.setTextSize(30);
                 view.removeOnAttachStateChangeListener(this);
               }
 

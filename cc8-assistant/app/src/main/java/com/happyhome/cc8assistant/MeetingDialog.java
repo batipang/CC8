@@ -117,7 +117,7 @@ final class MeetingDialog {
     panel.setOrientation(LinearLayout.VERTICAL);
     panel.setPadding(24, 14, 24, 14);
     info = new TextView(activity);
-    info.setTextSize(26);
+    info.setTextSize(30);
     panel.addView(info);
     LinearLayout controls = new LinearLayout(activity);
     start = button(controls, "开始会议", this::prepare);
@@ -212,7 +212,7 @@ final class MeetingDialog {
     Button value = new Button(activity);
     value.setAllCaps(false);
     value.setText(title);
-    value.setTextSize(24);
+    value.setTextSize(28);
     value.setOnClickListener(
         v -> {
           if (live(owner)) click.run();
@@ -269,7 +269,7 @@ final class MeetingDialog {
     final String id = state.optString("id");
     final boolean resume = "resume".equals(offer.optString("mode"));
     CheckBox consent = new CheckBox(activity);
-    consent.setTextSize(26);
+    consent.setTextSize(30);
     consent.setText("已获得所有参与者同意，将录音片段发送 MiniMax 转写。\n默认不保存原音；文字只保留在本机内存。关闭页面即暂停录音。");
     consent.setPadding(24, 18, 24, 18);
     ScrollView scroll = new ScrollView(activity);
@@ -529,7 +529,7 @@ final class MeetingDialog {
       return;
     }
     EditText edit = new EditText(activity);
-    edit.setTextSize(26);
+    edit.setTextSize(30);
     edit.setMinLines(3);
     edit.setMaxLines(8);
     edit.setFilters(new InputFilter[] {new InputFilter.LengthFilter(24000)});
