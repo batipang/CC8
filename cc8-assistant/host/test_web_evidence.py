@@ -72,6 +72,7 @@ class WebEvidenceTests(unittest.TestCase):
             ('received_bytes', True),
             ('received_bytes', 1048577),
             ('http_status', 302),
+            ('http_status', 200.0),
             ('final_url', 'http://127.0.0.1'),
             ('text', ''),
             ('publication_labels', [5]),
@@ -87,6 +88,60 @@ class WebEvidenceTests(unittest.TestCase):
         row = self.sources()[0]
         self.assertEqual(row['access_evidence'], 'page_fetch_failed')
         self.assertEqual(row['page_excerpt'], '')
+        self.assertIsNone(row['page_text_chars'])
+        self.assertIsNone(row['page_text_truncated'])
+
+    def test_received_text_coverage_and_excerpt_limits_remain_distinct(self):
+        text = '\U0001f600' * 20000
+        receipt = self.page()
+        receipt.update(text=text, text_truncated=True)
+        self.evidence.page(receipt)
+        receipt['text_truncated'] = False
+        row = self.sources()[0]
+        self.assertEqual(row['page_text_chars'], 20000)
+        self.assertEqual(len(row['page_excerpt']), 2000)
+        self.assertIs(row['page_text_truncated'], True)
+        self.assertEqual(row['page_http_status'], 200)
+        self.assertIs(row['body_verified'], False)
+
+    def test_legacy_or_malformed_truncation_is_unknown_without_losing_real_text(self):
+        for value in (None, 'false', 0, True):
+            evidence = WebEvidence()
+            receipt = self.page()
+            receipt.update(text=' small\x00 text ', text_truncated=value)
+            evidence.page(receipt)
+            row = evidence.sources([{'title': 'source', 'url': self.url}])[0]
+            self.assertEqual(row['page_excerpt'], 'small text')
+            self.assertEqual(row['page_text_chars'], 13)
+            self.assertEqual(row['access_evidence'], 'page_body_received')
+            self.assertIsNone(row['page_text_truncated'])
+        evidence = WebEvidence()
+        receipt['text_truncated'] = False
+        evidence.page(receipt)
+        self.assertIs(
+            evidence.sources([{'title': 'source', 'url': self.url}])[0]['page_text_truncated'],
+            False,
+        )
+
+    def test_failed_reads_keep_only_fixed_error_codes_and_valid_terminal_status(self):
+        for error, status, code, expected_status in (
+            ('http_error', 404, 'http_error', 404),
+            ('unsupported_encoding', 200, 'unsupported_encoding', 200),
+            ('timeout', None, 'timeout', None),
+            ('/private/secret-key', 999, '', None),
+            ('network_failed', True, 'network_failed', None),
+            ('dns_failed', '404', 'dns_failed', None),
+        ):
+            evidence = WebEvidence()
+            receipt = dict(ok=False, url=self.url, error=error, http_status=status)
+            evidence.page(receipt)
+            receipt['error'] = 'changed'
+            row = evidence.sources([{'title': 'source', 'url': self.url}])[0]
+            self.assertEqual(row['access_evidence'], 'page_fetch_failed')
+            self.assertEqual(row['page_error_code'], code)
+            self.assertEqual(row['page_http_status'], expected_status)
+            self.assertEqual(row['page_excerpt'], '')
+            self.assertNotIn('secret-key', str(row))
 
     def test_unicode_large_source_metadata_cannot_overflow_authenticated_packets(self):
         links = []

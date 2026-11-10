@@ -51,6 +51,31 @@ public class SourceCheck {
  yes(!new SourcesPresentation(new JSONArray(read),"","",4,9).at(0).summary().contains("HTTP 页面已读取"),"malformed page receipt promoted");
  read.data.put("page_bytes",577);read.data.put("page_details_limited",true);
  yes(new SourcesPresentation(new JSONArray(read),"","",4,9).at(0).label().contains("受传输大小限制"),"omitted details were concealed");
+ JSONObject coverage=new JSONObject("title","范围","url",url,"access_evidence","page_body_received",
+  "observed_at","now","page_bytes",1000,"page_excerpt","汉😀字","page_text_chars",20000,"page_text_truncated",true);
+ SourcesPresentation.Source scoped=new SourcesPresentation(new JSONArray(coverage),"now","answer_completed",4,9).at(0);
+ yes(scoped.label().contains("保留文字：20000 字符；当前摘录：3 字符")&&scoped.label().contains("后文未核对"),"UTF16 units or truncation promoted full-page coverage");
+ coverage.data.put("page_text_chars",3);coverage.data.put("page_text_truncated",false);
+ yes(scoped.label().contains("20000 字符")&&scoped.label().contains("后文未核对"),"mutable coverage rewrote the receipt");
+ scoped=new SourcesPresentation(new JSONArray(coverage),"","",4,9).at(0);
+ yes(scoped.label().contains("读取器未因文字上限截断")&&!scoped.label().contains("后文未核对"),"known complete retained text hidden");
+ for(Object bad:new Object[]{null,"false",0}){coverage.data.put("page_text_truncated",bad);
+  yes(new SourcesPresentation(new JSONArray(coverage),"","",4,9).at(0).label().contains("截断状态：未提供"),"missing/coerced boolean became completeness proof");}
+ coverage.data.put("page_text_chars",2);coverage.data.put("page_text_truncated",false);
+ yes(new SourcesPresentation(new JSONArray(coverage),"","",4,9).at(0).label().contains("文字数量：未提供"),"inconsistent excerpt count trusted");
+ coverage.data.put("page_bytes",1.0);
+ yes(!new SourcesPresentation(new JSONArray(coverage),"","",4,9).at(0).pageRead,"floating-point bytes manufactured body evidence");
+ coverage.data.put("page_bytes",1000);coverage.data.put("page_text_chars",20000);
+ coverage.data.remove("page_excerpt");coverage.data.put("page_text_truncated",true);coverage.data.put("page_details_limited",true);
+ String omitted=new SourcesPresentation(new JSONArray(coverage),"","",4,9).at(0).label();
+ yes(omitted.contains("当前摘录：0 字符")&&omitted.contains("受传输大小限制")&&omitted.contains("后文未核对"),"omitted transport data counted as displayed excerpt");
+ JSONObject failure=new JSONObject("title","失败来源","url",url,"access_evidence","page_fetch_failed",
+  "page_error_code","unsupported_encoding","page_http_status",200,"page_excerpt","未取得正文");
+ String failed=new SourcesPresentation(new JSONArray(failure),"","",4,9).at(0).label();
+ yes(failed.contains("UTF-8")&&failed.contains("HTTP 响应：200；未取得可用正文")&&!failed.contains("正文摘录"),"HTTP 200 or stale excerpt manufactured body evidence");
+ failure.data.put("page_error_code","/private/credential-secret");failure.data.put("page_http_status",true);
+ failed=new SourcesPresentation(new JSONArray(failure),"","",4,9).at(0).label();
+ yes(!failed.contains("credential-secret")&&failed.contains("未提供可核对的原因")&&failed.contains("未取得可核对状态"),"untrusted reason or malformed status displayed");
  for(String bad:new String[]{"javascript:alert(1)","http://localhost/a","https://user:secret@example.com/a","https://127.0.0.1/a","https://0177.0.0.1/a","https://127.1/a","https://0x7f.0.0.1/a","https://[::ffff:127.0.0.1]/a","https://10.0.0.1/a","https://169.254.1.1/a","https://machine.local/a","https://machine.local./a","https://example.com:22/a","https://example.com/a b"})
   yes(!SourcesPresentation.safeUrl(bad),"unsafe URL accepted: "+bad);
  Object[] many=new Object[20];java.util.Arrays.fill(many,page);

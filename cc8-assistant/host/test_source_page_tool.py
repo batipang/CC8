@@ -97,6 +97,25 @@ class SourceToolTests(unittest.TestCase):
         self.assertIs(row['body_verified'], False)
         self.assertNotIn('原文中', row['page_excerpt'])
 
+    def test_real_failed_tool_receipt_reaches_final_sources_without_model_body_claims(self):
+        rpc = ReadingRpc()
+        brain = DotBrain(rpc)
+        events = []
+        failure = {'ok': False, 'url': URL, 'error': 'unsupported_encoding', 'http_status': 200}
+        with patch('dot_client.read_page', return_value=failure):
+            list(
+                brain.clauses(
+                    '核对来源', [], on_web=lambda kind, value: events.append((kind, value))
+                )
+            )
+        row = next(payload for kind, payload in events if kind == 'sources')['items'][0]
+        self.assertEqual(row['access_evidence'], 'page_fetch_failed')
+        self.assertEqual(row['page_error_code'], 'unsupported_encoding')
+        self.assertEqual(row['page_http_status'], 200)
+        self.assertEqual(row['page_excerpt'], '')
+        self.assertIsNone(row['page_text_chars'])
+        self.assertIs(row['body_verified'], False)
+
     def test_per_turn_budget_is_shared_across_tool_calls_and_resets_for_new_turn(self):
         rpc = ReadingRpc(5)
         brain = DotBrain(rpc)
