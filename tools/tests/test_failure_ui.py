@@ -103,6 +103,23 @@ class HierarchyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             qa_ui.stdout_hierarchy('<hierarchy/>ERROR: could not get idle state')
 
+    def test_exact_sdk27_cache_warning_does_not_hide_a_valid_dump_or_accept_unknown_output(self):
+        warning = "mkdir: '/data/local/tmp/dalvik-cache': Permission denied\n"
+        raw = '<hierarchy><node bounds="[10,20][90,60]"/></hierarchy>'
+        root = qa_ui.stdout_hierarchy(warning + raw + 'UI hierchary dumped to: /proc/self/fd/1')
+        self.assertEqual(qa_ui.point(next(root.iter('node'))), (50, 40))
+        for invalid in (
+            warning,
+            warning + 'ERROR: could not get idle state',
+            warning + warning + raw,
+            warning.replace('dalvik-cache', 'other') + raw,
+            'untrusted prefix\n' + raw,
+            warning + '<!DOCTYPE hierarchy><hierarchy/>',
+            warning + raw + 'untrusted suffix',
+        ):
+            with self.subTest(raw=invalid), self.assertRaises(ValueError):
+                qa_ui.stdout_hierarchy(invalid)
+
     def root(self, content):
         return qa_ui.hierarchy('<hierarchy>' + content + '</hierarchy>')
 
