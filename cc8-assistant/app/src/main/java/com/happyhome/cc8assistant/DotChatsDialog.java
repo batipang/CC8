@@ -115,7 +115,7 @@ final class DotChatsDialog {
             .setNegativeButton("关闭", null);
     Button reportButton = new Button(activity);
     reportButton.setText("工作汇报");
-    reportButton.setTextSize(24);
+    reportButton.setTextSize(28);
     if (reports) builder.setView(reportButton);
     AlertDialog dialog = builder.create();
     reportButton.setOnClickListener(

@@ -68,6 +68,7 @@ public class Button extends TextView {
  private Click click;boolean enabled=true;
  public void setEnabled(boolean value){enabled=value;}
  public Button(Object owner){super(owner);}
+ public void setMinHeight(int value){}
  public void setOnClickListener(Click value){click=value;}
  public void performClick(){if(enabled&&click!=null)click.click(this);}
 }

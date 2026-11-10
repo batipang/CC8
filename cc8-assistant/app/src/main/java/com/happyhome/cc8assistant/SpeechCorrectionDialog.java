@@ -28,7 +28,7 @@ final class SpeechCorrectionDialog {
     close();
     if (!Boolean.TRUE.equals(state.opt("pending"))) return;
     TextView content = new TextView(activity);
-    content.setTextSize(26);
+    content.setTextSize(30);
     content.setPadding(24, 16, 24, 16);
     content.setText(
         "原问题：\n"
