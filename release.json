@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "playout-avatar-motion-baseline-recovery-20261110.1",
+  "release_id": "avatar-caption-baseline-recovery-20261110.1",
   "backend": {
     "version": "0.16.27"
   },
   "assistant": {
-    "version": "0.9.102",
-    "version_code": 139,
+    "version": "0.9.104",
+    "version_code": 141,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {
