@@ -358,6 +358,12 @@ class MeetingSession:
             )
         )
 
+    def note_analysis(self):
+        """A completed derived document gets its own export revision."""
+        if self.state != 'ended' or any(row['state'] == 'pending' for row in self.rows):
+            raise ValueError('Meeting analysis cannot revise this state')
+        self._change()
+
     def delete(self):
         self.owner = None
         self.buffer.clear()

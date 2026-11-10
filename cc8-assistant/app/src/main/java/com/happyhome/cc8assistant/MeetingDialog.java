@@ -22,7 +22,16 @@ final class MeetingDialog {
   private final Handler handler = new Handler(Looper.getMainLooper());
   private AlertDialog dialog, child, confirmation;
   private TextView info;
-  private Button start, pause, end, transcript, delete, export;
+  private Button start,
+      pause,
+      end,
+      transcript,
+      delete,
+      export,
+      summarize,
+      translate,
+      analysisResults,
+      cancelAnalysis;
   private long route = -1, epoch;
   private JSONObject state = new JSONObject();
   private String pending = "", action = "";
@@ -31,10 +40,35 @@ final class MeetingDialog {
   private long readingRevision;
   private int readingOffset;
   private StringBuilder text;
+  private final MeetingAnalysisDialog analysisDialog;
 
   MeetingDialog(Activity activity, VoiceSession session) {
     this.activity = activity;
     this.session = session;
+    analysisDialog =
+        new MeetingAnalysisDialog(
+            activity,
+            new MeetingAnalysisDialog.Port() {
+              public long epoch() {
+                return MeetingDialog.this.epoch;
+              }
+
+              public boolean current(long owner) {
+                return live(owner);
+              }
+
+              public JSONObject state() {
+                return MeetingDialog.this.state;
+              }
+
+              public void request(JSONObject args) {
+                MeetingDialog.this.request(args);
+              }
+
+              public void toast(String message) {
+                MeetingDialog.this.toast(message);
+              }
+            });
   }
 
   private boolean live() {
@@ -61,6 +95,7 @@ final class MeetingDialog {
     timeout = null;
     pending = action = readingRow = readingId = "";
     text = null;
+    analysisDialog.close();
     AlertDialog old = dialog;
     dialog = null;
     if (child != null) child.dismiss();
@@ -134,6 +169,24 @@ final class MeetingDialog {
     export = button(documents, "导出文字", this::exportText);
     button(documents, "已导出文件", () -> request(args("exports")));
     panel.addView(documents);
+    LinearLayout analysis = new LinearLayout(activity);
+    summarize = button(analysis, "Dot 总结", () -> requestAnalysis("summarize", "zh"));
+    translate = button(analysis, "翻译文字", analysisDialog::chooseTranslation);
+    analysisResults = button(analysis, "查看分析", analysisDialog::openResults);
+    panel.addView(analysis);
+    LinearLayout processing = new LinearLayout(activity);
+    cancelAnalysis =
+        button(
+            processing,
+            "取消文字处理",
+            () -> {
+              JSONObject job = state.optJSONObject("analysis_job");
+              if (job == null) return;
+              JSONObject args = forMeeting("cancel_analysis");
+              Wire.put(args, "analysis_id", job.optString("id"));
+              request(args);
+            });
+    panel.addView(processing);
     ScrollView scroll = new ScrollView(activity);
     scroll.addView(panel);
     dialog =
@@ -175,7 +228,10 @@ final class MeetingDialog {
             close();
             return;
           }
-          if (pending.isEmpty() && child == null && confirmation == null) request(args("status"));
+          if (pending.isEmpty()
+              && child == null
+              && confirmation == null
+              && !analysisDialog.isOpen()) request(args("status"));
           handler.postDelayed(this, 1000);
         }
       };
@@ -264,11 +320,13 @@ final class MeetingDialog {
         () -> {
           if (!id.equals(pending) || !live()) return;
           pending = action = "";
+          analysisDialog.failed();
           session.leaveMeeting(route);
           info.setText("会议请求未确认，已停止本机会议录音。请刷新查看，不会自动重试。");
         };
     handler.postDelayed(timeout, 12000);
     if (!session.meetingRequest(id, args, route)) {
+      if ("analysis_text".equals(action)) analysisDialog.failed();
       handler.removeCallbacks(timeout);
       pending = action = "";
       toast("请求未发送，请等待音频释放、检查权限和连接后重新确认。");
@@ -294,6 +352,7 @@ final class MeetingDialog {
     if (timeout != null) handler.removeCallbacks(timeout);
     timeout = null;
     if (!Boolean.TRUE.equals(value.opt("ok"))) {
+      if ("analysis_text".equals(completed)) analysisDialog.failed();
       toast(value.optString("message", "会议状态已变化，请刷新查看。"));
       return;
     }
@@ -309,6 +368,8 @@ final class MeetingDialog {
     else if ("export".equals(completed))
       showExport(value.optJSONObject("export"), value.optString("local_path"));
     else if ("delete_export".equals(completed)) request(args("exports"));
+    else if ("analysis_text".equals(completed))
+      analysisDialog.acceptPage(value.optJSONObject("page"));
   }
 
   private void render() {
@@ -340,6 +401,39 @@ final class MeetingDialog {
     transcript.setEnabled(state.optInt("row_count") > 0);
     delete.setEnabled(exists && !"capturing".equals(mode) && state.optInt("pending_count") == 0);
     export.setEnabled("ended".equals(mode) && state.optInt("pending_count") == 0);
+    JSONObject job = state.optJSONObject("analysis_job");
+    String progress = job == null ? "" : job.optString("state");
+    boolean busy = "queued".equals(progress) || "running".equals(progress);
+    boolean ready =
+        "ended".equals(mode)
+            && state.optInt("pending_count") == 0
+            && state.optInt("row_count") > 0
+            && !busy;
+    summarize.setEnabled(ready);
+    translate.setEnabled(ready);
+    cancelAnalysis.setEnabled(busy);
+    JSONArray results = state.optJSONArray("analyses");
+    analysisResults.setEnabled(results != null && results.length() > 0);
+    if (job != null)
+      info.setText(
+          info.getText()
+              + "\nDot 文字处理："
+              + (busy
+                  ? "正在处理，可取消"
+                  : "completed".equals(progress)
+                      ? "结果已生成，请核对"
+                      : "failed".equals(progress)
+                          ? job.optString("message", "未取得完整结果，未保存部分生成内容")
+                          : "已取消")
+              + "\n仅处理文字，不自动执行会议待办。");
+  }
+
+  private void requestAnalysis(String kind, String language) {
+    JSONObject args = forMeeting(kind);
+    Wire.put(args, "revision", state.optLong("revision"));
+    Wire.put(args, "confirmed", true);
+    if ("translate".equals(kind)) Wire.put(args, "language", language);
+    request(args);
   }
 
   private void showRows(JSONObject page) {

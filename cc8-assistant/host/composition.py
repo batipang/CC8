@@ -525,6 +525,12 @@ def build_components(
             event=lambda name, **fields: host.event(name, **fields),
             touch=lambda: host.touch_activity(),
             claim=lambda: host.session.claim_meeting_generation(),
+            submit=lambda text, factory: host.session.submit_text(
+                text, _job_factory=factory, _job_origin='meeting'
+            ),
+            workspace=lambda: host.workspace,
+            publish=lambda: host.publish_workspace(),
+            diagnostics=lambda: host.diagnostics,
         ),
         exports=MeetingExports(private_directory() / 'meeting-exports'),
     )

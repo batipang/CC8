@@ -175,12 +175,16 @@ class WatchSummaryTests(unittest.TestCase):
 
     def test_queue_eviction_releases_summary_body_and_callback(self):
         from announce import Announcement
+        from reply_types import TextReply
 
         with tempfile.TemporaryDirectory() as folder:
             b, store = self.start(folder, ['PRIVATE'])
             old = Announcement(-1, 'PRIVATE', segments=('PRIVATE',), on_segment=lambda _: None)
             b.response.queue.put_nowait(old)
             b.response.queue.put_nowait(Announcement(-1, 'ordinary'))
-            b.response.enqueue(Announcement(-1, 'replacement'))
+            # A current text response may evict stale queued announcements;
+            # an invalid generation is now rejected before touching the queue.
+            b.session.text_generation = b.generation
+            b.response.enqueue(TextReply(b.generation, 'replacement'))
             self.assertTrue(old.done.is_set())
             self.assertEqual((old.text, old.segments, old.on_segment), ('', (), None))

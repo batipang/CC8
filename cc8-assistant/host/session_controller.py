@@ -12,7 +12,7 @@ import time
 import uuid
 import re
 from protocol import Packet
-from reply_types import TextReply, ResultRead, CorrectedReply
+from reply_types import TextReply, ResultRead, CorrectedReply, MeetingReply
 from saved_tasks import ident as result_ident
 from request_text import validate_request_text
 from diagnostics import error_kind
@@ -235,6 +235,7 @@ class SessionController:
         corrected=False,
         _job_factory=None,
         _workflow_nonce='',
+        _job_origin='workflow',
     ):
         text = validate_request_text(text, 6000)
         if type(corrected) is not bool or corrected and result_id is not None:
@@ -244,9 +245,19 @@ class SessionController:
         ):
             raise ValueError('Invalid trusted text work factory')
         if (
+            _job_origin not in ('workflow', 'meeting')
+            or _job_origin == 'meeting'
+            and _job_factory is None
+        ):
+            raise ValueError('Invalid trusted text work origin')
+        if (
             not isinstance(_workflow_nonce, str)
             or _workflow_nonce
-            and (_job_factory is None or not re.fullmatch('[a-f0-9]{32}', _workflow_nonce))
+            and (
+                _job_factory is None
+                or _job_origin != 'workflow'
+                or not re.fullmatch('[a-f0-9]{32}', _workflow_nonce)
+            )
         ):
             raise ValueError('Invalid workflow camera confirmation')
         if result_id is not None:
@@ -299,7 +310,7 @@ class SessionController:
                     generation=generation,
                     text=text,
                     **(
-                        {'input_origin': 'workflow', 'workflow_camera_nonce': _workflow_nonce}
+                        {'input_origin': _job_origin, 'workflow_camera_nonce': _workflow_nonce}
                         if _job_factory is not None
                         else {'input_origin': 'correction'}
                         if corrected
@@ -324,6 +335,7 @@ class SessionController:
                     not isinstance(job, TextReply)
                     or job.generation != generation
                     or job.text != text
+                    or isinstance(job, MeetingReply) != (_job_origin == 'meeting')
                 ):
                     raise ValueError('Invalid trusted response job')
                 if not current():

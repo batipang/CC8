@@ -69,10 +69,12 @@ def validate_request(value: object) -> None:
         'delete_export': {'export_id', 'sha256', 'confirmed'},
         'summarize': {'id', 'revision', 'confirmed'},
         'translate': {'id', 'revision', 'language', 'confirmed'},
+        'cancel_analysis': {'id', 'analysis_id'},
+        'analysis_text': {'id', 'analysis_id', 'offset'},
     }
     if action not in fields or set(value) != {'event', 'request_id', 'action'} | fields[action]:
         raise ValueError('Unexpected meeting fields')
-    for key in ('id', 'offer_id', 'row_id', 'nonce', 'start_request_id'):
+    for key in ('id', 'offer_id', 'row_id', 'nonce', 'start_request_id', 'analysis_id'):
         if key in value and not token(value[key]):
             raise ValueError('Invalid meeting identity')
     if 'revision' in value and not integer(value['revision'], MAX_REVISION):
@@ -82,7 +84,10 @@ def validate_request(value: object) -> None:
     for key in ('save_audio', 'original'):
         if key in value and type(value[key]) is not bool:
             raise ValueError('Invalid meeting option')
-    if 'offset' in value and not integer(value['offset'], MAX_ROWS if action == 'index' else 12000):
+    if 'offset' in value and not integer(
+        value['offset'],
+        MAX_ROWS if action == 'index' else 512 * 1024 if action == 'analysis_text' else 12000,
+    ):
         raise ValueError('Invalid meeting page cursor')
     if action == 'edit':
         text_value(value['text'])

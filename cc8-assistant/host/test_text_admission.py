@@ -9,11 +9,66 @@ from unittest.mock import Mock, patch
 
 from announce import AnnouncementServer, validate_text
 from bridge import Bridge
+from reply_types import Reply, TextReply
 from test_failure_feedback import Brain, SECRET
 import test_error_completion_feedback as response_fixture
 
 
 class TextAdmissionTests(unittest.TestCase):
+    def test_rejected_announcement_erases_payload_without_evicting_current_work(self):
+        from announce import Announcement
+
+        bridge = self.bridge()
+        bridge.submit_text('当前任务')
+        old = Announcement(-1, 'PRIVATE', segments=('PRIVATE',), on_segment=lambda n: None)
+        bridge.response.enqueue(old)
+        self.assertTrue(old.done.is_set())
+        self.assertEqual((old.text, old.segments, old.on_segment), ('', (), None))
+        self.assertEqual([job.text for job in bridge.response.queue.queue], ['当前任务'])
+
+    def test_stale_response_cannot_evict_a_current_serial_job(self):
+        bridge = self.bridge()
+        current = bridge.submit_text('当前文档任务')
+        bridge.response.enqueue(Reply(current['generation'] - 1, '旧回答一'))
+        bridge.response.enqueue(Reply(current['generation'] - 1, '旧回答二'))
+        self.assertEqual([job.text for job in bridge.response.queue.queue], ['当前文档任务'])
+
+    def test_reentrant_correction_notice_cannot_enqueue_the_retired_owner(self):
+        bridge = self.bridge(active=True)
+        generation = bridge.generation
+        fired = []
+
+        def publish():
+            if not fired:
+                fired.append(True)
+                bridge.submit_text('后到的新任务')
+
+        with (
+            patch.object(bridge.response.corrections, 'note', return_value=True),
+            patch.object(bridge.response, 'publish_corrections', publish),
+        ):
+            bridge.response.enqueue(Reply(generation, '已被替换的旧任务'))
+        self.assertEqual([job.text for job in bridge.response.queue.queue], ['后到的新任务'])
+
+    def test_meeting_origin_requires_its_trusted_job_and_cannot_bind_camera_consent(self):
+        bridge = self.bridge()
+        for kwargs in (
+            dict(_job_origin='meeting'),
+            dict(
+                _job_origin='meeting',
+                _job_factory=lambda g: TextReply(g, '文档'),
+                _workflow_nonce='a' * 32,
+            ),
+        ):
+            with self.assertRaises(ValueError):
+                bridge.session.submit_text('文档', **kwargs)
+        with self.assertRaises(ValueError):
+            bridge.session.submit_text(
+                '文档', _job_origin='meeting', _job_factory=lambda g: TextReply(g, '文档')
+            )
+        self.assertIsNone(bridge.session.text_generation)
+        self.assertTrue(bridge.response.queue.empty())
+
     def bridge(self, *, active=False):
         with patch('threading.Thread.start'):
             bridge = Bridge(None, Brain())

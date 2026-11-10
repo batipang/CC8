@@ -13,6 +13,7 @@ from meeting_view import checked, index_page, status, text_page
 from meeting_protocol import validate_request
 from meeting_worker import MeetingWorker
 from meeting_export import MeetingExports, CommitUncertain
+from meeting_analysis_control import MeetingAnalyses, AnalysisHooks, AnalysisUnavailable
 from protocol import MEETING
 
 
@@ -37,6 +38,10 @@ class MeetingHooks:
     event: Callable
     touch: Callable[[], None]
     claim: Callable[[], int]
+    submit: Callable | None = None
+    workspace: Callable | None = None
+    publish: Callable = lambda: None
+    diagnostics: Callable | None = None
 
 
 class MeetingController:
@@ -52,6 +57,19 @@ class MeetingController:
         self.changed = threading.Event()
         self.exports: MeetingExports | None = exports
         self.worker = MeetingWorker(hooks.lock, client_factory, changed=self.changed.set)
+        self.analyses = MeetingAnalyses(
+            AnalysisHooks(
+                lock=hooks.lock,
+                model=lambda: self.model,
+                owner=hooks.owner,
+                idle=lambda: hooks.idle() and not self.worker.busy(),
+                submit=hooks.submit,
+                changed=self.changed.set,
+                workspace=hooks.workspace,
+                publish=hooks.publish,
+                diagnostics=hooks.diagnostics,
+            )
+        )
         # No recording, thread, request, credential read or persistence here.
 
     def peer(self, version):
@@ -79,6 +97,7 @@ class MeetingController:
                 self.model is not None
                 and self.model.state in ('capturing', 'paused')
                 or self.worker.busy()
+                or self.analyses.busy()
             )
 
     def invalidate(self, reason='cancelled'):
@@ -93,10 +112,11 @@ class MeetingController:
             else 'cancelled'
         )
         self.worker.interrupt(mapped)
+        self.analyses.invalidate(mapped)
 
     def view(self):
         with self.hooks.lock:
-            return status(self.model)
+            return dict(status(self.model), **self.analyses.metadata())
 
     def _prepare(self, request, owner):
         action = request['action']
@@ -160,6 +180,7 @@ class MeetingController:
         if request['action'] == 'start':
             model = MeetingSession(uuid.uuid4().hex)
             self.worker.bind(model)
+            self.analyses.clear()
             self.model = model
         capture = CaptureOwner(self.route_serial, owner[2], uuid.uuid4().hex)
         self.model.start(capture)
@@ -202,7 +223,12 @@ class MeetingController:
                     )
                 )
             receipt = self.exports.save(
-                self.model, request['id'], request['revision'], request['format'], current=current
+                self.model,
+                request['id'],
+                request['revision'],
+                request['format'],
+                current=current,
+                analyses=self.analyses.exported(),
             )
             return dict(
                 export=receipt,
@@ -226,6 +252,13 @@ class MeetingController:
             return {}
         if self.model is None or request['id'] != self.model.ident or self.model.state == 'deleted':
             raise Rejected('会议已不可用，请刷新当前状态。')
+        if action in ('summarize', 'translate'):
+            return self.analyses.submit(request, owner)
+        if action == 'cancel_analysis':
+            self.analyses.cancel(request['analysis_id'])
+            return {}
+        if action == 'analysis_text':
+            return dict(page=self.analyses.page(request['analysis_id'], request['offset']))
         if action == 'capture_failed':
             if (
                 self.model.owner is None
@@ -265,12 +298,14 @@ class MeetingController:
             )
         if action == 'edit':
             self.offer = None
+            self.analyses.invalidate('source_changed')
             self.model.edit(request['row_id'], request['revision'], request['text'])
             return {}
         if action == 'delete':
             if self.model.state == 'capturing' or self.worker.busy():
                 raise Rejected('请先暂停或结束会议，并等待转写停止，再明确删除。')
             self.offer = self.run_owner = None
+            self.analyses.clear()
             self.model.delete()
             return {}
         raise Rejected('该会议功能仍在开发，未执行请求。')
@@ -288,13 +323,17 @@ class MeetingController:
                     raise Rejected('该请求已处理，请刷新状态，不会重复执行。')
                 self.seen.append(key)
                 result.update(self._action(request, owner), ok=True)
-            except Rejected as error:
+            except (Rejected, AnalysisUnavailable) as error:
                 result['message'] = str(error)
             except CommitUncertain:
                 result['message'] = '导出或删除结果未确认，请查看已导出文件核对；不会自动重试。'
             except (OSError, ValueError, RuntimeError):
                 result['message'] = '会议状态未确认，请刷新查看；不会自动重试或开始录音。'
-            target = self.hooks.owner() if request['action'] in ('start', 'resume') else owner
+            target = (
+                self.hooks.owner()
+                if request['action'] in ('start', 'resume', 'summarize', 'translate')
+                else owner
+            )
             if same_owner(owner[:2], target[:2] if target else None) and same_owner(
                 target, self.hooks.owner()
             ):
@@ -337,4 +376,5 @@ class MeetingController:
                 self.hooks.event('meeting_update', state=self.view())
 
     def close(self):
+        self.analyses.invalidate()
         self.worker.close()

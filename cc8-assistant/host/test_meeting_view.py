@@ -123,6 +123,8 @@ class MeetingViewTests(unittest.TestCase):
                 'delete_export', export_id='a' * 32 + '_r7.txt', sha256='b' * 64, confirmed=True
             ),
             self.request('summarize', id='a' * 32, revision=7, confirmed=True),
+            self.request('cancel_analysis', id='a' * 32, analysis_id='b' * 32),
+            self.request('analysis_text', id='a' * 32, analysis_id='b' * 32, offset=0),
             self.request('translate', id='a' * 32, revision=7, language='en', confirmed=True),
         ]
         for request in valid:
@@ -157,6 +159,7 @@ class MeetingViewTests(unittest.TestCase):
                 'delete_export', export_id='a' * 32 + '_r7.txt', sha256=True, confirmed=True
             ),
             self.request('auto_record'),
+            self.request('analysis_text', id='a' * 32, analysis_id='b' * 32, offset=524289),
             self.request([]),
         ]
         for request in requests:

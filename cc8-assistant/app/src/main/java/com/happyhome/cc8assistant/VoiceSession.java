@@ -923,11 +923,16 @@ final class VoiceSession {
               if (!revoked.isEmpty() && revoked.equals(pendingVisionNonce)) pendingVisionNonce = "";
             }
             beginTaskOutput("text", p.generation);
-            listener.playback(true);
+            boolean meetingDocument = "meeting".equals(j.optString("input_origin"));
+            listener.playback(!meetingDocument);
+            if (meetingDocument) listener.state("thinking", "Dot 正在处理会议文字 · 麦克风关闭");
             boolean corrected = "correction".equals(j.optString("input_origin"));
             listener.heard((corrected ? "已确认更正：" : "") + j.optString("text"));
             listener.caption(
-                corrected ? "已确认更正，正在处理新问题。\n原来已执行的操作不会撤销。" : "已收到文字指令。\n正在处理…", "attentive");
+                meetingDocument
+                    ? "正在处理完整会议文字。\n结果可在会议页查看和导出。"
+                    : corrected ? "已确认更正，正在处理新问题。\n原来已执行的操作不会撤销。" : "已收到文字指令。\n正在处理…",
+                "attentive");
           }
         } else if ("text_done".equals(event)) {
           if (textSession && p.generation == textGeneration) {

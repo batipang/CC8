@@ -24,6 +24,7 @@ from reply_types import (
     ResultRead,
     CorrectedReply,
     WorkflowReply,
+    MeetingReply,
 )
 from speech_correction import (
     SpeechCorrection,
@@ -64,6 +65,7 @@ class ResponseHooks:
     submit_corrected: Callable[[str], object] | None = None
     cancel_correction: Callable[[], object] = lambda: None
     run_workflow: Callable[[WorkflowReply], None] | None = None
+    run_meeting: Callable[[MeetingReply], None] | None = None
 
 
 class ResponseWorker:
@@ -317,30 +319,39 @@ class ResponseWorker:
 
     def enqueue(self, job):
         with self.hooks.lock:
-            if self.hooks.valid(job.generation):
-                if type(job) is Reply and correction_command(job.text) is not None:
-                    pass
-                else:
-                    text = job.text if type(job) is Reply or isinstance(job, CorrectedReply) else ''
-                    owner = self.hooks.correction_owner() if text else None
-                    changed = self.corrections.note(text, owner)
-                    if changed or owner is not None:
-                        try:
-                            self.publish_corrections()
-                        except (OSError, EOFError):
-                            pass
-        while True:
-            try:
-                self.queue.put_nowait(job)
+            if not self.hooks.valid(job.generation):
+                self.discard_announcement(job)
                 return
-            except queue.Full:
+            if type(job) is Reply and correction_command(job.text) is not None:
+                pass
+            else:
+                text = job.text if type(job) is Reply or isinstance(job, CorrectedReply) else ''
+                owner = self.hooks.correction_owner() if text else None
+                changed = self.corrections.note(text, owner)
+                if changed or owner is not None:
+                    try:
+                        self.publish_corrections()
+                    except (OSError, EOFError):
+                        pass
+            # Admission and eviction share generation ownership. In particular,
+            # a correction display callback may synchronously admit newer work.
+            while self.hooks.valid(job.generation):
                 try:
-                    old = self.queue.get_nowait()
-                except queue.Empty:
-                    continue
-                if isinstance(old, Announcement):
-                    old.discard_segments()
-                    old.done.set()
+                    self.queue.put_nowait(job)
+                    return
+                except queue.Full:
+                    try:
+                        old = self.queue.get_nowait()
+                    except queue.Empty:
+                        continue
+                    self.discard_announcement(old)
+            self.discard_announcement(job)
+
+    @staticmethod
+    def discard_announcement(job):
+        if isinstance(job, Announcement):
+            job.discard_segments()
+            job.done.set()
 
     def work(self):
         # 单消费者串行播报，识别另在线程运行，因此暂停时仍能继续听插话。
@@ -393,6 +404,10 @@ class ResponseWorker:
         try:
             if type(job) is Reply and self.handle_correction_voice(job):
                 pass
+            elif isinstance(job, MeetingReply):
+                if self.hooks.run_meeting is None:
+                    raise RuntimeError('Meeting document executor unavailable')
+                self.hooks.run_meeting(job)
             elif isinstance(job, WorkflowReply):
                 if self.hooks.run_workflow is None:
                     raise RuntimeError('Workflow executor unavailable')

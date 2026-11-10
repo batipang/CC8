@@ -9,9 +9,13 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import uuid
+import json
 
 from protocol import MEETING, Packet, receive
 from meeting_export import MeetingExports, CommitUncertain
+from meeting_analysis import MeetingAnalyzer
+from dot_receipt import DotError
+import test_meeting_analysis as documents
 import test_dot_handoff as bridge_fixtures
 from test_meeting_worker import Client
 from test_protocol_fuzz import Fragmented
@@ -476,6 +480,174 @@ class MeetingControllerTests(unittest.TestCase):
         )
         self.assertFalse(result['ok'])
         self.assertEqual(Path(saved['local_path']).read_text(), 'another document')
+
+    def analyze(self, kind='summarize', **options):
+        model = self.bridge.meetings.model
+        value = self.request(
+            kind, id=model.ident, revision=model.revision, confirmed=True, **options
+        )
+        self.assertTrue(value['ok'], value)
+        job = self.bridge.response.queue.get_nowait()
+        self.bridge.respond_job(job)
+        self.bridge.finish_text_response(job.generation)
+        return value, job
+
+    def ended(self):
+        capture = self.start()
+        self.audio(capture)
+        self.request('end', id=capture['id'])
+        self.idle()
+        return self.bridge.meetings.model
+
+    def test_document_job_uses_serial_dispatch_without_voice_brain_tts_or_clipping(self):
+        b = self.bridge
+        model = self.ended()
+        revision = model.revision
+        b.meetings.analyses.analyzer = MeetingAnalyzer(documents.Client)
+        with patch.object(b, 'answer', side_effect=AssertionError('Ordinary voice answer used')):
+            value, job = self.analyze()
+        self.assertGreater(job.generation, 100)
+        self.assertEqual(b.meetings.analyses.job.state, 'completed')
+        self.assertEqual(model.revision, revision + 1)
+        record = next(iter(b.meetings.analyses.records.values()))
+        self.assertGreater(len(record.text), 10000)
+        self.assertFalse(b.session.active)
+        self.assertIsNone(b.session.text_generation)
+        self.assertFalse(b.playback.playing)
+        begin = next(v for k, v in b.events if k == 'text_begin')
+        self.assertEqual(begin['input_origin'], 'meeting')
+        task = b.workspace.snapshot()['tasks'][-1]
+        self.assertEqual(task['status'], 'completed')
+        self.assertNotIn('总结完整结果', repr(b.workspace.snapshot()))
+        b.cancel('button')
+        self.assertEqual(b.meetings.analyses.job.state, 'completed')
+        self.assertEqual(len(b.meetings.analyses.records), 1)
+        self.assertFalse(b.meetings.view()['analyses'][0]['stale'])
+
+    def test_complete_analysis_pages_and_exports_are_hashed_and_revised_without_overwriting(self):
+        store = self.export_store()
+        model = self.ended()
+        before = model.revision
+        initial = self.request(
+            'export', id=model.ident, revision=before, format='json', confirmed=True
+        )
+        self.bridge.meetings.analyses.analyzer = MeetingAnalyzer(documents.Client)
+        self.analyze()
+        record = next(iter(self.bridge.meetings.analyses.records.values()))
+        offset = 0
+        body = []
+        while offset is not None:
+            page = self.request(
+                'analysis_text', id=model.ident, analysis_id=record.ident, offset=offset
+            )['page']
+            self.assertEqual(page['result_sha256'], record.sha256)
+            body.append(page['text'])
+            offset = page['next_offset']
+        self.assertEqual(''.join(body), record.text)
+        saved = self.request(
+            'export', id=model.ident, revision=model.revision, format='json', confirmed=True
+        )
+        self.assertTrue(saved['ok'], saved)
+        self.assertNotEqual(initial['export']['id'], saved['export']['id'])
+        value = json.loads(Path(saved['local_path']).read_text())['meeting']['analyses'][0]
+        self.assertEqual(value['text'], record.text)
+        self.assertEqual(value['source_revision'], before)
+        self.assertFalse(value['stale'])
+        changed = self.request(
+            'edit',
+            id=model.ident,
+            revision=model.revision,
+            row_id=model.rows[0]['id'],
+            text='新的校对文字',
+            confirmed=True,
+        )
+        self.assertTrue(changed['ok'])
+        self.assertTrue(self.bridge.meetings.view()['analyses'][0]['stale'])
+        self.assertTrue(
+            self.request('delete', id=model.ident, revision=model.revision, confirmed=True)['ok']
+        )
+        self.assertEqual(self.bridge.meetings.analyses.records, {})
+        self.assertEqual(len(store.snapshot()['items']), 2)
+
+    def test_cancelled_queued_analysis_never_calls_provider_or_reopens_capture(self):
+        model = self.ended()
+        factory = []
+        self.bridge.meetings.analyses.analyzer = MeetingAnalyzer(lambda: factory.append(True))
+        result = self.request(
+            'translate', id=model.ident, revision=model.revision, language='en', confirmed=True
+        )
+        self.assertTrue(result['ok'], result)
+        self.assertTrue(self.bridge.meetings.reserved())
+        self.assertTrue(
+            self.request('cancel_analysis', id=model.ident, analysis_id=result['analysis_id'])['ok']
+        )
+        job = self.bridge.response.queue.get_nowait()
+        self.bridge.respond_job(job)
+        self.bridge.finish_text_response(job.generation)
+        self.assertEqual(factory, [])
+        self.assertEqual(self.bridge.meetings.analyses.job.state, 'cancelled')
+        self.assertFalse(self.bridge.session.active)
+
+    def test_edit_cancel_during_model_turn_discards_late_answer_and_preserves_new_text(self):
+        model = self.ended()
+        client = documents.Client()
+        entered = threading.Event()
+        release = threading.Event()
+        run = client.run
+
+        def blocked(*args):
+            entered.set()
+            self.assertTrue(release.wait(2))
+            return run(*args)
+
+        client.run = blocked
+        client.cancel = release.set
+        self.bridge.meetings.analyses.analyzer = MeetingAnalyzer(lambda: client)
+        result = self.request('summarize', id=model.ident, revision=model.revision, confirmed=True)
+        self.assertTrue(result['ok'], result)
+        job = self.bridge.response.queue.get_nowait()
+        thread = threading.Thread(target=self.bridge.respond_job, args=(job,), daemon=True)
+        thread.start()
+        try:
+            self.assertTrue(entered.wait(1))
+            changed = self.request(
+                'edit',
+                id=model.ident,
+                revision=model.revision,
+                row_id=model.rows[0]['id'],
+                text='人工校对后的新正文',
+                confirmed=True,
+            )
+            self.assertTrue(changed['ok'], changed)
+        finally:
+            release.set()
+            thread.join(2)
+            self.bridge.finish_text_response(job.generation)
+        self.assertFalse(thread.is_alive())
+        self.assertTrue(client.closed)
+        self.assertEqual(self.bridge.meetings.analyses.records, {})
+        self.assertEqual(model.rows[0]['text'], '人工校对后的新正文')
+        self.assertEqual(self.bridge.meetings.analyses.job.reason, 'source_changed')
+
+    def test_provider_failure_keeps_prior_completed_result_and_redacts_its_error(self):
+        self.ended()
+        self.bridge.meetings.analyses.analyzer = MeetingAnalyzer(documents.Client)
+        self.analyze()
+        first = next(iter(self.bridge.meetings.analyses.records.values()))
+        client = documents.Client()
+
+        def failed(*args):
+            raise DotError('PRIVATE_PROVIDER_CREDENTIAL', kind='quota')
+
+        client.run = failed
+        self.bridge.meetings.analyses.analyzer = MeetingAnalyzer(lambda: client)
+        self.analyze()
+        self.assertTrue(client.closed)
+        self.assertEqual(self.bridge.meetings.analyses.job.state, 'failed')
+        self.assertTrue(self.bridge.meetings.analyses.job.message)
+        self.assertEqual(list(self.bridge.meetings.analyses.records.values()), [first])
+        self.assertNotIn('PRIVATE_PROVIDER_CREDENTIAL', repr(self.bridge.events))
+        self.assertFalse(self.bridge.meetings.view()['analyses'][0]['stale'])
 
 
 if __name__ == '__main__':

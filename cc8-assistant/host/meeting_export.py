@@ -48,7 +48,7 @@ def at(samples):
     return f'{hour:02}:{minute:02}:{second:02}.{fraction:03}'
 
 
-def render(model, ident, revision, format):
+def render(model, ident, revision, format, *, analyses=()):
     """Call under the domain guard; no silent text truncation or guessed silence."""
     checked(model, ident, revision)
     if model.state != 'ended' or any(row['state'] == 'pending' for row in model.rows):
@@ -56,6 +56,9 @@ def render(model, ident, revision, format):
     if format not in ('txt', 'json'):
         raise ValueError('Unsupported meeting export')
     snapshot = model.snapshot()
+    if type(analyses) is not tuple or len(analyses) > 3:
+        raise ValueError('Invalid meeting derived documents')
+    snapshot['analyses'] = list(analyses)
     if format == 'json':
         raw = (
             json.dumps(
@@ -96,6 +99,17 @@ def render(model, ident, revision, format):
                 lines.append('[' + labels.get(row['state'], '结果未确认') + ']')
                 if row['reason']:
                     lines.append('状态代码：' + row['reason'])
+        for value in analyses:
+            lines.extend(
+                [
+                    '\nDot ' + ('总结' if value['kind'] == 'summarize' else '翻译'),
+                    '依据修订：' + str(value['source_revision']),
+                    '依据旧正文，已过时，请重新生成。'
+                    if value['stale']
+                    else '依据当前正文；生成内容仍需核对。',
+                    value['text'],
+                ]
+            )
         raw = ('\n'.join(lines) + '\n').encode('utf-8')
     if not 0 < len(raw) <= MAX_BYTES:
         raise ValueError('Meeting export exceeds file budget; no partial export written')
@@ -322,10 +336,10 @@ class MeetingExports:
             raise OSError('Meeting export bundle replaced before removal')
         os.rmdir(item.name, dir_fd=directory)
 
-    def save(self, model, ident, revision, format, *, current=lambda: True):
+    def save(self, model, ident, revision, format, *, current=lambda: True, analyses=()):
         if not isinstance(model, MeetingSession):
             raise ValueError('Expected a current meeting')
-        raw = render(model, ident, revision, format)
+        raw = render(model, ident, revision, format, analyses=analyses)
         name = ident + '_r' + str(revision) + '.' + format
         checksum = hashlib.sha256(raw).hexdigest()
         meta = (
