@@ -80,4 +80,13 @@ final class CaptionViewport extends ScrollView {
     for (int i = 0; i < layout.getLineCount(); i++) if (lineVisible(text, i)) count++;
     return count;
   }
+
+  int lineLimit() {
+    return LINES;
+  }
+
+  int layoutLines(TextView text) {
+    Layout layout = text.getLayout();
+    return layout == null ? 0 : layout.getLineCount();
+  }
 }
