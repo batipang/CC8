@@ -21,7 +21,7 @@ INSTRUCTIONS = (
 )
 
 
-def context_parameters(directory):
+def context_parameters(directory, servers=()):
     return dict(
         cwd=str(Path(directory)),
         ephemeral=True,
@@ -33,7 +33,7 @@ def context_parameters(directory):
         selectedCapabilityRoots=[],
         runtimeWorkspaceRoots=[],
         config={
-            'mcp_servers': {},
+            'mcp_servers': {name: {'enabled': False} for name in servers},
             'apps': {'_default': {'enabled': False}},
             'features.shell_tool': False,
             'features.unified_exec': False,
@@ -50,6 +50,45 @@ def context_parameters(directory):
             'web_search': 'disabled',
         },
     )
+
+
+def server_names(result):
+    config = result.get('config') if type(result) is dict else None
+    servers = config.get('mcp_servers', {}) if type(config) is dict else None
+    if (
+        type(servers) is not dict
+        or len(servers) > 64
+        or any(type(name) is not str or not 0 < len(name) <= 256 for name in servers)
+    ):
+        raise DotError('Document external configuration not confirmed')
+    return tuple(servers)
+
+
+def confirm_inventory(result, expected):
+    if (
+        type(result) is not dict
+        or 'nextCursor' not in result
+        or result['nextCursor'] is not None
+        or type(result.get('data')) is not list
+        or len(result['data']) > 64
+    ):
+        raise DotError('Document external tool scope not confirmed')
+    names = set()
+    for row in result['data']:
+        if (
+            type(row) is not dict
+            or type(row.get('name')) is not str
+            or row['name'] not in expected
+            or row['name'] in names
+            or row.get('runtimeStatus') != 'disabled'
+            or row.get('tools') != {}
+            or row.get('resources') != []
+            or row.get('resourceTemplates') != []
+        ):
+            raise DotError('Document external tools were not disabled')
+        names.add(row['name'])
+    if names != set(expected):
+        raise DotError('Document external tool inventory incomplete')
 
 
 def context_identity(result):
@@ -117,9 +156,26 @@ class DotDocument:
         """
         if not isinstance(prompt, str) or not 0 < len(prompt.encode('utf-8')) <= MAX_INPUT_BYTES:
             raise ValueError('Document input exceeds budget; no partial prompt submitted')
-        valid = lambda: not self.stopped.is_set() and current()
-        if not valid():
-            raise Cancelled('Document cancelled')
+        deadline = self.clock() + self.timeout
+        active = lambda: not self.stopped.is_set() and current()
+        valid = lambda: active() and self.clock() < deadline
+
+        def check():
+            if self.clock() >= deadline:
+                raise DotError('Document turn timed out', kind='timeout')
+            if not active():
+                raise Cancelled('Document cancelled')
+
+        def request(method, params):
+            check()
+            remaining = deadline - self.clock()
+            if remaining <= 0:
+                raise DotError('Document turn timed out', kind='timeout')
+            result = self.rpc.request(method, params, timeout=min(20, remaining))
+            check()
+            return result
+
+        check()
         self.rpc.start()
         for _ in range(256):
             try:
@@ -133,12 +189,20 @@ class DotDocument:
         answer = None
         with tempfile.TemporaryDirectory(prefix='cc8-document-') as directory:
             try:
-                result = self.rpc.request('thread/start', context_parameters(directory), timeout=20)
+                servers = server_names(
+                    request('config/read', dict(cwd=directory, includeLayers=False))
+                )
+                result = request('thread/start', context_parameters(directory, servers))
                 thread = context_identity(result)
+                confirm_inventory(
+                    request(
+                        'mcpServerStatus/list', dict(threadId=thread, detail='full', limit=100)
+                    ),
+                    servers,
+                )
                 with self.owner_lock:
                     self.thread_id, self.turn_id = thread, None
-                if not valid():
-                    raise Cancelled('Document cancelled')
+                check()
 
                 def observe_tools(event):
                     p = event.get('params') or {}
@@ -169,7 +233,7 @@ class DotDocument:
                 if callable(getattr(self.rpc, 'listen', None)):
                     remove_guard = self.rpc.listen(observe_tools)
                     watch = ReceiptWatch(self.rpc, thread, valid, publish, clock=self.clock)
-                result = self.rpc.request(
+                result = request(
                     'turn/start',
                     dict(
                         threadId=thread,
@@ -180,7 +244,6 @@ class DotDocument:
                         runtimeWorkspaceRoots=[],
                         sandboxPolicy={'type': 'readOnly', 'networkAccess': False},
                     ),
-                    timeout=20,
                 )
                 turn = (result.get('turn') or {}).get('id')
                 if not isinstance(turn, str) or not 0 < len(turn) <= 4096:
@@ -190,14 +253,12 @@ class DotDocument:
                 state = FinalAnswer(thread, turn)
                 if watch:
                     watch.bind(turn)
-                deadline = self.clock() + self.timeout
-                while self.clock() < deadline:
+                while True:
                     # A completed receipt already admitted by the reader is
                     # retained even if cancellation follows before consumption.
                     if delivered:
                         return answer
-                    if not valid():
-                        raise Cancelled('Document cancelled')
+                    check()
                     if watch:
                         watch.check()
                     try:
@@ -221,7 +282,6 @@ class DotDocument:
                             publish(text)
                         if delivered:
                             return answer
-                raise DotError('Document turn timed out', kind='timeout')
             finally:
                 if watch:
                     watch.close()

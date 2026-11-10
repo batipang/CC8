@@ -183,6 +183,10 @@ class Rpc:
         self.closed = threading.Event()
         self.observable = observable
         self.extra = []
+        self.servers = {}
+        self.inventory = None
+        self.cursor = None
+        self.bad_config = False
         if not observable:
             self.listen = None
 
@@ -203,6 +207,22 @@ class Rpc:
 
     def request(self, method, params, timeout=20):
         self.calls.append((method, params))
+        if method == 'config/read':
+            return dict(config=dict(mcp_servers=[] if self.bad_config else self.servers))
+        if method == 'mcpServerStatus/list':
+            rows = self.inventory
+            if rows is None:
+                rows = [
+                    dict(
+                        name=name,
+                        runtimeStatus='disabled',
+                        tools={},
+                        resources=[],
+                        resourceTemplates=[],
+                    )
+                    for name in self.servers
+                ]
+            return dict(data=rows, nextCursor=self.cursor)
         if method == 'thread/start':
             self.number += 1
             return dict(thread=dict(id='doc-' + str(self.number)), sandbox=dict(type=self.policy))
@@ -241,6 +261,67 @@ class Rpc:
 
 
 class DocumentClientTests(unittest.TestCase):
+    def test_inherited_mcp_is_explicitly_disabled_and_confirmed_before_any_document_turn(self):
+        rpc = Rpc(observable=True)
+        rpc.servers = {'configured': {'command': 'not-executed'}}
+        client = DotDocument(rpc)
+        client.run('complete document', {}, lambda: True, lambda result: True)
+        params = next(p for m, p in rpc.calls if m == 'thread/start')
+        self.assertEqual(params['config']['mcp_servers'], {'configured': {'enabled': False}})
+        methods = [method for method, _ in rpc.calls]
+        self.assertLess(methods.index('mcpServerStatus/list'), methods.index('turn/start'))
+        inventory = next(p for m, p in rpc.calls if m == 'mcpServerStatus/list')
+        self.assertEqual(inventory['threadId'], 'doc-1')
+        client.close()
+
+    def test_document_deadline_includes_configuration_and_is_not_restarted_for_model_turn(self):
+        now = [0]
+        rpc = Rpc()
+        original = rpc.request
+
+        def request(method, params, timeout=20):
+            if method == 'config/read':
+                now[0] += 10
+            return original(method, params, timeout)
+
+        rpc.request = request
+        client = DotDocument(rpc, clock=lambda: now[0], timeout=5)
+        with self.assertRaises(DotError) as failed:
+            client.run('document', {}, lambda: True, lambda result: True)
+        self.assertEqual(failed.exception.kind, 'timeout')
+        self.assertFalse(any(method == 'turn/start' for method, _ in rpc.calls))
+        client.close()
+
+    def test_unconfirmed_mcp_scope_never_submits_document_or_turn(self):
+        for mode in ('tools', 'resources', 'status', 'extra', 'cursor', 'config'):
+            with self.subTest(mode=mode):
+                rpc = Rpc(observable=True)
+                rpc.servers = {'configured': {'command': 'not-executed'}}
+                row = dict(
+                    name='configured',
+                    runtimeStatus='disabled',
+                    tools={},
+                    resources=[],
+                    resourceTemplates=[],
+                )
+                if mode == 'tools':
+                    row['tools'] = {'write': {}}
+                if mode == 'resources':
+                    row['resources'] = [{'uri': 'private'}]
+                if mode == 'status':
+                    row['runtimeStatus'] = 'connected'
+                if mode == 'extra':
+                    row['name'] = 'unknown-plugin-server'
+                rpc.inventory = [row]
+                rpc.cursor = 'more' if mode == 'cursor' else None
+                rpc.bad_config = mode == 'config'
+                client = DotDocument(rpc)
+                with self.assertRaises(DotError):
+                    client.run('PRIVATE DOCUMENT', {}, lambda: True, lambda result: True)
+                self.assertFalse(any(method == 'turn/start' for method, _ in rpc.calls))
+                self.assertNotIn('PRIVATE DOCUMENT', repr(rpc.calls))
+                client.close()
+
     def test_unexpected_tool_notification_prevents_even_early_terminal_admission(self):
         for observable in (True, False):
             rpc = Rpc(observable=observable)
