@@ -471,7 +471,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
           if (!foreground || session.isVisual()) return false;
           if (imageQualityDialog != null) imageQualityDialog.dismiss();
           AlertDialog dialog =
-              new AlertDialog.Builder(this)
+              new LargeDialogBuilder(this)
                   .setTitle("看图与识字")
                   .setItems(
                       new String[] {"普通看图", "识别图片文字", "看图设置", "追问最近照片", "选择 Mac 窗口"},
@@ -516,7 +516,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   private void showStatusDetails() {
     if ("error".equals(phase)) {
-      new AlertDialog.Builder(this)
+      new LargeDialogBuilder(this)
           .setTitle("错误详情与处理方法")
           .setMessage(lastStateMessage)
           .setPositiveButton("关闭", null)
@@ -688,7 +688,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     input.setFilters(
         new android.text.InputFilter[] {new android.text.InputFilter.LengthFilter(6000)});
     AlertDialog dialog =
-        new AlertDialog.Builder(this)
+        new LargeDialogBuilder(this)
             .setTitle("文字指令 · 不开启麦克风")
             .setView(input)
             .setPositiveButton("发送", null)
@@ -729,7 +729,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   }
 
   private void showUnconfirmedTaskNotice() {
-    new AlertDialog.Builder(this)
+    new LargeDialogBuilder(this)
         .setTitle("上次执行结果未确认")
         .setMessage("连接中断前有未结束的任务，部分步骤可能已经执行。请先在电脑端核对结果，再决定是否重新交办。重连不会自动重做任务；关闭提示也不会撤销已执行的操作。")
         .setPositiveButton(
@@ -747,7 +747,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     final long route = workspaceRoute;
     if (linked) session.workspaceGet();
     if (tasksData.length() == 0) {
-      new AlertDialog.Builder(this)
+      new LargeDialogBuilder(this)
           .setTitle("任务")
           .setMessage("还没有任务记录。你可以让大黄蜂查询资料、分析照片或操作当前 Mac。任务记录仅在本次 Mac 服务运行期间保留。")
           .setPositiveButton("文字指令", (d, n) -> inputTask())
@@ -763,7 +763,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
       JSONObject t = tasks.optJSONObject(i);
       names[i + 1] = taskStatus(t.optString("status")) + " · " + t.optString("title");
     }
-    new AlertDialog.Builder(this)
+    new LargeDialogBuilder(this)
         .setTitle("最近任务 · 本次服务")
         .setItems(
             names,
@@ -823,7 +823,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     ScrollView scroll = new ScrollView(this);
     scroll.addView(content);
     AlertDialog.Builder dialog =
-        new AlertDialog.Builder(this)
+        new LargeDialogBuilder(this)
             .setTitle(task.optString("title"))
             .setView(scroll)
             .setNegativeButton("关闭", null);
@@ -857,7 +857,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
               + reminderDeliveryLabel(item);
     }
     AlertDialog.Builder dialog =
-        new AlertDialog.Builder(this).setTitle("提醒 · 北京时间").setNegativeButton("关闭", null);
+        new LargeDialogBuilder(this).setTitle("提醒 · 北京时间").setNegativeButton("关闭", null);
     if (names.length > 0)
       dialog.setItems(names, (d, n) -> reminderOptions(items.optJSONObject(n), route));
     else
@@ -918,7 +918,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   }
 
   private void showReminderHistory() {
-    AlertDialog.Builder builder = new AlertDialog.Builder(this).setTitle("提醒送达记录 · 北京时间");
+    AlertDialog.Builder builder = new LargeDialogBuilder(this).setTitle("提醒送达记录 · 北京时间");
     if (reminderHistoryData.length() == 0) {
       builder.setMessage("暂无记录。这里只显示最近保存的送达状态，不代表用户已听到或已阅读。");
     } else {
@@ -1004,7 +1004,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     // Opening switches/settings must not focus an editor and summon the IME.
     form.setFocusableInTouchMode(true);
     AlertDialog dialog =
-        new AlertDialog.Builder(this)
+        new LargeDialogBuilder(this)
             .setTitle("提醒送达设置")
             .setView(scroll)
             .setNegativeButton("取消", null)
@@ -1088,7 +1088,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   private void reminderOptions(JSONObject item, long route) {
     if (!requireWorkspaceRoute(route)) return;
-    new AlertDialog.Builder(this)
+    new LargeDialogBuilder(this)
         .setTitle(item.optString("title"))
         .setItems(
             new String[] {"修改提醒", "稍后 10 分钟", "取消提醒"},
@@ -1205,7 +1205,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     scroll.addView(form);
     form.setFocusableInTouchMode(true);
     AlertDialog dialog =
-        new AlertDialog.Builder(this)
+        new LargeDialogBuilder(this)
             .setTitle(item == null ? "添加提醒" : "修改提醒")
             .setView(scroll)
             .setPositiveButton("保存", null)
@@ -1259,7 +1259,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   }
 
   private void showSettings() {
-    new AlertDialog.Builder(this)
+    new LargeDialogBuilder(this)
         .setTitle("大黄蜂设置")
         .setItems(
             new String[] {
@@ -1303,7 +1303,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
                       public void onStopTrackingTouch(SeekBar b) {}
                     });
-                new AlertDialog.Builder(this)
+                new LargeDialogBuilder(this)
                     .setTitle("媒体音量")
                     .setView(volume)
                     .setPositiveButton("完成", null)
@@ -1320,7 +1320,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
               } else if (n == 5) showConnectionInfo();
               else if (n == 6) {
                 updatePrivacy();
-                new AlertDialog.Builder(this)
+                new LargeDialogBuilder(this)
                     .setTitle("隐私与语音说明")
                     .setMessage(privacyText.getText())
                     .setPositiveButton("知道了", null)
@@ -1383,7 +1383,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     ScrollView scroll = new ScrollView(this);
     scroll.addView(content);
     AlertDialog dialog =
-        new AlertDialog.Builder(this)
+        new LargeDialogBuilder(this)
             .setTitle("声音与自然插话")
             .setView(scroll)
             .setNegativeButton("取消", null)
@@ -1457,7 +1457,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     ScrollView scroll = new ScrollView(this);
     scroll.addView(content);
     AlertDialog dialog =
-        new AlertDialog.Builder(this)
+        new LargeDialogBuilder(this)
             .setTitle("看图设置")
             .setView(scroll)
             .setPositiveButton(
@@ -1521,7 +1521,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     ScrollView scroll = new ScrollView(this);
     scroll.addView(content);
     AlertDialog dialog =
-        new AlertDialog.Builder(this)
+        new LargeDialogBuilder(this)
             .setTitle("追问这张照片")
             .setView(scroll)
             .setPositiveButton("发送追问", null)
@@ -1684,7 +1684,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     JSONObject initial = session.snapshot();
     final String[] displayed = {connectionInfoMessage(initial)};
     final AlertDialog dialog =
-        new AlertDialog.Builder(this)
+        new LargeDialogBuilder(this)
             .setTitle("连接状态")
             .setMessage(displayed[0])
             .setNeutralButton("桌面入口", (d, which) -> DesktopEntryService.settings(this))
@@ -1739,7 +1739,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   }
 
   private void showBrainSelector() {
-    new AlertDialog.Builder(this)
+    new LargeDialogBuilder(this)
         .setTitle("选择助理大脑")
         .setSingleChoiceItems(
             new String[] {"MiniMax · 对话与联网查询", "Dot / Codex · 思考与执行"},
@@ -1762,7 +1762,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     detail.setPadding(dp(22), dp(16), dp(22), dp(16));
     ScrollView scroll = new ScrollView(this);
     scroll.addView(detail);
-    new AlertDialog.Builder(this)
+    new LargeDialogBuilder(this)
         .setTitle("Dot / Codex · 任务结果")
         .setView(scroll)
         .setNeutralButton(
@@ -2169,7 +2169,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
       names[i] = current.at(i).label();
     }
     AlertDialog dialog =
-        new AlertDialog.Builder(this)
+        new LargeDialogBuilder(this)
             .setTitle(current.heading())
             .setItems(
                 names,
@@ -2186,7 +2186,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
                     link.setTextIsSelectable(true);
                     link.setPadding(dp(24), dp(20), dp(24), dp(20));
                     final AlertDialog fallback =
-                        new AlertDialog.Builder(this)
+                        new LargeDialogBuilder(this)
                             .setTitle("设备无法打开浏览器")
                             .setView(link)
                             .setPositiveButton("知道了", null)

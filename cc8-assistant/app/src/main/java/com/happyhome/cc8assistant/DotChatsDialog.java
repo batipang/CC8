@@ -60,7 +60,7 @@ final class DotChatsDialog {
     action = nextAction;
     String ident = pending;
     progress =
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("Dot 聊天")
             .setMessage("正在读取，请稍候…")
             .setNegativeButton("取消", (d, n) -> close())
@@ -105,7 +105,7 @@ final class DotChatsDialog {
     boolean selected = "summary_handoff".equals(state.optString("mode"));
     boolean reports = selected && state.optBoolean("work_reports_supported");
     AlertDialog.Builder builder =
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("Dot 聊天接续")
             .setMessage(
                 (selected ? "当前来源：" + state.optString("source_title") : "当前为独立语音会话")
@@ -128,7 +128,7 @@ final class DotChatsDialog {
 
   private void showReportPeriods() {
     String[] periods = {"half_hour", "two_hours", "today"};
-    new AlertDialog.Builder(activity)
+    new LargeDialogBuilder(activity)
         .setTitle("所选聊天的工作汇报")
         .setItems(
             new String[] {"过去半小时", "过去两小时", "今天 · 北京时间"},
@@ -195,7 +195,7 @@ final class DotChatsDialog {
         text.append("\n回合完成不代表任务已验证；以上答复尚未独立核验。\n");
       }
     }
-    new AlertDialog.Builder(activity)
+    new LargeDialogBuilder(activity)
         .setTitle("工作汇报 · 只读快照")
         .setMessage(text.toString())
         .setNegativeButton("关闭", null)
@@ -218,14 +218,14 @@ final class DotChatsDialog {
               : item.optString("title", "未命名聊天") + " · " + item.optString("project", "未标明项目");
     }
     AlertDialog.Builder builder =
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("选择摘要来源 · 不追加原聊天")
             .setItems(
                 names,
                 (d, n) -> {
                   JSONObject item = items.optJSONObject(n);
                   if (item == null) return;
-                  new AlertDialog.Builder(activity)
+                  new LargeDialogBuilder(activity)
                       .setTitle(item.optString("title", "未命名聊天"))
                       .setMessage(
                           "将所选聊天最近三个已完成回合的文字摘录交给独立 Dot 会话，可能截断。可用的本地项目目录用于新会话，远端或失效环境不会自动接入。\n\n历史请求不会自动重新执行；结果不会自动追加原聊天。摘录只保留在本次 Mac 服务内存中，随之后的请求使用已有模型服务。")

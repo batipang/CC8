@@ -49,6 +49,7 @@ class ActivityCheck {
   void setCompoundDrawables(Object a,Object b,Object c,Object d){}
  }
  interface Click {void click(Object dialog,int index);}
+ static class LargeDialogBuilder extends AlertDialog.Builder {LargeDialogBuilder(Object owner){super(owner);}}
  static class AlertDialog {
   static Builder last;
   void dismiss(){}

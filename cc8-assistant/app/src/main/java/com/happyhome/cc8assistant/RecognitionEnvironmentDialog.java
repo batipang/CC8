@@ -62,7 +62,7 @@ final class RecognitionEnvironmentDialog {
     ScrollView scroll = new ScrollView(activity);
     scroll.addView(content);
     AlertDialog editor =
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("听音环境")
             .setView(scroll)
             .setNegativeButton("取消", null)

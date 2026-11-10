@@ -84,7 +84,7 @@ final class WorkflowEditor {
     labels[rows.length() + 1] = "修改流程名称";
     final long owner = epoch + 1;
     show(
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("编辑：" + flow.optString("name") + " · 原定时将关闭")
             .setItems(
                 labels,
@@ -132,7 +132,7 @@ final class WorkflowEditor {
     EditText name = input(flow.optString("name"), "流程名称，最多 40 字", 40);
     final long owner = epoch + 1;
     AlertDialog shown =
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("流程名称")
             .setView(name)
             .setPositiveButton("应用到草稿", null)
@@ -171,7 +171,7 @@ final class WorkflowEditor {
     for (int i = 0; i < kinds.length; i++) labels[i] = WorkflowModel.kindName(kinds[i]);
     final long owner = epoch + 1;
     show(
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("添加步骤")
             .setItems(
                 labels,
@@ -203,7 +203,7 @@ final class WorkflowEditor {
   private void stepMenu(JSONObject flow, int revision, int index) {
     final long owner = epoch + 1;
     show(
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle(flow.optJSONArray("steps").optJSONObject(index).optString("title"))
             .setItems(
                 new String[] {"编辑标题和输入", "上移一步", "下移一步", "删除这一步"},
@@ -281,7 +281,7 @@ final class WorkflowEditor {
     scroll.addView(box);
     final long owner = epoch + 1;
     AlertDialog shown =
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle(WorkflowModel.kindName(step.optString("kind")))
             .setView(scroll)
             .setPositiveButton("应用到草稿", null)
@@ -318,7 +318,7 @@ final class WorkflowEditor {
   private void confirm(JSONObject flow, int revision) {
     final long owner = epoch + 1;
     show(
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("确认保存到当前 Mac")
             .setMessage(WorkflowModel.describe(flow) + "\n\n保存配置不运行流程；定时需要另外明确开启。")
             .setPositiveButton(
@@ -342,7 +342,7 @@ final class WorkflowEditor {
     JSONObject flow = (JSONObject) WorkflowModel.copy(value);
     final long owner = epoch + 1;
     show(
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("定时运行 · 北京时间")
             .setItems(
                 new String[] {"关闭定时", "每 5 分钟", "每 15 分钟", "每 30 分钟", "选择钟点和星期"},
@@ -386,7 +386,7 @@ final class WorkflowEditor {
               boolean[] selected = {true, true, true, true, true, true, true};
               final long daysOwner = epoch + 1;
               show(
-                  new AlertDialog.Builder(activity)
+                  new LargeDialogBuilder(activity)
                       .setTitle("选择星期 · 北京时间")
                       .setMultiChoiceItems(
                           new String[] {"周一", "周二", "周三", "周四", "周五", "周六", "周日"},
@@ -442,7 +442,7 @@ final class WorkflowEditor {
                 + days;
     final long owner = epoch + 1;
     show(
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("确认开启只读定时")
             .setMessage(
                 when

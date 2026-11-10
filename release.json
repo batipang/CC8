@@ -5,8 +5,8 @@
     "version": "0.16.29"
   },
   "assistant": {
-    "version": "0.9.105",
-    "version_code": 142,
+    "version": "0.9.107",
+    "version_code": 144,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {

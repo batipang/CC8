@@ -41,7 +41,7 @@ final class SpeechCorrectionDialog {
     ScrollView scroll = new ScrollView(activity);
     scroll.addView(content);
     AlertDialog created =
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("更正草稿 · 尚未提交")
             .setView(scroll)
             .setNegativeButton("撤回更正", null)

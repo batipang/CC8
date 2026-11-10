@@ -13,6 +13,7 @@
     <style name="AssistantDialogTheme" parent="android:style/Theme.Material.Dialog.Alert">
         <item name="android:colorAccent">#43E0FC</item>
         <item name="android:textSize">26sp</item>
+        <item name="android:windowTitleStyle">@style/AssistantDialogTitle</item>
         <item name="android:windowMinWidthMajor">88%</item>
         <item name="android:windowMinWidthMinor">92%</item>
         <item name="android:textAppearanceLarge">@style/AssistantDialogLarge</item>
@@ -22,6 +23,10 @@
         <item name="android:textAppearanceListItemSmall">@style/AssistantDialogBody</item>
         <item name="android:textAppearanceButton">@style/AssistantDialogButton</item>
         <item name="android:buttonBarButtonStyle">@style/AssistantDialogAction</item>
+    </style>
+    <style name="AssistantDialogTitle" parent="android:style/Widget.TextView">
+        <item name="android:textAppearance">@style/AssistantDialogLarge</item>
+        <item name="android:textSize">28sp</item>
     </style>
     <style name="AssistantDialogLarge" parent="android:style/TextAppearance.Material.Title">
         <item name="android:textSize">28sp</item>

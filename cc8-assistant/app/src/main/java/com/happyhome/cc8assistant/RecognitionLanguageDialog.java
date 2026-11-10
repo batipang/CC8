@@ -62,7 +62,7 @@ final class RecognitionLanguageDialog {
     ScrollView scroll = new ScrollView(activity);
     scroll.addView(content);
     AlertDialog editor =
-        new AlertDialog.Builder(activity)
+        new LargeDialogBuilder(activity)
             .setTitle("识别语言")
             .setView(scroll)
             .setNegativeButton("取消", null)
