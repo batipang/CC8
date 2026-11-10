@@ -51,6 +51,7 @@ class ReportingHooks:
     wake_word: str
     log: EventSink
     status: Callable[[str, str], None]
+    meeting_state: Callable[[], dict[str, object]] = lambda: {}
 
 
 class StatusReporter:
@@ -74,6 +75,15 @@ class StatusReporter:
             # kill a worker; serialization errors above still reach the caller.
             pass
 
+    def meeting_diagnostics(self):
+        state = self.hooks.meeting_state()
+        mode = state.get('state', 'none')
+        return dict(
+            meeting_mode=mode,
+            meeting_capture_requested=mode == 'capturing',
+            meeting_pending_chunks=state.get('pending_count', 0),
+        )
+
     def health(self):
         state = self.hooks.session()
         visual = self.hooks.visual()
@@ -83,6 +93,7 @@ class StatusReporter:
         environment = endpoint.near_speech.environment
         stop = endpoint.fast_stop_observation
         metrics = self.hooks.metrics()
+        meeting = self.meeting_diagnostics()
         # 白名单输出就绪位，不导出 metrics 内可能存在的自检文字和用户内容。
         return {
             'ok': True,
@@ -142,7 +153,10 @@ class StatusReporter:
             'response_worker': self.hooks.response_alive(),
             'connected': state.connected,
             'transport': state.transport_kind,
-            'microphone_active': state.active,
+            # Capture leases, as with ordinary voice. The separate native
+            # device status reports actual AudioRecord start/release state.
+            'microphone_active': state.active or meeting['meeting_capture_requested'],
+            **meeting,
             # Owner-only ephemeral control state, distinct from worker liveness
             # and capture leases. Reading it never arms or advances a request.
             'session_generation': state.generation,
@@ -193,6 +207,7 @@ class StatusReporter:
         data = {
             'connected': state.connected,
             'active': state.active,
+            **self.meeting_diagnostics(),
             'calibrating': self.hooks.calibration().active,
             'playing': self.hooks.playback().playing,
             'generation': state.generation,

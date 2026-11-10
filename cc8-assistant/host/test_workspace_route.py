@@ -22,6 +22,9 @@ SESSION_INTERFACES = r"""
   boolean dotChatSupported,savedTasksSupported,preferenceMemorySupported,resultProvenanceSupported,resultReadingSupported,visionModesSupported,photoFollowupSupported,macWindowSupported,vocabularySupported,workflowSupported,reportSourcesSupported,reportArchiveSupported,threadQueueSupported,reportProgressSupported;
   final PhotoFollowupWindow photoFollowup=new PhotoFollowupWindow();
  final WorkflowConsent workflowConsent=new WorkflowConsent();
+  boolean meetingSupported,meetingHostReserved;int meetingRevocations;
+  String revokeMeeting(){meetingRevocations++;return "";}
+  void cancelMeetingForGeneration(int generation){}
   String pendingPhotoId="",pendingPhotoForgetId="";
   JSONObject voicePreferences,speechCorrection;
   int speechCorrectionRevision=-1;
@@ -328,10 +331,13 @@ SCENARIOS = r"""
     yes(c.taskResultUnconfirmed,"Unknown running work remains visible despite a late old completion");
     break;
    }
-   case "queued_workspace_loss":
+   case "queued_workspace_loss":{
+    int meetingBefore=s.meetingRevocations;
     s.deliver(oldWorkspace(),old);s.lost(old);c.drain();
+    yes(s.meetingRevocations>meetingBefore,"Losing all routes did not revoke meeting capture");
     yes(c.tasksData.length()==0&&!c.linked,"Loss must clear the old workspace");
     yes(c.taskResultUnconfirmed,"Queued old completion must not hide interrupted running work");break;
+   }
    case "queued_link_after_pause":{
     activate(c,new Link("wifi"));Runnable pending=c.ui.poll();
     yes(pending!=null,"fixture needs a queued link callback");
@@ -339,8 +345,10 @@ SCENARIOS = r"""
     yes(!c.linked,"Queued old link callback must not reconnect the background UI");break;
    }
    case "backup_without_false_callback":{
+    int meetingBefore=s.meetingRevocations;
     Link wifi=new Link("wifi");wifi.ready=true;s.wifiLink=wifi;
     s.lost(old);c.drain();
+    yes(s.meetingRevocations>meetingBefore,"Selecting backup inherited meeting capture");
     yes(c.linked&&s.activeLink==wifi,"Authenticated backup should remain selected");
     yes(c.tasksData.length()==0&&c.taskResultUnconfirmed,"New activation must clear old task state even without a false callback");
     c.snapshot(0,task("completed"));c.drain();

@@ -8,12 +8,12 @@ import wave
 
 from minimax_client import Transport, MiniMaxError, Cancelled, check_api_result
 from protocol import decode_json_object
+from meeting_protocol import text_value
 
 RATE = 16000
 CHUNK_SAMPLES = RATE * 30
 MIN_SAMPLES = RATE // 10
 MAX_RESPONSE = 512 * 1024
-MAX_TEXT = 12000
 MAX_SPANS = 256
 MAX_ALIGNMENT_BYTES = 64 * 1024
 
@@ -32,18 +32,6 @@ class Transcript:
     duration_ms: int
     spans: tuple[Span, ...] = ()
     metadata: str = 'unavailable'
-
-
-def text_value(value):
-    if (
-        not isinstance(value, str)
-        or len(value) > MAX_TEXT
-        or any(ord(c) < 32 and c not in '\n\r\t' for c in value)
-    ):
-        raise ValueError('Invalid meeting transcript text')
-    if len(value.encode('utf-8')) > MAX_TEXT * 4:
-        raise ValueError('Meeting transcript text exceeds budget')
-    return value.strip()
 
 
 def numeric(value):

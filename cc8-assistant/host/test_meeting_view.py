@@ -5,7 +5,8 @@ import unittest
 
 from meeting_asr import Transcript
 from meeting_session import CaptureOwner, MeetingSession
-from meeting_view import index_page, status, text_page, validate_request
+from meeting_view import index_page, status, text_page
+from meeting_protocol import validate_request
 from protocol import decode_json_object, HEADER, MAX_PACKET
 
 
@@ -106,6 +107,8 @@ class MeetingViewTests(unittest.TestCase):
             self.request('resume', id='a' * 32, offer_id='b' * 32, confirmed=True),
             self.request('pause', id='a' * 32),
             self.request('end', id='a' * 32),
+            self.request('abort_start', start_request_id='b' * 32),
+            self.request('capture_failed', id='a' * 32, nonce='b' * 32, reason='capture_failed'),
             self.request('index', id='a' * 32, revision=7, offset=0),
             self.request(
                 'text', id='a' * 32, revision=7, row_id='c' * 32, offset=0, original=False

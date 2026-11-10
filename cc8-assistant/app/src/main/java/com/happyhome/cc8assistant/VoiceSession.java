@@ -71,6 +71,8 @@ final class VoiceSession {
     default void vocabularyResult(JSONObject data, long route) {}
 
     default void workflowResult(JSONObject data, long route) {}
+
+    default void meetingResult(JSONObject data, long route) {}
   }
 
   private final Context context;
@@ -125,6 +127,13 @@ final class VoiceSession {
       reportProgressSupported;
   private volatile JSONObject voicePreferences;
   private final WorkflowConsent workflowConsent = new WorkflowConsent();
+  private final MeetingConsent meetingConsent = new MeetingConsent();
+  private volatile boolean meetingSupported, meetingHostReserved;
+  private volatile boolean meetingReleaseFailed;
+  private volatile MeetingRecorder meetingRecorder;
+  private String meetingId = "", meetingNonce = "";
+  private long meetingRoute = -1, meetingRevision;
+  private int meetingGeneration;
   private volatile JSONObject speechCorrection;
   private int speechCorrectionRevision = -1;
 
@@ -150,6 +159,28 @@ final class VoiceSession {
 
   boolean supportsWorkflows() {
     return workflowSupported;
+  }
+
+  boolean supportsMeetings() {
+    return meetingSupported;
+  }
+
+  boolean isMeetingCapturing() {
+    MeetingRecorder current = meetingRecorder;
+    return current != null && current.capturing();
+  }
+
+  boolean meetingMediaBlocked() {
+    return meetingReleaseFailed;
+  }
+
+  private boolean meetingReserved() {
+    synchronized (routeLock) {
+      return meetingHostReserved
+          || meetingRecorder != null
+          || meetingReleaseFailed
+          || meetingConsent.pending();
+    }
   }
 
   boolean supportsReportSources() {
@@ -277,6 +308,7 @@ final class VoiceSession {
     // 先使生命周期票据失效，再停音频和关闭连接；旧异步任务不能在后台重建资源。
     ServerSocket listener;
     synchronized (routeLock) {
+      revokeMeeting();
       availability.end(SystemClock.elapsedRealtime());
       cancelVision();
       textSession = false;
@@ -316,6 +348,8 @@ final class VoiceSession {
     final Link usb, wifi;
     final long route;
     synchronized (routeLock) {
+      revokeMeeting();
+      meetingSupported = meetingHostReserved = false;
       usb = usbLink;
       wifi = wifiLink;
       activeLink = null;
@@ -451,6 +485,8 @@ final class VoiceSession {
       }
       boolean captureWasActive = currentCapture != null && currentCapture.nativeReady;
       if (changed) {
+        revokeMeeting();
+        meetingSupported = meetingHostReserved = false;
         sourcesPresentation = null;
         // A reused USB Link after Wi-Fi is still a new activation. Invalidate
         // queued workspace callbacks before publishing this route's ready state.
@@ -500,6 +536,7 @@ final class VoiceSession {
       JSONObject hello = Wire.event("device_ready");
       Wire.put(hello, "supports_playback_pause", true);
       Wire.put(hello, "speech_correction_version", 1);
+      Wire.put(hello, "meeting_version", 1);
       Wire.put(hello, "playback_pause_applied_version", 1);
       Wire.put(hello, "playout_receipt_version", 1);
       Wire.put(hello, "render_clock_report_version", 1);
@@ -601,6 +638,8 @@ final class VoiceSession {
       if (usbLink == link) usbLink = null;
       if (wifiLink == link) wifiLink = null;
       if (activeLink != link) return;
+      revokeMeeting();
+      meetingSupported = meetingHostReserved = false;
       activeLink = null;
       routeEpoch++;
       sourcesPresentation = null;
@@ -826,6 +865,7 @@ final class VoiceSession {
             preferenceMemorySupported = Boolean.TRUE.equals(j.opt("supports_preference_memory"));
             vocabularySupported = Boolean.TRUE.equals(j.opt("supports_vocabulary"));
             workflowSupported = Boolean.TRUE.equals(j.opt("supports_workflows"));
+            meetingHello(j);
             reportSourcesSupported = Boolean.TRUE.equals(j.opt("supports_report_sources"));
             reportArchiveSupported = Boolean.TRUE.equals(j.opt("supports_report_archive"));
             threadQueueSupported = Boolean.TRUE.equals(j.opt("supports_thread_queue"));
@@ -1214,6 +1254,8 @@ final class VoiceSession {
           if (foreground) listener.vocabularyResult(j, route);
         } else if ("workflow_result".equals(event)) {
           if (foreground && workflowSupported) listener.workflowResult(j, route);
+        } else if ("meeting_result".equals(event) || "meeting_update".equals(event)) {
+          if (foreground && meetingSupported) acceptMeeting(j, route, p.generation);
         } else if ("saved_task_result".equals(event)) {
           if (foreground) listener.savedTasks(j);
         } else if ("web_sources".equals(event)) {
@@ -1235,6 +1277,7 @@ final class VoiceSession {
               || !statusFeedback.cancel(
                   p.generation, recording || announcement || visual || textSession)) return;
           minimumGeneration = Math.max(minimumGeneration, p.generation);
+          cancelMeetingForGeneration(p.generation);
           String revoked = workflowConsent.cancel(p.generation);
           if (!revoked.isEmpty() && revoked.equals(pendingVisionNonce)) pendingVisionNonce = "";
           photoFollowup.clear();
@@ -1531,6 +1574,228 @@ final class VoiceSession {
         Wire.put(request, key, args.opt(key));
       }
       return sendWorkspace(request, route);
+    }
+  }
+
+  private void cancelMeetingForGeneration(int generation) {
+    if (!meetingId.isEmpty() && meetingRecorder != null && generation >= meetingGeneration)
+      revokeMeeting();
+  }
+
+  private void meetingHello(JSONObject hello) {
+    meetingSupported = Boolean.TRUE.equals(hello.opt("supports_meetings"));
+    JSONObject state = hello.optJSONObject("meeting_state");
+    meetingHostReserved =
+        state != null
+            && ("capturing".equals(state.optString("state"))
+                || "paused".equals(state.optString("state"))
+                || state.optInt("pending_count") > 0);
+  }
+
+  boolean meetingRequest(String requestId, JSONObject args, long route) {
+    synchronized (routeLock) {
+      if (!foreground
+          || !meetingSupported
+          || !currentRoute(route)
+          || !requestId.matches("[a-f0-9]{32}")) return false;
+      String action = args.optString("action");
+      boolean starting = "start".equals(action) || "resume".equals(action);
+      if (starting) {
+        if (!Boolean.TRUE.equals(args.opt("confirmed"))
+            || recording
+            || visual
+            || announcement
+            || textSession
+            || meetingRecorder != null
+            || meetingReleaseFailed
+            || context.checkCallingOrSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED
+            || !meetingConsent.arm(requestId, route, SystemClock.elapsedRealtime())) return false;
+      } else if ("pause".equals(action) || "end".equals(action)) {
+        String pendingStart = revokeMeeting();
+        if (!pendingStart.isEmpty()) abortMeetingStart(pendingStart, route);
+      }
+      JSONObject request = Wire.event("meeting_request");
+      Wire.put(request, "request_id", requestId);
+      java.util.Iterator<String> keys = args.keys();
+      while (keys.hasNext()) {
+        String key = keys.next();
+        if (!"event".equals(key) && !"request_id".equals(key))
+          Wire.put(request, key, args.opt(key));
+      }
+      if (sendWorkspace(request, route)) return true;
+      if (starting) meetingConsent.reject(requestId, route);
+      return false;
+    }
+  }
+
+  private void abortMeetingStart(String requestId, long route) {
+    if (!requestId.matches("[a-f0-9]{32}")) return;
+    JSONObject args = new JSONObject();
+    Wire.put(args, "action", "abort_start");
+    Wire.put(args, "start_request_id", requestId);
+    meetingRequest(WorkflowModel.id(), args, route);
+  }
+
+  void leaveMeeting(long route) {
+    synchronized (routeLock) {
+      if (!currentRoute(route)) return;
+      String id = meetingId;
+      String pendingStart = revokeMeeting();
+      if (!pendingStart.isEmpty()) abortMeetingStart(pendingStart, route);
+      if (!id.isEmpty()) {
+        JSONObject args = new JSONObject();
+        Wire.put(args, "action", "pause");
+        Wire.put(args, "id", id);
+        meetingRequest(WorkflowModel.id(), args, route);
+      }
+    }
+  }
+
+  /** Caller holds routeLock. Keep the recorder reference until its physical release receipt. */
+  private String revokeMeeting() {
+    String pendingStart = meetingConsent.clear();
+    meetingId = meetingNonce = "";
+    meetingRoute = -1;
+    MeetingRecorder old = meetingRecorder;
+    if (old != null) old.stop();
+    return pendingStart;
+  }
+
+  private void acceptMeeting(JSONObject data, long route, int generation) {
+    String requestId = data.optString("request_id");
+    JSONObject state = data.optJSONObject("state");
+    JSONObject capture = data.optJSONObject("capture");
+    if (capture != null && Boolean.TRUE.equals(data.opt("ok"))) {
+      boolean consent = meetingConsent.take(requestId, route, SystemClock.elapsedRealtime());
+      String id = capture.optString("id"), nonce = capture.optString("nonce");
+      if (!consent
+          || !id.matches("[a-f0-9]{32}")
+          || !nonce.matches("[a-f0-9]{32}")
+          || capture.optInt("generation", -1) != generation
+          || generation < minimumGeneration
+          || capture.optInt("sample_rate") != 16000
+          || capture.optInt("packet_type") != Wire.MEETING
+          || state == null
+          || !id.equals(state.optString("id"))
+          || !"capturing".equals(state.optString("state"))
+          || state.optLong("revision", -1) < 0
+          || recording
+          || visual
+          || announcement
+          || textSession
+          || meetingRecorder != null) {
+        abortMeetingStart(requestId, route);
+      } else {
+        meetingId = id;
+        meetingNonce = nonce;
+        meetingRoute = route;
+        meetingGeneration = generation;
+        meetingRevision = state.optLong("revision");
+        minimumGeneration = Math.max(minimumGeneration, generation);
+        startMeetingRecorder(id, nonce, route, generation, requestId);
+      }
+    } else if ("meeting_result".equals(data.optString("event"))) {
+      meetingConsent.reject(requestId, route);
+    }
+    if (state != null) {
+      String mode = state.optString("state");
+      meetingHostReserved =
+          "capturing".equals(mode) || "paused".equals(mode) || state.optInt("pending_count") > 0;
+      if (!meetingId.isEmpty()
+          && meetingId.equals(state.optString("id"))
+          && state.optLong("revision", -1) >= meetingRevision
+          && !"capturing".equals(mode)) revokeMeeting();
+    }
+    listener.meetingResult(data, route);
+  }
+
+  private void startMeetingRecorder(
+      String id, String nonce, long route, int generation, String requestId) {
+    final MeetingRecorder[] owner = new MeetingRecorder[1];
+    final long confirmedAt = SystemClock.elapsedRealtime();
+    MeetingRecorder candidate =
+        new MeetingRecorder(
+            captureResourceLock,
+            new MeetingRecorder.Port() {
+              public boolean current() {
+                synchronized (routeLock) {
+                  return foreground
+                      && currentRoute(route)
+                      && meetingRecorder == owner[0]
+                      && id.equals(meetingId)
+                      && nonce.equals(meetingNonce)
+                      && meetingRoute == route
+                      && meetingGeneration == generation
+                      && isConnected()
+                      && !recording;
+                }
+              }
+
+              public boolean start(AudioRecord record) {
+                synchronized (routeLock) {
+                  if (!current()
+                      || SystemClock.elapsedRealtime() - confirmedAt >= 5000
+                      || context.checkCallingOrSelfPermission(Manifest.permission.RECORD_AUDIO)
+                          != PackageManager.PERMISSION_GRANTED) return false;
+                  record.startRecording();
+                  return record.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING;
+                }
+              }
+
+              public boolean send(byte[] pcm, long sequence, long frame) {
+                synchronized (routeLock) {
+                  Link destination = activeLink;
+                  if (!current() || destination == null || destination.closed || !destination.ready)
+                    return false;
+                  byte[] data = new byte[16 + pcm.length];
+                  for (int i = 0; i < 16; i++)
+                    data[i] = (byte) Integer.parseInt(nonce.substring(i * 2, i * 2 + 2), 16);
+                  System.arraycopy(pcm, 0, data, 16, pcm.length);
+                  Wire.Packet packet = new Wire.Packet();
+                  packet.type = Wire.MEETING;
+                  packet.generation = generation;
+                  packet.sequence = sequence;
+                  packet.frame = frame;
+                  packet.nanos = System.nanoTime();
+                  packet.data = data;
+                  try {
+                    ownPacket(packet, destination);
+                    destination.offer(packet);
+                    return true;
+                  } catch (IOException failure) {
+                    destination.close();
+                    return false;
+                  }
+                }
+              }
+
+              public void finished(boolean failed, boolean released) {
+                synchronized (routeLock) {
+                  if (meetingRecorder != owner[0]) return;
+                  boolean stillOwned = current();
+                  if (!released) meetingReleaseFailed = true;
+                  meetingRecorder = null;
+                  if (failed && stillOwned) {
+                    JSONObject args = new JSONObject();
+                    Wire.put(args, "action", "capture_failed");
+                    Wire.put(args, "id", id);
+                    Wire.put(args, "nonce", nonce);
+                    Wire.put(args, "reason", "capture_failed");
+                    meetingRequest(WorkflowModel.id(), args, route);
+                  }
+                  if (stillOwned) revokeMeeting();
+                }
+              }
+            });
+    owner[0] = candidate;
+    meetingRecorder = candidate;
+    try {
+      candidate.start();
+    } catch (RuntimeException failure) {
+      meetingRecorder = null;
+      revokeMeeting();
+      abortMeetingStart(requestId, route);
     }
   }
 
@@ -2003,6 +2268,10 @@ final class VoiceSession {
     final CaptureWindow window = new CaptureWindow(testLimitMs, SystemClock.elapsedRealtime());
     // mine 固定本次录音 epoch，旧线程 finally 只能清理自己，不能关闭后来新开的录音。
     if (!foreground || recording || !isConnected()) return;
+    if (meetingReserved()) {
+      listener.state("idle", "会议占用音频，请先在会议页结束或删除会议。");
+      return;
+    }
     cancelVision();
     if (context.checkCallingOrSelfPermission(Manifest.permission.RECORD_AUDIO)
         != PackageManager.PERMISSION_GRANTED) {
@@ -2014,16 +2283,18 @@ final class VoiceSession {
     listener.playback(false);
     cancelPlayback();
     final int mine;
-    synchronized (this) {
-      if (!foreground || recording || !isConnected()) return;
-      recording = true;
-      captureWindow = window;
-      mine = ++epoch;
-      micFrames = 0;
-      renderFrames = 0;
-      minimumGeneration = 0;
-      statusFeedback.reset();
-      speakerOwner.beginVoice(mine, () -> recording && epoch == mine);
+    synchronized (routeLock) {
+      synchronized (this) {
+        if (!foreground || recording || !isConnected() || meetingReserved()) return;
+        recording = true;
+        captureWindow = window;
+        mine = ++epoch;
+        micFrames = 0;
+        renderFrames = 0;
+        minimumGeneration = 0;
+        statusFeedback.reset();
+        speakerOwner.beginVoice(mine, () -> recording && epoch == mine);
+      }
     }
     listener.microphone(true);
     listener.state("calibrating", "正在准备音频，请保持安静");
@@ -2432,7 +2703,8 @@ final class VoiceSession {
     Wire.put(j, "wifi_ready", wifiLink != null && wifiLink.ready && !wifiLink.closed);
     Wire.put(j, "wifi_paired", lan.paired());
     Wire.put(j, "wifi_error", wifiError);
-    Wire.put(j, "microphone_active", recording);
+    Wire.put(j, "microphone_active", recording || isMeetingCapturing());
+    Wire.put(j, "meeting_capture_active", isMeetingCapturing());
     CaptureWindow window = captureWindow;
     Wire.put(j, "test_capture_limit_supported", true);
     Wire.put(j, "test_capture_epoch_supported", true);
@@ -2629,7 +2901,7 @@ final class VoiceSession {
               100f
                   * audio.getStreamVolume(AudioManager.STREAM_MUSIC)
                   / Math.max(1, audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC))));
-      Wire.put(result, "microphone_active", recording);
+      Wire.put(result, "microphone_active", recording || isMeetingCapturing());
       Wire.put(result, "foreground", foreground);
       Wire.put(result, "transport", transportName());
       Wire.put(result, "wifi_ready", wifiLink != null && wifiLink.ready && !wifiLink.closed);

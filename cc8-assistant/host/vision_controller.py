@@ -415,6 +415,9 @@ class VisionController:
             )
             return
         with self.hooks.lock:
+            if self.hooks.calibrating():
+                self.hooks.event('vision_unavailable', message='音频正在使用，请先结束当前模式。')
+                return
             generation = self.hooks.cancel_session('vision_request')
             # Provider/transport cleanup may synchronously admit replacement
             # work. Its generation owns the UI and queue, even on this thread.

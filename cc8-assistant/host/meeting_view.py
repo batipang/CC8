@@ -5,11 +5,11 @@ must echo next_offset, not compute it from its UTF-16 String.length(). Callers
 hold the meeting owner lock; this module creates no transport, file or worker.
 """
 
-from meeting_session import MeetingSession, integer, token, MAX_ROWS
+from meeting_session import MeetingSession
+from meeting_protocol import MAX_REVISION, MAX_ROWS, token, integer
 
 INDEX_ROWS = 12
 TEXT_CHARS = 1024
-MAX_REVISION = 2**63 - 1
 
 
 def checked(model, ident, revision):
@@ -95,53 +95,3 @@ def text_page(model, ident, revision, row_id, offset, *, original=False):
         text=content[offset:end],
         next_offset=end if end < len(content) else None,
     )
-
-
-def validate_request(value):
-    """Validate before controller ownership or side effects; no implicit consent."""
-    if type(value) is not dict or value.get('event') != 'meeting_request':
-        raise ValueError('Invalid meeting request')
-    if not token(value.get('request_id')):
-        raise ValueError('Invalid meeting request identity')
-    action = value.get('action')
-    if type(action) is not str:
-        raise ValueError('Invalid meeting action')
-    fields = {
-        'status': set(),
-        'prepare': set(),
-        'start': {'offer_id', 'confirmed', 'save_audio'},
-        'prepare_resume': {'id', 'revision'},
-        'resume': {'id', 'offer_id', 'confirmed'},
-        # Safety actions intentionally do not depend on ASR-changing revisions.
-        'pause': {'id'},
-        'end': {'id'},
-        'index': {'id', 'revision', 'offset'},
-        'text': {'id', 'revision', 'row_id', 'offset', 'original'},
-        'edit': {'id', 'revision', 'row_id', 'text', 'confirmed'},
-        'delete': {'id', 'revision', 'confirmed'},
-        'export': {'id', 'revision', 'format', 'confirmed'},
-        'summarize': {'id', 'revision', 'confirmed'},
-        'translate': {'id', 'revision', 'language', 'confirmed'},
-    }
-    if action not in fields or set(value) != {'event', 'request_id', 'action'} | fields[action]:
-        raise ValueError('Unexpected meeting fields')
-    for key in ('id', 'offer_id', 'row_id'):
-        if key in value and not token(value[key]):
-            raise ValueError('Invalid meeting identity')
-    if 'revision' in value and not integer(value['revision'], MAX_REVISION):
-        raise ValueError('Invalid meeting revision')
-    if 'confirmed' in value and value['confirmed'] is not True:
-        raise ValueError('Explicit meeting confirmation required')
-    for key in ('save_audio', 'original'):
-        if key in value and type(value[key]) is not bool:
-            raise ValueError('Invalid meeting option')
-    if 'offset' in value and not integer(value['offset'], MAX_ROWS if action == 'index' else 12000):
-        raise ValueError('Invalid meeting page cursor')
-    if action == 'edit':
-        from meeting_asr import text_value
-
-        text_value(value['text'])
-    if action == 'export' and value['format'] not in ('txt', 'json'):
-        raise ValueError('Unsupported meeting export')
-    if action == 'translate' and value['language'] not in ('zh', 'en'):
-        raise ValueError('Unsupported meeting translation language')

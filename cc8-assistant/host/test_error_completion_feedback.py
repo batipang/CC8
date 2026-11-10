@@ -515,6 +515,8 @@ class FeedbackCheck {
  static class Link {}
  final Link source=new Link();
  boolean captureHello(Link link,Data hello){return true;}
+ void meetingHello(Data hello){}
+ void cancelMeetingForGeneration(int generation){}
  // The typed settings receipt is exercised by WorkspaceRouteTests.
  void acceptVoicePreferences(Object state){}
  void clearSpeechCorrection(long route){}

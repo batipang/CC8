@@ -11,7 +11,7 @@ import subprocess as subprocess
 import threading as threading
 import time
 
-from protocol import EVENT, MIC, MIC_PAIRED, ROUTE_BOUND, decode_event
+from protocol import EVENT, MIC, MIC_PAIRED, ROUTE_BOUND, MEETING, decode_event
 from transport import Pairing, TransportHub
 from echo_processors import WebRtcEchoCanceller
 from fast_stop import FastStopDetector
@@ -130,6 +130,7 @@ class Bridge:
         self.preferences = components.preferences
         self.vocabulary = components.vocabulary
         self.workflows = components.workflows
+        self.meetings = components.meetings
         if isinstance(self.brain, BrainRouter):
             self.brain.preferences = self.preferences
             self.brain.work_reports = self.chats.voice
@@ -183,6 +184,7 @@ class Bridge:
     def heartbeat_tick(self):
         try:
             self.response.expire_corrections()
+            self.meetings.tick()
             if self.session.connection is not None:
                 self.idle_tick()
                 self.event('ping')
@@ -297,6 +299,9 @@ class Bridge:
                 self.on_event(decode_event(p.data))
             except (KeyError, TypeError, OverflowError):
                 raise ValueError('Invalid device event fields') from None
+            return
+        if p.kind == MEETING:
+            self.meetings.on_packet(p)
             return
         self.capture.on_packet(p)
 

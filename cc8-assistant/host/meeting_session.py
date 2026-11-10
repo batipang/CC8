@@ -2,13 +2,12 @@
 
 from copy import deepcopy
 from dataclasses import dataclass, field
-import re
 import uuid
 
-from meeting_asr import CHUNK_SAMPLES, RATE, MIN_SAMPLES, Transcript, text_value
+from meeting_asr import CHUNK_SAMPLES, RATE, MIN_SAMPLES, Transcript
+from meeting_protocol import MAX_ROWS, token, integer, text_value
 
 MAX_SAMPLES = RATE * 3600
-MAX_ROWS = 256
 MAX_TEXT_BYTES = 256 * 1024
 MAX_SPANS = 2048
 MAX_ALIGNMENT_BYTES = 256 * 1024
@@ -30,16 +29,9 @@ REASONS = frozenset(
         'network',
         'asr_failed',
         'no_signal',
+        'capture_failed',
     )
 )
-
-
-def token(value):
-    return type(value) is str and re.fullmatch(r'[a-f0-9]{32}', value) is not None
-
-
-def integer(value, maximum):
-    return type(value) is int and 0 <= value <= maximum
 
 
 @dataclass(frozen=True)

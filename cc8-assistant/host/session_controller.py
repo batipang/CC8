@@ -254,7 +254,11 @@ class SessionController:
             if type(result_restart) is not bool:
                 raise ValueError('Invalid result reading mode')
         with self.guard:
-            if self.connection is None or self.hooks.calibration().active:
+            if (
+                self.connection is None
+                or self.hooks.calibration().active
+                or self.hooks.capture_reserved()
+            ):
                 raise RuntimeError('Text request unavailable')
             previous = self.generation
             try:
@@ -416,6 +420,7 @@ class SessionController:
                 self.playback_interrupted_by_transport = True
             self.hooks.announcements().invalidate()
             self.hooks.invalidate_workflows(reason)
+            self.hooks.invalidate_meetings(reason)
             self.text_generation = None
             self.hooks.visual().invalidate(
                 reason=reason, new_generation=generation, capture_owner=self.capture_owner()
@@ -669,6 +674,26 @@ class SessionController:
 
     def tool_sample_comparison(self, reason='comparison_only'):
         return self.tool_samples.comparison(self, reason)
+
+    def claim_meeting_generation(self):
+        """A confirmed exclusive meeting fences old idle cleanup without a voice Start.
+
+        MeetingController holds this same guard and has checked all other audio
+        pipelines idle. This only advances ownership; it starts no ordinary
+        microphone, provider cancellation, calibration, output or voice session.
+        """
+        with self.guard:
+            if (
+                self.connection is None
+                or self.active
+                or self.text_generation is not None
+                or self.hooks.calibration().active
+                or self.hooks.announcements().generation is not None
+                or self.hooks.visual().generation is not None
+            ):
+                raise RuntimeError('Meeting audio is not idle')
+            self.generation += 1
+            return self.generation
 
     def start_capture(self, j):
         start_capture(self, j)

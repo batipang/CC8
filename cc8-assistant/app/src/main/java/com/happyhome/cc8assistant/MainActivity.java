@@ -53,6 +53,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   private RecognitionEnvironmentDialog recognitionEnvironment;
   private VocabularyDialog vocabulary;
   private WorkflowDialog workflows;
+  private MeetingDialog meetings;
   private AlertDialog imageQualityDialog;
   private boolean highDefinitionImage;
   private boolean reviewCapturedImage;
@@ -180,6 +181,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     recognitionEnvironment = new RecognitionEnvironmentDialog(this, session);
     vocabulary = new VocabularyDialog(this, session);
     workflows = new WorkflowDialog(this, session);
+    meetings = new MeetingDialog(this, session);
     resultDetails = new ResultDetailsDialog(this, session);
     savedTasks = new SavedTasksDialog(this, session, resultDetails);
     requestOpenVoice(getIntent());
@@ -1282,7 +1284,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
               "听音环境",
               "用户词表／选词纠错",
               "工作汇报来源",
-              "工作流程／定时简报"
+              "工作流程／定时简报",
+              "会议录音／转写"
             },
             (d, n) -> {
               if (n == 0) {
@@ -1337,7 +1340,13 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
               else if (n == 17) vocabulary.open();
               else if (n == 18) reportSources.open();
               else if (n == 19) workflows.open();
-              else showReminderHistory();
+              else if (n == 20) {
+                autoVoice.cancel();
+                pending = false;
+                handler.removeCallbacks(autoVoiceTick);
+                if (session.isRecording()) session.stopMicrophone();
+                meetings.open();
+              } else showReminderHistory();
             })
         .setNegativeButton("关闭", null)
         .show();
@@ -1844,6 +1853,15 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   }
 
   @Override
+  public void meetingResult(JSONObject data, long route) {
+    runOnUiThread(
+        () -> {
+          if (foreground && session.currentRoute(route) && meetings != null)
+            meetings.accept(data, route);
+        });
+  }
+
+  @Override
   public void speechCorrection(JSONObject data, long route) {
     runOnUiThread(
         () -> {
@@ -1953,6 +1971,13 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
               ? "摄像头已授权，请重新确认看图、识字或取景流程"
               : "未获得摄像头权限，未采集图片");
     }
+    if (request == 35) {
+      state(
+          "idle",
+          results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED
+              ? "麦克风已授权，请重新打开会议页并明确确认录音。"
+              : "未获得麦克风权限，会议录音没有开始。");
+    }
     if (request == 21) {
       boolean allowed = results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED;
       boolean requested = pending;
@@ -2039,6 +2064,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
             recognitionEnvironment.close();
             vocabulary.close();
             workflows.close();
+            meetings.close();
             if (imageQualityDialog != null) imageQualityDialog.dismiss();
             savedTasks.close();
             resultDetails.close();
@@ -2301,6 +2327,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     if (recognitionEnvironment != null) recognitionEnvironment.close();
     if (vocabulary != null) vocabulary.close();
     if (workflows != null) workflows.close();
+    if (meetings != null) meetings.close();
     if (imageQualityDialog != null) imageQualityDialog.dismiss();
     if (savedTasks != null) savedTasks.close();
     if (resultDetails != null) resultDetails.close();

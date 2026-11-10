@@ -195,6 +195,9 @@ def run_backend(dependencies: BackendDependencies):
 
         cleanup_all(
             bridge.session.deactivate,
+            lambda: (
+                bridge.meetings.close() if getattr(bridge, 'meetings', None) is not None else None
+            ),
             bridge.playback.stop_output,
             bridge.announcements.invalidate,
             cancel_turn,
