@@ -4,6 +4,7 @@ from contextlib import nullcontext, redirect_stdout, redirect_stderr
 import fcntl
 import io
 import json
+import socket
 from pathlib import Path
 import subprocess
 import sys
@@ -5344,11 +5345,69 @@ class DeviceAutomationTests(unittest.TestCase):
         result = objects('PRIVATE_CAPTION\nHUD_UI_STATUS {"camera_open":false}', 'HUD_UI_STATUS ')
         self.assertEqual(result, {'camera_open': False})
 
+    def test_read_only_device_status_uses_real_owned_socket_without_other_actions(self):
+        received, errors = [], []
+        expected = {
+            'ok': True,
+            'device_release': {
+                'schema_version': 1,
+                'assistant_version': '0.9.125',
+                'assistant_code': 162,
+                'protocol_version': 2,
+            },
+            'installation_verified': False,
+        }
+        with (
+            tempfile.TemporaryDirectory() as folder,
+            socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server,
+        ):
+            path = Path(folder) / 'runtime.sock'
+            server.bind(str(path))
+            path.chmod(0o600)
+            server.listen(1)
+            server.settimeout(1)
+
+            def serve():
+                try:
+                    with server.accept()[0] as peer:
+                        peer.settimeout(1)
+                        data = bytearray()
+                        while b'\n' not in data:
+                            block = peer.recv(4096)
+                            if not block or len(data) + len(block) > 4096:
+                                raise AssertionError('Invalid synthetic status request')
+                            data.extend(block)
+                        received.append(json.loads(data))
+                        peer.sendall((json.dumps(expected) + '\n').encode())
+                except Exception as error:
+                    errors.append(type(error).__name__)
+
+            worker = threading.Thread(target=serve, daemon=True)
+            worker.start()
+            try:
+                result = rpc(
+                    path, {'operation': 'device_control', 'arguments': {'action': 'status'}}
+                )
+            finally:
+                worker.join(2)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(errors, [])
+            self.assertEqual(
+                received, [{'operation': 'device_control', 'arguments': {'action': 'status'}}]
+            )
+            self.assertEqual(result, expected)
+
     def test_ipc_rejects_camera_and_arbitrary_tool_routes_before_connect(self):
         for request in (
             {'operation': 'camera_snapshot'},
             {'operation': 'text_request', 'text': 'PRIVATE'},
             {'operation': 'device_control', 'arguments': {'action': 'start'}},
+            *(
+                {'operation': 'device_control', 'arguments': {'action': action}}
+                for action in ('volume', 'stop', 'wake_screen', 'camera', 'start_microphone')
+            ),
+            {'operation': 'device_control', 'arguments': {'action': 'status', 'percent': 1}},
+            {'operation': 'device_control', 'arguments': {'action': 'status'}, 'extra': True},
             {'operation': 'response_probe_arm', 'case': True},
             {'operation': 'response_probe_arm', 'case': len(ALL_QUESTIONS) + 1},
             {'operation': 'response_probe_arm', 'case': 30, 'text': 'PRIVATE'},
