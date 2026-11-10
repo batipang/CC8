@@ -42,7 +42,7 @@ def stubs():
     )
     value['android/widget/Button.java'] = value['android/widget/Button.java'].replace(
         'public Button(){super(null);}',
-        'public boolean enabled=true;public Button(){super(null);}'
+        'public boolean enabled=true;public void setAllCaps(boolean value){}public Button(){super(null);}'
         'public Button(android.content.Context c){super(c);}public void setEnabled(boolean b){enabled=b;}'
         'public void performClick(){if(enabled&&click!=null)click.onClick(this);}',
     )
