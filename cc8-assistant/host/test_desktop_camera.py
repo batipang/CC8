@@ -125,6 +125,9 @@ class SnapshotBridgeTests(unittest.TestCase):
 
 
 class IpcBridge:
+    def local_operation_allowed(self, request):
+        return True  # This camera fixture represents an admitted owner session.
+
     def __init__(self, complete=True):
         self.guard = threading.RLock()
         self.generation = 100

@@ -17,9 +17,11 @@ class BrainRouter:
     # 文字按用户选择或显式委派路由，图像统一交给 Dot；失败时报告错误而不暗中换大脑。
     label = 'MiniMax + Dot'
 
-    def __init__(self, minimax, dot=None, selected='dot'):
+    def __init__(self, minimax, dot=None, selected='dot', *, guest=None):
         self.minimax = minimax
         self.dot = dot or DotBrain()
+        self.guest = guest
+        self.identity = ('owner', 0)
         self.work_reports = None
         self.preferences = None
         self.preference_context = ''
@@ -28,30 +30,69 @@ class BrainRouter:
         self.last_metrics = {}
 
     def select(self, provider):
-        if provider not in ('minimax', 'dot'):
+        if self.identity[0] != 'owner' or provider not in ('minimax', 'dot'):
             raise ValueError('Unknown brain provider')
         self.selected = provider
 
     def cancel(self):
-        cleanup_all(self.minimax.cancel, self.dot.cancel)
+        if self.identity[0] == 'guest':
+            if self.guest is not None:
+                self.guest.cancel()
+            return
+        cleanup_all(
+            self.minimax.cancel,
+            self.dot.cancel,
+            lambda: self.guest.cancel() if self.guest is not None else None,
+        )
+
+    def set_identity(self, mode):
+        """Internal idle-only transition, called by the identity controller.
+
+        Never expose this method as a model tool or a device-selected provider.
+        The outer session guard owns admission, workspace isolation and ACKs.
+        """
+        if mode not in ('owner', 'guest', 'blocked') or (mode == 'guest' and self.guest is None):
+            raise ValueError('Guest dialogue is unavailable')
+        epoch = self.identity[1] + 1
+        self.identity = ('blocked', epoch)
+        self.current_report_delivery = None
+        self.preference_context = ''
+        if self.guest is not None:
+            if mode == 'guest':
+                self.guest.activate()
+            else:
+                self.guest.deactivate()
+        self.identity = (mode, epoch)
+
+    def bind_identity(self, is_current):
+        identity = self.identity
+
+        def current():
+            return is_current() and identity == self.identity and identity[0] != 'blocked'
+
+        return current
 
     def close(self):
         cleanup_all(
-            self.cancel,
+            self.minimax.cancel,
+            self.dot.cancel,
             self.dot.close,
+            lambda: self.guest.deactivate() if self.guest is not None else None,
             lambda: self.work_reports.clear() if self.work_reports else None,
         )
 
     def prepare(self, is_current=lambda: True):
-        if self.selected != 'dot':
+        if self.identity[0] != 'owner' or self.selected != 'dot':
             return False
-        return self.dot.prepare(is_current)
+        return self.dot.prepare(self.bind_identity(is_current))
 
-    def updates(self, target, provider, on_web, *, vision=False):
+    def updates(self, target, provider, on_web, *, vision=False, is_current=lambda: True):
         if on_web is None:
             return None
 
         def update(kind, payload):
+            if not is_current():
+                return
             # Receive-path receipts may arrive while this router's generator is
             # suspended in TTS. Expose current bounded provider metrics before
             # forwarding, rather than waiting for yield-from to finish.
@@ -61,6 +102,23 @@ class BrainRouter:
             on_web(kind, payload)
 
         return update
+
+    @staticmethod
+    def scoped_clauses(clauses, is_current):
+        # Providers are not responsible for role authorization. Recheck at the
+        # router's yield boundary as well, including a provider's late final row.
+        iterator = iter(clauses)
+        try:
+            for clause in iterator:
+                if not is_current():
+                    raise Cancelled('Dialogue identity changed')
+                yield clause
+            if not is_current():
+                raise Cancelled('Dialogue identity changed')
+        finally:
+            close = getattr(iterator, 'close', None)
+            if callable(close):
+                close()
 
     def apply_preferences(self, history, target):
         context = self.preferences.context() if self.preferences else ''
@@ -76,6 +134,11 @@ class BrainRouter:
         return history
 
     def vision_clauses(self, text, image, history, is_current=lambda: True, on_web=None):
+        if self.identity[0] != 'owner':
+            raise Cancelled('Vision is unavailable outside owner mode')
+        is_current = self.bind_identity(is_current)
+        if not is_current():
+            raise Cancelled('Vision cancelled')
         self.current_report_delivery = None
         if self.work_reports:
             self.work_reports.forget()
@@ -83,12 +146,15 @@ class BrainRouter:
         # Camera input always goes to Dot, regardless of the text-chat selector.
         try:
             history = self.apply_preferences(history, self.dot)
-            yield from self.dot.clauses(
-                text,
-                history,
+            yield from self.scoped_clauses(
+                self.dot.clauses(
+                    text,
+                    history,
+                    is_current,
+                    self.updates(self.dot, 'dot', on_web, vision=True, is_current=is_current),
+                    image=image,
+                ),
                 is_current,
-                self.updates(self.dot, 'dot', on_web, vision=True),
-                image=image,
             )
             self.last_metrics = {**self.dot.last_metrics, 'provider': 'dot', 'vision': True}
         except DotApprovalRequired:
@@ -117,9 +183,30 @@ class BrainRouter:
             ) from None
 
     def clauses(self, text, history, is_current=lambda: True, on_web=None):
+        is_current = self.bind_identity(is_current)
         self.current_report_delivery = None
         if not is_current():
             raise Cancelled('Turn cancelled')
+        if self.identity[0] == 'guest':
+            # This branch precedes delegation, memory commands, report readers
+            # and the owner's selected provider. Never pass caller history.
+            target = self.guest
+            if target is None:
+                raise Cancelled('Guest dialogue is unavailable')
+            self.last_metrics = {'provider': 'guest_minimax', 'completed': False}
+            yield from self.scoped_clauses(
+                target.clauses(
+                    text,
+                    (),
+                    is_current,
+                    self.updates(target, 'guest_minimax', on_web, is_current=is_current),
+                ),
+                is_current,
+            )
+            if not is_current():
+                raise Cancelled('Guest dialogue superseded')
+            self.last_metrics = {**target.last_metrics, 'provider': 'guest_minimax'}
+            return
         match = DELEGATE.match(text)
         prompt = text[match.end() :].strip() if match else text
         if self.preferences:
@@ -190,8 +277,14 @@ class BrainRouter:
             return
         try:
             history = self.apply_preferences(history, target)
-            yield from target.clauses(
-                prompt, history, is_current, self.updates(target, provider, on_web)
+            yield from self.scoped_clauses(
+                target.clauses(
+                    prompt,
+                    history,
+                    is_current,
+                    self.updates(target, provider, on_web, is_current=is_current),
+                ),
+                is_current,
             )
             self.last_metrics = {**target.last_metrics, 'provider': provider}
         except DotApprovalRequired:

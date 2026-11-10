@@ -357,7 +357,7 @@ class VisionUiTests(unittest.TestCase):
  static class Button {String text;void setText(String t){text=t;}void setContentDescription(String t){}}
  Eyes eyes=new Eyes();Button visionButton=new Button();
  static class Workflows {int closed;void close(){closed++;}} Workflows workflows=new Workflows();
- void runOnUiThread(Runnable call){call.run();}
+ void postIdentityUi(Runnable call){call.run();}
  void state(String p,String m){phase=p;message=m;}
  """
             + method

@@ -91,7 +91,8 @@ class ActivityCheck {
  Object peerRelease;
  String brainProvider="dot";
  int taskActions;
- void runOnUiThread(Runnable work){work.run();}
+ void postIdentityUi(Runnable work){work.run();}
+ void identityChanged(boolean stop){}
  void traceAuto(String value){}void screen(boolean value){}void refresh(){}void maybeAutoVoice(){}
  Object icon(int id,int color,int size){return new Object();}
  String dateLabel(String value){return value;}

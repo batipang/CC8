@@ -276,6 +276,9 @@ class AnnouncementTests(unittest.TestCase):
         class BridgeStub:
             generation = 1
 
+            def local_operation_allowed(self, request):
+                return True  # This fixture represents an admitted owner session.
+
             def announce(self, text):
                 entered.set()
                 return job

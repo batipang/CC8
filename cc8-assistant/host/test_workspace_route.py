@@ -16,6 +16,12 @@ SESSION = JAVA / 'VoiceSession.java'
 
 SESSION_INTERFACES = r"""
  static class Session {
+ static class IdentityFixture {boolean ready(){return true;}boolean owner(){return true;}boolean guestRequested(){return false;}void route(long value){}boolean accepts(JSONObject j,long route){return true;}boolean acceptLegacy(long route){return true;}}
+ final IdentityFixture identity=new IdentityFixture();boolean identityHello=true;
+ boolean identityConnected(){return true;}
+ boolean handleIdentityEvent(JSONObject data,long route,Link source){return false;}
+ boolean guestEvent(String event,JSONObject data){return true;}
+
   final Object routeLock=new Object();
   SourcesPresentation sourcesPresentation;
   boolean foreground=true,recording,visual,announcement,textSession,receiverRegistered;
@@ -974,7 +980,7 @@ class WorkspaceRouteTests(unittest.TestCase):
         )
         harness = harness.replace(
             'String optString(String key)',
-            'java.util.Iterator<String> keys(){return values.keySet().iterator();}Object opt(String key){return values.get(key);}JSONObject getJSONObject(String key){return (JSONObject)values.get(key);}boolean optBoolean(String key){return Boolean.TRUE.equals(values.get(key));}String optString(String key,String fallback){String value=optString(key);return value.isEmpty()?fallback:value;}String optString(String key)',
+            'void remove(String key){values.remove(key);}java.util.Iterator<String> keys(){return values.keySet().iterator();}Object opt(String key){return values.get(key);}JSONObject getJSONObject(String key){return (JSONObject)values.get(key);}boolean optBoolean(String key){return Boolean.TRUE.equals(values.get(key));}String optString(String key,String fallback){String value=optString(key);return value.isEmpty()?fallback:value;}String optString(String key)',
         )
         harness = harness.replace(method(harness, 'static class Session'), SESSION_INTERFACES)
         harness = harness.replace('Object peerRelease;', 'VersionPresentation.Peer peerRelease;')
@@ -1021,8 +1027,8 @@ class WorkspaceRouteTests(unittest.TestCase):
             'void setCompoundDrawables(Object a,Object b,Object c,Object d){}void setTextIsSelectable(boolean value){}void setPadding(int a,int b,int c,int d){}',
         )
         harness = harness.replace(
-            'void runOnUiThread(Runnable work){work.run();}',
-            'void runOnUiThread(Runnable work){ui.add(work);}',
+            'void postIdentityUi(Runnable work){work.run();}',
+            'void postIdentityUi(Runnable work){ui.add(work);}',
         )
         adapters = (
             'void workspace(JSONObject data){workspace(data,session.routeEpoch);}' if bound else ''

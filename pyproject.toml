@@ -19,6 +19,8 @@ python_version = "3.11"
 strict = true
 files = [
     "cc8-assistant/host/protocol.py",
+    "cc8-assistant/host/identity_mode.py",
+    "cc8-assistant/host/identity_controller.py",
     "cc8-assistant/host/meeting_protocol.py",
     "cc8-assistant/host/preference_protocol.py",
     "cc8-assistant/host/route_output.py",

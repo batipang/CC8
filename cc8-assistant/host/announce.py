@@ -22,6 +22,7 @@ from qa_speech import tool_sample_request
 from known_speech_receipt import valid_request as known_speech_request
 from wake_input_receipt import valid_request as wake_input_request
 from request_text import validate_request_text
+from protocol import decode_json_object
 
 SOCKET = Path(__file__).resolve().parents[2] / 'device-access/private/voice-runtime/announce.sock'
 
@@ -100,8 +101,18 @@ class AnnouncementServer:
                         data += chunk
                     if len(data) > 4096:
                         raise ValueError('Oversized request')
-                    request = json.loads(data)
-                    if request.get('operation') == 'health':
+                    request = decode_json_object(data, max_bytes=4096)
+                    if not self.bridge.local_operation_allowed(request):
+                        raise RuntimeError('Restore owner mode before owner device work')
+                    if request.get('operation') == 'identity_status':
+                        if request != {'operation': 'identity_status'}:
+                            raise ValueError('Identity status accepts no arguments')
+                        result = self.bridge.identity_status()
+                    elif request.get('operation') == 'identity_owner':
+                        if set(request) != {'operation', 'revision'}:
+                            raise ValueError('Owner restore requires only its revision')
+                        result = self.bridge.restore_owner({'revision': request['revision']})
+                    elif request.get('operation') == 'health':
                         result = self.bridge.health()
                     elif request.get('operation') == 'diagnostics':
                         result = self.bridge.diagnostics_report()

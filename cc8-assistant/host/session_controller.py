@@ -237,7 +237,7 @@ class SessionController:
         _workflow_nonce='',
         _job_origin='workflow',
     ):
-        text = validate_request_text(text, 6000)
+        text = validate_request_text(text, 6000 if self.hooks.owner_access() else 4000)
         if type(corrected) is not bool or corrected and result_id is not None:
             raise ValueError('Invalid corrected input mode')
         if _job_factory is not None and (
@@ -265,6 +265,12 @@ class SessionController:
             if type(result_restart) is not bool:
                 raise ValueError('Invalid result reading mode')
         with self.guard:
+            if not self.hooks.dialogue_access():
+                raise RuntimeError('Device identity is unconfirmed')
+            if not self.hooks.owner_access() and (
+                result_id is not None or corrected or _job_factory is not None
+            ):
+                raise RuntimeError('Guest text dialogue cannot invoke owner work')
             if (
                 self.connection is None
                 or self.hooks.calibration().active
@@ -587,7 +593,9 @@ class SessionController:
             getattr(self.hooks.capture().endpoint, 'set_environment', None)
         )
         return self.voice_preferences.snapshot(
-            supported, recognition_supported, environment_supported
+            supported and self.hooks.owner_access(),
+            recognition_supported and self.hooks.owner_access(),
+            environment_supported and self.hooks.owner_access(),
         )
 
     def set_environment_profile(self, request):

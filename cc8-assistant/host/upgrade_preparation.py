@@ -19,6 +19,7 @@ from configuration import _read as read_profile, ConfigError
 from config_schema import FIELDS, validate_document
 from private_output import PrivateOutput, private_directory
 from release_info import ROOT, load_release
+from identity_compatibility import storage_gate as identity_storage_gate
 
 EXCLUDED = [
     'credentials',
@@ -203,6 +204,7 @@ def plan(before_root, after_root, assistant_apk=None):
         ],
         'reminder_storage': reminder_storage_gate(before_root, after_root),
         'report_watch_storage': report_watch_storage_gate(before_root, after_root),
+        'identity_storage': identity_storage_gate(before_root, after_root),
     }
     if assistant_apk is not None:
         # Reuse actual AAPT/API-27 signature checks; no adb or installation here.
@@ -266,6 +268,14 @@ def verify_assistant_transition(
     if not all(gate['compatible'] for gate in watch_gates.values()):
         raise ValueError(
             'Scheduled report store is not readable by candidate/recovery; keep it intact'
+        )
+    identity_gates = {
+        name: identity_storage_gate(roots[0], target)
+        for name, target in (('candidate', roots[1]), ('recovery', roots[2]))
+    }
+    if not all(gate['compatible'] for gate in identity_gates.values()):
+        raise ValueError(
+            'Guest privacy state requires an identity-aware backend; restore owner explicitly before legacy recovery'
         )
 
     apks = [Path(baseline_apk)]
@@ -493,6 +503,7 @@ def main(argv=None):
             not value['declared_protocol_compatible']
             or not value['reminder_storage']['compatible']
             or not value['report_watch_storage']['compatible']
+            or not value['identity_storage']['compatible']
         ):
             return 2
         if args.action == 'verify-transition' and args.observation_report is not None:

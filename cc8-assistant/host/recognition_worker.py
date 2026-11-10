@@ -353,7 +353,9 @@ class RecognitionWorker:
                         echo_risk=risky,
                         references=len(available),
                     )
-                    if self.hooks.photo_voice(text, generation, bool(command)):
+                    if self.hooks.owner_access() and self.hooks.photo_voice(
+                        text, generation, bool(command)
+                    ):
                         continue
                     if command:
                         self.hooks.clear_correction_draft()
@@ -363,7 +365,11 @@ class RecognitionWorker:
                         self.hooks.diagnostics().finish(trace_id, 'completed')
                         self.hooks.status('listening', '已停止播报，我在听')
                         continue
-                    if correction_command(text) is None and visual_request(text):
+                    if (
+                        self.hooks.owner_access()
+                        and correction_command(text) is None
+                        and visual_request(text)
+                    ):
                         self.hooks.begin_visual(text, 'voice')
                     else:
                         if local_wake:

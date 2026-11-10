@@ -66,6 +66,7 @@ class ResponseHooks:
     cancel_correction: Callable[[], object] = lambda: None
     run_workflow: Callable[[WorkflowReply], None] | None = None
     run_meeting: Callable[[MeetingReply], None] | None = None
+    owner_access: Callable[[], bool] = lambda: True
 
 
 class ResponseWorker:
@@ -82,6 +83,8 @@ class ResponseWorker:
         self.correction_requests = deque(maxlen=64)
 
     def publish_corrections(self):
+        if not self.hooks.owner_access():
+            return
         self.hooks.event(
             'speech_correction', **self.corrections.state(self.hooks.correction_owner())
         )
@@ -91,6 +94,8 @@ class ResponseWorker:
         # Literal uniqueness and numeric/token boundaries remain owned by the
         # existing correction engine; no ASR history or task is replaced now.
         with self.hooks.lock:
+            if not self.hooks.owner_access():
+                raise CorrectionUnavailable('访客模式不能读取主人纠错记录')
             owner = self.hooks.correction_owner()
             if not source_id or self.corrections.source_token(owner) != source_id:
                 raise CorrectionUnavailable('Original recognition changed')
@@ -129,6 +134,8 @@ class ResponseWorker:
     def request_correction(self, data):
         with self.hooks.lock:
             try:
+                if not self.hooks.owner_access():
+                    raise CorrectionUnavailable('访客模式不能读取主人纠错记录')
                 if data['request_id'] in self.correction_requests:
                     raise CorrectionUnavailable('这个更正请求已处理，不会重复提交。')
                 owner = self.hooks.correction_owner()
@@ -145,6 +152,8 @@ class ResponseWorker:
             self.submit_correction(owner, data['draft_id'])
 
     def submit_correction(self, owner, ident):
+        if not self.hooks.owner_access():
+            raise CorrectionUnavailable('访客模式不能提交主人纠错记录')
         if self.hooks.submit_corrected is None:
             raise CorrectionUnavailable('当前后台暂不能提交更正，请直接说完整的新问题。')
         text = self.corrections.consume(owner, ident)
@@ -163,10 +172,14 @@ class ResponseWorker:
                 pass
 
     def handle_correction_voice(self, job):
+        if not self.hooks.owner_access():
+            return False
         action = correction_command(job.text)
         if action is None:
             return False
         with self.hooks.lock:
+            if not self.hooks.owner_access():
+                return False
             if not self.hooks.valid(job.generation):
                 return True
             self.hooks.diagnostics().ensure(job.generation, 'text')
@@ -194,6 +207,8 @@ class ResponseWorker:
         return True
 
     def result_task(self, ident):
+        if not self.hooks.owner_access():
+            raise ReadingUnavailable('访客模式不能读取主人任务结果')
         task = next(
             (
                 t
@@ -322,7 +337,10 @@ class ResponseWorker:
             if not self.hooks.valid(job.generation):
                 self.discard_announcement(job)
                 return
-            if type(job) is Reply and correction_command(job.text) is not None:
+            if not self.hooks.owner_access():
+                # Guest questions do not become an owner correction source.
+                pass
+            elif type(job) is Reply and correction_command(job.text) is not None:
                 pass
             else:
                 text = job.text if type(job) is Reply or isinstance(job, CorrectedReply) else ''
@@ -380,6 +398,11 @@ class ResponseWorker:
                         self.hooks.log('text_finish_error', error_type=type(error).__name__)
 
     def respond_job(self, job):
+        if not self.hooks.owner_access() and type(job) not in (Reply, TextReply):
+            # Trusted internal work items still need authorization at dispatch;
+            # an earlier enqueue is not a grant across an identity transition.
+            self.discard_announcement(job)
+            return
         if isinstance(job, BrainPreparation):
             if not self.hooks.active() or not self.hooks.valid(job.generation):
                 return
@@ -422,7 +445,7 @@ class ResponseWorker:
             self.busy = False
 
     def answer(self, text, generation, image=None):
-        command = reading_command(text) if image is None else None
+        command = reading_command(text) if image is None and self.hooks.owner_access() else None
         if command is not None:
             with self.hooks.lock:
                 tasks = self.hooks.workspace().snapshot()['tasks']
@@ -674,9 +697,10 @@ class ResponseWorker:
             answer = ''.join(spoken)
             # Local report excerpts are not automatic context for a later model
             # request. Follow-up binds the separate, fixed RAM snapshot instead.
-            if not self.hooks.brain() or self.hooks.brain().last_metrics.get('provider') not in (
-                'work_report',
-                'preference_memory',
+            if self.hooks.owner_access() and (
+                not self.hooks.brain()
+                or self.hooks.brain().last_metrics.get('provider')
+                not in ('work_report', 'preference_memory')
             ):
                 self.history.extend(
                     [{'role': 'user', 'content': text}, {'role': 'assistant', 'content': answer}]

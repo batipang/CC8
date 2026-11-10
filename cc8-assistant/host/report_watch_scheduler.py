@@ -24,6 +24,7 @@ class WatchHooks:
     error: Callable[[str], None] = lambda kind: None
     send_summary: Callable | None = None
     cancel: Callable[[object], None] = lambda job: None
+    owner_access: Callable[[], bool] = lambda: True
 
 
 class WatchScheduler:
@@ -38,6 +39,9 @@ class WatchScheduler:
     def arm(self):
         """Called only after explicit configuration consent, or a new normal Start identity."""
         with self.hooks.lock:
+            if not self.hooks.owner_access():
+                self.revoke()
+                return
             owner = self.hooks.owner()
             if owner is None or self.hooks.blocked():
                 return
@@ -57,7 +61,7 @@ class WatchScheduler:
             clear()
 
     def owner_current(self, grant):
-        if self.hooks.blocked():
+        if not self.hooks.owner_access() or self.hooks.blocked():
             # A maintenance/test interval revokes its prior grant as well. Ending
             # the lease is not a new user Start and must not resume history reads.
             self.grant = self.reading = None
@@ -99,6 +103,13 @@ class WatchScheduler:
 
     def tick(self):
         with self.hooks.lock:
+            if not self.hooks.owner_access():
+                # No owner store lookup or prepared notice while visiting.
+                # In-flight jobs prevent idle-only switching; their receipts
+                # remain available for owner settlement rather than replay.
+                self.revoke()
+                self.last_activation = self.hooks.activation()
+                return
             expire = getattr(self.reader, 'expire_results', None)
             if expire is not None:
                 expire()

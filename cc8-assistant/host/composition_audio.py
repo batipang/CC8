@@ -141,6 +141,7 @@ def build_audio_pipeline(
             bind_response_probe=lambda text, generation, input_end_ns: (
                 host.capture.bind_response_probe(text, generation, input_end_ns)
             ),
+            owner_access=lambda: host.owner_access(),
         )
     )
     response = ResponseWorker(
@@ -200,6 +201,7 @@ def build_audio_pipeline(
             cancel_correction=lambda: host.cancel('correction_cancel'),
             run_workflow=lambda job: host.workflows.execute(job),
             run_meeting=lambda job: host.meetings.analyses.execute(job),
+            owner_access=lambda: host.owner_access(),
         )
     )
     return capture, recognition, response

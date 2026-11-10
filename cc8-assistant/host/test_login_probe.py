@@ -174,6 +174,7 @@ class LoginProbeTests(unittest.TestCase):
                     else []
                 )
                 bridge = SimpleNamespace(
+                    local_operation_allowed=lambda request: True,
                     health=lambda: health,
                     diagnostics_report=lambda: dict(ok=True, requests=requests),
                 )

@@ -47,10 +47,49 @@ class DeviceEventRouter:
     vocabulary_action: Callable[[dict], None] = lambda data: None
     workflow_action: Callable[[dict], None] = lambda data: None
     meeting_action: Callable[[dict], None] = lambda data: None
+    owner_access: Callable[[], bool] = lambda: True
+    current_workspace: Callable[[], Workspace] | None = None
+    guest_ready: Callable[[dict], None] = lambda data: None
+    identity_request: Callable[[dict], None] = lambda data: None
+    identity_applied: Callable[[dict], None] = lambda data: None
+    ready: Callable[[dict], None] | None = None
 
     def on_event(self, j):
         validate_device_event(j)
+        # Admission and the selected handler share the identity transition
+        # lock. Checking a role before waiting for the handler would let an
+        # already admitted private read run after a guest transition.
+        with self.session.guard:
+            self._dispatch(j)
+
+    def _dispatch(self, j):
         event = j.get('event')
+        if event == 'identity_request':
+            self.identity_request(j)
+            return
+        if event == 'identity_applied':
+            self.identity_applied(j)
+            return
+        if not self.owner_access() and event not in (
+            'device_ready',
+            'session_start',
+            'session_stop',
+            'session_rebind',
+            'screen_touch',
+            'text_request',
+            'task_cancel',
+            'workspace_get',
+            'interrupt',
+            'device_control_result',
+            'play_done',
+            'playback_paused',
+            'playback_resumed',
+            'playback_error',
+            'playout_progress',
+            'capture_gap',
+        ):
+            self.event('workspace_result', ok=False, message='访客模式仅支持独立问答')
+            return
         if event in (
             'camera_image_begin',
             'camera_image_chunk',
@@ -89,8 +128,13 @@ class DeviceEventRouter:
                     self.cancel('vision_cancel')
                     self.status('listening' if self.session.active else 'idle', '已停止看图')
         elif event == 'device_ready':
-            self.session.ready(j)
-            self.chats.publish(ok=True)
+            if self.ready is not None:
+                self.ready(j)
+            elif self.owner_access():
+                self.session.ready(j)
+                self.chats.publish(ok=True)
+            else:
+                self.guest_ready(j)
         elif event == 'dot_chat_request':
             self.chats.request(j)
         elif event == 'dot_chat_cancel':
@@ -144,7 +188,9 @@ class DeviceEventRouter:
                 task = next(
                     (
                         t
-                        for t in self.workspace.snapshot()['tasks']
+                        for t in (
+                            self.current_workspace() if self.current_workspace else self.workspace
+                        ).snapshot()['tasks']
                         if t['id'] == j.get('id') and t['status'] == 'running'
                     ),
                     None,

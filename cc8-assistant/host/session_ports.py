@@ -83,6 +83,8 @@ class SessionHooks:
     meeting_peer: Callable[[object], None] = lambda version: None
     capture_reserved: Callable[[], bool] = lambda: False
     meeting_state: Callable[[], JsonObject] = lambda: {}
+    owner_access: Callable[[], bool] = lambda: True
+    dialogue_access: Callable[[], bool] = lambda: True
 
 
 class FailureSink(Protocol):
@@ -137,3 +139,4 @@ class RecognitionHooks:
     natural_barge_enabled: Callable[[], bool] = lambda: True
     clear_correction_draft: Callable[[], None] = lambda: None
     photo_voice: Callable[[str, int, bool], bool] = lambda *_: False
+    owner_access: Callable[[], bool] = lambda: True

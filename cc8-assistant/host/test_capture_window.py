@@ -119,6 +119,8 @@ class CaptureAudioInput {
  void clear(){clears++;}
 }
 class VoiceSession {
+ static class IdentityFixture { boolean ready(){return true;} }
+ final IdentityFixture identity=new IdentityFixture();boolean identityHello=true;
  final Context context=new Context();
  final SpeakerOwner speakerOwner=new SpeakerOwner(()->new SpeakerSession.Device(){
   public void play(){}public void pause(){}public void flush(){}public void release(){}
@@ -172,6 +174,7 @@ class VoiceSession {
   boolean playing,paused;
  }
  static class Listener {
+ void link(boolean connected,long route){}
   final List<Boolean> microphones=new CopyOnWriteArrayList<>();
   final AtomicInteger errors=new AtomicInteger();
   final AtomicInteger rejected=new AtomicInteger(-1);

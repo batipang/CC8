@@ -99,6 +99,14 @@ class SearchData(unittest.TestCase):
         ]:
             self.assertIsNone(public_url(url), url)
 
+    def test_url_scalar_limit_preserves_valid_unicode_and_rejects_broken_sequences(self):
+        prefix = 'https://example.com/'
+        url = prefix + '\U0001f600' * (2048 - len(prefix))
+        self.assertEqual(public_url(url), url)
+        self.assertIsNone(public_url(url + 'x'))
+        for bad in ('\ud800', '\udfff', '\x80', '\x9f'):
+            self.assertIsNone(public_url(prefix + bad))
+
     def test_normalize_deduplicates_bounds_and_keeps_dates_separate(self):
         rows = [
             result(snippet='a' * 9000),
@@ -110,6 +118,23 @@ class SearchData(unittest.TestCase):
         self.assertEqual(len(items[0]['snippet']), 1400)
         self.assertEqual(items[0]['published_at'], '2026-10-30')
         self.assertNotIn('retrieved_at', items[0])
+
+    def test_search_fields_remain_serializable_unicode_and_optional_date_can_be_unknown(self):
+        for field in ('title', 'snippet'):
+            row = result()
+            row[field] = 'bad\ud800'
+            self.assertEqual(normalize({'organic': [row]}), [])
+        row = result(title='\U0001f600' * 160)
+        row['date'] = '\udfff'
+        normalized = normalize({'organic': [row]})
+        self.assertEqual(normalized[0]['published_at'], '')
+        self.assertEqual(normalized[0]['title'], row['title'])
+        json.dumps(normalized, ensure_ascii=False).encode('utf-8')
+        row.update(title='first\x00 second', snippet='some\x80 text', date=True)
+        normalized = normalize({'organic': [row]})
+        self.assertEqual(normalized[0]['title'], 'first second')
+        self.assertEqual(normalized[0]['snippet'], 'some text')
+        self.assertEqual(normalized[0]['published_at'], '')
 
     def test_split_urls_and_citations_never_spoken(self):
         s = SpeechClauses()
