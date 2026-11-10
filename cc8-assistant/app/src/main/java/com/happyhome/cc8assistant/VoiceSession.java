@@ -22,6 +22,8 @@ final class VoiceSession {
   interface Listener {
     void link(boolean connected, long route);
 
+    default void identityChanged(boolean cancelAutoVoice) {}
+
     void state(String phase, String message);
 
     default void status(StatusPresentation update) {
@@ -78,6 +80,9 @@ final class VoiceSession {
   }
 
   private final Context context;
+  private final IdentityState identity;
+  private volatile boolean identityHello;
+  private volatile String identityRequestId = "";
   private final Listener listener;
   private final Object routeLock = new Object();
   private final Object captureResourceLock = new Object();
@@ -229,6 +234,7 @@ final class VoiceSession {
   VoiceSession(Context context, Listener listener) {
     this.context = context.getApplicationContext();
     this.listener = listener;
+    this.identity = new IdentityState(new IdentityPreferences(this.context));
     this.lan = new LanConnector(this.context);
     this.speakerOwner = new SpeakerOwner(NativeSpeaker::new, () -> foreground);
   }
@@ -239,7 +245,153 @@ final class VoiceSession {
 
   boolean isConnected() {
     Link link = activeLink;
-    return link != null && !link.closed;
+    return link != null && !link.closed && identityConnected();
+  }
+
+  long identityEpoch() {
+    return identity.epoch();
+  }
+
+  boolean currentIdentity(long epoch) {
+    return identity.current(epoch);
+  }
+
+  boolean ownerMode() {
+    return identity.owner();
+  }
+
+  String identityLabel() {
+    return !identity.ready() ? "身份待确认" : identity.owner() ? "主人 · Dot" : "访客 · MiniMax";
+  }
+
+  boolean enterGuest() {
+    if (!foreground
+        || !isConnected()
+        || !identity.owner()
+        || !identity.supported()
+        || visual
+        || textSession
+        || announcement
+        || meetingReserved()
+        || "thinking".equals(phase)
+        || "speaking".equals(phase)
+        || "calibrating".equals(phase)) return false;
+    final long revision;
+    synchronized (routeLock) {
+      if (!foreground || !isConnected() || !identity.owner()) return false;
+      try {
+        revision = identity.beginGuest();
+      } catch (IOException error) {
+        return false;
+      }
+      identityHello = false;
+      identityRequestId = java.util.UUID.randomUUID().toString().replace("-", "");
+    }
+    final String requestId = identityRequestId;
+    // Invalidate queued owner callbacks and stop output before asynchronous disk work.
+    stopMicrophone();
+    cancelVision();
+    cancelPlayback();
+    listener.identityChanged(true);
+    new Thread(
+            () -> {
+              try {
+                identity.persistGuest(revision);
+                if (identity.ready() || identity.revision() != revision)
+                  return; // A newer handshake has already reconciled this intent.
+                JSONObject request = Wire.event("identity_request");
+                Wire.put(request, "request_id", requestId);
+                JSONObject arguments = new JSONObject();
+                Wire.put(arguments, "action", "guest");
+                Wire.put(arguments, "revision", revision);
+                Wire.put(request, "arguments", arguments);
+                send(request);
+              } catch (IOException error) {
+                if (identity.revision() != revision || identity.ready()) return;
+                listener.identityChanged(true);
+                listener.state("error", "访客切换未确认，访问已锁定，请在 Mac 检查");
+              }
+            },
+            "cc8-identity-choice")
+        .start();
+    return true;
+  }
+
+  private boolean handleIdentityEvent(JSONObject j, long route, Link source) throws IOException {
+    String event = j.optString("event");
+    if ("identity_state".equals(event)) {
+      boolean duplicate =
+          identityConnected()
+              && identity.token().equals(j.optString("token"))
+              && identity.mode().equals(j.optString("identity_mode"))
+              && j.opt("identity_revision") instanceof Number
+              && ((Number) j.opt("identity_revision")).longValue() == identity.revision();
+      boolean restore = identity.guestRequested() && "owner".equals(j.optString("identity_mode"));
+      if (!identity.accept(j, route)) return true;
+      identityRequestId = "";
+      if (restore) {
+        stopMicrophone();
+        cancelVision();
+        cancelPlayback();
+      }
+      if (!duplicate) {
+        identityHello = false;
+        sourcesPresentation = null;
+        photoFollowup.clear();
+        speechCorrection = null;
+        listener.identityChanged(restore);
+      }
+      JSONObject ack = Wire.event("identity_applied");
+      Wire.put(ack, "token", identity.token());
+      Wire.put(ack, "mode", identity.mode());
+      Wire.put(ack, "revision", identity.revision());
+      source.event(ack);
+      return true;
+    }
+    if ("identity_result".equals(event) || "identity_unavailable".equals(event)) {
+      if ("identity_result".equals(event)) {
+        if (identityRequestId.isEmpty() || !identityRequestId.equals(j.optString("request_id")))
+          return true;
+        identityRequestId = "";
+      } else if (identityConnected()) return true;
+      if (!Boolean.TRUE.equals(j.opt("ok"))) {
+        stopMicrophone();
+        cancelPlayback();
+        listener.identityChanged(true);
+        listener.state("idle", j.optString("message", "身份切换未确认，请在 Mac 检查"));
+      }
+      return true;
+    }
+    return false;
+  }
+
+  private boolean guestEvent(String event, JSONObject data) {
+    if ("device_control".equals(event)) return "status".equals(data.optString("action"));
+    return "hello".equals(event)
+        || "brain_provider".equals(event)
+        || "status".equals(event)
+        || "transcript".equals(event)
+        || "dot_result".equals(event)
+        || "text_begin".equals(event)
+        || "text_done".equals(event)
+        || "play_begin".equals(event)
+        || "play_end".equals(event)
+        || "caption_timing".equals(event)
+        || "playback_pause".equals(event)
+        || "playback_resume".equals(event)
+        || "capture_started".equals(event)
+        || "capture_rejected".equals(event)
+        || "screen_sleep".equals(event)
+        || "screen_wake".equals(event)
+        || "workspace".equals(event)
+        || "workspace_result".equals(event)
+        || "web_sources".equals(event)
+        || "cancel".equals(event)
+        || "ping".equals(event);
+  }
+
+  private boolean identityConnected() {
+    return identity.ready() && identityHello;
   }
 
   boolean currentRoute(long route) {
@@ -288,6 +440,17 @@ final class VoiceSession {
       };
 
   void resume() {
+    synchronized (routeLock) {
+      if (foreground) return;
+    }
+    try {
+      identity.load();
+      listener.identityChanged(false);
+    } catch (IOException error) {
+      listener.identityChanged(true);
+      listener.state("error", "身份记录无法读取，访问已锁定，请在 Mac 检查");
+      return;
+    }
     final int ticket;
     synchronized (routeLock) {
       if (foreground) return;
@@ -317,6 +480,8 @@ final class VoiceSession {
       foreground = false;
       lifecycle++;
       routeEpoch++;
+      identity.route(routeEpoch);
+      identityHello = false;
       listener = server;
       server = null;
     }
@@ -338,7 +503,8 @@ final class VoiceSession {
 
   boolean currentSourcesPresentation(SourcesPresentation update) {
     synchronized (routeLock) {
-      return foreground
+      return identityConnected()
+          && foreground
           && update != null
           && sourcesPresentation == update
           && currentRoute(update.route)
@@ -493,6 +659,8 @@ final class VoiceSession {
         // A reused USB Link after Wi-Fi is still a new activation. Invalidate
         // queued workspace callbacks before publishing this route's ready state.
         routeEpoch++;
+        identity.route(routeEpoch);
+        identityHello = false;
         desktopCameraAuth.reset();
         if (visual) {
           visual = false;
@@ -536,6 +704,8 @@ final class VoiceSession {
         phase = recordingPhase();
       }
       JSONObject hello = Wire.event("device_ready");
+      Wire.put(hello, "identity_version", 1);
+      Wire.put(hello, "identity_guest_requested", identity.guestRequested());
       Wire.put(hello, "supports_playback_pause", true);
       Wire.put(hello, "speech_correction_version", 1);
       Wire.put(hello, "meeting_version", 1);
@@ -572,6 +742,8 @@ final class VoiceSession {
     Link destination = activeLink;
     if (!foreground
         || !recording
+        || !identity.ready()
+        || !identityHello
         || window == null
         || captureWindow != window
         || epoch != captureEpoch
@@ -619,8 +791,10 @@ final class VoiceSession {
       throw new IOException("Invalid capture frontend capability");
     source.pairedCaptureRequested = "paired".equals(frontend);
     source.captureStartToken = token == null ? "" : (String) token;
+    identityHello = true;
     CaptureWindow window = captureWindow;
     registerCapture(window, epoch);
+    listener.link(true, routeEpoch);
     return window == null || captureWindow == window;
   }
 
@@ -644,6 +818,8 @@ final class VoiceSession {
       meetingSupported = meetingHostReserved = false;
       activeLink = null;
       routeEpoch++;
+      identity.route(routeEpoch);
+      identityHello = false;
       sourcesPresentation = null;
       photoFollowup.clear();
       workflowConsent.clear();
@@ -857,6 +1033,20 @@ final class VoiceSession {
         // route.
         if (!foreground || !currentRoute(route)) return;
         String event = j.optString("event");
+        if (handleIdentityEvent(j, route, source)) return;
+        if ("hello".equals(event) && j.opt("identity_mode") == null) {
+          if (!identity.acceptLegacy(route)) return;
+          listener.identityChanged(false);
+        }
+        boolean control =
+            "cancel".equals(event)
+                || "ping".equals(event)
+                || "capture_rejected".equals(event)
+                || "screen_wake".equals(event);
+        if (!control && !identity.accepts(j, route)) return;
+        if (!identity.owner() && !guestEvent(event, j)) return;
+        j.remove("identity_mode");
+        j.remove("identity_revision");
         if ("hello".equals(event)) {
           boolean keepVoiceStatus = captureHello(source, j);
           dotChatSupported = Boolean.TRUE.equals(j.opt("supports_dot_chat_handoff"));
@@ -1348,6 +1538,7 @@ final class VoiceSession {
         }
       }
     } else if (p.type == Wire.SPEAKER) {
+      if (!identity.ready() || !identityHello) return;
       Player current = player;
       if ((recording || announcement || visual || textSession)
           && current != null
@@ -2403,7 +2594,7 @@ final class VoiceSession {
                       synchronized (routeLock) {
                         // A blocking native read may straddle activation (including
                         // USB -> Wi-Fi -> the same USB object). Drop that whole block.
-                        if (!currentRoute(readRoute)) {
+                        if (!currentRoute(readRoute) || !identity.ready() || !identityHello) {
                           micFrames += count;
                           continue;
                         }
@@ -2633,7 +2824,8 @@ final class VoiceSession {
 
   boolean currentStatusPresentation(StatusPresentation update) {
     synchronized (routeLock) {
-      return update != null
+      return identityConnected()
+          && update != null
           && update.current(
               foreground,
               recording,
@@ -2658,7 +2850,7 @@ final class VoiceSession {
   }
 
   boolean currentPlaybackPresentation(PlaybackPresentation update) {
-    return foreground && playbackPresentation == update;
+    return identityConnected() && foreground && playbackPresentation == update;
   }
 
   private void publishPlayback(Player owner, String text, String nextPhase, String message) {

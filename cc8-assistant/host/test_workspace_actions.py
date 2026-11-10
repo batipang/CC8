@@ -236,6 +236,9 @@ HARNESS = r"""
 package com.happyhome.cc8assistant;
 import android.app.*;import android.widget.*;import android.view.*;import org.json.*;import java.util.*;import java.io.*;
 class VoiceSession {
+ static class IdentityFixture { boolean ready(){return true;} }
+ final IdentityFixture identity=new IdentityFixture();boolean identityHello=true;
+ boolean identityConnected(){return true;}
  final Object routeLock=new Object();boolean foreground=true,savedTasksSupported=true,resultProvenanceSupported=true,resultReadingSupported=true;
  long routeEpoch=1;int epoch,eventCalls;Link activeLink=new Link("original"),usbLink,wifiLink,backup;
  final List<JSONObject> sent=new ArrayList<>();

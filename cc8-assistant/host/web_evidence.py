@@ -9,6 +9,7 @@ from web_search import now, public_url
 from source_page import FAILURE_CODES, MAX_TEXT, visible_text
 import threading
 import json
+import re
 
 MAX_ACTIONS = 64
 
@@ -35,6 +36,7 @@ class WebEvidence:
                 if (
                     not isinstance(text, str)
                     or not 1 <= len(text) <= MAX_TEXT
+                    or re.search(r'[\ud800-\udfff]', text)
                     or type(size) is not int
                     or not 1 <= size <= 1048576
                     or final is None
@@ -44,7 +46,10 @@ class WebEvidence:
                     or receipt.get('untrusted_page') is not True
                     or not isinstance(dates, list)
                     or len(dates) > 8
-                    or any(not isinstance(v, str) or len(v) > 64 for v in dates)
+                    or any(
+                        not isinstance(v, str) or len(v) > 64 or re.search(r'[\ud800-\udfff]', v)
+                        for v in dates
+                    )
                 ):
                     return
                 normalized = visible_text(text)
@@ -59,7 +64,7 @@ class WebEvidence:
                     excerpt=normalized[:2000],
                     text_chars=len(text),
                     text_truncated=truncated,
-                    dates='；'.join(' '.join(v.split()) for v in dates),
+                    dates='；'.join(visible_text(v) for v in dates),
                     size=size,
                 )
             elif receipt.get('ok') is not False:
@@ -119,7 +124,11 @@ class WebEvidence:
             if url is None or url in seen:
                 continue
             title = link.get('title')
-            if not isinstance(title, str) or not 1 <= len(title) <= 160:
+            if (
+                not isinstance(title, str)
+                or not 1 <= len(title) <= 160
+                or re.search(r'[\x00-\x1f\x7f-\x9f\ud800-\udfff]', title)
+            ):
                 continue
             seen.add(url)
             # A later failed access supersedes an earlier completed action for

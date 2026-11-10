@@ -1114,7 +1114,11 @@ class ProbeIntegrationTests(unittest.TestCase):
             cancelled.append(True)
             observer.cancel()
 
-        stub = SimpleNamespace(playback_probe=start, cancel_playback_probe=cancel)
+        stub = SimpleNamespace(
+            local_operation_allowed=lambda request: True,
+            playback_probe=start,
+            cancel_playback_probe=cancel,
+        )
         stub.finish_playback_probe = lambda probe: None
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'probe.sock'

@@ -28,6 +28,7 @@ class AnnouncementHooks:
     metric: MetricSink
     save_status: Callable[[], None]
     log: EventSink
+    owner_access: Callable[[], bool] = lambda: True
 
 
 class AnnouncementController:
@@ -60,7 +61,8 @@ class AnnouncementController:
     def _submit(self, text, *, prepare, segments=(), on_segment=None):
         with self.hooks.lock:
             if (
-                not self.hooks.connected()
+                not self.hooks.owner_access()
+                or not self.hooks.connected()
                 or self.hooks.calibration_busy()
                 or self.generation is not None
             ):
@@ -81,7 +83,9 @@ class AnnouncementController:
 
             def current():
                 return (
-                    self.hooks.session_generation() == generation and self.generation == generation
+                    self.hooks.owner_access()
+                    and self.hooks.session_generation() == generation
+                    and self.generation == generation
                 )
 
             def superseded():
@@ -163,7 +167,7 @@ class AnnouncementController:
         generation = job.generation
         try:
             with self.hooks.lock:
-                if not self.hooks.valid(generation):
+                if not self.hooks.owner_access() or not self.hooks.valid(generation):
                     return
                 self.hooks.event('announcement_begin', generation=generation)
                 if not self.hooks.valid(generation):
@@ -172,8 +176,10 @@ class AnnouncementController:
             # Read user-provided text literally, without an LLM rewrite or lookup.
             for index, segment in enumerate(job.segments or (job.text,)):
                 for begin in range(0, len(segment), 120):
-                    if not self.hooks.valid(generation) or not self.hooks.speak(
-                        segment[begin : begin + 120], generation
+                    if (
+                        not self.hooks.owner_access()
+                        or not self.hooks.valid(generation)
+                        or not self.hooks.speak(segment[begin : begin + 120], generation)
                     ):
                         return
                 if job.on_segment is not None:

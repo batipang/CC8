@@ -6,12 +6,13 @@ read audio files. The companion APK never starts capture from a host command.
 
 from __future__ import annotations
 from pathlib import Path
+from collections import deque
 import signal as signal
 import subprocess as subprocess
 import threading as threading
 import time
 
-from protocol import EVENT, MIC, MIC_PAIRED, ROUTE_BOUND, MEETING, decode_event
+from protocol import EVENT, MIC, MIC_PAIRED, ROUTE_BOUND, MEETING, SPEAKER, decode_event
 from transport import Pairing, TransportHub
 from echo_processors import WebRtcEchoCanceller
 from fast_stop import FastStopDetector
@@ -23,8 +24,13 @@ from calibration_controller import STARTUP_GREETING as STARTUP_GREETING
 from composition import build_components, build_device_events, build_session
 from assistant_identity import WAKE_WORD as WAKE_WORD, WAKE_PATTERN as WAKE_PATTERN
 from app_runtime import BackendDependencies, run_backend as run_app
-from minimax_client import MiniMaxBrain
+from minimax_client import MiniMaxBrain, Transport, Cancelled
+from guest_brain import GuestBrain
+from identity_runtime import IdentityRuntime
+from identity_mode import IdentityModeStore
 from workspace import Workspace
+from result_reading import ResultReading
+from voice_preferences import VoicePreferences
 from diagnostics import TraceBook
 from connection_observation import connection_report
 from runtime_guard import RuntimeLease, RuntimeConflict
@@ -52,6 +58,7 @@ from dot_client import runtime_status as dot_runtime_status
 
 ROOT = Path(__file__).resolve().parents[2]
 PRIVATE = ROOT / 'device-access/private/voice-runtime'
+IDENTITY_READER_VERSION = 1
 LIBRARY = ROOT / '.toolchains/cc8/speexdsp-1.2.1/libspeexdsp/.libs/libspeexdsp.dylib'
 
 
@@ -75,13 +82,16 @@ class Bridge:
         report_archive_store=None,
         report_checkpoint_store=None,
         report_watch_store=None,
+        identity_store=None,
     ):
         self.diagnostics = TraceBook()
         started_at = time.monotonic()
         self.speech = speech
         self.brain = brain
+        self.identity = self.identity_runtime = None
         self.library = library
         self.workspace = workspace or Workspace()
+        self.owner_workspace = self.workspace
         self.transport_hub = None
         self.metrics = {
             'mic_frames': 0,
@@ -92,6 +102,7 @@ class Bridge:
             'raw_audio_saved': False,
         }
         self.session = build_session(self, capture_frontend=capture_frontend)
+        self.owner_voice_preferences = self.session.voice_preferences
         if isinstance(self.brain, BrainRouter):
             self.brain.dot.device_control = self.control_device
             self.brain.dot.reminders = self.reminder_action
@@ -120,6 +131,8 @@ class Bridge:
         self.capture = components.capture
         self.recognition = components.recognition
         self.response = components.response
+        self.owner_history = self.response.history
+        self.owner_reading = self.response.reading
         self.announcements = components.announcements
         self.reminders = components.reminders
         self.device = components.device
@@ -146,6 +159,22 @@ class Bridge:
             cancel=lambda reason: self.cancel(reason),
         )
         self.device_events = build_device_events(self)
+        if identity_store is not None:
+            if not isinstance(self.brain, BrainRouter):
+                raise ValueError('Identity isolation requires the configured brain router')
+            if self.brain.guest is None:
+                mini = self.brain.minimax
+                if not isinstance(mini, MiniMaxBrain):
+                    raise ValueError('Independent guest MiniMax configuration unavailable')
+                client = mini.transport
+                key, base, config, factory = client.key, client.base, client.config, client.factory
+                self.brain.guest = GuestBrain(
+                    lambda: Transport(key=key, base=base, config=config, session_factory=factory),
+                    mini.model,
+                )
+            self.identity_runtime = IdentityRuntime(self, identity_store)
+            self.identity = self.identity_runtime.controller
+            self.identity_runtime.load()
         self.recognition.start()
         self.response.start()
 
@@ -157,23 +186,124 @@ class Bridge:
     def guard(self):
         return self.session.guard
 
+    def owner_access(self):
+        # Production callbacks consult the live role rather than a copied UI
+        # flag. The persistent identity/peer receipt gate is composed here too.
+        runtime = self.identity_runtime
+        return (runtime is None or runtime.owner_access()) and (
+            not isinstance(self.brain, BrainRouter) or self.brain.identity[0] == 'owner'
+        )
+
+    def dialogue_access(self):
+        return self.identity_runtime is None or self.identity_runtime.dialogue_access()
+
+    def device_ready(self, packet):
+        if self.identity_runtime is not None:
+            return self.identity_runtime.ready(packet)
+        if self.owner_access():
+            self.session.ready(packet)
+            self.chats.publish(ok=True)
+
+    def identity_request(self, packet):
+        if self.identity_runtime is not None:
+            return self.identity_runtime.request(packet)
+
+    def identity_applied(self, packet):
+        if self.identity_runtime is not None:
+            return self.identity_runtime.applied(packet)
+
+    def identity_status(self):
+        return {
+            'ok': self.identity is not None,
+            'state': self.identity.public() if self.identity is not None else None,
+        }
+
+    def restore_owner(self, arguments):
+        if self.identity is None:
+            raise RuntimeError('Identity switching is unavailable')
+        return self.identity.owner_from_desktop(arguments)
+
+    def local_operation_allowed(self, request):
+        # This owner-only local socket is not a back door for an owner report
+        # or desktop action to be displayed/spoken on a guest terminal.
+        if self.owner_access():
+            return True
+        if request.get('operation') in (
+            'health',
+            'diagnostics',
+            'connection_diagnostics',
+            'transport_status',
+            'workspace_status',
+            'identity_status',
+            'identity_owner',
+        ):
+            return True
+        return request == {'operation': 'device_control', 'arguments': {'action': 'status'}}
+
+    def reset_identity(self, mode):
+        """Internal idle transition; the controller owns stop, persistence and ACKs."""
+        if mode not in ('owner', 'guest', 'blocked') or not isinstance(self.brain, BrainRouter):
+            raise ValueError('Identity isolation unavailable')
+        with self.guard:
+            # Deny access before exchanging any RAM owners. If clearing fails,
+            # neither the old nor the requested role becomes usable.
+            self.brain.set_identity('blocked')
+            self.response.clear_corrections(publish=False)
+            self.workspace = self.owner_workspace if mode == 'owner' else Workspace()
+            self.response.history = self.owner_history if mode == 'owner' else deque(maxlen=8)
+            self.response.reading = self.owner_reading if mode == 'owner' else ResultReading()
+            preferences = self.owner_voice_preferences if mode == 'owner' else VoicePreferences()
+            if self.session.voice_preferences is not preferences:
+                setter = getattr(self.speech, 'set_voice_rate', None)
+                if callable(setter):
+                    setter(preferences.rate)
+                setter = getattr(self.speech, 'set_recognition_language', None)
+                if getattr(
+                    self.speech, 'recognition_language_supported', False
+                ) is True and callable(setter):
+                    setter(preferences.recognition_language)
+                self.capture.endpoint.set_environment(preferences.environment_profile)
+                self.session.voice_preferences = preferences
+            self.brain.set_identity(mode)
+
     def log(self, event, **fields):
         return self.reporting.log(event, **fields)
 
     def send(self, p):
+        inner = p
+        if p.kind == ROUTE_BOUND:
+            token = self.session.bound_route_token
+            inner = p.unbind_route(token) if token is not None else None
+        if inner is not None and inner.kind == SPEAKER and not self.dialogue_access():
+            raise Cancelled('Device identity is unconfirmed')
         return self.session.send(p)
 
     def event(self, event, generation=None, **fields):
+        runtime = self.identity_runtime
+        if runtime is not None:
+            identity = self.identity.state
+            with self.guard:
+                if identity != self.identity.state:
+                    return
+                fields = runtime.event_fields(event, fields)
+                if fields is None:
+                    return
+                return self.session.event(event, generation, **fields)
         return self.session.event(event, generation, **fields)
 
     def change_transport(self, channel):
+        if self.identity_runtime is not None and (
+            channel is not self.session.connection
+            or getattr(channel, 'route_token', None) != self.session.bound_route_token
+        ):
+            self.identity_runtime.transport_changed()
         return self.session.change_transport(channel)
 
     def status(self, phase, message):
         return self.session.status(phase, message)
 
     def valid(self, generation):
-        return self.session.valid(generation)
+        return self.dialogue_access() and self.session.valid(generation)
 
     def touch_activity(self):
         return self.session.touch_activity()
@@ -193,8 +323,9 @@ class Bridge:
             self.log('heartbeat_retry', error_type=type(error).__name__)
 
     def publish_workspace(self):
-        if self.session.connection is not None:
-            self.event('workspace', **self.workspace.snapshot())
+        with self.guard:
+            if self.dialogue_access() and self.session.connection is not None:
+                self.event('workspace', **self.workspace.snapshot())
 
     def health(self):
         return self.reporting.health()
@@ -220,6 +351,8 @@ class Bridge:
         return result
 
     def control_device(self, action, percent=None):
+        if action != 'status' and not self.owner_access():
+            raise RuntimeError('Owner device action unavailable in guest mode')
         return self.device.control(action, percent)
 
     def pause_for_voice(self, trigger_nanos=None):
@@ -290,7 +423,8 @@ class Bridge:
         # A preserved native recorder is not registered on a freshly selected
         # route until its current Start/Rebind is accepted. Never buffer early PCM.
         if p.kind in (MIC, MIC_PAIRED) and (
-            self.session.capture_route_pending
+            not self.dialogue_access()
+            or self.session.capture_route_pending
             or getattr(self.session.connection, 'application_ready', True) is not True
         ):
             return
@@ -301,7 +435,8 @@ class Bridge:
                 raise ValueError('Invalid device event fields') from None
             return
         if p.kind == MEETING:
-            self.meetings.on_packet(p)
+            if self.owner_access():
+                self.meetings.on_packet(p)
             return
         self.capture.on_packet(p)
 
@@ -369,6 +504,8 @@ class Bridge:
         self.metrics[name] = self.metrics.get(name, 0) + 1 if increment else value
 
     def request_snapshot(self, *, metadata_only=False):
+        if not self.owner_access():
+            raise RuntimeError('Owner camera action unavailable in guest mode')
         return self.visual.request_snapshot(metadata_only=metadata_only)
 
     def cancel_snapshot(self, job):
@@ -378,6 +515,8 @@ class Bridge:
         return self.visual.capture_snapshot(job, capture)
 
     def begin_visual(self, text, origin, nonce=''):
+        if not self.owner_access():
+            raise RuntimeError('Owner vision action unavailable in guest mode')
         return self.visual.begin_visual(text, origin, nonce)
 
     def answer_visual(self, job):
@@ -410,6 +549,26 @@ def main():
         raise SystemExit(str(error)) from None
 
 
+def runtime_bridge(speech, brain, **kwargs):
+    store = IdentityModeStore(PRIVATE / 'identity-mode.json')
+    if brain is None:
+        if store.snapshot().mode != 'owner':
+            raise RuntimeError('Guest mode requires the independent MiniMax router')
+        return Bridge(
+            speech,
+            brain,
+            **kwargs,
+            report_watch_store=ReportWatchStore(PRIVATE / 'work-report-watch.json'),
+        )
+    return Bridge(
+        speech,
+        brain,
+        **kwargs,
+        identity_store=store,
+        report_watch_store=ReportWatchStore(PRIVATE / 'work-report-watch.json'),
+    )
+
+
 def run_backend():
     return run_app(
         BackendDependencies(
@@ -422,11 +581,7 @@ def run_backend():
             wake_detector=WakeDetector.load,
             brain_router=BrainRouter,
             minimax_brain=MiniMaxBrain,
-            bridge=lambda *args, **kwargs: Bridge(
-                *args,
-                **kwargs,
-                report_watch_store=ReportWatchStore(PRIVATE / 'work-report-watch.json'),
-            ),
+            bridge=runtime_bridge,
             workspace=Workspace,
             transport_hub=TransportHub,
             pairing=Pairing,

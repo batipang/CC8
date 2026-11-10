@@ -46,6 +46,33 @@ class WebEvidenceTests(unittest.TestCase):
             **extra,
         )
 
+    def test_valid_unicode_title_and_url_use_scalar_budgets(self):
+        title = '\U0001f600' * 160
+        prefix = 'https://example.com/'
+        url = prefix + '\U0001f600' * (2048 - len(prefix))
+        rows = self.evidence.sources([dict(title=title, url=url)])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]['title'], rows[0]['url']), (title, url))
+        self.assertLessEqual(len(json.dumps(rows, ensure_ascii=False).encode()), 56000)
+        self.assertEqual(self.evidence.sources([dict(title=title + 'x', url=url)]), [])
+
+    def test_invalid_unicode_and_controls_cannot_break_source_packet_encoding(self):
+        for bad in ('\ud800', '\udfff', 'x\ud800y', '\x00', '\x80', '\x9f'):
+            with self.subTest(bad=repr(bad)):
+                rows = self.evidence.sources(
+                    [dict(title=bad, url=self.url), dict(title='正常', url=self.url)]
+                )
+                self.assertEqual(len(rows), 1)
+                json.dumps(rows, ensure_ascii=False).encode('utf-8')
+                self.assertEqual(
+                    self.evidence.sources([dict(title='来源', url=self.url + bad)]), []
+                )
+        for field, value in (('text', 'bad\ud800'), ('publication_labels', ['bad\udfff'])):
+            receipt = self.page()
+            receipt[field] = value
+            self.evidence.page(receipt)
+        self.assertEqual(self.sources()[0]['access_evidence'], 'answer_link_only')
+
     def test_actual_reader_receipt_exposes_text_and_labels_without_verifying_facts(self):
         receipt = self.page()
         self.evidence.page(receipt)

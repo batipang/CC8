@@ -55,6 +55,7 @@ public class UiFixture {
     void cancel() { cancelled = true; }
   }
   static class VoiceSession {
+ boolean identityConnected(){return true;}
     boolean foreground = true;
     Player player;
     MainActivity listener;
@@ -71,7 +72,7 @@ public class UiFixture {
     final Deque<Runnable> pending = new ArrayDeque<>();
     String caption, mood, phase, message;
     MainActivity() { session.listener = this; }
-    void runOnUiThread(Runnable work) { pending.addLast(work); }
+    void postIdentityUi(Runnable work) { pending.addLast(work); }
     void applyCaption(String text, String emotion) { caption = text; mood = emotion; }
     void applyState(String next, String detail) { phase = next; message = detail; }
 """

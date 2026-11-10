@@ -31,7 +31,11 @@ def wants_web(text, previous=False):
 
 def public_url(value):
     # 规范公网来源地址的字符串边界检查，不构成 DNS 级网络隔离。
-    if not isinstance(value, str) or len(value) > 2048 or re.search(r'[\s\x00-\x1f\x7f]', value):
+    if (
+        not isinstance(value, str)
+        or len(value) > 2048
+        or re.search(r'[\s\x00-\x1f\x7f-\x9f\ud800-\udfff]', value)
+    ):
         return None
     try:
         p = urlsplit(value)
@@ -64,6 +68,12 @@ def public_url(value):
         return None
 
 
+def _source_text(value, limit):
+    if not isinstance(value, str) or re.search(r'[\ud800-\udfff]', value):
+        return ''
+    return re.sub(r'[\s\x00-\x1f\x7f-\x9f]+', ' ', value).strip()[:limit]
+
+
 def normalize(data):
     items = []
     seen = set()
@@ -76,8 +86,8 @@ def normalize(data):
         url = public_url(row.get('link'))
         if not url or url in seen:
             continue
-        title = re.sub(r'\s+', ' ', str(row.get('title') or '')).strip()[:160]
-        snippet = re.sub(r'\s+', ' ', str(row.get('snippet') or '')).strip()[:1400]
+        title = _source_text(row.get('title'), 160)
+        snippet = _source_text(row.get('snippet'), 1400)
         if not title or not snippet:
             continue
         seen.add(url)
@@ -86,7 +96,7 @@ def normalize(data):
                 'title': title,
                 'url': url,
                 'snippet': snippet,
-                'published_at': str(row.get('date') or '')[:64],
+                'published_at': _source_text(row.get('date'), 64),
             }
         )
         if len(items) >= 6:

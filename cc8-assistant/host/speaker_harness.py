@@ -110,6 +110,9 @@ class Wire {
  static short[] samples(byte[] bytes){short[] out=new short[bytes.length/2];ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(out);return out;}
 }
 public class VoiceSession implements AutoCloseable {
+ boolean identityConnected(){return true;}
+ static class IdentityFixture { boolean ready(){return true;} }
+ final IdentityFixture identity=new IdentityFixture();boolean identityHello=true;
  final Object routeLock=new Object();
  final SpeakerOwner speakerOwner=new SpeakerOwner(NativeSpeaker::new,()->this.foreground);
  volatile boolean foreground=true,recording=true,textSession,visual,announcement;

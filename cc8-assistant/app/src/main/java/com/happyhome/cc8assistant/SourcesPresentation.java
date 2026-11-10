@@ -20,9 +20,8 @@ final class SourcesPresentation {
       evidence = text(row.opt("access_evidence"), 40);
       observedAt = text(row.opt("observed_at"), 64);
       publishedAt = text(row.opt("published_at"), 64);
-      // Host limits count Unicode scalars; Java's bounds count UTF-16 units.
-      pageExcerpt = text(row.opt("page_excerpt"), 4000);
-      pageDates = text(row.opt("page_dates"), 1088);
+      pageExcerpt = text(row.opt("page_excerpt"), 2000);
+      pageDates = text(row.opt("page_dates"), 519); // Eight 64-scalar labels and seven separators.
       String target = text(row.opt("final_url"), 2048);
       finalUrl = safeUrl(target) ? target : "";
       int bytes = integer(row.opt("page_bytes"), 1048576);
@@ -148,8 +147,16 @@ final class SourcesPresentation {
   private static String text(Object value, int max) {
     if (!(value instanceof String)) return "";
     String text = (String) value;
-    if (text.length() > max) return "";
-    for (int i = 0; i < text.length(); i++) if (Character.isISOControl(text.charAt(i))) return "";
+    // Match Python's scalar limits without accepting broken surrogate pairs.
+    if (text.length() > max * 2) return "";
+    int scalars = 0;
+    for (int i = 0; i < text.length(); i++) {
+      if (++scalars > max) return "";
+      char c = text.charAt(i);
+      if (Character.isHighSurrogate(c)) {
+        if (i + 1 >= text.length() || !Character.isLowSurrogate(text.charAt(++i))) return "";
+      } else if (Character.isLowSurrogate(c) || Character.isISOControl(c)) return "";
+    }
     return text;
   }
 
@@ -203,7 +210,7 @@ final class SourcesPresentation {
   }
 
   static boolean safeUrl(String value) {
-    if (value == null || value.isEmpty() || value.length() > 2048) return false;
+    if (text(value, 2048).isEmpty()) return false;
     try {
       URI uri = new URI(value);
       String host = uri.getHost();

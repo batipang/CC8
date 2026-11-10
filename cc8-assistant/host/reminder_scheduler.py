@@ -19,6 +19,7 @@ class ReminderHooks:
     announce: Callable[[str], Announcement]
     delivery_owner: Callable[[], object] = lambda: None
     desktop_notify: Callable[[str, str, Callable[[], bool]], DesktopDelivery] | None = None
+    owner_access: Callable[[], bool] = lambda: True
 
 
 class ReminderScheduler:
@@ -32,6 +33,8 @@ class ReminderScheduler:
 
     def action(self, args, is_current=lambda: True):
         with self.hooks.lock:
+            if not self.hooks.owner_access():
+                raise ValueError('访客模式不能访问主人提醒')
             result = self.hooks.workspace().reminder(args, is_current)
             if result.get('ok'):
                 self.hooks.publish_workspace()
@@ -40,6 +43,8 @@ class ReminderScheduler:
     def tick(self):
         # Do not interrupt conversations or turn on capture to deliver a reminder.
         with self.hooks.lock:
+            if not self.hooks.owner_access():
+                return
             job = self.job
             if job is not None:
                 if not job.done.is_set():
@@ -80,7 +85,8 @@ class ReminderScheduler:
             try:
                 self.hooks.touch()
                 if (
-                    not self.hooks.can_deliver()
+                    not self.hooks.owner_access()
+                    or not self.hooks.can_deliver()
                     or self.hooks.delivery_owner() != owner
                     or not self.hooks.workspace().reminder_claims_current(claims)
                 ):
@@ -100,7 +106,8 @@ class ReminderScheduler:
                     def current():
                         with self.hooks.lock:
                             return (
-                                self.hooks.can_deliver()
+                                self.hooks.owner_access()
+                                and self.hooks.can_deliver()
                                 and self.hooks.delivery_owner() == owner
                                 and self.hooks.workspace().reminder_claims_current(claims)
                             )

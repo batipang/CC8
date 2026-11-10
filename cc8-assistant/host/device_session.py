@@ -15,9 +15,11 @@ if TYPE_CHECKING:
 
 def complete_handshake(session: SessionController, j):
     hooks = session.hooks
-    hooks.meeting_peer(j.get('meeting_version'))
-    hooks.visual().update_peer(j)
-    session.correction_ui_supported = (
+    owner = hooks.owner_access()
+    if owner:
+        hooks.meeting_peer(j.get('meeting_version'))
+        hooks.visual().update_peer(j)
+    session.correction_ui_supported = owner and (
         type(j.get('speech_correction_version')) is int and j['speech_correction_version'] == 1
     )
     frontend = session.negotiate_capture_frontend(j)
@@ -66,22 +68,24 @@ def complete_handshake(session: SessionController, j):
         transport=session.transport_kind,
         capture_frontend=frontend,
         playback_interrupted_by_transport=interrupted,
-        supports_dot_chat_handoff=True,
-        supports_report_sources=True,
-        supports_report_archive=True,
-        supports_thread_queue=True,
-        supports_report_progress=True,
-        supports_saved_task_results=True,
-        supports_preference_memory=True,
-        supports_vocabulary=True,
-        supports_workflows=True,
-        supports_meetings=type(j.get('meeting_version')) is int and j['meeting_version'] == 1,
-        meeting_state=hooks.meeting_state(),
-        supports_vision_modes=True,
-        supports_photo_followup=True,
-        supports_mac_window=window_available(),
-        supports_result_provenance=True,
-        supports_result_reading=True,
+        supports_dot_chat_handoff=owner,
+        supports_report_sources=owner,
+        supports_report_archive=owner,
+        supports_thread_queue=owner,
+        supports_report_progress=owner,
+        supports_saved_task_results=owner,
+        supports_preference_memory=owner,
+        supports_vocabulary=owner,
+        supports_workflows=owner,
+        supports_meetings=owner
+        and type(j.get('meeting_version')) is int
+        and j['meeting_version'] == 1,
+        meeting_state=hooks.meeting_state() if owner else {},
+        supports_vision_modes=owner,
+        supports_photo_followup=owner,
+        supports_mac_window=owner and window_available(),
+        supports_result_provenance=owner,
+        supports_result_reading=owner,
         voice_preferences=session.voice_preferences_state(),
         asr_engine=getattr(getattr(hooks.speech(), 'recognizer', None), 'engine', 'sensevoice'),
         **(
@@ -108,13 +112,19 @@ def complete_handshake(session: SessionController, j):
             )
         session.flush_screen_event()
     hooks.log('device_handshake_verified', transport=session.transport_kind)
-    hooks.event('brain_provider', provider=getattr(hooks.brain(), 'selected', 'minimax'))
+    hooks.event(
+        'brain_provider',
+        provider=getattr(hooks.brain(), 'selected', 'minimax') if owner else 'guest_minimax',
+    )
     hooks.publish_workspace()
     hooks.save_status()
 
 
 def rebind_capture(session: SessionController, j):
     hooks = session.hooks
+    if not hooks.dialogue_access():
+        session.reject_capture_start(j.get('capture_id'))
+        return
     if not session.accepts_capture_frontend(j):
         session.reject_capture_start(j.get('capture_id'))
         return
@@ -144,7 +154,7 @@ def rebind_capture(session: SessionController, j):
 
 def start_capture(session: SessionController, j):
     capture_id = j.get('capture_id')
-    if session.hooks.capture_reserved():
+    if not session.hooks.dialogue_access() or session.hooks.capture_reserved():
         session.reject_capture_start(capture_id)
         return
     if not session.accepts_capture_frontend(j):

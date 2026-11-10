@@ -229,6 +229,7 @@ def build_components(
             metric=host.record_metric,
             save_status=lambda: host.save_status(),
             log=lambda name, **fields: host.log(name, **fields),
+            owner_access=lambda: host.owner_access(),
         )
     )
     reminders = ReminderScheduler(
@@ -237,7 +238,8 @@ def build_components(
             workspace=lambda: host.workspace,
             publish_workspace=lambda: host.publish_workspace(),
             can_deliver=lambda: (
-                host.session.connection is not None
+                host.owner_access()
+                and host.session.connection is not None
                 and not voice_busy(host)
                 and host.session.text_generation is None
                 and host.response.corrections.draft is None
@@ -254,6 +256,7 @@ def build_components(
                 host.session.epoch,
                 host.session.capture_id,
             ),
+            owner_access=lambda: host.owner_access(),
         )
     )
     device = DeviceController(
@@ -301,7 +304,9 @@ def build_components(
             generation=lambda: host.session.generation,
             connection=lambda: host.session.connection,
             available=lambda: (
-                isinstance(host.brain, BrainRouter) and hasattr(host.brain.dot, 'set_handoff')
+                host.owner_access()
+                and isinstance(host.brain, BrainRouter)
+                and hasattr(host.brain.dot, 'set_handoff')
             ),
             idle=lambda: (
                 not (
@@ -374,7 +379,10 @@ def build_components(
                 ),
                 activation=lambda: host.session.capture_id if host.session.active else None,
                 generation=lambda: host.session.generation,
-                blocked=lambda: automation_active(private_directory() / 'automation-test.lock'),
+                blocked=lambda: (
+                    not host.owner_access()
+                    or automation_active(private_directory() / 'automation-test.lock')
+                ),
                 idle=lambda: (
                     not voice_busy(host)
                     and host.session.text_generation is None
@@ -386,6 +394,7 @@ def build_components(
                 send_summary=watch_summary,
                 cancel=watch_cancel,
                 error=lambda kind: host.log('work_report_watch_error', error_type=kind),
+                owner_access=lambda: host.owner_access(),
             )
         )
     saved_tasks = SavedTaskController(
@@ -440,7 +449,7 @@ def build_components(
                     host.brain,
                     getattr(host.brain, 'selected', None),
                 )
-                if host.session.connection is not None
+                if host.owner_access() and host.session.connection is not None
                 else None
             ),
             idle=lambda: (
@@ -489,11 +498,14 @@ def build_components(
                     host.brain,
                     getattr(host.brain, 'selected', None),
                 )
-                if host.session.connection is not None
+                if host.owner_access() and host.session.connection is not None
                 else None
             ),
             activation=lambda: host.session.capture_id if host.session.active else None,
-            blocked=lambda: automation_active(private_directory() / 'automation-test.lock'),
+            blocked=lambda: (
+                not host.owner_access()
+                or automation_active(private_directory() / 'automation-test.lock')
+            ),
             ready=lambda: (
                 not voice_busy(host)
                 and host.session.text_generation is None
@@ -511,7 +523,8 @@ def build_components(
             lock=host.session.guard,
             owner=lambda: (
                 (host.session.connection, host.session.bound_route_token, host.session.generation)
-                if host.session.connection is not None
+                if host.owner_access()
+                and host.session.connection is not None
                 and getattr(host.session.connection, 'application_ready', True) is True
                 else None
             ),
@@ -607,6 +620,11 @@ def build_device_events(host: Bridge) -> DeviceEventRouter:
         vocabulary_action=lambda data: host.vocabulary.request(data),
         workflow_action=lambda data: host.workflows.request(data),
         meeting_action=lambda data: host.meetings.request(data),
+        owner_access=lambda: host.owner_access(),
+        current_workspace=lambda: host.workspace,
+        identity_request=lambda data: host.identity_request(data),
+        identity_applied=lambda data: host.identity_applied(data),
+        ready=lambda data: host.device_ready(data),
     )
 
 
@@ -653,6 +671,8 @@ def build_session(host: Bridge, *, capture_frontend: str = 'mono') -> SessionCon
             meeting_peer=lambda version: host.meetings.peer(version),
             capture_reserved=lambda: host.meetings.reserved(),
             meeting_state=lambda: host.meetings.view(),
+            owner_access=lambda: host.owner_access(),
+            dialogue_access=lambda: host.dialogue_access(),
         ),
         capture_frontend=capture_frontend,
     )

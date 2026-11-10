@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "source-read-details-164-20261110.1",
+  "release_id": "guest-isolation-166-20261111.1",
   "backend": {
-    "version": "0.16.35"
+    "version": "0.16.36"
   },
   "assistant": {
-    "version": "0.9.127",
-    "version_code": 164,
+    "version": "0.9.128",
+    "version_code": 166,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {

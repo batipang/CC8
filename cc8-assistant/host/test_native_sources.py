@@ -76,6 +76,24 @@ public class SourceCheck {
  failure.data.put("page_error_code","/private/credential-secret");failure.data.put("page_http_status",true);
  failed=new SourcesPresentation(new JSONArray(failure),"","",4,9).at(0).label();
  yes(!failed.contains("credential-secret")&&failed.contains("未提供可核对的原因")&&failed.contains("未取得可核对状态"),"untrusted reason or malformed status displayed");
+ String emoji=new String(Character.toChars(0x1f600));
+ JSONObject unicode=new JSONObject("title",emoji.repeat(160),"url",url);
+ s=new SourcesPresentation(new JSONArray(unicode),"","",4,9);
+ yes(s.size()==1&&s.at(0).title.codePointCount(0,s.at(0).title.length())==160,"host-valid non-BMP title was discarded");
+ unicode.data.put("title",emoji.repeat(161));yes(new SourcesPresentation(new JSONArray(unicode),"","",4,9).size()==0,"scalar title limit widened");
+ String longUrl="https://example.com/"+emoji.repeat(2048-"https://example.com/".length());
+ yes(SourcesPresentation.safeUrl(longUrl)&&!SourcesPresentation.safeUrl(longUrl+emoji),"URL limits used UTF16 units or exceeded host scalar bound");
+ unicode.data.put("title",emoji.repeat(160));unicode.data.put("url",longUrl);
+ s=new SourcesPresentation(new JSONArray(unicode),"","",4,9);yes(s.size()==1&&s.at(0).url.equals(longUrl),"valid long Unicode URL lost at field parse");
+ for(String malformed:new String[]{Character.toString((char)0xd800),Character.toString((char)0xdc00),"x"+(char)0xd800+"y"}){
+  unicode.data.put("title",malformed);yes(new SourcesPresentation(new JSONArray(unicode),"","",4,9).size()==0,"broken title surrogate accepted");
+  yes(!SourcesPresentation.safeUrl(url+malformed),"broken URL surrogate accepted");
+ }
+ JSONObject large=new JSONObject("title","内容","url",url,"access_evidence","page_body_received","observed_at","now","page_bytes",8000,
+  "page_excerpt",emoji.repeat(2000),"page_dates",String.join("；",java.util.Collections.nCopies(8,emoji.repeat(64))));
+ scoped=new SourcesPresentation(new JSONArray(large),"","",4,9).at(0);
+ yes(scoped.pageExcerpt.codePointCount(0,scoped.pageExcerpt.length())==2000&&scoped.pageDates.codePointCount(0,scoped.pageDates.length())==519,"excerpt/date scalar limits disagree with host");
+ large.data.put("page_excerpt",emoji.repeat(2001));yes(new SourcesPresentation(new JSONArray(large),"","",4,9).at(0).pageExcerpt.isEmpty(),"excerpt scalar budget exceeded");
  for(String bad:new String[]{"javascript:alert(1)","http://localhost/a","https://user:secret@example.com/a","https://127.0.0.1/a","https://0177.0.0.1/a","https://127.1/a","https://0x7f.0.0.1/a","https://[::ffff:127.0.0.1]/a","https://10.0.0.1/a","https://169.254.1.1/a","https://machine.local/a","https://machine.local./a","https://example.com:22/a","https://example.com/a b"})
   yes(!SourcesPresentation.safeUrl(bad),"unsafe URL accepted: "+bad);
  Object[] many=new Object[20];java.util.Arrays.fill(many,page);

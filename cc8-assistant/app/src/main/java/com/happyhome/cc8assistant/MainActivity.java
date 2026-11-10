@@ -20,7 +20,8 @@ import java.io.*;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-public final class MainActivity extends Activity implements VoiceSession.Listener {
+public final class MainActivity extends Activity
+    implements VoiceSession.Listener, LargeDialogBuilder.OwnerAccess {
   // 主界面只编排前台操作与显示；录放和通道生命周期由 VoiceSession 管理。
   private final java.util.ArrayDeque<String> autoVoiceTrace = new java.util.ArrayDeque<>();
   private final OpenVoiceGate autoVoice = new OpenVoiceGate();
@@ -103,6 +104,97 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   private AlertDialog connectionInfoDialog;
   private JSONObject connectionInfoAvailability;
   private String connectionInfoRenderedMessage = "";
+
+  private void postIdentityUi(Runnable action) {
+    final long epoch = session == null ? -1 : session.identityEpoch();
+    runOnUiThread(
+        () -> {
+          if (session == null || session.currentIdentity(epoch)) action.run();
+        });
+  }
+
+  public long dialogEpoch() {
+    return session == null ? -1 : session.identityEpoch();
+  }
+
+  public boolean ownerDialogAllowed(long epoch) {
+    return session != null && session.ownerMode() && session.currentIdentity(epoch);
+  }
+
+  @Override
+  public void identityChanged(boolean cancelAutoVoice) {
+    postIdentityUi(
+        () -> {
+          if (cancelAutoVoice) {
+            autoVoice.cancel();
+            pending = false;
+            handler.removeCallbacks(autoVoiceTick);
+          }
+          clearIdentityUi();
+          linked = session.isConnected();
+          if (brainText != null) brainText.setText(session.identityLabel());
+          refresh();
+        });
+  }
+
+  private void clearIdentityUi() {
+    if (eyes != null) eyes.cancel();
+    LargeDialogBuilder.dismissAll(this);
+    if (dotChats != null) dotChats.close();
+    if (reportSources != null) reportSources.close();
+    if (preferenceMemory != null) preferenceMemory.close();
+    if (recognitionLanguage != null) recognitionLanguage.close();
+    if (recognitionEnvironment != null) recognitionEnvironment.close();
+    if (vocabulary != null) vocabulary.close();
+    if (workflows != null) workflows.close();
+    if (meetings != null) meetings.close();
+    if (savedTasks != null) savedTasks.close();
+    if (resultDetails != null) resultDetails.close();
+    if (correctionDialog != null) correctionDialog.close();
+    if (versions != null) versions.close();
+    clearSources();
+    tasksData = new JSONArray();
+    remindersData = new JSONArray();
+    reminderHistoryData = new JSONArray();
+    reminderPolicyData = null;
+    reminderChannelsSupported = false;
+    workspaceRevision = -1;
+    dotResult = dotResultSource = "";
+    taskResultUnconfirmed = false;
+    if (heardText != null) heardText.setText("你：");
+    if (captionText != null) applyCaption("", "attentive");
+    if (dotText != null) dotText.setText("");
+    active = session.isRecording();
+    playbackActive = false;
+    if (taskSteps != null) renderWorkspace();
+  }
+
+  private void showIdentity() {
+    String message =
+        session.identityLabel() + "\n访客仅使用 MiniMax 独立问答，不读取主人记录或操作桌面。\n恢复主人模式需在 Mac 发起。切换后麦克风保持关闭。";
+    LargeDialogBuilder builder = new LargeDialogBuilder(this, true);
+    builder.setTitle("使用身份");
+    builder.setMessage(message).setNegativeButton("关闭", null);
+    if (session.ownerMode())
+      builder.setPositiveButton(
+          "进入访客",
+          (d, which) -> {
+            if ("thinking".equals(phase)
+                || "speaking".equals(phase)
+                || "calibrating".equals(phase)
+                || hasRunningTask(tasksData)
+                || !session.enterGuest()) {
+              Toast.makeText(this, "请等待当前请求结束；旧后台请先更新", Toast.LENGTH_LONG).show();
+              return;
+            }
+            autoVoice.cancel();
+            pending = false;
+            handler.removeCallbacks(autoVoiceTick);
+            clearIdentityUi();
+            applyState("idle", "访客切换中 · 等待设备与 Mac 确认");
+          });
+    builder.show();
+  }
 
   private int dp(float value) {
     return Math.round(value * getResources().getDisplayMetrics().density);
@@ -349,7 +441,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     brainText = label("Dot 已连接", 20, INK);
     brainText.setCompoundDrawables(icon(R.drawable.ic_hud_connection, CYAN, 24), null, null, null);
     brainText.setCompoundDrawablePadding(dp(9));
-    brainText.setOnClickListener(v -> showBrainSelector());
+    brainText.setOnClickListener(v -> showIdentity());
     place(root, brainText, 838, 15, 146, 48);
     rule(root, 985, 26, 1, 26);
     linkText = label("未连接", 20, INK);
@@ -368,7 +460,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     companion = new CompanionView(this);
     companion.setOnLongClickListener(
         v -> {
-          startActivity(new Intent(this, CameraTestActivity.class));
+          if (session.ownerMode()) startActivity(new Intent(this, CameraTestActivity.class));
           return true;
         });
     place(root, companion, 25, 75, 550, 456);
@@ -619,7 +711,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   public void announcement() {
-    runOnUiThread(
+    postIdentityUi(
         () -> {
           heardText.setText("指定播报 · 麦克风状态保持不变");
           clearSources();
@@ -628,7 +720,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   public void workspace(JSONObject data, long route) {
-    runOnUiThread(
+    postIdentityUi(
         () -> {
           if (!linked || workspaceRoute != route || !session.currentRoute(route)) return;
           long revision = data.optLong("revision", -1);
@@ -650,7 +742,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   public void workspaceResult(boolean ok, String message, long route) {
-    runOnUiThread(
+    postIdentityUi(
         () -> {
           if (!linked || workspaceRoute != route || !session.currentRoute(route)) return;
           Toast.makeText(this, message, Toast.LENGTH_LONG).show();
@@ -1280,6 +1372,10 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   }
 
   private void showSettings() {
+    if (!session.ownerMode()) {
+      showIdentity();
+      return;
+    }
     new LargeDialogBuilder(this)
         .setTitle("大黄蜂设置")
         .setItems(
@@ -1305,7 +1401,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
               "工作汇报来源",
               "工作流程／定时简报",
               "会议录音／转写",
-              "版本与更新"
+              "版本与更新",
+              "主人／访客模式"
             },
             (d, n) -> {
               if (n == 0) {
@@ -1367,6 +1464,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
                 if (session.isRecording()) session.stopMicrophone();
                 meetings.open();
               } else if (n == 21) versions.open();
+              else if (n == 22) showIdentity();
               else showReminderHistory();
             })
         .setNegativeButton("关闭", null)
@@ -1635,7 +1733,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   public void vision(boolean busy, String message, boolean preserveError) {
-    runOnUiThread(
+    postIdentityUi(
         () -> {
           if (busy && workflows != null) workflows.close();
           if (!busy && eyes != null) eyes.cancel();
@@ -1650,7 +1748,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   public void cameraCapture(JSONObject request) {
-    runOnUiThread(
+    postIdentityUi(
         () -> {
           if (!foreground || !session.isVisionRequestCurrent(request)) {
             session.cameraFailed(request, "not_foreground");
@@ -1810,7 +1908,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   public void brain(String provider) {
-    runOnUiThread(
+    postIdentityUi(
         () -> {
           brainProvider = "dot".equals(provider) ? "dot" : "minimax";
           brainText.setText(
@@ -1821,7 +1919,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   public void dotResult(String value, boolean truncated, String sourceTitle) {
-    runOnUiThread(
+    postIdentityUi(
         () -> {
           dotResult = value;
           dotResultSource = sourceTitle;
@@ -1830,7 +1928,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   public void dotChats(JSONObject data) {
-    runOnUiThread(
+    postIdentityUi(
         () -> {
           if (!foreground) return;
           dotChats.accept(data);
@@ -1840,7 +1938,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   public void savedTasks(JSONObject data) {
-    runOnUiThread(
+    postIdentityUi(
         () -> {
           savedTasks.accept(data);
           resultDetails.accept(data);
@@ -1849,7 +1947,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   public void preferenceResult(JSONObject data, long route) {
-    runOnUiThread(
+    postIdentityUi(
         () -> {
           if (foreground && preferenceMemory != null) preferenceMemory.accept(data, route);
         });
@@ -1857,7 +1955,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   public void vocabularyResult(JSONObject data, long route) {
-    runOnUiThread(
+    postIdentityUi(
         () -> {
           if (foreground && session.currentRoute(route) && vocabulary != null)
             vocabulary.accept(data, route);
@@ -1866,7 +1964,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   public void workflowResult(JSONObject data, long route) {
-    runOnUiThread(
+    postIdentityUi(
         () -> {
           if (foreground && session.currentRoute(route) && workflows != null)
             workflows.accept(data, route);
@@ -1877,7 +1975,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   public void releaseInfo(JSONObject data, long route) {
     // Snapshot before queuing; a mutable network JSON object cannot rewrite the view.
     final VersionPresentation.Peer update = new VersionPresentation.Peer(data, route);
-    runOnUiThread(
+    postIdentityUi(
         () -> {
           if (foreground && session.currentRoute(route)) peerRelease = update;
         });
@@ -1885,7 +1983,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   public void meetingResult(JSONObject data, long route) {
-    runOnUiThread(
+    postIdentityUi(
         () -> {
           if (foreground && session.currentRoute(route) && meetings != null)
             meetings.accept(data, route);
@@ -1894,7 +1992,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   public void speechCorrection(JSONObject data, long route) {
-    runOnUiThread(
+    postIdentityUi(
         () -> {
           if (foreground && correctionDialog != null) correctionDialog.accept(data, route);
         });
@@ -2026,6 +2124,10 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   private void updatePrivacy() {
     if (privacyText == null) return;
+    if (!session.ownerMode()) {
+      privacyText.setText(session.identityLabel() + "\n独立问答 · 不读取主人记录\nMiniMax 识别与播报");
+      return;
+    }
     String ears = "minimax".equals(recognitionEngine) ? "语音片段发送 MiniMax 云端识别" : "语音在当前 Mac 本机识别";
     privacyText.setText(
         ears
@@ -2040,7 +2142,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   public void recognition(String engine) {
-    runOnUiThread(
+    postIdentityUi(
         () -> {
           recognitionEngine = engine;
           updatePrivacy();
@@ -2057,9 +2159,11 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
             : playbackActive
                 ? ("thinking".equals(phase) ? "停止任务" : "停止播报")
                 : waiting && !linked ? "取消等待" : "开始语音");
-    start.setEnabled(linked || active || waiting);
+    start.setEnabled((linked && session.isConnected()) || active || waiting);
+    if (taskAction != null) taskAction.setEnabled(session.ownerMode());
+    if (dotText != null) dotText.setEnabled(session.ownerMode());
     if (visionButton != null) {
-      visionButton.setEnabled(linked && !"calibrating".equals(phase));
+      visionButton.setEnabled(session.ownerMode() && linked && !"calibrating".equals(phase));
       buttonStyle(visionButton, false);
     }
     interrupt.setEnabled(
@@ -2067,7 +2171,8 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     buttonStyle(start, false);
     buttonStyle(interrupt, false);
     refreshModes();
-    brainText.setEnabled(!"calibrating".equals(phase));
+    brainText.setEnabled(true);
+    if (!session.ownerMode()) brainText.setText(session.identityLabel());
     micText.setText(active ? "麦克风开启" : "麦克风关闭");
     micText.setCompoundDrawables(
         icon(R.drawable.ic_hud_mic, active ? CYAN : AMBER, 29), null, null, null);
@@ -2079,7 +2184,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   public void link(boolean connected, long route) {
-    runOnUiThread(
+    postIdentityUi(
         () -> {
           if (!session.currentRoute(route)) return;
           linked = connected;
@@ -2134,12 +2239,12 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   public void state(String next, String message) {
-    runOnUiThread(() -> applyState(next, message));
+    postIdentityUi(() -> applyState(next, message));
   }
 
   @Override
   public void status(StatusPresentation update) {
-    runOnUiThread(
+    postIdentityUi(
         () -> {
           if (!session.currentStatusPresentation(update)) return;
           if (!listeningState.hostStatus(
@@ -2160,12 +2265,12 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   public void caption(String text, String emotion) {
-    runOnUiThread(() -> applyCaption(text, emotion));
+    postIdentityUi(() -> applyCaption(text, emotion));
   }
 
   @Override
   public void playbackPresentation(VoiceSession.PlaybackPresentation update) {
-    runOnUiThread(
+    postIdentityUi(
         () -> {
           if (!foreground || !session.currentPlaybackPresentation(update)) return;
           if (update.text != null) applyCaption(update.text, update.mood);
@@ -2176,7 +2281,11 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
   private void applyCaption(String text, String emotion) {
     captionPlaceholder = text.isEmpty();
     final String value =
-        text.isEmpty() ? (active ? "说大黄蜂唤醒我。\n也可以点击看一看。" : "麦克风已关闭。\n点击开始语音即可对话。") : text;
+        text.isEmpty()
+            ? (active
+                ? (session.ownerMode() ? "说大黄蜂唤醒我。\n也可以点击看一看。" : "说大黄蜂唤醒我。\n访客独立问答。")
+                : "麦克风已关闭。\n点击开始语音即可对话。")
+            : text;
     if (!value.equals(captionText.getText().toString())) {
       captionText.setText(value);
       captionText.progress(0, false);
@@ -2189,12 +2298,12 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   public void heard(String text) {
-    runOnUiThread(() -> heardText.setText("你：" + text));
+    postIdentityUi(() -> heardText.setText("你：" + text));
   }
 
   @Override
   public void sources(SourcesPresentation update) {
-    runOnUiThread(
+    postIdentityUi(
         () -> {
           if (!foreground || !session.currentSourcesPresentation(update)) return;
           clearSources();
@@ -2290,7 +2399,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   public void playback(boolean value) {
-    runOnUiThread(
+    postIdentityUi(
         () -> {
           playbackActive = value;
           refresh();
@@ -2299,7 +2408,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   public void captureRejected(int stoppedEpoch) {
-    runOnUiThread(
+    postIdentityUi(
         () -> {
           if (!foreground || !session.captureRejectionCurrent(stoppedEpoch)) return;
           applyState("error", "Mac 未能启动语音处理，麦克风已关闭。请点击开始语音重试。");
@@ -2308,7 +2417,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   public void microphone(boolean value) {
-    runOnUiThread(
+    postIdentityUi(
         () -> {
           active = session.isRecording();
           if (!active) {
@@ -2322,7 +2431,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
 
   @Override
   public void screen(boolean sleeping) {
-    runOnUiThread(
+    postIdentityUi(
         () -> {
           if (sleeping && (!foreground || !active)) return;
           if (screenSleeping == sleeping) return;

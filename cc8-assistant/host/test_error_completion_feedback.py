@@ -501,6 +501,7 @@ class DeviceFeedbackTests(unittest.TestCase):
         harness = (
             """package com.happyhome.cc8assistant;
 class FeedbackCheck {
+ boolean identityConnected(){return true;}
  boolean foreground=true,recording=false,announcement=false,visual=false,textSession=false;
  int minimumGeneration=0,textGeneration=0,announcementGeneration=0,visualGeneration=0,epoch=1,lifecycle=1;
  final Object routeLock=new Object();long route=5, activeRoute=5,routeEpoch=5;
