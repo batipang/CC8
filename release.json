@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "dialog-typography-20261110.1",
+  "release_id": "meeting-documents-forward-recovery-147-20261110.1",
   "backend": {
     "version": "0.16.29"
   },
   "assistant": {
-    "version": "0.9.107",
-    "version_code": 144,
+    "version": "0.9.110",
+    "version_code": 147,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {
