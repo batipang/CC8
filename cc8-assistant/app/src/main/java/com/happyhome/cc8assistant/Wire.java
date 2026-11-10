@@ -11,6 +11,7 @@ final class Wire {
       SPEAKER = 4,
       MIC_PAIRED = 5,
       ROUTE_BOUND = 6,
+      MEETING = 7,
       HEADER = 29,
       MAX = 65536;
 
@@ -63,16 +64,22 @@ final class Wire {
 
   private static void validate(int type, byte[] data) throws IOException {
     if (data == null) throw new IOException("Missing packet payload");
-    if (type < 1 || type > ROUTE_BOUND) throw new IOException("Invalid packet type");
+    if (type < 1 || type > MEETING) throw new IOException("Invalid packet type");
     if (data.length > MAX - HEADER) throw new IOException("Packet too large");
     int offset = 0;
     if (type == ROUTE_BOUND) {
       if (data.length < 17) throw new IOException("Invalid route envelope");
       type = data[16] & 255;
-      if (type < 1 || type > MIC_PAIRED) throw new IOException("Invalid inner packet type");
+      if (type < 1 || type > MEETING || type == ROUTE_BOUND)
+        throw new IOException("Invalid inner packet type");
       offset = 17;
     }
     int length = data.length - offset;
+    if (type == MEETING) {
+      if (length < 18 || length > 3216 || length % 2 != 0)
+        throw new IOException("Invalid meeting PCM frame");
+      return;
+    }
     if (type == MIC_PAIRED && (length == 0 || length % 4 != 0))
       throw new IOException("Invalid paired PCM frame");
     if (type != EVENT && (length % 2 != 0 || length > 6400))

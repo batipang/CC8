@@ -10,7 +10,7 @@ import struct
 HEADER = struct.Struct('!BIQQQ')
 # 长度与头字段为网络字节序，PCM 载荷为小端有符号 16 位。
 # frame 是采样位置，nanos 是设备时间，不能当作日历时间。
-MIC, RENDER, EVENT, SPEAKER, MIC_PAIRED, ROUTE_BOUND = 1, 2, 3, 4, 5, 6
+MIC, RENDER, EVENT, SPEAKER, MIC_PAIRED, ROUTE_BOUND, MEETING = 1, 2, 3, 4, 5, 6, 7
 MAX_PACKET = 65536
 MAX_JSON_DEPTH = 16
 MAX_JSON_NODES = 4096
@@ -119,6 +119,10 @@ def validate_device_event(value: object) -> JsonObject:
         from workflow_protocol import validate_request as validate_workflow_request
 
         validate_workflow_request(value)
+    if name == 'meeting_request':
+        from meeting_protocol import validate_request as validate_meeting_request
+
+        validate_meeting_request(value)
     if name == 'vocabulary_request':
         from recognition_vocabulary import validate_request as validate_vocabulary_request
 
@@ -392,6 +396,7 @@ class Packet:
             SPEAKER,
             MIC_PAIRED,
             ROUTE_BOUND,
+            MEETING,
         ):
             raise ValueError('Unknown packet type')
         for value, bits in (
@@ -413,12 +418,17 @@ class Packet:
                 EVENT,
                 SPEAKER,
                 MIC_PAIRED,
+                MEETING,
             ):
                 raise ValueError('Invalid route envelope')
             Packet(self.data[16], data=self.data[17:]).encode()
         if self.kind == MIC_PAIRED and (not self.data or len(self.data) % 4):
             raise ValueError('Invalid paired PCM length')
-        if self.kind not in (EVENT, ROUTE_BOUND) and (len(self.data) % 2 or len(self.data) > 6400):
+        if self.kind == MEETING and (not 18 <= len(self.data) <= 3216 or len(self.data) % 2):
+            raise ValueError('Invalid meeting PCM length')
+        if self.kind not in (EVENT, ROUTE_BOUND, MEETING) and (
+            len(self.data) % 2 or len(self.data) > 6400
+        ):
             raise ValueError('Invalid PCM length')
         payload = (
             HEADER.pack(self.kind, self.generation, self.sequence, self.frame, self.nanos)

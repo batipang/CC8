@@ -12,6 +12,12 @@ import java.util.Arrays;
  * remains with VoiceSession's existing capture owner and watchdog.
  */
 final class CaptureAudioInput {
+  static final class ReleaseUnconfirmed extends IOException {
+    ReleaseUnconfirmed() {
+      super("麦克风释放未确认，请关闭并重启助手");
+    }
+  }
+
   final AudioRecord recorder;
   final boolean paired;
   final String fallbackReason;
@@ -100,7 +106,7 @@ final class CaptureAudioInput {
       try {
         record.release();
       } catch (RuntimeException failure) {
-        throw new IOException("麦克风释放未确认，请重新打开助手");
+        throw new ReleaseUnconfirmed();
       }
   }
 

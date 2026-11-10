@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 def complete_handshake(session: SessionController, j):
     hooks = session.hooks
+    hooks.meeting_peer(j.get('meeting_version'))
     hooks.visual().update_peer(j)
     session.correction_ui_supported = (
         type(j.get('speech_correction_version')) is int and j['speech_correction_version'] == 1
@@ -72,6 +73,8 @@ def complete_handshake(session: SessionController, j):
         supports_preference_memory=True,
         supports_vocabulary=True,
         supports_workflows=True,
+        supports_meetings=type(j.get('meeting_version')) is int and j['meeting_version'] == 1,
+        meeting_state=hooks.meeting_state(),
         supports_vision_modes=True,
         supports_photo_followup=True,
         supports_mac_window=window_available(),
@@ -139,6 +142,9 @@ def rebind_capture(session: SessionController, j):
 
 def start_capture(session: SessionController, j):
     capture_id = j.get('capture_id')
+    if session.hooks.capture_reserved():
+        session.reject_capture_start(capture_id)
+        return
     if not session.accepts_capture_frontend(j):
         session.reject_capture_start(capture_id)
         return

@@ -79,6 +79,10 @@ class SessionHooks:
     cancel_observation: Callable[[], None] = lambda: None
     discard_corrections: Callable[[bool], bool] = lambda _: False
     invalidate_workflows: Callable[[str], None] = lambda reason: None
+    invalidate_meetings: Callable[[str], None] = lambda reason: None
+    meeting_peer: Callable[[object], None] = lambda version: None
+    capture_reserved: Callable[[], bool] = lambda: False
+    meeting_state: Callable[[], JsonObject] = lambda: {}
 
 
 class FailureSink(Protocol):

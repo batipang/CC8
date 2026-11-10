@@ -46,6 +46,7 @@ class DeviceEventRouter:
     preference_action: Callable[[dict], None] = lambda data: None
     vocabulary_action: Callable[[dict], None] = lambda data: None
     workflow_action: Callable[[dict], None] = lambda data: None
+    meeting_action: Callable[[dict], None] = lambda data: None
 
     def on_event(self, j):
         validate_device_event(j)
@@ -102,6 +103,8 @@ class DeviceEventRouter:
             self.vocabulary_action(j)
         elif event == 'workflow_request':
             self.workflow_action(j)
+        elif event == 'meeting_request':
+            self.meeting_action(j)
         elif event == 'result_read_request':
             self.read_result(j)
         elif event == 'speech_correction_action':

@@ -145,6 +145,8 @@ class VoiceSession {
  final List<Integer> packetKinds=new CopyOnWriteArrayList<>(),packetLengths=new CopyOnWriteArrayList<>();
  int visionCancels,playbackCancels;
  boolean isConnected(){return true;}
+ boolean meetingReservation;
+ boolean meetingReserved(){return meetingReservation;}
  boolean currentRoute(long route){return route==routeEpoch;}
  void rejectForTest(Object id,long route){rejectCapture(id,route);}
  void registerForTest(CaptureWindow window,int epoch)throws IOException{registerCapture(window,epoch);}
@@ -199,6 +201,10 @@ public final class CaptureCheck {
  public static void main(String[] args)throws Exception {
   test=args[0];VoiceSession s=new VoiceSession();
   try {
+   if("meeting_reserved".equals(test)){
+    s.meetingReservation=true;s.startMicrophone();
+    yes(!s.recording&&AudioRecord.created.isEmpty(),"Ordinary voice bypassed meeting reservation");return;
+   }
    if("route_read".equals(test)||"route_read_pair".equals(test)){
     s.activeLink.pairedCaptureRequested="route_read_pair".equals(test);
     s.startMicrophone();yes(AudioRecord.entered.await(3,TimeUnit.SECONDS),"native read not reached");
@@ -624,6 +630,9 @@ class CaptureWindowTests(unittest.TestCase):
 
     def test_format_capability_alone_never_starts_capture(self):
         self.check_worker('hello_no_capture')
+
+    def test_ordinary_voice_does_not_acquire_hardware_during_meeting_confirmation(self):
+        self.check_worker('meeting_reserved')
 
     def test_bad_format_hello_cannot_partially_update_capture_capability(self):
         self.check_worker('hello_invalid_frontend')

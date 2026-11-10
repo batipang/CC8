@@ -47,6 +47,8 @@ from vocabulary_controller import VocabularyController, VocabularyHooks
 from workflow_store import WorkflowStore
 from workflow_controller import WorkflowController, WorkflowHooks
 from workflow_scheduler import ScheduleHooks
+from meeting_controller import MeetingController, MeetingHooks
+from meeting_export import MeetingExports
 
 if TYPE_CHECKING:
     from bridge import Bridge
@@ -70,9 +72,10 @@ class Components:
     preferences: PreferenceController
     vocabulary: VocabularyController
     workflows: WorkflowController
+    meetings: MeetingController
 
 
-def voice_busy(host: Bridge) -> bool:
+def voice_busy(host: Bridge, *, include_meeting: bool = True) -> bool:
     return (
         host.calibration.active
         or host.calibration.running
@@ -86,6 +89,8 @@ def voice_busy(host: Bridge) -> bool:
         or host.announcements.generation is not None
         or host.capture.endpoint.vad.talking
         or host.capture.endpoint.waiting_chinese_busy
+        or include_meeting
+        and host.meetings.reserved()
     )
 
 
@@ -139,7 +144,7 @@ def build_components(
         VisionHooks(
             lock=host.session.guard,
             connected=lambda: host.session.connection is not None,
-            calibrating=lambda: host.calibration.active,
+            calibrating=lambda: host.calibration.active or host.meetings.reserved(),
             has_transport=lambda: host.transport_hub is not None,
             brain_ready=lambda: isinstance(host.brain, BrainRouter),
             session_generation=lambda: host.session.generation,
@@ -209,7 +214,9 @@ def build_components(
         AnnouncementHooks(
             lock=host.session.guard,
             connected=lambda: host.session.connection is not None,
-            calibration_busy=lambda: host.calibration.active or host.calibration.running,
+            calibration_busy=lambda: (
+                host.calibration.active or host.calibration.running or host.meetings.reserved()
+            ),
             cancel_session=lambda reason: host.cancel(reason),
             session_generation=lambda: host.session.generation,
             valid=lambda generation: host.valid(generation),
@@ -499,6 +506,34 @@ def build_components(
             error=lambda kind: host.log('workflow_schedule_error', error_type=kind),
         )
     )
+    meetings = MeetingController(
+        MeetingHooks(
+            lock=host.session.guard,
+            owner=lambda: (
+                (host.session.connection, host.session.bound_route_token, host.session.generation)
+                if host.session.connection is not None
+                and getattr(host.session.connection, 'application_ready', True) is True
+                else None
+            ),
+            idle=lambda: (
+                not host.session.active
+                and host.session.text_generation is None
+                and not voice_busy(host, include_meeting=False)
+                and not host.chats.busy
+                and host.reminders.job is None
+            ),
+            event=lambda name, **fields: host.event(name, **fields),
+            touch=lambda: host.touch_activity(),
+            claim=lambda: host.session.claim_meeting_generation(),
+            submit=lambda text, factory: host.session.submit_text(
+                text, _job_factory=factory, _job_origin='meeting'
+            ),
+            workspace=lambda: host.workspace,
+            publish=lambda: host.publish_workspace(),
+            diagnostics=lambda: host.diagnostics,
+        ),
+        exports=MeetingExports(private_directory() / 'meeting-exports'),
+    )
     reporting = StatusReporter(
         ReportingHooks(
             session=lambda: host.session.snapshot(),
@@ -522,6 +557,7 @@ def build_components(
             wake_word=wake_word,
             log=lambda name, **fields: host.log(name, **fields),
             status=lambda phase, message: host.status(phase, message),
+            meeting_state=lambda: host.meetings.view(),
         ),
         started_at=started_at,
     )
@@ -542,6 +578,7 @@ def build_components(
         preferences,
         vocabulary,
         workflows,
+        meetings,
     )
 
 
@@ -569,6 +606,7 @@ def build_device_events(host: Bridge) -> DeviceEventRouter:
         preference_action=lambda data: host.preferences.request(data),
         vocabulary_action=lambda data: host.vocabulary.request(data),
         workflow_action=lambda data: host.workflows.request(data),
+        meeting_action=lambda data: host.meetings.request(data),
     )
 
 
@@ -611,6 +649,10 @@ def build_session(host: Bridge, *, capture_frontend: str = 'mono') -> SessionCon
                 preserve_source=preserve, publish=False
             ),
             invalidate_workflows=lambda reason: host.workflows.invalidate(reason),
+            invalidate_meetings=lambda reason: host.meetings.invalidate(reason),
+            meeting_peer=lambda version: host.meetings.peer(version),
+            capture_reserved=lambda: host.meetings.reserved(),
+            meeting_state=lambda: host.meetings.view(),
         ),
         capture_frontend=capture_frontend,
     )

@@ -12,7 +12,7 @@ import time
 import uuid
 import re
 from protocol import Packet
-from reply_types import TextReply, ResultRead, CorrectedReply
+from reply_types import TextReply, ResultRead, CorrectedReply, MeetingReply
 from saved_tasks import ident as result_ident
 from request_text import validate_request_text
 from diagnostics import error_kind
@@ -235,6 +235,7 @@ class SessionController:
         corrected=False,
         _job_factory=None,
         _workflow_nonce='',
+        _job_origin='workflow',
     ):
         text = validate_request_text(text, 6000)
         if type(corrected) is not bool or corrected and result_id is not None:
@@ -244,9 +245,19 @@ class SessionController:
         ):
             raise ValueError('Invalid trusted text work factory')
         if (
+            _job_origin not in ('workflow', 'meeting')
+            or _job_origin == 'meeting'
+            and _job_factory is None
+        ):
+            raise ValueError('Invalid trusted text work origin')
+        if (
             not isinstance(_workflow_nonce, str)
             or _workflow_nonce
-            and (_job_factory is None or not re.fullmatch('[a-f0-9]{32}', _workflow_nonce))
+            and (
+                _job_factory is None
+                or _job_origin != 'workflow'
+                or not re.fullmatch('[a-f0-9]{32}', _workflow_nonce)
+            )
         ):
             raise ValueError('Invalid workflow camera confirmation')
         if result_id is not None:
@@ -254,7 +265,11 @@ class SessionController:
             if type(result_restart) is not bool:
                 raise ValueError('Invalid result reading mode')
         with self.guard:
-            if self.connection is None or self.hooks.calibration().active:
+            if (
+                self.connection is None
+                or self.hooks.calibration().active
+                or self.hooks.capture_reserved()
+            ):
                 raise RuntimeError('Text request unavailable')
             previous = self.generation
             try:
@@ -295,7 +310,7 @@ class SessionController:
                     generation=generation,
                     text=text,
                     **(
-                        {'input_origin': 'workflow', 'workflow_camera_nonce': _workflow_nonce}
+                        {'input_origin': _job_origin, 'workflow_camera_nonce': _workflow_nonce}
                         if _job_factory is not None
                         else {'input_origin': 'correction'}
                         if corrected
@@ -320,6 +335,7 @@ class SessionController:
                     not isinstance(job, TextReply)
                     or job.generation != generation
                     or job.text != text
+                    or isinstance(job, MeetingReply) != (_job_origin == 'meeting')
                 ):
                     raise ValueError('Invalid trusted response job')
                 if not current():
@@ -416,6 +432,7 @@ class SessionController:
                 self.playback_interrupted_by_transport = True
             self.hooks.announcements().invalidate()
             self.hooks.invalidate_workflows(reason)
+            self.hooks.invalidate_meetings(reason)
             self.text_generation = None
             self.hooks.visual().invalidate(
                 reason=reason, new_generation=generation, capture_owner=self.capture_owner()
@@ -669,6 +686,26 @@ class SessionController:
 
     def tool_sample_comparison(self, reason='comparison_only'):
         return self.tool_samples.comparison(self, reason)
+
+    def claim_meeting_generation(self):
+        """A confirmed exclusive meeting fences old idle cleanup without a voice Start.
+
+        MeetingController holds this same guard and has checked all other audio
+        pipelines idle. This only advances ownership; it starts no ordinary
+        microphone, provider cancellation, calibration, output or voice session.
+        """
+        with self.guard:
+            if (
+                self.connection is None
+                or self.active
+                or self.text_generation is not None
+                or self.hooks.calibration().active
+                or self.hooks.announcements().generation is not None
+                or self.hooks.visual().generation is not None
+            ):
+                raise RuntimeError('Meeting audio is not idle')
+            self.generation += 1
+            return self.generation
 
     def start_capture(self, j):
         start_capture(self, j)

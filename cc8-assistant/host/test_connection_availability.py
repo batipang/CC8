@@ -29,6 +29,7 @@ public class AvailabilityCheck {
   final Object routeLock=new Object();final Context context=new Context();
   final SpeakerOwner speakerOwner=new SpeakerOwner();final Listener listener=new Listener();
   boolean recording,foreground=true;Link wifiLink;JSONObject sent;
+  boolean isMeetingCapturing(){return false;}
   void cancelPlayback(){}String transportName(){return "usb";}void send(JSONObject j){sent=j;}
   CONTROL_METHOD
   long now;int reads;

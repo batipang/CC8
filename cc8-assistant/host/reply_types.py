@@ -52,6 +52,13 @@ class WorkflowReply(TextReply):
 
 
 @dataclass
+class MeetingReply(TextReply):
+    """A complete frozen document, never a clipped voice utterance."""
+
+    run: object = field(default=None, repr=False)
+
+
+@dataclass
 class ResultRead(TextReply):
     result_id: str = ''
     restart: bool = False

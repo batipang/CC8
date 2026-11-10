@@ -199,6 +199,7 @@ def build_audio_pipeline(
             submit_corrected=lambda text: host.session.submit_text(text, corrected=True),
             cancel_correction=lambda: host.cancel('correction_cancel'),
             run_workflow=lambda job: host.workflows.execute(job),
+            run_meeting=lambda job: host.meetings.analyses.execute(job),
         )
     )
     return capture, recognition, response
