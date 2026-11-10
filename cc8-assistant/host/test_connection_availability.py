@@ -37,6 +37,7 @@ public class AvailabilityCheck {
  static class DesktopEntryService {static int calls;static void settings(Object context){calls++;}}
  interface Click {void click(AlertDialog d,int which);}
  interface Dismiss {void dismiss(AlertDialog d);}
+ static class LargeDialogBuilder extends AlertDialog.Builder {LargeDialogBuilder(Object context){super(context);}}
  static class AlertDialog {
   String message;boolean showing;Dismiss dismiss;int writes;
   TextView view=new TextView();
