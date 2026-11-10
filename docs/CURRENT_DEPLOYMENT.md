@@ -1,5 +1,11 @@
 # 当前 CC8 部署与验收范围
 
+## 0.16.31／code156 已部署：对话框统一大字
+
+原签名助手 0.9.119 code156，APK SHA-256 `2ba74ef2addfe9823a0dc7adc4e92a986b889997dcfc54e285cfadd0e055bf95`，主分支源码 `90cf80a07130344658fe6873aca954a4f46bdde5`。后台仍为 0.16.31、运行源码 `b662202dd4d3afa74f88aceaed7f4accff6d01b1`，未重启原实例。[PR488](https://github.com/batipang/CC8/pull/488) 八项必需 CI、原签名正式构建／lint、2594 项后台回归（4 项私人音频未选）及实机自动检查通过。四类隔离原生对话框确认 32／30／28sp，正式设置、连接提示与既有字幕布局检查和独立审计通过；恢复原后台，原配置／完整 ENV／配对／八类私有存储保持，无开麦、拍照或播报。证据位于忽略的 `device-access/private/deployments/dialog-type156/`。
+
+恢复 code157 已备好，未安装，不算恢复演练。下一候选 0.16.32／code158 为公开网页核对；软件合入、构建与实际部署分别记录。真实会议与完整 P0／P1 验收仍开放，72 小时继续最后。以下保留之前各次部署当时的记录。
+
 ## 0.16.31／code154 已部署：会议文字处理
 
 实际后台 0.16.31、原签名助手 0.9.117 code154，运行源码 `b662202dd4d3afa74f88aceaed7f4accff6d01b1`。安装 APK SHA-256 `772cf1d862dd34c00f7b8f3b2d8f85a0434ea55f5ce9550e2f7dc996ba60c7be`。会议转写校对、Dot 总结、中英翻译、完整分页和 TXT／JSON 导出已交付软件；[PR487](https://github.com/batipang/CC8/pull/487) 八项必需 CI 通过。原签名组合部署、空会议实机控件检查和独立审计均通过，恢复原后台，未启动录音、拍照或模型处理；配置、完整 ENV、Interactive 策略和八类私有存储保持。证据保留于忽略的 `device-access/private/deployments/01631-meeting-labels154/`。

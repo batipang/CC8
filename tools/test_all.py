@@ -59,7 +59,11 @@ def run_suites(names, private_audio=False, run=subprocess.run):
     for name in names:
         print(f'\n[{name}] offline checks', flush=True)
         try:
-            result = run([sys.executable, *SUITES[name]], cwd=ROOT, env=env, timeout=300)
+            # The host suite includes thousands of cases and repeated native
+            # compilation. CI measured 296.9s for assertions alone; leave room
+            # for discovery/exit while retaining a finite failure deadline.
+            timeout = 480 if name == 'host' else 300
+            result = run([sys.executable, *SUITES[name]], cwd=ROOT, env=env, timeout=timeout)
             if result.returncode:
                 failed.append(name)
         except (OSError, subprocess.TimeoutExpired):

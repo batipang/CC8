@@ -749,9 +749,12 @@ SCENARIOS = r"""
     Wire.Packet packet=new Wire.Packet(new JSONObject("event","web_sources","items",new JSONArray(row),"retrieved_at","2026-11-09T20:00:00+08:00","time_basis","answer_completed"));
     s.deliver(packet,old);c.drain();c.showSources();AlertDialog dialog=c.sourcesDialog;AlertDialog.Builder first=AlertDialog.last;
     yes(first.title.startsWith("回答来源汇总时间")&&first.items[0].contains("读取状态未知"),"real dialog promoted source evidence");
-    first.itemClick.click(dialog,0);yes(c.openedLinks==1&&c.lastLink.equals("https://example.com/article"),"current source click lost URL");
-    s.deliver(packet,old);first.itemClick.click(dialog,0);yes(c.openedLinks==1,"retired queued dialog opened a link");c.drain();yes(dialog.dismissed,"new sources kept old dialog open");
+    first.itemClick.click(dialog,0);dialog.dismiss();AlertDialog detail=c.sourcesDialog;AlertDialog.Builder details=AlertDialog.last;
+    yes(c.openedLinks==0&&details.title.equals("来源详情 · 请核对")&&details.message.contains("来源标注日期：未知"),"source details silently opened browser or invented date");
+    details.positive.click(detail,-1);yes(c.openedLinks==1&&c.lastLink.equals("https://example.com/article"),"explicit open lost source URL");
+    s.deliver(packet,old);first.itemClick.click(dialog,0);details.positive.click(detail,-1);yes(c.openedLinks==1,"retired queued dialog opened a link");c.drain();yes(detail.dismissed,"new sources kept old detail dialog open");
     c.showSources();c.browserUnavailable=true;AlertDialog.Builder second=AlertDialog.last;second.itemClick.click(c.sourcesDialog,0);
+    AlertDialog.Builder detailAgain=AlertDialog.last;detailAgain.positive.click(c.sourcesDialog,-1);
     AlertDialog fallback=c.sourcesDialog;yes(AlertDialog.last.title.equals("设备无法打开浏览器"),"browser failure lost selectable-link fallback");
     Link next=new Link("wifi");activate(c,next);c.drain();yes(fallback.dismissed&&c.sourcesDialog==null&&c.sourceCount()==0,"handover kept fallback URL visible");
     break;

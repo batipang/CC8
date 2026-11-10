@@ -6,6 +6,8 @@ independent proof that a cited claim or the page body was verified.
 """
 
 from web_search import now, public_url
+import threading
+import json
 
 MAX_ACTIONS = 64
 
@@ -14,6 +16,45 @@ class WebEvidence:
     def __init__(self, clock=now):
         self.clock = clock
         self.actions = {}
+        self.pages = []
+        self.page_lock = threading.Lock()
+
+    def page(self, receipt):
+        """Accept only the local public-reader result, never model-written fields."""
+        if not isinstance(receipt, dict) or public_url(receipt.get('url')) is None:
+            return
+        with self.page_lock:
+            if len(self.pages) >= 4:
+                return
+            row = {'url': receipt['url'], 'observed_at': self.clock(), 'ok': False}
+            if receipt.get('ok') is True:
+                text, dates = receipt.get('text'), receipt.get('publication_labels')
+                size = receipt.get('received_bytes')
+                final = public_url(receipt.get('final_url'))
+                if (
+                    not isinstance(text, str)
+                    or not 1 <= len(text) <= 20000
+                    or type(size) is not int
+                    or not 1 <= size <= 1048576
+                    or final is None
+                    or receipt.get('http_status') != 200
+                    or receipt.get('facts_verified') is not False
+                    or receipt.get('untrusted_page') is not True
+                    or not isinstance(dates, list)
+                    or len(dates) > 8
+                    or any(not isinstance(v, str) or len(v) > 64 for v in dates)
+                ):
+                    return
+                row.update(
+                    ok=True,
+                    final_url=final,
+                    excerpt=' '.join(text.split())[:2000],
+                    dates='；'.join(' '.join(v.split()) for v in dates),
+                    size=size,
+                )
+            elif receipt.get('ok') is not False:
+                return
+            self.pages.append(row)
 
     def completed(self, item):
         """Only call for an owned item/completed notification, never a delta."""
@@ -51,6 +92,8 @@ class WebEvidence:
         seen = set()
         if not isinstance(links, list):
             return result
+        with self.page_lock:
+            pages = tuple(self.pages)
         for link in links[:30]:
             if not isinstance(link, dict):
                 continue
@@ -65,6 +108,8 @@ class WebEvidence:
             # this URL. Neither state establishes article or event dates.
             matching = [row for row in self.actions.values() if row['url'] == url]
             receipt = matching[-1] if matching else None
+            reads = [row for row in pages if url in (row['url'], row.get('final_url'))]
+            read = reads[-1] if reads else None
             result.append(
                 {
                     'title': title,
@@ -78,6 +123,33 @@ class WebEvidence:
                     'body_verified': False,
                 }
             )
+            if read is not None:
+                result[-1].update(
+                    access_evidence='page_body_received' if read['ok'] else 'page_fetch_failed',
+                    observed_at=read['observed_at'],
+                    page_excerpt=read.get('excerpt', ''),
+                    page_dates=read.get('dates', ''),
+                    page_bytes=read.get('size', 0),
+                    final_url=read.get('final_url', ''),
+                )
             if len(result) == 6:
                 break
+
+        # A source event shares the 64KiB authenticated packet budget. Preserve
+        # URLs/receipt truth first; omit optional detail explicitly when needed.
+        def size():
+            return len(json.dumps(result, ensure_ascii=False).encode('utf-8'))
+
+        for key in ('page_excerpt', 'page_dates', 'final_url'):
+            if size() <= 56000:
+                break
+            for row in reversed(result):
+                if row.pop(key, None):
+                    row['page_details_limited'] = True
+                if size() <= 56000:
+                    break
+        while size() > 56000 and result:
+            result.pop()
+            if result:
+                result[-1]['list_limited'] = True
         return result

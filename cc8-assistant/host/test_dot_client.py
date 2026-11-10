@@ -87,7 +87,8 @@ class DotTests(unittest.TestCase):
         turn = rpc.calls[1][1]
         self.assertTrue(thread['ephemeral'])
         self.assertEqual(
-            {t['name'] for t in thread['dynamicTools']}, {'cc8_control', 'mac_open', 'cc8_reminder'}
+            {t['name'] for t in thread['dynamicTools']},
+            {'cc8_control', 'mac_open', 'cc8_reminder', 'cc8_read_source'},
         )
         self.assertNotIn('sandbox', thread)
         self.assertNotIn('approvalPolicy', thread)

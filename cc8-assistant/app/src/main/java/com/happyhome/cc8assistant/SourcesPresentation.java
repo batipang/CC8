@@ -8,7 +8,8 @@ import org.json.JSONObject;
 /** Immutable source metadata; an operation receipt does not verify page contents. */
 final class SourcesPresentation {
   static final class Source {
-    final String title, url, evidence, observedAt, publishedAt;
+    final String title, url, evidence, observedAt, publishedAt, pageExcerpt, pageDates, finalUrl;
+    final boolean pageRead, detailLimited, listLimited;
 
     Source(JSONObject row) {
       title = text(row.opt("title"), 160);
@@ -16,24 +17,61 @@ final class SourcesPresentation {
       evidence = text(row.opt("access_evidence"), 40);
       observedAt = text(row.opt("observed_at"), 64);
       publishedAt = text(row.opt("published_at"), 64);
+      // Host limits count Unicode scalars; Java's bounds count UTF-16 units.
+      pageExcerpt = text(row.opt("page_excerpt"), 4000);
+      pageDates = text(row.opt("page_dates"), 1088);
+      String target = text(row.opt("final_url"), 2048);
+      finalUrl = safeUrl(target) ? target : "";
+      Object bytes = row.opt("page_bytes");
+      pageRead =
+          "page_body_received".equals(evidence)
+              && !observedAt.isEmpty()
+              && bytes instanceof Number
+              && ((Number) bytes).doubleValue() == ((Number) bytes).intValue()
+              && ((Number) bytes).intValue() > 0
+              && ((Number) bytes).intValue() <= 1048576;
+      detailLimited = Boolean.TRUE.equals(row.opt("page_details_limited"));
+      listLimited = Boolean.TRUE.equals(row.opt("list_limited"));
+    }
+
+    private String access() {
+      return pageRead
+          ? "HTTP 页面已读取，事实仍需核对"
+          : "page_fetch_failed".equals(evidence)
+              ? "页面读取失败，未取得可用正文"
+              : "page_action_completed".equals(evidence)
+                  ? "有页面操作完成回执，正文未核实"
+                  : "page_action_failed".equals(evidence)
+                      ? "页面操作失败，正文未核实"
+                      : "search_result_returned".equals(evidence)
+                          ? "搜索服务返回，正文未核实"
+                          : "仅回答中的链接，读取状态未知";
+    }
+
+    String summary() {
+      return title + "\n" + URI.create(url).getHost() + " · " + access();
     }
 
     String label() {
-      String access =
-          "page_action_completed".equals(evidence)
-              ? "有页面操作完成回执，正文未核实"
-              : "page_action_failed".equals(evidence)
-                  ? "页面操作失败，正文未核实"
-                  : "search_result_returned".equals(evidence) ? "搜索服务返回，正文未核实" : "仅回答中的链接，读取状态未知";
       return title
           + "\n"
           + URI.create(url).getHost()
           + " · "
-          + access
+          + access()
           + (observedAt.isEmpty() ? "" : "\n操作记录：" + observedAt.replace('T', ' '))
           + "\n来源标注日期："
           + (publishedAt.isEmpty() ? "未知" : publishedAt)
-          + "；事件日期未知";
+          + "；事件日期未知"
+          + (pageRead
+              ? "\n页面日期标注："
+                  + (pageDates.isEmpty() ? "未提供或未展示" : pageDates)
+                  + "\n这是页面自述，不是事件日期的核实结果。"
+                  + (finalUrl.isEmpty() || finalUrl.equals(url) ? "" : "\n读取的最终地址：" + finalUrl)
+                  + "\n\n正文摘录（可能不完整）：\n"
+                  + (pageExcerpt.isEmpty() ? "未展示" : pageExcerpt)
+              : "")
+          + (detailLimited ? "\n部分页面详情受传输大小限制未展示。" : "")
+          + (listLimited ? "\n来源列表受传输大小限制，仅显示部分条目。" : "");
     }
   }
 

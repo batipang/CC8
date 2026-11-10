@@ -2193,7 +2193,7 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     if (sourcesDialog != null) sourcesDialog.dismiss();
     String[] names = new String[current.size()];
     for (int i = 0; i < names.length; i++) {
-      names[i] = current.at(i).label();
+      names[i] = current.at(i).summary();
     }
     AlertDialog dialog =
         new LargeDialogBuilder(this)
@@ -2205,26 +2205,47 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
                       || sourcesDialog != selected
                       || displayedSources != current
                       || !session.currentSourcesPresentation(current)) return;
-                  String url = current.at(index).url;
-                  try {
-                    startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
-                  } catch (ActivityNotFoundException | SecurityException e) {
-                    TextView link = text(url, 30, INK);
-                    link.setTextIsSelectable(true);
-                    link.setPadding(dp(24), dp(20), dp(24), dp(20));
-                    final AlertDialog fallback =
-                        new LargeDialogBuilder(this)
-                            .setTitle("设备无法打开浏览器")
-                            .setView(link)
-                            .setPositiveButton("知道了", null)
-                            .create();
-                    sourcesDialog = fallback;
-                    fallback.setOnDismissListener(
-                        d -> {
-                          if (sourcesDialog == fallback) sourcesDialog = null;
-                        });
-                    fallback.show();
-                  }
+                  SourcesPresentation.Source source = current.at(index);
+                  String url = source.url;
+                  final AlertDialog detail =
+                      new LargeDialogBuilder(this)
+                          .setTitle("来源详情 · 请核对")
+                          .setMessage(source.label())
+                          .setNegativeButton("关闭", null)
+                          .setPositiveButton(
+                              "打开网页",
+                              (opened, n) -> {
+                                if (!foreground
+                                    || sourcesDialog != opened
+                                    || displayedSources != current
+                                    || !session.currentSourcesPresentation(current)) return;
+                                try {
+                                  startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+                                } catch (ActivityNotFoundException | SecurityException e) {
+                                  TextView link = text(url, 30, INK);
+                                  link.setTextIsSelectable(true);
+                                  link.setPadding(dp(24), dp(20), dp(24), dp(20));
+                                  final AlertDialog fallback =
+                                      new LargeDialogBuilder(this)
+                                          .setTitle("设备无法打开浏览器")
+                                          .setView(link)
+                                          .setPositiveButton("知道了", null)
+                                          .create();
+                                  sourcesDialog = fallback;
+                                  fallback.setOnDismissListener(
+                                      d -> {
+                                        if (sourcesDialog == fallback) sourcesDialog = null;
+                                      });
+                                  fallback.show();
+                                }
+                              })
+                          .create();
+                  sourcesDialog = detail;
+                  detail.setOnDismissListener(
+                      d -> {
+                        if (sourcesDialog == detail) sourcesDialog = null;
+                      });
+                  detail.show();
                 })
             .setNegativeButton("关闭", null)
             .create();
