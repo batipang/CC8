@@ -20,6 +20,10 @@ def stubs():
         'public void setTextSize',
         'public void setTextIsSelectable(boolean b){}public void setTextSize',
     )
+    value['android/widget/TextView.java'] = value['android/widget/TextView.java'].replace(
+        'public void setText(String s){',
+        'public static int writes;public void setText(String s){writes++;',
+    )
     value['android/widget/ScrollView.java'] = value['android/widget/ScrollView.java'].replace(
         'public void addView', 'public void scrollTo(int x,int y){}public void addView'
     )
@@ -161,6 +165,18 @@ public class MeetingDialogCheck{
     press(root,"已导出文件");int count=s.requests.size();ui.accept(reply(s).put("exports",new JSONObject("items",new JSONArray(file().put("id","../outside")))),1);
     need(count==s.requests.size()&&Toast.last.contains("回执未确认"),"Malformed file became actionable");break;
    }
+   case "stable_idle_render":{
+    int writes=TextView.writes;
+    for(int i=0;i<40;i++)ui.accept(new JSONObject("event","meeting_update","state",state()),1);
+    need(TextView.writes==writes,"Unchanged polling repeatedly repainted accessible text");
+    JSONObject running=state().put("analysis_job",new JSONObject("id","e".repeat(32),"state","running"));
+    ui.accept(new JSONObject("event","meeting_update","state",running),1);
+    need(TextView.writes>writes,"Changed document status was not rendered");writes=TextView.writes;
+    for(int i=0;i<40;i++)ui.accept(new JSONObject("event","meeting_update","state",running),1);
+    need(TextView.writes==writes,"Unchanged analysis status repeatedly repainted text");
+    ui.accept(new JSONObject("event","meeting_update","state",running.put("position_samples",32000L)),1);
+    need(TextView.writes>writes,"Changed meeting time was not rendered");break;
+   }
    case "analysis_complete":case "analysis_tampered":case "analysis_deadline":{
     String full="😀完整结果";JSONObject meta=analysis(full);
     ui.accept(new JSONObject("event","meeting_update","state",state().put("analyses",new JSONArray(meta))),1);
@@ -264,6 +280,7 @@ class MeetingDialogTests(unittest.TestCase):
             'stale_reply',
             'invalid_list',
             'failed_edit',
+            'stable_idle_render',
             'analysis_complete',
             'analysis_tampered',
             'analysis_deadline',
