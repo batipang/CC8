@@ -28,6 +28,7 @@ from runtime_env import command_path
 from configuration import load_config
 from config_schema import ConfigError
 from runtime_guard import _private_file, ensure_available, RuntimeConflict
+from check_login import start_login_check
 
 LABEL = 'com.happyhome.cc8.' + hashlib.sha256(str(ROOT).encode()).hexdigest()[:12]
 PLIST = Path.home() / 'Library/LaunchAgents' / f'{LABEL}.plist'
@@ -296,7 +297,9 @@ class Supervisor:
 
     def run(self):
         failures = 0
+        login_check = None
         try:
+            login_check = start_login_check(ROOT, PRIVATE, self.stop, self.log)
             while enabled() and not self.stop.is_set():
                 try:
                     with ProcessLease(PRIVATE / 'launcher.lock'):
@@ -374,6 +377,14 @@ class Supervisor:
                 if self.stop.wait(retry_delay(failures)):
                     break
         finally:
+            if login_check is not None:
+                try:
+                    login_check.close()
+                except Exception:
+                    try:
+                        self.log.warning('login_check_close_unconfirmed')
+                    except Exception:
+                        pass
             self.terminate()
             self.state('stopped', failures)
             for handler in self.log.handlers:
