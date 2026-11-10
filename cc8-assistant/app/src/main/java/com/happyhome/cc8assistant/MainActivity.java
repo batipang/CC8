@@ -2415,6 +2415,10 @@ public final class MainActivity extends Activity implements VoiceSession.Listene
     Wire.put(ui, "caption_view_height", captionScroll.getHeight());
     Wire.put(ui, "caption_scroll_y", captionScroll.getScrollY());
     Wire.put(ui, "caption_full_visible_lines", captionScroll.fullVisibleLines(captionText));
+    // A two-line standby prompt has two visible lines; the limit stays three.
+    // Export counts only, so maintenance need not read caption content or play audio.
+    Wire.put(ui, "caption_layout_lines", captionScroll.layoutLines(captionText));
+    Wire.put(ui, "caption_visible_line_limit", captionScroll.lineLimit());
     Wire.put(
         ui, "caption_window_height", captionScroll.getHeight() - captionScroll.getPaddingBottom());
     Wire.put(ui, "caption_current_line", lastCaptionLine);

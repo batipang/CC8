@@ -1,5 +1,17 @@
 # 当前 CC8 部署与验收范围
 
+## 0.16.27／code139 当前运行：首次口型更新后的自动回退
+
+实际运行源码`dd8399d82c46b20bbfbc9e68155372f66ac7202b`，后台0.16.27／助手0.9.102 code139，APK SHA-256 `1cb79a63df5b159f8cdd3b576b1e6e0bd2f7413ef86762ff092fe962010b705b`。这是已部署136行为的原签名更高版本号恢复包，仅release声明不同；保留工作流程及全部原数据。
+
+口型[PR478](https://github.com/batipang/CC8/pull/478)、[PR检查](https://github.com/batipang/CC8/actions/runs/42752645907)和[主分支检查](https://github.com/batipang/CC8/actions/runs/42753376628)各八项通过。主分支`847fbba`的原签名138包（SHA-256 `8bdea68a5ad1017c181068d2d87a6194808874bdd5309062c0eda1db096e7f1a`）实际安装后，维护脚本错误地要求待机短提示也必须有三行可见文字。实际提示只有两行，`caption_full_visible_lines=2`是正确内容计数，不能把它当作三行容量不足。未发现本批改变字幕布局；不是一次已确认的口型回归。
+
+该检查错误触发自动安装139及恢复后台源码，整个更新／回退97.784秒。系统安装回调、实际139摘要、同一恢复实例、原配置／完整ENV／Interactive策略／八类存储／组件及原厂后台均经独立进程核对，麦克风、相机和播放关闭，无生产语音／模型请求。实际记录是`device-access/private/deployments/01628-avatar-motion-grouped/deployment-948e88a4.json`和`independent-recovery-audit.json`。这是实际发生并已核对的前向版本回退；不外推为其他固件、迁移或全部P1-09验收通过。
+
+下一候选0.16.29／code140保留口型实现，补实际文本行数／配置上限诊断及受控布局回归，待受保护CI和修正后的维护检查后重新交付。真实说话、视觉自然度与热量／性能仍在最终验收队列，72小时仍最后。
+
+以下保留各版本当时的交付状态，旧段落的“当前／候选”以该节发生时为准。
+
 ## 0.16.27／code136 已部署：命名工作流程
 
 当前后台0.16.27，原签名助手0.9.99 code136；主分支源码`1f56ca864cdcf5bfce61e6e5fe5b84f491309c43`，tree `ef1be6d2ccb42f4c3b66c3189e44bc0d283bd5b2`。实际安装的主分支APK SHA-256为`1854a66cea2c01f5a123c3dbb9c367a2b4366a951d74f6c41147f8d5e4b87221`，开发分支APK不是安装摘要。[PR476](https://github.com/batipang/CC8/pull/476)、[精确PR检查](https://github.com/batipang/CC8/actions/runs/42747930250)与[主分支检查](https://github.com/batipang/CC8/actions/runs/42749570522)各八项全部通过。24项安装器、179项工具、76项Java检查及2476项后台检查通过（2472成功、4项私人音频明确未选）；567个Python文件／24个严格类型根及原签名Android构建／lint通过。
