@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "dialog-type-156-20261110.1",
+  "release_id": "source-page-recovery-159-20261110.1",
   "backend": {
     "version": "0.16.31"
   },
   "assistant": {
-    "version": "0.9.119",
-    "version_code": 156,
+    "version": "0.9.122",
+    "version_code": 159,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {
