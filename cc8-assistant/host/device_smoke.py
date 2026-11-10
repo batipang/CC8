@@ -716,12 +716,14 @@ def english_wake_input_coverage(before, after):
 
 
 def rpc(path, request, timeout=5):
-    # Workspace status is read-only. The test client cannot create tasks via IPC.
+    # This exact device status query is read-only. Other device_control actions
+    # and arbitrary tool/task requests remain outside the test client.
     allowed = (
         {'operation': 'health'},
         {'operation': 'diagnostics'},
         {'operation': 'workspace_status'},
         {'operation': 'transport_status'},
+        {'operation': 'device_control', 'arguments': {'action': 'status'}},
     )
     require(
         request in allowed

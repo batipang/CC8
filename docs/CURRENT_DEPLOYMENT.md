@@ -1,5 +1,13 @@
 # 当前 CC8 部署与验收范围
 
+## 0.16.32／code161 当前运行：版本入口维护检查触发恢复
+
+[PR490](https://github.com/batipang/CC8/pull/490) 已合入 `3aa433422e5d52e4134c5a2d30396f0bae52d73e`，精确 PR 提交及恢复 code161 各八项 CI 通过。code160 原签名包（SHA-256 `52c6a17d3b2a5496029e24bf40a68e5f78b2ebf38d5edccb0097686f5ec09a79`）安装、组合就绪和原有布局检查通过，随后维护脚本调用 `device_smoke.rpc` 查询只读 `device_control/status`，被该测试客户端白名单拒绝。请求尚未连接 IPC；这不是已证明的正式状态工具或版本页面故障。
+
+自动恢复已实际安装原功能 code161／助手 0.9.124（SHA-256 `dfa50c82fb205417d204f93242b3d6f3dcdc82c364be0c1dd55b5e38ed03ae4a`），后台 0.16.32，运行源码 `e0436565fa27ce9000cedb80fbc61eb21e4731c2`，保留已部署 code158 的全部行为。`device-access/private/deployments/01633-version-info160/deployment-7cea7009.json` 保存原失败与实际恢复，`independent-recovery-audit.json` 独立核对同一恢复实例、原配置／完整 ENV／Interactive／八类私有存储与组件、原后台状态及双端无采集。不能把 code160 记为已完成交付。
+
+下一候选 0.16.34／code162 为测试客户端增加唯一精确的只读状态查询，实际 Unix socket 回归覆盖接受和其他设备动作／额外字段的拒绝。相同版本界面使用更高 APK 版本号交付，不降级安装。更新、实机状态工具／版本页和独立审计仍须分别通过；完整 P0／P1 及 72 小时验收保持原范围和顺序。
+
 ## 0.16.32／code158 已部署：原文读取与来源详情
 
 主分支与运行源码均为 `d9112661d0495497613a86dc99e427f917518e12`，后台 0.16.32／原签名助手 0.9.121 code158，实际 APK SHA-256 `08f45049d564d1fb4cde190eee0c8f4dfe1444a9dae88463842822f9768afa74`。[PR489](https://github.com/batipang/CC8/pull/489)、[精确 PR 检查](https://github.com/batipang/CC8/actions/runs/42811762823)及主分支检查八项通过；两平台各 2626 项后台检查（4 项私人音频明确未选）、24 项安装器、180 项工具和 76 项 Java 检查通过。首轮 CI 在全部断言通过后触及外层 300 秒限制，原失败保留；后台套件外层预算改为 480 秒，其他子套件保持 300 秒。
