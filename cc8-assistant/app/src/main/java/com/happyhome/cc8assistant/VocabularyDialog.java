@@ -239,12 +239,12 @@ final class VocabularyDialog {
     form.setPadding(24, 16, 24, 16);
     form.setFocusableInTouchMode(true);
     EditText term = new EditText(activity);
-    term.setTextSize(22);
+    term.setTextSize(26);
     term.setHint("正确词语，例如常州");
     term.setSingleLine(true);
     term.setFilters(new InputFilter[] {new InputFilter.LengthFilter(80)});
     EditText aliases = new EditText(activity);
-    aliases.setTextSize(22);
+    aliases.setTextSize(26);
     aliases.setHint("常见误听写法，一行一个，最多4个；可留空");
     aliases.setMinLines(4);
     aliases.setFilters(new InputFilter[] {new InputFilter.LengthFilter(324)});

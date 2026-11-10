@@ -7,27 +7,39 @@
         <item name="android:statusBarColor">#050D16</item>
         <item name="android:windowActionModeOverlay">true</item>
         <item name="android:alertDialogTheme">@style/AssistantDialogTheme</item>
+        <item name="android:datePickerDialogTheme">@style/AssistantDialogTheme</item>
+        <item name="android:timePickerDialogTheme">@style/AssistantDialogTheme</item>
     </style>
     <style name="AssistantDialogTheme" parent="android:style/Theme.Material.Dialog.Alert">
         <item name="android:colorAccent">#43E0FC</item>
-        <item name="android:textSize">21sp</item>
+        <item name="android:textSize">26sp</item>
+        <item name="android:windowMinWidthMajor">88%</item>
+        <item name="android:windowMinWidthMinor">92%</item>
         <item name="android:textAppearanceLarge">@style/AssistantDialogLarge</item>
         <item name="android:textAppearanceMedium">@style/AssistantDialogBody</item>
         <item name="android:textAppearanceSmall">@style/AssistantDialogSmall</item>
         <item name="android:textAppearanceListItem">@style/AssistantDialogBody</item>
         <item name="android:textAppearanceListItemSmall">@style/AssistantDialogBody</item>
         <item name="android:textAppearanceButton">@style/AssistantDialogButton</item>
+        <item name="android:buttonBarButtonStyle">@style/AssistantDialogAction</item>
     </style>
     <style name="AssistantDialogLarge" parent="android:style/TextAppearance.Material.Title">
-        <item name="android:textSize">24sp</item>
+        <item name="android:textSize">28sp</item>
     </style>
     <style name="AssistantDialogBody" parent="android:style/TextAppearance.Material.Body1">
-        <item name="android:textSize">22sp</item>
+        <item name="android:textSize">26sp</item>
     </style>
     <style name="AssistantDialogSmall" parent="android:style/TextAppearance.Material.Body1">
-        <item name="android:textSize">20sp</item>
+        <item name="android:textSize">24sp</item>
     </style>
     <style name="AssistantDialogButton" parent="android:style/TextAppearance.Material.Button">
-        <item name="android:textSize">21sp</item>
+        <item name="android:textSize">24sp</item>
+    </style>
+    <style name="AssistantDialogAction" parent="android:style/Widget.Material.Button.Borderless">
+        <item name="android:textSize">24sp</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:singleLine">false</item>
+        <item name="android:maxLines">2</item>
+        <item name="android:minHeight">52dp</item>
     </style>
 </resources>

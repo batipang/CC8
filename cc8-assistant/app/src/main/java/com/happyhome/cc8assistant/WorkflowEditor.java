@@ -113,7 +113,7 @@ final class WorkflowEditor {
     EditText field = new EditText(activity);
     field.setText(text);
     field.setHint(hint);
-    field.setTextSize(24);
+    field.setTextSize(26);
     field.setFilters(new InputFilter[] {new InputFilter.LengthFilter(maximum)});
     return field;
   }
@@ -261,14 +261,12 @@ final class WorkflowEditor {
     if (report) {
       period.setAdapter(
           new ArrayAdapter<String>(
-              activity,
-              android.R.layout.simple_spinner_dropdown_item,
-              new String[] {"过去半小时", "过去两小时", "今天"}));
+              activity, R.layout.dialog_spinner_item, new String[] {"过去半小时", "过去两小时", "今天"}));
       for (int i = 0; i < periods.length; i++)
         if (periods[i].equals(step.optString("period"))) period.setSelection(i);
       box.addView(period);
       TextView source = new TextView(activity);
-      source.setTextSize(24);
+      source.setTextSize(26);
       JSONObject metadata = step.optJSONObject("source");
       source.setText(
           metadata == null

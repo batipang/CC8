@@ -83,7 +83,7 @@ final class ResultDetailsDialog {
       }
     TextView text = new TextView(activity);
     text.setText(body.toString());
-    text.setTextSize(22);
+    text.setTextSize(26);
     text.setTextIsSelectable(true);
     text.setPadding(24, 18, 24, 18);
     LinearLayout content = new LinearLayout(activity);
@@ -92,6 +92,7 @@ final class ResultDetailsDialog {
     if (files != null && files.length() > 0 && session.supportsResultProvenance()) {
       Button locate = new Button(activity);
       locate.setText("在 Mac 定位文件");
+      locate.setTextSize(24);
       locate.setOnClickListener(v -> chooseFile(record.optString("id"), files, saved, route));
       content.addView(locate);
     }

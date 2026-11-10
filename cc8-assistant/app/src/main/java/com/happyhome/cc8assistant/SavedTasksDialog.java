@@ -166,7 +166,7 @@ final class SavedTasksDialog {
     body.append("\n\n结果摘录：\n").append(item.optString("result"));
     TextView detail = new TextView(activity);
     detail.setText(body.toString());
-    detail.setTextSize(22);
+    detail.setTextSize(26);
     detail.setTextIsSelectable(true);
     detail.setPadding(24, 18, 24, 18);
     LinearLayout content = new LinearLayout(activity);
@@ -175,6 +175,7 @@ final class SavedTasksDialog {
     if (item.optJSONObject("provenance") != null) {
       Button source = new Button(activity);
       source.setText("来源与文件");
+      source.setTextSize(24);
       source.setOnClickListener(v -> resultDetails.open(item, true, route));
       content.addView(source);
     }

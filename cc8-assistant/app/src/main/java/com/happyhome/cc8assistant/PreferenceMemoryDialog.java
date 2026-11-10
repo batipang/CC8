@@ -210,12 +210,12 @@ final class PreferenceMemoryDialog {
     form.setOrientation(LinearLayout.VERTICAL);
     form.setPadding(24, 16, 24, 16);
     EditText key = new EditText(activity);
-    key.setTextSize(22);
+    key.setTextSize(26);
     key.setHint("偏好名称，例如称呼");
     key.setSingleLine(true);
     key.setFilters(new InputFilter[] {new InputFilter.LengthFilter(40)});
     EditText value = new EditText(activity);
-    value.setTextSize(22);
+    value.setTextSize(26);
     value.setHint("内容，例如老王；开启后会提供给模型");
     value.setMinLines(2);
     value.setFilters(new InputFilter[] {new InputFilter.LengthFilter(200)});
