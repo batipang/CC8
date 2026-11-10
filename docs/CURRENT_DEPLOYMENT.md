@@ -1,5 +1,17 @@
 # 当前 CC8 部署与验收范围
 
+## 0.16.24／code134 已部署：定时原答复摘要与最近结果
+
+后台0.16.24／原签名助手0.9.97 code134已组合部署，源码`b18393f0cc0a7381851248746d6fcb2a537531d2`，tree`471fdf89f761e35c55695d2a1cd01f926dfbfff0`。实际main APK SHA-256 `0db97578c1ad37794ffc7a860bb899358ce57fb64f8781b6e0ab5dd806468b73`；功能分支APK `5e6ef5e3…`不是安装摘要。[PR473](https://github.com/batipang/CC8/pull/473)、[主分支八项CI](https://github.com/batipang/CC8/actions/runs/42718572753)、[原行为恢复135八项CI](https://github.com/batipang/CC8/actions/runs/42717639459)全部通过。恢复135保留此前实际0.16.23行为，只改版本声明，未安装。
+
+十步维护52.858秒，两项正式默认关闭／页面释放检查63.881秒，六阶段含独立复核共182.050秒。此组没有失败或重跑；上一0.16.23的误拦截原失败仍保留。未启用定时提示、读取实际聊天、发系统通知、开麦或拍照。摘要和最近结果的正向流程由实际后台及编译后的原生方法回归覆盖；真实来源／通知授权仍单列最终环境验收。
+
+最终独立复核确认同一新实例、原配置／完整ENV／实际Interactive策略、Dot／MiniMax分工、签名与检测器、通知和窗口组件、六类既有私有存储及新提示文件缺失状态保持。双端麦克风、相机、播放和校准关闭，零新增正式模型／ASR请求；恢复原厂后台，没有强制休眠。证据保留于忽略的`device-access/private/deployments/01624-work-summary-grouped/`。最终72小时未开始，继续最低优先级。
+
+共享Dot宿主的只读proxy重查仍无法初始化，daemon version退出1；自己的代理已关闭，原配置摘要保持，零新聊天／消息／模型回合。原聊天续办保持未实现；排队成功或CLI退出0不代替宿主执行证据。
+
+下一候选0.16.25仅改后台，提供[显式相机连接检查](CAMERA_ROUTE_CHECKS.md)，尚未部署；本批未启动真实镜头，也不关闭P0／P1整体或72小时验收。以下保留此前组合当时的记录。
+
 ## 0.16.23／code132 已部署：完整汇报分页与可选数量提示
 
 后台0.16.23／原签名助手0.9.95 code132已组合部署，源码`9aaf47dde4c8cd769132a991900739340670d801`，tree`60b844f07bf7e6876e9afcf74b4570844c0fb952`。实际主分支APK SHA-256为`569502bf58b487416ea1a41c79a9c972e9f38a4f1e762fc3d4cd50a4c22edda7`；功能分支APK的`0a883256…`不是本次安装摘要。[PR471](https://github.com/batipang/CC8/pull/471)／[PR472](https://github.com/batipang/CC8/pull/472)、[main八项CI](https://github.com/batipang/CC8/actions/runs/42711185178)及[原行为恢复133八项CI](https://github.com/batipang/CC8/actions/runs/42710635798)通过。恢复133保留此前实际0.16.21行为，仅改版本声明，未安装；中间130／恢复131也未安装。

@@ -289,9 +289,11 @@ class VisionController:
             or (event.get('nonce') and event.get('nonce') == self.nonce)
         )
 
-    def request_snapshot(self):
+    def request_snapshot(self, *, metadata_only=False):
         # Only the owner-local IPC route enters here. No model camera tool or
         # startup/reconnect path may manufacture this authorization.
+        if type(metadata_only) is not bool:
+            raise ValueError('Invalid snapshot mode')
         with self.hooks.lock:
             if (
                 not self.hooks.connected()
@@ -303,7 +305,9 @@ class VisionController:
                 raise RuntimeError('Camera unavailable or busy')
             generation = self.hooks.cancel_session('desktop_snapshot')
             capture = self.inbox.begin(generation, policy=self.image_policy)
-            job = DesktopSnapshot(generation, capture.ident, policy=capture.policy)
+            job = DesktopSnapshot(
+                generation, capture.ident, policy=capture.policy, metadata_only=metadata_only
+            )
             self.snapshot_job = job
             self.generation = generation
             self.nonce = capture.ident
@@ -332,7 +336,12 @@ class VisionController:
         try:
             if not current():
                 return
-            self.hooks.status('thinking', 'Dot 请求拍照 · 预览 5 秒后返回当前聊天')
+            self.hooks.status(
+                'thinking',
+                '相机连接检查 · 正在取景'
+                if job.metadata_only
+                else 'Dot 请求拍照 · 预览 5 秒后返回当前聊天',
+            )
             self.hooks.event(
                 'camera_capture',
                 generation=generation,

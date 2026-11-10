@@ -221,6 +221,7 @@ class DesktopSnapshot:
     image: bytes | None = None
     result: str = 'interrupted'
     error: str = ''
+    metadata_only: bool = False
 
 
 class CameraInbox:

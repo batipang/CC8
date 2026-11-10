@@ -361,8 +361,8 @@ class Bridge:
     def record_metric(self, name, value=None, *, increment=False):
         self.metrics[name] = self.metrics.get(name, 0) + 1 if increment else value
 
-    def request_snapshot(self):
-        return self.visual.request_snapshot()
+    def request_snapshot(self, *, metadata_only=False):
+        return self.visual.request_snapshot(metadata_only=metadata_only)
 
     def cancel_snapshot(self, job):
         return self.visual.cancel_snapshot(job)

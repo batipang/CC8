@@ -121,6 +121,8 @@ class AnnouncementServer:
                         result = self.bridge.transport_hub.suppress_all_for_test()
                     elif request.get('operation') == 'camera_snapshot':
                         result = self.snapshot(connection, request)
+                    elif request.get('operation') == 'camera_route_interrupt':
+                        result = self.camera_route_interrupt(request)
                     elif request.get('operation') == 'playback_probe':
                         result = self.playback_probe(connection, request)
                     elif request.get('operation') in (
@@ -235,17 +237,57 @@ class AnnouncementServer:
         ident = request.get('request_id')
         if not isinstance(ident, str) or not re.fullmatch('[a-f0-9]{32}', ident):
             raise ValueError('Invalid request ID')
-        job = self.bridge.request_snapshot()
+        fields = {'operation', 'request_id'}
+        metadata_only = 'metadata_only' in request
+        if metadata_only:
+            fields |= {'metadata_only', 'expected_instance', 'expected_generation'}
+        if (
+            set(request) != fields
+            or request.get('operation') != 'camera_snapshot'
+            or metadata_only
+            and request['metadata_only'] is not True
+            or metadata_only
+            and (
+                not isinstance(request.get('expected_instance'), str)
+                or not re.fullmatch('[a-f0-9]{32}', request['expected_instance'])
+                or type(request.get('expected_generation')) is not int
+                or request['expected_generation'] < 0
+            )
+        ):
+            raise ValueError('Invalid camera request fields')
+        scope = {'metadata_only': True} if metadata_only else {}
+        if metadata_only:
+            # Fence the actual side effect on the server, not only an earlier
+            # health read: a restarted backend/new owner must never open a lens.
+            with self.bridge.guard:
+                health = self.bridge.health()
+                if (
+                    health.get('runtime_instance') != request['expected_instance']
+                    or self.bridge.generation != request['expected_generation']
+                    or any(
+                        health.get(key) is not False
+                        for key in (
+                            'microphone_active',
+                            'playing',
+                            'calibrating',
+                            'text_request_active',
+                        )
+                    )
+                ):
+                    raise RuntimeError('Camera probe context changed')
+                job = self.bridge.request_snapshot(metadata_only=True)
+        else:
+            job = self.bridge.request_snapshot()
         try:
             deadline = time.monotonic() + 25
             while not job.done.wait(0.05):
                 # Closing the calling chat's client must cancel an unfinished photo.
                 if select.select([connection], [], [], 0)[0]:
                     self.bridge.cancel_snapshot(job)
-                    return {'status': 'interrupted', 'request_id': ident}
+                    return {'status': 'interrupted', 'request_id': ident, **scope}
                 if time.monotonic() > deadline:
                     self.bridge.cancel_snapshot(job)
-                    return {'status': 'timeout', 'request_id': ident}
+                    return {'status': 'timeout', 'request_id': ident, **scope}
             with self.bridge.guard:
                 if (
                     job.result != 'completed'
@@ -256,10 +298,11 @@ class AnnouncementServer:
                         'status': job.result if job.result != 'completed' else 'interrupted',
                         'request_id': ident,
                         'reason': job.error or 'capture_interrupted',
+                        **scope,
                     }
                 image = job.image
                 width, height = jpeg_dimensions(image, policy=job.policy)
-                return {
+                result = {
                     'status': 'completed',
                     'request_id': ident,
                     'media_type': 'image/jpeg',
@@ -268,12 +311,56 @@ class AnnouncementServer:
                     'height': height,
                     'bytes': len(image),
                     'sha256': hashlib.sha256(image).hexdigest(),
-                    'image_base64': base64.b64encode(image).decode('ascii'),
+                    **scope,
                 }
+                if not metadata_only:
+                    result['image_base64'] = base64.b64encode(image).decode('ascii')
+                return result
         finally:
             if not job.done.is_set():
                 self.bridge.cancel_snapshot(job)
             job.image = None
+
+    def camera_route_interrupt(self, request):
+        if (
+            set(request) != {'operation', 'expected_instance', 'expected_generation', 'route'}
+            or request.get('operation') != 'camera_route_interrupt'
+            or request.get('route') not in ('wifi_handover', 'all_routes_lost')
+            or type(request.get('expected_generation')) is not int
+            or request['expected_generation'] < 0
+            or not isinstance(request.get('expected_instance'), str)
+            or not re.fullmatch('[a-f0-9]{32}', request['expected_instance'])
+        ):
+            raise ValueError('Invalid camera route interruption')
+        # Recheck at the actual route side effect. A user can start a new
+        # conversation or cancel the preview after the tool's health read.
+        with self.bridge.guard:
+            health = self.bridge.health()
+            job = self.bridge.visual.snapshot_job
+            if (
+                health.get('runtime_instance') != request['expected_instance']
+                or self.bridge.generation != request['expected_generation']
+                or job is None
+                or not job.metadata_only
+                or job.generation != request['expected_generation']
+                or job.done.is_set()
+                or any(
+                    health.get(key) is not False
+                    for key in (
+                        'microphone_active',
+                        'playing',
+                        'calibrating',
+                        'text_request_active',
+                    )
+                )
+            ):
+                raise RuntimeError('Camera route context changed')
+            hub = self.bridge.transport_hub
+            return (
+                hub.suppress_usb_for_test(12)
+                if request['route'] == 'wifi_handover'
+                else hub.suppress_all_for_test()
+            )
 
     def playback_probe(self, connection, request):
         if request != {'operation': 'playback_probe'}:

@@ -76,6 +76,8 @@ class StatusReporter:
 
     def health(self):
         state = self.hooks.session()
+        visual = self.hooks.visual()
+        snapshot = visual.snapshot_job
         playback = self.hooks.playback()
         endpoint = self.hooks.capture().endpoint
         environment = endpoint.near_speech.environment
@@ -145,6 +147,13 @@ class StatusReporter:
             # and capture leases. Reading it never arms or advances a request.
             'session_generation': state.generation,
             'text_request_active': state.text_request_active,
+            # Content-free observation of an explicitly requested visible
+            # camera check. Reading health never creates a snapshot.
+            'camera_metadata_only_supported': True,
+            'desktop_snapshot_active': snapshot is not None,
+            'desktop_snapshot_generation': (snapshot.generation if snapshot is not None else None),
+            'vision_active': visual.generation is not None,
+            'desktop_snapshots_captured': metrics.get('desktop_snapshots_captured', 0),
             # Ephemeral request/capture ownership, never a device identifier.
             # Test observers may wait across local VAD candidates only while
             # this generation stays current; Stop/rebind/new capture change it.
