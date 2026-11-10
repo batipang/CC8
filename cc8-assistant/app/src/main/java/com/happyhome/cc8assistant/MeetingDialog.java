@@ -210,6 +210,7 @@ final class MeetingDialog {
   private Button button(LinearLayout parent, String title, Runnable click) {
     final long owner = epoch;
     Button value = new Button(activity);
+    value.setAllCaps(false);
     value.setText(title);
     value.setTextSize(24);
     value.setOnClickListener(

@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "meeting-isolation-ui-152-20261110.1",
+  "release_id": "meeting-labels-154-20261110.1",
   "backend": {
     "version": "0.16.31"
   },
   "assistant": {
-    "version": "0.9.115",
-    "version_code": 152,
+    "version": "0.9.117",
+    "version_code": 154,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {
