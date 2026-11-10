@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "meeting-stable-151-20261110.1",
+  "release_id": "meeting-ui-wrapper-153-20261110.1",
   "backend": {
     "version": "0.16.29"
   },
   "assistant": {
-    "version": "0.9.114",
-    "version_code": 151,
+    "version": "0.9.116",
+    "version_code": 153,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {
