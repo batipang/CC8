@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from wake_controller import WAITING
 from route_output import same_route
 from window_input import available as window_available
+from runtime_versions import public_release
 
 if TYPE_CHECKING:
     from session_controller import SessionController
@@ -60,6 +61,7 @@ def complete_handshake(session: SessionController, j):
         message = '大黄蜂已就绪 · 点击开始语音'
     hooks.event(
         'hello',
+        release_info=public_release(),
         message=message,
         transport=session.transport_kind,
         capture_frontend=frontend,

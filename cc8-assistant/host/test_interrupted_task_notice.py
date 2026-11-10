@@ -88,6 +88,7 @@ class ActivityCheck {
  JSONArray reminderHistoryData=new JSONArray();
  boolean reminderChannelsSupported;
  long workspaceRevision=-1,workspaceRoute=0;boolean linked=true,taskResultUnconfirmed;
+ Object peerRelease;
  String brainProvider="dot";
  int taskActions;
  void runOnUiThread(Runnable work){work.run();}
