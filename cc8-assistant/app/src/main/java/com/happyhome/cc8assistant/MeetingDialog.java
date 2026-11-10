@@ -380,7 +380,7 @@ final class MeetingDialog {
         "capturing".equals(mode)
             ? (session.isMeetingCapturing() ? "会议录音中" : "正在准备会议录音")
             : "paused".equals(mode) ? "已暂停录音" : "ended".equals(mode) ? "会议已结束" : "尚未开始会议";
-    info.setText(
+    String message =
         label
             + " · "
             + seconds / 60
@@ -392,9 +392,9 @@ final class MeetingDialog {
             + " 段 · 缺口／未确认 "
             + state.optInt("gap_count")
             + " 段\n"
-            + (state.optString("reason").isEmpty() ? "原音不保存，转写文字请核对。" : "存在中断或未确认内容，请核对文字。"));
-    if (session.meetingMediaBlocked()) info.setText("麦克风释放未确认。请关闭并重启助手后再录音；已有会议文字仍可查看。 ");
-    start.setText("paused".equals(mode) ? "继续录音" : "开始会议");
+            + (state.optString("reason").isEmpty() ? "原音不保存，转写文字请核对。" : "存在中断或未确认内容，请核对文字。");
+    if (session.meetingMediaBlocked()) message = "麦克风释放未确认。请关闭并重启助手后再录音；已有会议文字仍可查看。 ";
+    showText(start, "paused".equals(mode) ? "继续录音" : "开始会议");
     start.setEnabled(!session.meetingMediaBlocked() && (!exists || "paused".equals(mode)));
     pause.setEnabled("capturing".equals(mode));
     end.setEnabled("capturing".equals(mode) || "paused".equals(mode));
@@ -415,9 +415,8 @@ final class MeetingDialog {
     JSONArray results = state.optJSONArray("analyses");
     analysisResults.setEnabled(results != null && results.length() > 0);
     if (job != null)
-      info.setText(
-          info.getText()
-              + "\nDot 文字处理："
+      message +=
+          "\nDot 文字处理："
               + (busy
                   ? "正在处理，可取消"
                   : "completed".equals(progress)
@@ -425,7 +424,13 @@ final class MeetingDialog {
                       : "failed".equals(progress)
                           ? job.optString("message", "未取得完整结果，未保存部分生成内容")
                           : "已取消")
-              + "\n仅处理文字，不自动执行会议待办。");
+              + "\n仅处理文字，不自动执行会议待办。";
+    showText(info, message);
+  }
+
+  private static void showText(TextView view, String value) {
+    // Repeated identical status polls must not keep accessibility and layout busy.
+    if (!value.contentEquals(view.getText())) view.setText(value);
   }
 
   private void requestAnalysis(String kind, String language) {
