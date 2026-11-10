@@ -145,7 +145,36 @@ class PageReaderTests(unittest.TestCase):
             (response(b'<script>hidden</script>'), 'no_readable_text'),
         ]:
             self.rows = [row]
-            self.assertEqual(self.read()['error'], code)
+            result = self.read()
+            self.assertEqual(result['error'], code)
+            self.assertEqual(result['http_status'], 404 if code == 'http_error' else 200)
+            self.assertNotIn('text', result)
+
+    def test_invalid_status_and_redirect_failures_cannot_claim_a_terminal_response(self):
+        for code in ('0200', '999', '99', '20.0'):
+            self.rows = [(b'ignored', ('HTTP/1.1 ' + code + ' Error\r\n\r\n').encode())]
+            result = self.read()
+            self.assertEqual(result['error'], 'invalid_headers')
+            self.assertNotIn('http_status', result)
+        self.rows = [response(status=302, Location='/next')]
+
+        def next_or_timeout(*args):
+            if self.rows:
+                return self.rows.pop(0)
+            raise PageError('timeout')
+
+        self.request = next_or_timeout
+        result = self.read()
+        self.assertEqual(result['error'], 'timeout')
+        self.assertNotIn('http_status', result)
+
+    def test_nonpublic_internal_error_text_is_not_returned(self):
+        def fail(*args):
+            raise PageError('/private/owner/credential-secret')
+
+        result = read_page('https://example.com', resolve=fail)
+        self.assertEqual(result['error'], 'read_failed')
+        self.assertNotIn('credential-secret', str(result))
 
     def test_oversized_body_is_not_promoted_to_a_partial_success(self):
         self.rows = [response(b'a' * (MAX_BYTES + 1))]

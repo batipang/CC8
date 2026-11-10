@@ -6,6 +6,7 @@ independent proof that a cited claim or the page body was verified.
 """
 
 from web_search import now, public_url
+from source_page import FAILURE_CODES, MAX_TEXT, visible_text
 import threading
 import json
 
@@ -33,10 +34,11 @@ class WebEvidence:
                 final = public_url(receipt.get('final_url'))
                 if (
                     not isinstance(text, str)
-                    or not 1 <= len(text) <= 20000
+                    or not 1 <= len(text) <= MAX_TEXT
                     or type(size) is not int
                     or not 1 <= size <= 1048576
                     or final is None
+                    or type(receipt.get('http_status')) is not int
                     or receipt.get('http_status') != 200
                     or receipt.get('facts_verified') is not False
                     or receipt.get('untrusted_page') is not True
@@ -45,15 +47,31 @@ class WebEvidence:
                     or any(not isinstance(v, str) or len(v) > 64 for v in dates)
                 ):
                     return
+                normalized = visible_text(text)
+                if not normalized:
+                    return
+                truncated = receipt.get('text_truncated')
+                if type(truncated) is not bool or (truncated and len(text) != MAX_TEXT):
+                    truncated = None
                 row.update(
                     ok=True,
                     final_url=final,
-                    excerpt=' '.join(text.split())[:2000],
+                    excerpt=normalized[:2000],
+                    text_chars=len(text),
+                    text_truncated=truncated,
                     dates='；'.join(' '.join(v.split()) for v in dates),
                     size=size,
                 )
             elif receipt.get('ok') is not False:
                 return
+            else:
+                error, status = receipt.get('error'), receipt.get('http_status')
+                row['error_code'] = (
+                    error if isinstance(error, str) and error in FAILURE_CODES else ''
+                )
+                row['http_status'] = (
+                    status if type(status) is int and 100 <= status <= 599 else None
+                )
             self.pages.append(row)
 
     def completed(self, item):
@@ -131,6 +149,10 @@ class WebEvidence:
                     page_dates=read.get('dates', ''),
                     page_bytes=read.get('size', 0),
                     final_url=read.get('final_url', ''),
+                    page_text_chars=read.get('text_chars'),
+                    page_text_truncated=read.get('text_truncated'),
+                    page_error_code=read.get('error_code', ''),
+                    page_http_status=200 if read['ok'] else read.get('http_status'),
                 )
             if len(result) == 6:
                 break

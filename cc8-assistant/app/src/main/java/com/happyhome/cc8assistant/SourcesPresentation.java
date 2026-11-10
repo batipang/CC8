@@ -10,6 +10,9 @@ final class SourcesPresentation {
   static final class Source {
     final String title, url, evidence, observedAt, publishedAt, pageExcerpt, pageDates, finalUrl;
     final boolean pageRead, detailLimited, listLimited;
+    final int pageBytes, textChars, shownChars, httpStatus;
+    final Boolean textTruncated;
+    final String errorCode;
 
     Source(JSONObject row) {
       title = text(row.opt("title"), 160);
@@ -22,14 +25,19 @@ final class SourcesPresentation {
       pageDates = text(row.opt("page_dates"), 1088);
       String target = text(row.opt("final_url"), 2048);
       finalUrl = safeUrl(target) ? target : "";
-      Object bytes = row.opt("page_bytes");
-      pageRead =
-          "page_body_received".equals(evidence)
-              && !observedAt.isEmpty()
-              && bytes instanceof Number
-              && ((Number) bytes).doubleValue() == ((Number) bytes).intValue()
-              && ((Number) bytes).intValue() > 0
-              && ((Number) bytes).intValue() <= 1048576;
+      int bytes = integer(row.opt("page_bytes"), 1048576);
+      pageRead = "page_body_received".equals(evidence) && !observedAt.isEmpty() && bytes > 0;
+      pageBytes = pageRead ? bytes : 0;
+      textChars = integer(row.opt("page_text_chars"), 20000);
+      shownChars = pageExcerpt.codePointCount(0, pageExcerpt.length());
+      Object truncated = row.opt("page_text_truncated");
+      textTruncated =
+          pageRead && textChars >= shownChars && textChars > 0 && truncated instanceof Boolean
+              ? (Boolean) truncated
+              : null;
+      int status = integer(row.opt("page_http_status"), 599);
+      httpStatus = status >= 100 ? status : 0;
+      errorCode = text(row.opt("page_error_code"), 40);
       detailLimited = Boolean.TRUE.equals(row.opt("page_details_limited"));
       listLimited = Boolean.TRUE.equals(row.opt("list_limited"));
     }
@@ -52,6 +60,29 @@ final class SourcesPresentation {
       return title + "\n" + URI.create(url).getHost() + " · " + access();
     }
 
+    private String failureDetails() {
+      if (!"page_fetch_failed".equals(evidence)) return "";
+      return "\n读取原因："
+          + failureReason(errorCode)
+          + "\nHTTP 响应："
+          + (httpStatus == 0 ? "未取得可核对状态" : Integer.toString(httpStatus))
+          + "；未取得可用正文。";
+    }
+
+    private String coverageDetails() {
+      String size = "\n接收页面数据：" + pageBytes + " 字节";
+      if (textChars > 0 && shownChars <= textChars) {
+        size += "\n本次保留文字：" + textChars + " 字符；当前摘录：" + shownChars + " 字符";
+        if (shownChars < textChars) size += "\n其余已保留文字未在本页展示。";
+      } else size += "\n文字数量：未提供可核对记录";
+      if (Boolean.TRUE.equals(textTruncated)) {
+        size += "\n页面文字超过单次读取上限，仅保留前段；后文未核对。";
+      } else if (Boolean.FALSE.equals(textTruncated)) {
+        size += "\n读取器未因文字上限截断；仍需核对页面解析和事实。";
+      } else size += "\n读取器截断状态：未提供。";
+      return size;
+    }
+
     String label() {
       return title
           + "\n"
@@ -59,11 +90,13 @@ final class SourcesPresentation {
           + " · "
           + access()
           + (observedAt.isEmpty() ? "" : "\n操作记录：" + observedAt.replace('T', ' '))
+          + failureDetails()
           + "\n来源标注日期："
           + (publishedAt.isEmpty() ? "未知" : publishedAt)
           + "；事件日期未知"
           + (pageRead
-              ? "\n页面日期标注："
+              ? coverageDetails()
+                  + "\n页面日期标注："
                   + (pageDates.isEmpty() ? "未提供或未展示" : pageDates)
                   + "\n这是页面自述，不是事件日期的核实结果。"
                   + (finalUrl.isEmpty() || finalUrl.equals(url) ? "" : "\n读取的最终地址：" + finalUrl)
@@ -118,6 +151,55 @@ final class SourcesPresentation {
     if (text.length() > max) return "";
     for (int i = 0; i < text.length(); i++) if (Character.isISOControl(text.charAt(i))) return "";
     return text;
+  }
+
+  private static int integer(Object raw, int max) {
+    if (!(raw instanceof Integer) && !(raw instanceof Long)) return 0;
+    long value = ((Number) raw).longValue();
+    return value > 0 && value <= max ? (int) value : 0;
+  }
+
+  private static String failureReason(String code) {
+    switch (code) {
+      case "read_failed":
+        return "本次页面读取未完成";
+      case "timeout":
+        return "读取超过本次等待时间";
+      case "network_failed":
+        return "网络连接或传输未完成";
+      case "dns_busy":
+        return "本机域名解析任务繁忙，本次未读取";
+      case "dns_failed":
+        return "来源域名解析失败";
+      case "non_public_address":
+        return "来源解析到不允许读取的地址";
+      case "page_too_large":
+        return "页面数据超过单次读取上限";
+      case "invalid_headers":
+      case "ambiguous_headers":
+        return "来源响应头无法可靠解析";
+      case "http_error":
+        return "来源服务器未返回可读取页面";
+      case "unsupported_content_type":
+        return "当前不支持此页面格式";
+      case "unsupported_content_encoding":
+        return "当前不支持此响应压缩方式";
+      case "unsupported_encoding":
+        return "页面不是可解码的 UTF-8 文字";
+      case "no_readable_text":
+        return "页面中未提取到可读文字";
+      case "redirect_loop":
+      case "redirect_limit":
+        return "来源跳转重复或超过本次上限";
+      case "invalid_url":
+      case "invalid_redirect":
+      case "insecure_redirect":
+        return "来源地址或跳转不符合读取条件";
+      case "cancelled":
+        return "本次读取已取消";
+      default:
+        return "未提供可核对的原因";
+    }
   }
 
   static boolean safeUrl(String value) {

@@ -22,6 +22,30 @@ MAX_BYTES = 1024 * 1024
 MAX_HEADERS = 32 * 1024
 MAX_TEXT = 20000
 DNS_SLOTS = threading.BoundedSemaphore(2)
+FAILURE_CODES = frozenset(
+    {
+        'non_public_address',
+        'dns_busy',
+        'dns_failed',
+        'cancelled',
+        'timeout',
+        'page_too_large',
+        'network_failed',
+        'read_failed',
+        'invalid_headers',
+        'ambiguous_headers',
+        'unsupported_content_type',
+        'unsupported_encoding',
+        'invalid_url',
+        'redirect_loop',
+        'redirect_limit',
+        'invalid_redirect',
+        'insecure_redirect',
+        'http_error',
+        'unsupported_content_encoding',
+        'no_readable_text',
+    }
+)
 
 
 def visible_text(value):
@@ -173,7 +197,11 @@ def headers(raw):
             continue
         lines = block.split('\r\n')
         status = lines[0].split()
-        if len(status) < 2 or not status[0].startswith('HTTP/') or not status[1].isdigit():
+        if (
+            len(status) < 2
+            or not status[0].startswith('HTTP/')
+            or re.fullmatch('[1-5][0-9]{2}', status[1]) is None
+        ):
             raise PageError('invalid_headers')
         code = int(status[1])
         if 100 <= code < 200:
@@ -297,6 +325,9 @@ def read_page(url, current=lambda: True, *, resolve=addresses, request=fetch, cl
             if code != 200:
                 result['http_status'] = code
                 raise PageError('http_error')
+            # A 200 response can still fail decoding/extraction. Keep only a
+            # terminal response status, never a prior redirect's status.
+            result['http_status'] = code
             if fields.get('content-encoding', 'identity').lower() != 'identity':
                 raise PageError('unsupported_content_encoding')
             title, text, dates = extract(body, fields.get('content-type', ''))
@@ -320,7 +351,8 @@ def read_page(url, current=lambda: True, *, resolve=addresses, request=fetch, cl
             )
         raise PageError('redirect_limit')
     except PageError as error:
-        result['error'] = str(error)
+        code = str(error)
+        result['error'] = code if code in FAILURE_CODES else 'read_failed'
     except (OSError, ValueError, subprocess.SubprocessError):
         result['error'] = 'network_failed'
     result['observed_at'] = clock()
