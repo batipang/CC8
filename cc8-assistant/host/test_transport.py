@@ -14,10 +14,10 @@ import threading
 import time
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from transport import Pairing, TransportHub, Channel, signature, private_ipv4
-from protocol import Packet, receive, decode_event, SPEAKER, RENDER, EVENT, MIC
+from transport import AuthenticationReader, Pairing, TransportHub, Channel, signature, private_ipv4
+from protocol import HEADER, Packet, receive, decode_event, SPEAKER, RENDER, EVENT, MIC
 from bridge import Bridge, usb_target
 from tools.java_toolchain import java_bin
 
@@ -31,6 +31,38 @@ class TransportTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.temp.cleanup()
+
+    def test_invalid_pairing_is_rejected_before_creating_certificate_material(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            config = root / 'pairing.json'
+            for payload in (b'null', b' ' * 4097):
+                with self.subTest(size=len(payload)):
+                    config.write_bytes(payload)
+                    config.chmod(0o600)
+                    with self.assertRaises(ValueError):
+                        Pairing(root)
+                    self.assertFalse((root / 'server.pem').exists())
+                    self.assertEqual(config.read_bytes(), payload)
+
+    def test_authentication_reads_share_the_original_deadline(self):
+        socket = Mock()
+        socket.recv.return_value = b'fixture'
+        with patch('transport.time.monotonic', side_effect=[10, 11, 13]):
+            reader = AuthenticationReader(socket, deadline=13)
+            reader.recv(7)
+            reader.recv(7)
+            with self.assertRaises(TimeoutError):
+                reader.recv(7)
+        self.assertEqual([c.args[0] for c in socket.settimeout.call_args_list], [3, 2])
+        self.assertEqual(socket.recv.call_count, 2)
+
+    def test_packet_limit_is_checked_before_reading_its_body(self):
+        source = Mock()
+        source.recv.return_value = (HEADER.size + 1025).to_bytes(4, 'big')
+        with self.assertRaisesRegex(ValueError, 'Invalid packet length'):
+            receive(source, max_packet=HEADER.size + 1024)
+        source.recv.assert_called_once_with(4)
 
     def hub(self, usb_present=lambda: False):
         def absent():

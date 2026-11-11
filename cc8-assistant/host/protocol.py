@@ -482,10 +482,10 @@ def read_exact(stream: PacketStream, count: int) -> bytes:
     return bytes(result)
 
 
-def receive(stream: PacketStream) -> Packet:
+def receive(stream: PacketStream, *, max_packet: int = MAX_PACKET) -> Packet:
     # 底层可能拆包，须读满声明长度并复用发送侧校验，不能把一次 recv 当作一包。
     size = struct.unpack('!I', read_exact(stream, 4))[0]
-    if size < HEADER.size or size > MAX_PACKET:
+    if size < HEADER.size or size > min(max_packet, MAX_PACKET):
         raise ValueError('Invalid packet length')
     payload = read_exact(stream, size)
     kind, generation, sequence, frame, nanos = HEADER.unpack(payload[: HEADER.size])

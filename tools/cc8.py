@@ -446,6 +446,8 @@ def run_runtime(args, root=ROOT):
 
 def main():
     if sys.argv[1:2] == ['verify-failure-ui']:
+        if not __package__:
+            sys.path.insert(0, str(ROOT))
         from tools.check_failure_ui import main as failure_ui_main
 
         return failure_ui_main(sys.argv[2:])

@@ -165,7 +165,7 @@ class VoiceTools:
             if not path.is_relative_to(ROOT) or not path.exists():
                 raise ValueError('Existing project path required')
             if any(
-                part.startswith('.') or part in ('private', 'signing')
+                part.startswith('.') or part.casefold() in ('private', 'signing')
                 for part in path.relative_to(ROOT).parts
             ):
                 raise ValueError('Private project path is not available')

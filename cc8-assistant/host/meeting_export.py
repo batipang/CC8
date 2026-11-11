@@ -193,7 +193,7 @@ class MeetingExports:
             for index, entry in enumerate(entries):
                 if index >= 64:
                     raise OSError('Meeting export directory scan exceeds budget')
-                if entry.name == LOCK:
+                if entry.name in (LOCK, '.DS_Store'):
                     continue
                 if not valid_name(entry.name):
                     unknown = True
@@ -229,9 +229,19 @@ class MeetingExports:
             before = os.fstat(fd)
             if before.st_uid != os.getuid() or stat.S_IMODE(before.st_mode) != 0o700:
                 raise OSError('Unsafe meeting export bundle')
-            names = []
+            names, ids = [], []
             with os.scandir(fd) as entries:
                 for entry in entries:
+                    if entry.name == '.DS_Store':
+                        info = entry.stat(follow_symlinks=False)
+                        if (
+                            not stat.S_ISREG(info.st_mode)
+                            or info.st_uid != os.getuid()
+                            or info.st_nlink != 1
+                        ):
+                            raise OSError('Unsafe Finder metadata')
+                        ids.append((entry.name, identity(info)))
+                        continue
                     if len(names) >= 2 or entry.name not in {
                         'meeting.txt',
                         'meeting.json',
@@ -239,7 +249,7 @@ class MeetingExports:
                     }:
                         raise OSError('Unexpected meeting export bundle entries')
                     names.append(entry.name)
-            raw, ids = {}, []
+            raw = {}
             for child in sorted(names):
                 raw[child], child_id = self._bytes(
                     fd, child, 4096 if child == 'receipt.json' else MAX_BYTES

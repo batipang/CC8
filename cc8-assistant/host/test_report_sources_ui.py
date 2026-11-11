@@ -300,7 +300,7 @@ class ReportSourcesUiTests(unittest.TestCase):
             'com/happyhome/cc8assistant/VoiceSession.java'
         ].replace(
             'boolean supportsVocabulary()',
-            'boolean supportsReportSources(){return true;}boolean archive=true,threadQueue=true,reportProgress=true;boolean supportsReportProgress(){return reportProgress;}boolean supportsThreadQueue(){return threadQueue;}boolean supportsReportArchive(){return archive;}void dotChatCancel(String id){}'
+            'boolean supportsReportSources(){return true;}boolean archive=true,threadQueue=true,reportProgress=true;boolean supportsReportProgress(){return reportProgress;}boolean supportsThreadQueue(){return threadQueue;}boolean supportsReportArchive(){return archive;}void dotChatCancel(String id,long route){}'
             'boolean reportSourcesRequest(String id,JSONObject args,long r){if(!currentRoute(r))return false;lastId=id;requests.add(args);return true;}'
             'boolean supportsVocabulary()',
         )

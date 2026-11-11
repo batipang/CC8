@@ -128,7 +128,7 @@ class PairedCapturePcmTests(unittest.TestCase):
                 name,
             ],
             text=True,
-            stderr=subprocess.STDOUT,
+            stderr=subprocess.PIPE,
             timeout=10,
         )
         self.assertEqual(output.strip(), 'PASS ' + name)

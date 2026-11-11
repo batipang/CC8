@@ -350,6 +350,8 @@ def backup(profile, source_root=ROOT):
     for name in ('credential_file', 'signing_keystore'):
         raw = settings[name]
         if raw is None:
+            if name != 'signing_keystore':
+                raise ValueError('Credential file is required')
             raw = 'cc8-diagnostics/signing/cc8-diagnostics-debug.jks'
         path = Path(raw).expanduser()
         settings[name] = str(path if path.is_absolute() else source_root / path)

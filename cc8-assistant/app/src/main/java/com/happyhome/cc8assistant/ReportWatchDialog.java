@@ -30,7 +30,7 @@ final class ReportWatchDialog {
   }
 
   void close() {
-    if (!pending.isEmpty() && session.currentRoute(route)) session.dotChatCancel(pending);
+    if (!pending.isEmpty()) session.dotChatCancel(pending, route);
     pending = "";
     pendingAction = pendingSnapshot = "";
     epoch++;

@@ -607,8 +607,15 @@ SCENARIOS = r"""
     JSONObject sent=old.events.get(count);
     yes("vision_request".equals(sent.optString("event"))&&"ocr".equals(sent.optString("mode"))&&sent.optString("nonce").matches("[a-f0-9]{32}"),"OCR mode/nonce lost");
     yes(!s.requestVision("ocr")&&!s.recording,"duplicate pending OCR or recording enabled");
+    String waiting=s.pendingVisionNonce;
+    s.deliver(new Wire.Packet(new JSONObject("event","vision_unavailable","nonce","f".repeat(32))),old);
+    yes(waiting.equals(s.pendingVisionNonce),"late rejection cleared another request");
+    s.deliver(new Wire.Packet(new JSONObject("event","vision_unavailable","nonce",waiting)),old);
+    yes(s.pendingVisionNonce.isEmpty()&&s.requestVision("ocr"),"current rejection did not release request");
     Link next=new Link("wifi");activate(c,next);
     yes(!s.visionModesSupported,"handover retained old OCR capability");
+    yes(s.pendingVisionNonce.isEmpty(),"handover kept old camera request pending");
+    s.visionModesSupported=true;yes(s.requestVision("ocr"),"old request blocked the new route");
     s.visionModesSupported=true;s.pause();yes(!s.visionModesSupported&&!s.requestVision("ocr"),"Home retained OCR");
     break;
    }
@@ -886,6 +893,7 @@ class WorkspaceRouteTests(unittest.TestCase):
                 'private boolean acceptSpeechCorrection(',
                 'boolean currentSpeechCorrection(',
                 'boolean currentSourcesPresentation(',
+                'boolean isVisual(',
             )
         ]
         camera_route_bound = 'private void sendCameraEvent(' in session
@@ -961,6 +969,8 @@ class WorkspaceRouteTests(unittest.TestCase):
             + branch(session, 'photo_followup_forget_rejected')
             + '}else if("vision_begin".equals(event)){'
             + branch(session, 'vision_begin')
+            + '}else if("vision_unavailable".equals(event)){'
+            + branch(session, 'vision_unavailable')
             + '}else if("web_sources".equals(event)){'
             + branch(session, 'web_sources')
             + '}' * (session[start:end].count('{') - session[start:end].count('}') + 2)

@@ -229,8 +229,16 @@ final class MeetingAnalysisDialog {
                 "复制完整结果",
                 (d, n) -> {
                   if (!port.current(owner) || child != d) return;
-                  ((ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE))
-                      .setPrimaryClip(ClipData.newPlainText("会议分析", complete));
+                  if (complete.length() > 240000) {
+                    port.toast("结果超出剪贴板容量，请使用会议导出。");
+                    return;
+                  }
+                  try {
+                    ((ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE))
+                        .setPrimaryClip(ClipData.newPlainText("会议分析", complete));
+                  } catch (RuntimeException failure) {
+                    port.toast("剪贴板不可用，请使用会议导出。");
+                  }
                 })
             .create();
     Runnable render =

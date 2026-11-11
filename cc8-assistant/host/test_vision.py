@@ -267,6 +267,7 @@ class BridgeVisionTests(unittest.TestCase):
         b.on_event({'event': 'vision_request', 'nonce': 'a' * 32})
         self.assertFalse(hasattr(b, 'job'))
         self.assertEqual(b.events[-1][0], 'vision_unavailable')
+        self.assertEqual(b.events[-1][1]['nonce'], 'a' * 32)
         b.calibration.active = False
         b.on_event({'event': 'vision_request', 'nonce': 'bad'})
         self.assertFalse(hasattr(b, 'job'))

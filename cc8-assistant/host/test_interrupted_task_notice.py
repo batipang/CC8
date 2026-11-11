@@ -32,6 +32,7 @@ class ActivityCheck {
   final Map<String,Object> values=new HashMap<>();
   JSONObject(Object... pairs){for(int i=0;i<pairs.length;i+=2)values.put((String)pairs[i],pairs[i+1]);}
   String optString(String key){Object v=values.get(key);return v==null?"":String.valueOf(v);}
+  boolean has(String key){return values.containsKey(key);}
   int optInt(String key,int fallback){Object v=values.get(key);return v instanceof Integer?(Integer)v:fallback;}
   long optLong(String key,long fallback){Object v=values.get(key);return v instanceof Number?((Number)v).longValue():fallback;}
   JSONArray optJSONArray(String key){Object v=values.get(key);return v instanceof JSONArray?(JSONArray)v:null;}
@@ -49,7 +50,7 @@ class ActivityCheck {
   void setCompoundDrawables(Object a,Object b,Object c,Object d){}
  }
  interface Click {void click(Object dialog,int index);}
- static class LargeDialogBuilder extends AlertDialog.Builder {LargeDialogBuilder(Object owner){super(owner);}}
+ static class LargeDialogBuilder extends AlertDialog.Builder {LargeDialogBuilder(Object owner){super(owner);}static void dismissAll(Object owner){AlertDialog.last=null;}}
  static class AlertDialog {
   static Builder last;
   void dismiss(){}

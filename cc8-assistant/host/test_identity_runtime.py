@@ -83,6 +83,30 @@ class IdentityRuntimeTests(unittest.TestCase):
                 }
             )
 
+    def test_capture_ingress_holds_stop_and_identity_guard(self):
+        b, channel = self.session(saved_guest=True)
+        self.ready(b)
+        self.ack(b)
+        entered, release = threading.Event(), threading.Event()
+
+        def consume(_):
+            entered.set()
+            release.wait(2)
+
+        b.capture.on_packet = consume
+        packet = Packet(MIC, data=b'\0\0' * 320).bind_route(channel.route_token)
+        thread = threading.Thread(target=b.on_packet, args=(packet,))
+        thread.start()
+        try:
+            self.assertTrue(entered.wait(2))
+            acquired = b.guard.acquire(blocking=False)
+            if acquired:
+                b.guard.release()
+            self.assertFalse(acquired, 'Stop could reset capture while consuming a packet')
+        finally:
+            release.set()
+            thread.join(2)
+
     def test_no_private_hello_or_capture_or_pcm_until_exact_native_ack(self):
         b, channel = self.session()
         self.assertFalse(b.owner_access())

@@ -94,7 +94,8 @@ class StatusReporter:
         stop = endpoint.fast_stop_observation
         metrics = self.hooks.metrics()
         meeting = self.meeting_diagnostics()
-        # 白名单输出就绪位，不导出 metrics 内可能存在的自检文字和用户内容。
+        heartbeat = metrics.get('last_heartbeat_monotonic')
+        # 白名单输出就绪位，不导出用户内容。
         return {
             'ok': True,
             'bridge_version': RELEASE.backend_version,
@@ -108,6 +109,11 @@ class StatusReporter:
             'speech_noise_margin_db': environment.noise_margin_db,
             'barge_confirm_min_ms': environment.confirmation_frames * 10,
             'uptime_seconds': round(time.monotonic() - self.started_at, 1),
+            'heartbeat_age_seconds': (
+                round(max(0, time.monotonic() - heartbeat), 1)
+                if isinstance(heartbeat, (int, float))
+                else None
+            ),
             'runtime_instance': self.instance,
             'health_owner_version': 1,
             'runtime_process_id': os.getpid(),

@@ -662,10 +662,10 @@ final class VoiceSession {
         identity.route(routeEpoch);
         identityHello = false;
         desktopCameraAuth.reset();
-        if (visual) {
-          visual = false;
-          listener.vision(false, "连接切换，请重新看图", false);
-        }
+        boolean hadVision = isVisual();
+        visual = false;
+        pendingVisionNonce = visionRequestId = desktopVisionNonce = "";
+        if (hadVision) listener.vision(false, "连接切换，请重新看图", false);
         cancelPlayback();
         speakerOwner.endTasksThrough(Integer.MAX_VALUE);
         announcement = false;
@@ -1344,8 +1344,10 @@ final class VoiceSession {
                 statusFeedback.failed(p.generation));
           }
         } else if ("vision_unavailable".equals(event)) {
-          visual = false;
-          speakerOwner.endTask(p.generation);
+          // This receipt rejects a request before it owns the camera or speaker.
+          if (visual
+              || p.generation < minimumGeneration
+              || (j.has("nonce") && !j.optString("nonce").equals(pendingVisionNonce))) return;
           pendingVisionNonce = "";
           listener.vision(false, j.optString("message", "看图暂不可用"), false);
         } else if ("caption_timing".equals(event)) {
@@ -1567,26 +1569,21 @@ final class VoiceSession {
     send(Wire.event("workspace_get"));
   }
 
-  void dotChatRequest(String requestId, String action, String sourceId, String cursor) {
-    dotChatRequest(requestId, action, sourceId, cursor, null);
-  }
-
-  void dotChatRequest(
-      String requestId, String action, String sourceId, String cursor, String period) {
-    if (!foreground || !isConnected()) return;
+  boolean dotChatRequest(
+      String requestId, String action, String sourceId, String cursor, String period, long route) {
     JSONObject j = Wire.event("dot_chat_request");
     Wire.put(j, "request_id", requestId);
     Wire.put(j, "action", action);
     if (sourceId != null) Wire.put(j, "source_id", sourceId);
     if (cursor != null) Wire.put(j, "cursor", cursor);
     if (period != null) Wire.put(j, "period", period);
-    send(j);
+    return sendWorkspace(j, route);
   }
 
-  void dotChatCancel(String requestId) {
+  void dotChatCancel(String requestId, long route) {
     JSONObject j = Wire.event("dot_chat_cancel");
     Wire.put(j, "request_id", requestId);
-    send(j);
+    sendWorkspace(j, route);
   }
 
   boolean savedTaskRequest(String requestId, String action, String id, long route) {
@@ -2227,12 +2224,17 @@ final class VoiceSession {
           "mac_window".equals(mode) ? "请在 Mac 选择并确认一个窗口 · CC8 摄像头关闭" : "正在请求拍摄 · 图片将交给 Dot",
           false);
       final String nonce = pendingVisionNonce;
+      final long requestedRoute = routeEpoch;
       new android.os.Handler(android.os.Looper.getMainLooper())
           .postDelayed(
               () -> {
-                if (!nonce.isEmpty() && nonce.equals(pendingVisionNonce)) {
-                  cancelVision();
-                  listener.state(recording ? "listening" : "idle", "拍摄请求超时，请重试");
+                synchronized (routeLock) {
+                  if (currentRoute(requestedRoute)
+                      && !nonce.isEmpty()
+                      && nonce.equals(pendingVisionNonce)) {
+                    cancelVision();
+                    listener.state(recording ? "listening" : "idle", "拍摄请求超时，请重试");
+                  }
                 }
               },
               15000);
@@ -2441,18 +2443,24 @@ final class VoiceSession {
   }
 
   void interrupt() {
-    cancelVision();
-    announcement = false;
-    textSession = false;
-    listener.playback(false);
-    cancelPlayback();
-    speakerOwner.endTasksThrough(Integer.MAX_VALUE);
-    listener.caption("", "attentive");
-    send(Wire.event("interrupt"));
-    if (recording) listener.state("listening", "我在听，你继续说");
-    else {
-      phase = "idle";
-      listener.state("idle", "播报已停止 · 麦克风关闭");
+    synchronized (routeLock) {
+      Player current = player;
+      if (current != null) {
+        minimumGeneration = Math.max(minimumGeneration, current.generation + 1);
+      }
+      cancelVision();
+      announcement = false;
+      textSession = false;
+      listener.playback(false);
+      cancelPlayback();
+      speakerOwner.endTasksThrough(Integer.MAX_VALUE);
+      listener.caption("", "attentive");
+      send(Wire.event("interrupt"));
+      if (recording) listener.state("listening", "我在听，你继续说");
+      else {
+        phase = "idle";
+        listener.state("idle", "播报已停止 · 麦克风关闭");
+      }
     }
   }
 

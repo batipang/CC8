@@ -318,9 +318,11 @@ class Bridge:
             if self.session.connection is not None:
                 self.idle_tick()
                 self.event('ping')
-        except (OSError, EOFError, ValueError, RuntimeError) as error:
-            # A failed send or reminder-store write must not end the timer thread.
+        except Exception as error:
+            # One failed tick must leave the timer available for the next tick.
             self.log('heartbeat_retry', error_type=type(error).__name__)
+        finally:
+            self.metrics['last_heartbeat_monotonic'] = time.monotonic()
 
     def publish_workspace(self):
         with self.guard:
@@ -343,12 +345,17 @@ class Bridge:
         return self.session.submit_text(text)
 
     def reminder_tick(self):
-        result = self.reminders.tick()
-        scheduler = self.chats.watch_ui.scheduler
-        if scheduler is not None:
-            scheduler.tick()
-        self.workflows.scheduler.tick()
-        return result
+        for name, scheduler in (
+            ('reminders', self.reminders),
+            ('report_watch', self.chats.watch_ui.scheduler),
+            ('workflows', self.workflows.scheduler),
+        ):
+            if scheduler is None:
+                continue
+            try:
+                scheduler.tick()
+            except Exception as error:
+                self.log('scheduler_tick_failed', scheduler=name, error_type=type(error).__name__)
 
     def control_device(self, action, percent=None):
         if action != 'status' and not self.owner_access():
@@ -413,32 +420,35 @@ class Bridge:
         return self.device_events.on_event(j)
 
     def on_packet(self, p):
-        token = getattr(self.session.connection, 'route_token', None)
-        if token is not None:
-            p = p.unbind_route(token)
-            if p is None:
+        # Stop and identity changes also hold this guard. Keep packet admission
+        # and endpoint consumption in the same capture lifetime.
+        with self.guard:
+            token = getattr(self.session.connection, 'route_token', None)
+            if token is not None:
+                p = p.unbind_route(token)
+                if p is None:
+                    return
+            elif p.kind == ROUTE_BOUND:
                 return
-        elif p.kind == ROUTE_BOUND:
-            return
-        # A preserved native recorder is not registered on a freshly selected
-        # route until its current Start/Rebind is accepted. Never buffer early PCM.
-        if p.kind in (MIC, MIC_PAIRED) and (
-            not self.dialogue_access()
-            or self.session.capture_route_pending
-            or getattr(self.session.connection, 'application_ready', True) is not True
-        ):
-            return
-        if p.kind == EVENT:
-            try:
-                self.on_event(decode_event(p.data))
-            except (KeyError, TypeError, OverflowError):
-                raise ValueError('Invalid device event fields') from None
-            return
-        if p.kind == MEETING:
-            if self.owner_access():
-                self.meetings.on_packet(p)
-            return
-        self.capture.on_packet(p)
+            # A preserved native recorder is not registered on a freshly selected
+            # route until its current Start/Rebind is accepted. Never buffer early PCM.
+            if p.kind in (MIC, MIC_PAIRED) and (
+                not self.dialogue_access()
+                or self.session.capture_route_pending
+                or getattr(self.session.connection, 'application_ready', True) is not True
+            ):
+                return
+            if p.kind == EVENT:
+                try:
+                    self.on_event(decode_event(p.data))
+                except (KeyError, TypeError, OverflowError):
+                    raise ValueError('Invalid device event fields') from None
+                return
+            if p.kind == MEETING:
+                if self.owner_access():
+                    self.meetings.on_packet(p)
+                return
+            self.capture.on_packet(p)
 
     def process_microphone(self, p):
         return self.capture.process_microphone(p)
@@ -494,11 +504,9 @@ class Bridge:
     def add_metric_field(self, name, field, value):
         self.metrics[name][field] += value
 
-    def record_echo_pair(self, text, render_text, echo):
-        # Only the explicitly armed echo diagnostic records these bounded pairs.
-        pairs = self.metrics['echo_self_check']['diagnostic_text_pairs']
-        if len(pairs) < 8:
-            pairs.append({'heard': text[:200], 'render_asr': render_text[:200], 'rejected': echo})
+    def record_echo_pair(self, _text, _render_text, _echo):
+        # Self-check receipts count comparisons without retaining speech text.
+        self.metrics['echo_self_check']['transcript_comparisons'] += 1
 
     def record_metric(self, name, value=None, *, increment=False):
         self.metrics[name] = self.metrics.get(name, 0) + 1 if increment else value

@@ -403,20 +403,24 @@ class VisionController:
 
     def begin_visual(self, text, origin, nonce=''):
         # The caller already accepted an explicit foreground button/voice intent.
-        if not self.hooks.connected() or self.hooks.calibrating() or not self.hooks.brain_ready():
-            self.hooks.event(
-                'vision_unavailable', message='请先连接 Mac、结束校准，并确认 Dot 可用'
-            )
-            return
-        if origin == 'mac_window' and not window_available():
-            self.hooks.event(
-                'vision_unavailable',
-                message='Mac 窗口入口未安装或系统不支持，请在 Mac 完成准备后重试。',
-            )
-            return
         with self.hooks.lock:
-            if self.hooks.calibrating():
-                self.hooks.event('vision_unavailable', message='音频正在使用，请先结束当前模式。')
+            if (
+                not self.hooks.connected()
+                or self.hooks.calibrating()
+                or not self.hooks.brain_ready()
+            ):
+                self.hooks.event(
+                    'vision_unavailable',
+                    nonce=nonce,
+                    message='请先连接 Mac、结束校准，并确认 Dot 可用',
+                )
+                return
+            if origin == 'mac_window' and not window_available():
+                self.hooks.event(
+                    'vision_unavailable',
+                    nonce=nonce,
+                    message='Mac 窗口入口未安装或系统不支持，请在 Mac 完成准备后重试。',
+                )
                 return
             generation = self.hooks.cancel_session('vision_request')
             # Provider/transport cleanup may synchronously admit replacement

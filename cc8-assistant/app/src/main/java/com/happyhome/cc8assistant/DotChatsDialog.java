@@ -22,6 +22,7 @@ final class DotChatsDialog {
   private JSONObject state = new JSONObject();
   private String pending = "", action = "";
   private AlertDialog progress;
+  private long route = -1;
   private Runnable timeout;
 
   DotChatsDialog(Activity activity, VoiceSession session) {
@@ -30,11 +31,19 @@ final class DotChatsDialog {
   }
 
   void open() {
+    close();
+    route = session.connectedRoute();
     request("state", null, null);
   }
 
   void close() {
-    if (!pending.isEmpty()) session.dotChatCancel(pending);
+    clearPending();
+    state = new JSONObject();
+    route = -1;
+  }
+
+  private void clearPending() {
+    if (!pending.isEmpty()) session.dotChatCancel(pending, route);
     pending = "";
     if (timeout != null) handler.removeCallbacks(timeout);
     timeout = null;
@@ -47,8 +56,8 @@ final class DotChatsDialog {
   }
 
   private void request(String nextAction, String source, String cursor, String period) {
-    close();
-    if (!session.isConnected()) {
+    clearPending();
+    if (route < 0 || !session.currentRoute(route) || !session.isConnected()) {
       toast("请先连接 Mac");
       return;
     }
@@ -74,17 +83,21 @@ final class DotChatsDialog {
           toast("未确认聊天状态，请连接后刷新查看");
         };
     handler.postDelayed(timeout, 50000);
-    session.dotChatRequest(ident, nextAction, source, cursor, period);
+    if (!session.dotChatRequest(ident, nextAction, source, cursor, period, route)) {
+      close();
+      toast("连接已变化，请重新打开聊天接续。");
+    }
   }
 
   void accept(JSONObject data) {
+    if (route < 0 || !session.currentRoute(route)) return;
     String ident = data.optString("request_id");
     if (!ident.isEmpty() && !pending.equals(ident)) return;
     state = data;
     if (pending.isEmpty() || !pending.equals(data.optString("request_id"))) return;
     String completedAction = action;
     pending = "";
-    close();
+    clearPending();
     if (!data.optBoolean("ok")) {
       toast(data.optString("message", "聊天入口暂不可用"));
       return;

@@ -10,6 +10,7 @@ import threading
 import time
 from dot_runtime import codex_command
 from runtime_env import runtime_environment
+from release_info import RELEASE
 from rpc_pipe import RpcPipeWriter, deadline_after
 from rpc_process import close_guardian, start_guardian
 from dot_errors import error_notice, turn_completion
@@ -105,11 +106,13 @@ class CodexRpc:
                 raise DotError('Codex process is no longer connected', kind='transport_or_io')
             if self.process is not None:
                 return
+            environment = runtime_environment()
+            environment.pop('CC8_MINIMAX_API_KEY', None)
             self.process, self.guardian = start_guardian(
                 self.popen,
                 self.command or codex_command(),
                 cwd=ROOT,
-                env=runtime_environment(),
+                env=environment,
             )
             lifetime = self.guardian
             process = self.process
@@ -150,7 +153,7 @@ class CodexRpc:
                     'clientInfo': {
                         'name': 'cc8_bumblebee_voice',
                         'title': 'CC8 Bumblebee',
-                        'version': '0.4.0',
+                        'version': RELEASE.backend_version,
                     },
                     'capabilities': {'experimentalApi': True},
                 },
@@ -319,6 +322,8 @@ class CodexRpc:
                 if len(line) > self.MAX_LINE:
                     raise DotError('Codex message exceeds size limit')
                 message = json.loads(line)
+                if not isinstance(message, dict):
+                    raise DotError('Codex message must be an object')
                 if 'id' in message and 'method' in message:
                     self._server_request(message)
                 elif 'id' in message:
@@ -343,7 +348,7 @@ class CodexRpc:
                     )
                     if relevant:
                         self._receive(message)
-        except (ValueError, OSError, queue.Full, DotError) as error:
+        except (ValueError, TypeError, AttributeError, OSError, queue.Full, DotError) as error:
             self.failure_reason = (
                 str(error) if isinstance(error, DotError) else type(error).__name__
             )

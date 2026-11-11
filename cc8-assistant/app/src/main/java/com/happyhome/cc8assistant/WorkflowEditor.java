@@ -385,7 +385,7 @@ final class WorkflowEditor {
               Wire.put(schedule, "minute_of_day", hour * 60 + minute);
               boolean[] selected = {true, true, true, true, true, true, true};
               final long daysOwner = epoch + 1;
-              show(
+              AlertDialog weekdays =
                   new LargeDialogBuilder(activity)
                       .setTitle("选择星期 · 北京时间")
                       .setMultiChoiceItems(
@@ -394,22 +394,25 @@ final class WorkflowEditor {
                           (d, n, on) -> {
                             if (live(daysOwner)) selected[n] = on;
                           })
-                      .setPositiveButton(
-                          "核对定时",
-                          (d, n) -> {
-                            if (!live(daysOwner)) return;
-                            JSONArray days = new JSONArray();
-                            for (int i = 0; i < 7; i++) if (selected[i]) days.put(i);
-                            if (days.length() == 0) {
-                              toast("至少选择一个星期。");
-                              return;
-                            }
-                            Wire.put(schedule, "weekdays", days);
-                            Wire.put(flow, "schedule", schedule);
-                            scheduledConfirm(flow, revision);
-                          })
+                      .setPositiveButton("核对定时", null)
                       .setNegativeButton("取消", null)
-                      .create());
+                      .create();
+              show(weekdays);
+              weekdays
+                  .getButton(AlertDialog.BUTTON_POSITIVE)
+                  .setOnClickListener(
+                      button -> {
+                        if (!live(daysOwner)) return;
+                        JSONArray days = new JSONArray();
+                        for (int i = 0; i < 7; i++) if (selected[i]) days.put(i);
+                        if (days.length() == 0) {
+                          toast("至少选择一个星期。");
+                          return;
+                        }
+                        Wire.put(schedule, "weekdays", days);
+                        Wire.put(flow, "schedule", schedule);
+                        scheduledConfirm(flow, revision);
+                      });
             },
             now.get(Calendar.HOUR_OF_DAY),
             now.get(Calendar.MINUTE),

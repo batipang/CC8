@@ -28,8 +28,9 @@ def unique(pairs: list[tuple[str, object]]) -> dict[str, object]:
 
 
 class ReminderStore:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, max_bytes: int = MAX_BYTES) -> None:
         self.path = path
+        self.max_bytes = max_bytes
         self.expected: Identity | None = None
 
     @contextmanager
@@ -58,10 +59,10 @@ class ReminderStore:
                         or before.st_uid != os.getuid()
                         or before.st_mode & 0o077
                         or before.st_nlink != 1
-                        or not 0 < before.st_size <= MAX_BYTES
+                        or not 0 < before.st_size <= self.max_bytes
                     ):
                         raise ValueError('Invalid private reminder file')
-                    raw = source.read(MAX_BYTES + 1)
+                    raw = source.read(self.max_bytes + 1)
                     after = os.fstat(source.fileno())
                     if identity(before) != identity(after) or len(raw) != before.st_size:
                         raise OSError('Reminder file changed during read')
@@ -72,7 +73,7 @@ class ReminderStore:
 
     def save(self, value: object) -> None:
         raw = (json.dumps(value, ensure_ascii=False, allow_nan=False) + '\n').encode('utf-8')
-        if len(raw) > MAX_BYTES:
+        if len(raw) > self.max_bytes:
             raise ValueError('Reminder store exceeds size limit')
         with self.directory(create=True) as directory:
             try:

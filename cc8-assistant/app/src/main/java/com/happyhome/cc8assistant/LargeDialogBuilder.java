@@ -5,7 +5,7 @@ import android.content.Context;
 import android.view.View;
 import android.widget.TextView;
 
-/** Applies body typography after Android has inflated its fixed-size message layout. */
+/** Tracks dialogs by activity and applies the current identity and body typography. */
 final class LargeDialogBuilder extends AlertDialog.Builder {
   interface OwnerAccess {
     long dialogEpoch();

@@ -8,6 +8,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime, timedelta
 import json
+import re
 from pathlib import Path
 import threading
 import uuid
@@ -384,7 +385,9 @@ class Workspace:
                 return
             task['status'] = status
             task['finished_at'] = self.now().isoformat(timespec='seconds')
-            task['result'] = result[:1600]
+            result = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', result)
+            result = result.replace('\r\n', '\n').replace('\r', '\n')
+            task['result'] = ''.join(c for c in result if ord(c) >= 32 or c in '\n\t')[:1600]
             task['stage'] = {
                 'completed': '请求已完成',
                 'failed': '执行结果待核对' if unconfirmed else '请求未完成',
@@ -572,9 +575,9 @@ class Workspace:
         due = self._date(item['due'])
         step = 7 if item['repeat'] == 'weekly' else 1
         try:
-            if due <= self.now():
-                days = (self.now() - due).days
-                due += timedelta(days=(days // step + 1) * step)
+            # A completed occurrence always advances, even after a clock rollback.
+            days = max(0, (self.now() - due).days)
+            due += timedelta(days=(days // step + 1) * step)
             while item['repeat'] == 'weekdays' and due.weekday() > 4:
                 due += timedelta(days=1)
         except OverflowError:

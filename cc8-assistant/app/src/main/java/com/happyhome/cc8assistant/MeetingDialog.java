@@ -445,7 +445,10 @@ final class MeetingDialog {
   private void showRows(JSONObject page) {
     if (page == null) return;
     JSONArray rows = page.optJSONArray("rows");
-    if (rows == null) return;
+    if (rows == null || rows.length() > 12) return;
+    for (int i = 0; i < rows.length(); i++) {
+      if (rows.optJSONObject(i) == null) return;
+    }
     final long viewOwner = epoch;
     String[] labels = new String[rows.length() + (page.isNull("next_offset") ? 0 : 1)];
     for (int i = 0; i < rows.length(); i++) {
