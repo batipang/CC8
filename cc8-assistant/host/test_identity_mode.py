@@ -56,6 +56,17 @@ class IdentityModeTests(unittest.TestCase):
                 store.change(ModeState(), 'owner')
             self.assertEqual(store.path.read_bytes(), before)
 
+    def test_existing_null_does_not_restore_default_owner(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            store.change(ModeState(), 'guest')
+            store.path.write_bytes(b'null')
+            with self.assertRaises(ValueError):
+                store.snapshot()
+            with self.assertRaises(ValueError):
+                store.change(ModeState(), 'owner')
+            self.assertEqual(store.path.read_bytes(), b'null')
+
     def test_file_and_lock_links_never_change_the_referenced_target(self):
         with tempfile.TemporaryDirectory() as folder:
             store = self.store(folder)

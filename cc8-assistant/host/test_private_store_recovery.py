@@ -1,17 +1,18 @@
 """Exercise recovery against real files and runtime locks in an isolated checkout."""
 
 import hashlib
+from importlib import import_module
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 
 from process_lock import ProcessLease
-from reminder_recovery import recover
+from private_store_recovery import READERS, recover
 from workspace import Workspace
 
 
-class ReminderRecoveryTests(unittest.TestCase):
+class PrivateStoreRecoveryTests(unittest.TestCase):
     def setUp(self):
         folder = self.enterContext(tempfile.TemporaryDirectory())
         self.root = Path(folder).resolve() / 'checkout'
@@ -21,8 +22,8 @@ class ReminderRecoveryTests(unittest.TestCase):
         self.enterContext(patch('runtime_guard.owner_lease_path', return_value=self.lease))
         self.enterContext(patch('runtime_guard.active_roots', return_value=set()))
         self.enterContext(patch('runtime_guard.enabled_service_roots', return_value=set()))
-        self.enterContext(patch('reminder_recovery.active_roots', return_value=set()))
-        self.enterContext(patch('reminder_recovery.enabled_service_roots', return_value=set()))
+        self.enterContext(patch('private_store_recovery.active_roots', return_value=set()))
+        self.enterContext(patch('private_store_recovery.enabled_service_roots', return_value=set()))
 
     def put(self, raw):
         self.store.write_bytes(raw)
@@ -61,7 +62,7 @@ class ReminderRecoveryTests(unittest.TestCase):
         digest = self.put(b'')
         with ProcessLease(self.lease), self.assertRaises(BlockingIOError):
             recover(self.root, digest)
-        with patch('reminder_recovery.enabled_service_roots', return_value={self.root}):
+        with patch('private_store_recovery.enabled_service_roots', return_value={self.root}):
             with self.assertRaises(RuntimeError):
                 recover(self.root, digest)
         target = self.store.with_name('untouched.json')
@@ -71,3 +72,25 @@ class ReminderRecoveryTests(unittest.TestCase):
             recover(self.root, digest)
         self.assertTrue(self.store.is_symlink())
         self.assertEqual(target.read_bytes(), b'')
+
+    def test_each_supported_store_quarantines_null_and_uses_its_empty_default(self):
+        for name, (module, reader_name) in READERS.items():
+            with self.subTest(store=name):
+                reader = getattr(import_module(module), reader_name)
+                path = self.store.with_name(name + '.json')
+                baseline = reader(path).snapshot()
+                path.write_bytes(b'null')
+                path.chmod(0o600)
+                with self.assertRaises(ValueError):
+                    reader(path).snapshot()
+                status = recover(self.root, store=name)
+                self.assertEqual(status['state'], 'unreadable')
+                result = recover(self.root, status['sha256'], store=name)
+                self.assertEqual(result['state'], 'quarantined')
+                self.assertEqual(Path(result['archive']).read_bytes(), b'null')
+                self.assertEqual(reader(path).snapshot(), baseline)
+
+    def test_identity_pairing_and_unlisted_paths_are_outside_data_recovery(self):
+        for name in ('identity-mode', 'pairing', '../reminders'):
+            with self.subTest(store=name), self.assertRaises(ValueError):
+                recover(self.root, store=name)

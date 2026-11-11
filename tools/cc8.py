@@ -499,13 +499,13 @@ def main():
         from desktop_notifications_cli import main as notifications_main
 
         return notifications_main(sys.argv[2:])
-    if sys.argv[1:2] == ['recover-reminders']:
+    if sys.argv[1:2] in (['recover-reminders'], ['recover-storage']):
         if sys.version_info < (3, 11):
-            print('Reminder recovery requires Python 3.11+.', file=sys.stderr)
+            print('Storage recovery requires Python 3.11+.', file=sys.stderr)
             return 2
-        from reminder_recovery import main as recovery_main
+        from private_store_recovery import main as recovery_main
 
-        return recovery_main(sys.argv[2:])
+        return recovery_main(sys.argv[2:], reminders_only=sys.argv[1] == 'recover-reminders')
     if sys.argv[1:2] == ['upgrade']:
         from upgrade_preparation import main as upgrade_main
 
@@ -574,6 +574,9 @@ def main():
         'verify-service', help='Plan or explicitly check managed backend crash recovery'
     )
     commands.add_parser('verify-login', help='Plan or explicitly arm one passive post-login check')
+    commands.add_parser(
+        'recover-storage', help='Inspect and explicitly quarantine unreadable private data'
+    )
     commands.add_parser(
         'recover-reminders', help='Inspect and explicitly quarantine an unreadable reminder store'
     )
