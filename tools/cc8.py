@@ -26,8 +26,10 @@ from runtime_guard import (  # noqa: E402
 
 if __package__:
     from .java_toolchain import require_java
+    from .requirement_pins import read_pins
 else:
     from java_toolchain import require_java
+    from requirement_pins import read_pins
 
 
 class SetupError(RuntimeError):
@@ -44,13 +46,7 @@ for name,version in expected.items():
  if actual!=version: problems.append(name)
 print(json.dumps(dict(version=list(sys.version_info[:2]),system=platform.system(),
  machine=platform.machine(),missing_or_wrong=problems)))"""
-    expected = {}
-    if manifest:
-        for line in manifest.read_text().splitlines():
-            fields = line.split('#', 1)[0].split()
-            if fields:
-                name, version = fields[0].split('==')
-                expected[name] = version
+    expected = read_pins(manifest) if manifest else {}
     result = subprocess.run(
         [str(python), '-c', code, json.dumps(expected)],
         capture_output=True,
@@ -114,7 +110,16 @@ def setup(args, root=ROOT):
             if python_info(executable)['version'] < [3, 11]:
                 raise SetupError('Existing dev environment is too old; choose a fresh checkout')
         commands += [
-            [str(executable), '-m', 'pip', 'install', '-r', str(root / 'requirements-dev.txt')],
+            [
+                str(executable),
+                '-m',
+                'pip',
+                'install',
+                '--require-hashes',
+                '--only-binary=:all:',
+                '-r',
+                str(root / 'requirements-dev.txt'),
+            ],
             [str(executable), str(root / 'tools/quality.py'), 'setup'],
         ]
     if args.dry_run:

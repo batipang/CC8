@@ -16,7 +16,7 @@ from tools import ci_tools, security
 
 class AuditTests(unittest.TestCase):
     def run_audit(self, folder, data, returncode=0):
-        (Path(folder) / 'requirements.txt').write_text('x==1\n')
+        (Path(folder) / 'requirements.txt').write_text('x==1 --hash=sha256:' + 'a' * 64 + '\n')
 
         def run(command, **kwargs):
             Path(command[command.index('--output') + 1]).write_text(json.dumps(data))
@@ -65,7 +65,7 @@ class AuditTests(unittest.TestCase):
 
     def test_missing_or_stale_report_cannot_mask_audit_failure(self):
         with tempfile.TemporaryDirectory() as folder:
-            (Path(folder) / 'requirements.txt').write_text('x==1\n')
+            (Path(folder) / 'requirements.txt').write_text('x==1 --hash=sha256:' + 'a' * 64 + '\n')
             report = Path(folder) / 'artifacts/security/audit-0.json'
             report.parent.mkdir(parents=True)
             report.write_text('{"dependencies": []}')
@@ -94,10 +94,7 @@ class AuditTests(unittest.TestCase):
             for requirements in security.REQUIREMENTS:
                 path = Path(folder) / requirements
                 path.parent.mkdir(parents=True, exist_ok=True)
-                pin = 'x==1'
-                if requirements == security.RUNTIME_REQUIREMENTS:
-                    pin += ' --hash=sha256:' + 'a' * 64
-                path.write_text(pin + '\n')
+                path.write_text('x==1 --hash=sha256:' + 'a' * 64 + '\n')
             with patch.object(security, 'ROOT', Path(folder)):
                 self.assertEqual(security.audit(run=run), 1)
         self.assertEqual(len(commands), 3)
@@ -120,7 +117,9 @@ class AuditTests(unittest.TestCase):
     def test_empty_unpinned_or_include_manifest_is_not_accepted_as_inventory(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'requirements.txt'
-            path.write_text('Example_Package==1.0 --hash=sha256:' + 'a' * 64 + '\n')
+            path.write_text(
+                'Example_Package==1.0 ' + chr(92) + '\n  --hash=sha256:' + 'a' * 64 + '\n'
+            )
             self.assertEqual(
                 security.pinned_inventory(path, require_hashes=True), {('example-package', '1.0')}
             )
@@ -132,6 +131,8 @@ class AuditTests(unittest.TestCase):
                 'x>=1\n',
                 '-r elsewhere.txt\n',
                 'x==1 --hash=sha256:bad\n',
+                'x==1 ' + chr(92) + '\n',
+                'Example_Pkg==1\nexample-pkg==1\n',
                 'x==1 --index-url https://example.invalid\n',
             ):
                 path.write_text(source)

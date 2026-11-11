@@ -48,6 +48,8 @@ class CommandTests(unittest.TestCase):
                 self.assertEqual(cc8.setup(args, root), 0)
             plan = json.loads(out.getvalue())
             self.assertEqual(plan['commands'][0][1:3], ['-m', 'venv'])
+            self.assertIn('--require-hashes', plan['commands'][1])
+            self.assertIn('--only-binary=:all:', plan['commands'][1])
             self.assertIn('requirements-dev.txt', plan['commands'][1][-1])
             self.assertFalse((root / '.toolchains').exists())
             self.assertNotIn('voice-venv', out.getvalue())
@@ -290,7 +292,7 @@ class CommandTests(unittest.TestCase):
             (root / 'tools').mkdir()
             (root / 'cc8-assistant/host').mkdir(parents=True)
             shutil.copy2(cc8.ROOT / 'cc8', root / 'cc8')
-            for name in ('cc8.py', 'java_toolchain.py'):
+            for name in ('cc8.py', 'java_toolchain.py', 'requirement_pins.py'):
                 shutil.copy2(cc8.ROOT / 'tools' / name, root / 'tools' / name)
             for name in (
                 'configuration.py',

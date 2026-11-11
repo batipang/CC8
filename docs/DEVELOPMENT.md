@@ -15,7 +15,7 @@ Python 安装工具和构建脚本使用 Python 3.10+；语音后台使用 Pytho
 ```sh
 python3.13 -m venv .venv
 source .venv/bin/activate
-python -m pip install -r requirements-dev.txt
+python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt
 
 # 如已有可用 JDK 可省略；按实际安装位置填写
 export JAVA_HOME=/absolute/path/to/jdk21

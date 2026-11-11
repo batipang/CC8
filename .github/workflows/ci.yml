@@ -38,7 +38,7 @@ jobs:
           distribution: ${{ runner.os == 'macOS' && 'corretto' || 'temurin' }}
           java-version: '21'
       - name: Install lightweight test dependencies
-        run: python -m pip install -r requirements-dev.txt
+        run: 'python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt'
       - name: Run offline suites (private audio is opt-in and skipped)
         run: |
           python -m pip check
@@ -70,7 +70,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - run: python -m pip install -r requirements-dev.txt
+      - run: 'python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt'
       - name: Install checksum-pinned format and workflow tools
         run: |
           python tools/quality.py setup
@@ -199,7 +199,7 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.13'
-      - run: python -m pip install -r requirements-security.txt
+      - run: 'python -m pip install --require-hashes --only-binary=:all: -r requirements-security.txt'
       - run: python tools/security.py audit
       - name: Keep package audit reports
         if: always()

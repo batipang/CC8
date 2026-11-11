@@ -43,7 +43,7 @@ def preflight():
         raise RuntimeError(
             'Missing development dependencies: '
             + ', '.join(missing)
-            + '; run python -m pip install -r requirements-dev.txt'
+            + '; run python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt'
         )
     require_java()
     if not shutil.which('openssl'):
