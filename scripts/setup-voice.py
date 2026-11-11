@@ -113,12 +113,15 @@ def prepare_models(sensevoice=False):
 
 
 def prepare(sensevoice=False):
+    mac_major = platform.mac_ver()[0].partition('.')[0]
     if (
         sys.version_info[:2] != (3, 13)
         or platform.system() != 'Darwin'
         or platform.machine() != 'arm64'
+        or not mac_major.isdigit()
+        or int(mac_major) < 15
     ):
-        raise RuntimeError('This pinned runtime requires CPython 3.13 on Apple Silicon macOS')
+        raise RuntimeError('This pinned runtime requires CPython 3.13 on Apple Silicon macOS 15+')
     TOOLS.mkdir(parents=True, exist_ok=True)
     environment = TOOLS / 'voice-venv'
     if environment.is_symlink() or not environment.resolve().is_relative_to(ROOT.resolve()):
@@ -155,6 +158,8 @@ def prepare(sensevoice=False):
             '-m',
             'pip',
             'install',
+            '--require-hashes',
+            '--only-binary=:all:',
             '-r',
             str(ROOT / 'cc8-assistant/host/requirements-runtime.lock'),
         ],

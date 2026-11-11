@@ -22,7 +22,7 @@
 ## 测试与最小复现
 
 ```sh
-python -m pip install -r requirements-dev.txt
+python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt
 python tools/test_all.py --suite host
 python tools/test_all.py
 python tools/quality.py check
