@@ -64,3 +64,19 @@
 另在系统 Python 3.9.6、PATH=/usr/bin:/bin 实际跑 root CLI：从固定 P0 source tag 的 manifest 到候选规划，对本机原签名 APK 0.8.9 实际 AAPT/API-27 检查；再用合成配置 backup → verify → stage-restore。全部通过，文件 0600，原合成文件字节不变，未读取真实运行配置或操作设备。完整批次见 [VALIDATION](VALIDATION.md)。
 
 P1-09 仍开放：真实升级/回退演练、服务配置应用与设备验收尚未执行。
+
+## 提醒存储恢复
+
+如果损坏或不兼容的提醒文件导致后台无法启动，在实际运行后台的源码目录用 Python 3.11 或更高版本检查：
+
+```sh
+python3.13 ./cc8 recover-reminders
+```
+
+检查复用后台的提醒加载规则，只输出状态与 SHA-256。确认返回 `unreadable` 后，先停止同一目录的后台，再以检查返回的摘要执行隔离。
+
+```sh
+python3.13 ./cc8 recover-reminders --quarantine-sha256 <检查返回的摘要>
+```
+
+命令核对服务和运行锁、文件所有权及本次摘要，把原文件移入同级的私有 `reminders-recovery-*` 目录。隔离成功后，重新启动的后台使用空提醒表，原件仍可从回执给出的路径核对。若状态为 `quarantined_durability_unconfirmed`，先核对回执中的原件路径。检查和隔离均不启动服务或设备采集。
