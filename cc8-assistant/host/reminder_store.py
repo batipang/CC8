@@ -67,7 +67,11 @@ class ReminderStore:
                     if identity(before) != identity(after) or len(raw) != before.st_size:
                         raise OSError('Reminder file changed during read')
                     self.expected = identity(after)
-                return json.loads(raw, object_pairs_hook=unique)
+                value = json.loads(raw, object_pairs_hook=unique)
+                if value is None:
+                    # Only a missing file may request a store's default state.
+                    raise ValueError('Unexpected null in private store')
+                return value
         except FileNotFoundError:
             return None
 

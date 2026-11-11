@@ -65,18 +65,20 @@
 
 P1-09 仍开放：真实升级/回退演练、服务配置应用与设备验收尚未执行。
 
-## 提醒存储恢复
+## 私有数据恢复
 
-如果损坏或不兼容的提醒文件导致后台无法启动，在实际运行后台的源码目录用 Python 3.11 或更高版本检查：
-
-```sh
-python3.13 ./cc8 recover-reminders
-```
-
-检查复用后台的提醒加载规则，只输出状态与 SHA-256。确认返回 `unreadable` 后，先停止同一目录的后台，再以检查返回的摘要执行隔离。
+在实际运行后台的源码目录使用该后台配置的语音环境 Python 检查指定存储。例如，检查损坏后可能影响启动的提醒文件：
 
 ```sh
-python3.13 ./cc8 recover-reminders --quarantine-sha256 <检查返回的摘要>
+.toolchains/cc8/voice-venv/bin/python ./cc8 recover-storage reminders
 ```
 
-命令核对服务和运行锁、文件所有权及本次摘要，把原文件移入同级的私有 `reminders-recovery-*` 目录。隔离成功后，重新启动的后台使用空提醒表，原件仍可从回执给出的路径核对。若状态为 `quarantined_durability_unconfirmed`，先核对回执中的原件路径。检查和隔离均不启动服务或设备采集。
+检查复用后台相应的加载规则，只输出状态与 SHA-256。确认返回 `unreadable` 后，先停止同一目录的后台，将检查返回的摘要赋给 `SHA256` 后执行隔离。
+
+```sh
+.toolchains/cc8/voice-venv/bin/python ./cc8 recover-storage reminders --quarantine-sha256 "$SHA256"
+```
+
+命令核对服务和运行锁、文件所有权及本次摘要，把原文件移入同级的私有恢复目录。隔离成功后，重新启动的后台以该存储的空状态继续运行，原件仍可从回执给出的路径核对。若状态为 `quarantined_durability_unconfirmed`，先核对回执中的原件路径。检查和隔离均不启动服务或设备采集。
+
+支持的存储名为 `reminders`、`preference-memory`、`recognition-vocabulary`、`workflows`、`saved-task-results`、`work-report-sources`、`work-report-archive`、`work-report-progress` 和 `work-report-watch`。原 `recover-reminders` 命令仍可用于提醒。身份、配对和凭证应按各自授权流程处理。
