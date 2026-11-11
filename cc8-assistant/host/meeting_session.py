@@ -165,11 +165,10 @@ class MeetingSession:
         if (sequence > self.next_sequence) != (lost > 0):
             self.interrupt('protocol_error')
             return 0, ()
-        count = len(pcm) // 2
-        if self.position + lost + count > self.maximum_samples:
-            self.interrupt('duration_limit')
-            self.state = 'ended'
-            return 0, ()
+        remaining = self.maximum_samples - self.position
+        lost = min(lost, remaining)
+        count = min(len(pcm) // 2, remaining - lost)
+        pcm = pcm[: count * 2]
         ready = []
         received_before = self.received_samples
         if lost:

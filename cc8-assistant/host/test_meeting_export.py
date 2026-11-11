@@ -152,6 +152,15 @@ class MeetingExportTests(unittest.TestCase):
         self.store.delete(rows[0]['id'], rows[0]['sha256'])
         self.assertEqual(self.store.snapshot()['items'], [])
 
+    def test_finder_metadata_keeps_existing_export_readable_and_deletable(self):
+        model, _ = self.model()
+        item = self.save(model)
+        (self.path / '.DS_Store').write_bytes(b'fixture metadata')
+        (self.path / item['id'] / '.DS_Store').write_bytes(b'fixture metadata')
+        self.assertEqual(self.store.snapshot()['items'][0]['sha256'], item['sha256'])
+        self.assertTrue(self.save(model, 'txt')['integrity_confirmed'])
+        self.assertTrue(self.store.delete(item['id'], item['sha256'])['deleted'])
+
     def test_delete_requires_exact_current_receipt_and_leaves_other_exports(self):
         model, _ = self.model()
         first, second = self.save(model), self.save(model, 'txt')

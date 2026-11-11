@@ -2,7 +2,7 @@ import json
 import threading
 import time
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 import numpy as np
 
 from minimax_client import (
@@ -112,6 +112,20 @@ class StreamTests(unittest.TestCase):
 
 
 class TransportCleanupTests(unittest.TestCase):
+    def test_explicit_bearer_keeps_netrc_out_of_prepared_requests(self):
+        import requests
+
+        transport = Transport(key='fixture-bearer')
+        slot = transport.request_slot()
+        self.addCleanup(transport.release_slot, slot)
+        with patch(
+            'requests.sessions.get_netrc_auth', return_value=('fixture', 'unrelated')
+        ) as netrc:
+            prepared = slot.session.prepare_request(requests.Request('POST', transport.base))
+        netrc.assert_not_called()
+        self.assertEqual(prepared.headers['Authorization'], 'Bearer fixture-bearer')
+        self.assertTrue(slot.session.trust_env)
+
     def test_terminal_cleanup_preserves_success_failure_and_cancellation(self):
         for entry in ('asr', 'json', 'sse'):
             for outcome in ('success', 'quota', 'cancelled'):

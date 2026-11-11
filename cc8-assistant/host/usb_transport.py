@@ -14,6 +14,9 @@ import threading
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
+DEVICE_ACCESS = str(ROOT / 'device-access')
+if DEVICE_ACCESS not in sys.path:
+    sys.path.insert(0, DEVICE_ACCESS)
 
 
 class USBPipe:
@@ -120,7 +123,6 @@ class USBPipe:
 
 
 def usb_target():
-    sys.path.insert(0, str(ROOT / 'device-access'))
     import cc8_install as access
 
     # A network ADB endpoint must never be classified as a plugged USB cable.
@@ -153,7 +155,6 @@ def usb_present():
 
 
 def connect_device():
-    sys.path.insert(0, str(ROOT / 'device-access'))
     import cc8_install as access
 
     transport = usb_target()

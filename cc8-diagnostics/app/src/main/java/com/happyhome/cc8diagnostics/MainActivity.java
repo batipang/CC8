@@ -727,9 +727,14 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
     return file;
   }
 
-  private File saveCaptureFile() throws IOException {
+  private File latestCapture() throws IOException {
     File source = probe.getLastCapture();
-    if (source == null || !source.exists()) throw new IOException("没有已完成的录音");
+    if (source == null || !source.isFile()) throw new IOException("没有已完成的录音");
+    return source;
+  }
+
+  private File saveCaptureFile() throws IOException {
+    File source = latestCapture();
     File file = new File(reportDirectory(), source.getName());
     try (InputStream in = new FileInputStream(source);
         OutputStream out = new FileOutputStream(file)) {
@@ -750,8 +755,8 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
 
   @Override
   public void dump(String prefix, FileDescriptor descriptor, PrintWriter writer, String[] args) {
-    // Activity dumps are gated by Android's DUMP permission. Expose existing
-    // Prepare visible controls or read bounded results; never a recording command.
+    // Android's DUMP permission gates access to diagnostic results, explicit
+    // exports, reference playback and preparation of foreground controls.
     String operation = args != null && args.length > 0 ? args[0] : "snapshot";
     try {
       if ("snapshot".equals(operation)) {
@@ -921,13 +926,11 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
               }
               analysisToken = null;
               probe.clearAnalysis();
-              File[] files =
-                  getCacheDir()
-                      .listFiles(
-                          (dir, name) -> name.startsWith("cc8-capture-") && name.endsWith(".wav"));
-              int removed = 0;
-              if (files != null) for (File f : files) if (f.delete()) removed++;
-              toast("已删除 " + removed + " 个本地录音缓存");
+              int removed = deleteCaptureFiles(getCacheDir());
+              removed += deleteCaptureFiles(new File(getFilesDir(), "reports"));
+              File external = getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS);
+              if (external != null) removed += deleteCaptureFiles(new File(external, "reports"));
+              toast("已删除 " + removed + " 个本地录音文件");
             }));
     note(pageHost, "若 CC8 没有系统文件选择器，报告仍会保存到应用专用目录，并显示路径。安装检测器不等于解锁系统；本工具不会申请 Root、刷机或停用原厂服务。");
     heading(pageHost, "最近测试摘要");
@@ -939,6 +942,14 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
     json.setTypeface(Typeface.MONOSPACE);
     json.setTextIsSelectable(true);
     pageHost.addView(json);
+  }
+
+  private int deleteCaptureFiles(File folder) {
+    File[] files =
+        folder.listFiles((dir, name) -> name.startsWith("cc8-capture-") && name.endsWith(".wav"));
+    int removed = 0;
+    if (files != null) for (File file : files) if (file.isFile() && file.delete()) removed++;
+    return removed;
   }
 
   private void copyReport() {
@@ -961,7 +972,7 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
     String type;
     try {
       if (audio) {
-        file = saveCaptureFile();
+        file = latestCapture();
         type = "audio/wav";
       } else {
         if (report == null) {
@@ -981,7 +992,8 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
         startActivityForResult(intent, EXPORT_DOCUMENT);
       } catch (ActivityNotFoundException e) {
         pendingExport = null;
-        showSaved(file);
+        if (audio) toast("系统文件选择器不可用，录音仍保存在应用缓存。");
+        else showSaved(file);
       }
     } catch (Exception e) {
       toast("导出失败：" + e.getMessage());
@@ -1010,7 +1022,7 @@ public final class MainActivity extends Activity implements AudioProbe.Listener 
     File file = pendingExport;
     pendingExport = null;
     if (result != RESULT_OK || data == null || data.getData() == null || file == null) {
-      toast("未选择目标位置；本机文件仍保留");
+      toast("未选择目标位置，已取消导出。");
       return;
     }
     Uri destination = data.getData();

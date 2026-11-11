@@ -272,10 +272,16 @@ class Transport:
         for slot in slots:
             slot.cancel()
 
+    def authenticate(self, request):
+        # Explicit request auth takes precedence over Requests' .netrc lookup.
+        request.headers['Authorization'] = 'Bearer ' + self.key
+        return request
+
     def request_slot(self):
         slot = RequestSlot(budget=IOBudget(sum(self.timeout)))
         slot.session = self.factory()
         if isinstance(slot.session, requests.Session):
+            slot.session.auth = self.authenticate
             slot.session.mount('https://', BudgetAdapter(slot.budget))
         with self.lock:
             self.slots.add(slot)

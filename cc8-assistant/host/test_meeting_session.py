@@ -190,6 +190,18 @@ class MeetingSessionTests(unittest.TestCase):
             self.assertFalse(model.complete(chunk, self.result(chunk, '超过预算')))
         self.assertEqual(model.rows[0]['reason'], 'text_limit')
 
+    def test_packet_crossing_duration_limit_seals_remaining_samples(self):
+        model = self.model(maximum_samples=2400)
+        self.feed(model, 1)
+        accepted, ready = model.receive(owner(), 1, 1600, PCM)
+        self.assertEqual(accepted, 800)
+        self.assertEqual(
+            (model.state, model.reason, model.position), ('ended', 'duration_limit', 2400)
+        )
+        self.assertEqual(len(ready), 1)
+        self.assertEqual(ready[0].end_sample, 2400)
+        self.assertTrue(model.complete(ready[0], self.result(ready[0])))
+
     def test_foreign_or_duplicate_completion_never_adds_content(self):
         model = self.model()
         self.feed(model, 1)

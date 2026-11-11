@@ -102,6 +102,10 @@ final class PreferenceMemoryDialog {
     showList(state, route);
   }
 
+  private static boolean boundedText(String value, int limit) {
+    return !value.isEmpty() && value.codePointCount(0, value.length()) <= limit;
+  }
+
   private void showList(JSONObject state, long route) {
     if (!available(route)) return;
     JSONArray items = state.optJSONArray("items");
@@ -120,7 +124,16 @@ final class PreferenceMemoryDialog {
     String[] labels = new String[items.length()];
     for (int i = 0; i < labels.length; i++) {
       JSONObject item = items.optJSONObject(i);
-      labels[i] = item == null ? "无效记录" : item.optString("key") + "：" + item.optString("value");
+      Object key = item == null ? null : item.opt("key");
+      Object value = item == null ? null : item.opt("value");
+      if (!(key instanceof String)
+          || !(value instanceof String)
+          || !boundedText((String) key, 40)
+          || !boundedText((String) value, 200)) {
+        toast("记录格式不兼容，请更新后台。");
+        return;
+      }
+      labels[i] = key + "：" + value;
     }
     int revision = state.optInt("revision", -1);
     AlertDialog.Builder builder =

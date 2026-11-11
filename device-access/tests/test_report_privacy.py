@@ -33,14 +33,12 @@ class ReportPrivacyTests(unittest.TestCase):
                 return_value={'shell_verified': True, 'uid': 2000, 'model': 'AILABS_S6', 'sdk': 27},
             )
         )
-        install = stack.enter_context(
-            patch.object(
-                access,
-                'install',
-                return_value=install_result
-                or {'installed': True, 'installed_apk_hash_verified': True},
-            )
-        )
+
+        def finish_install(*args, before_dispatch, **kwargs):
+            before_dispatch()
+            return install_result or {'installed': True, 'installed_apk_hash_verified': True}
+
+        install = stack.enter_context(patch.object(access, 'install', side_effect=finish_install))
         stack.enter_context(redirect_stdout(io.StringIO()))
         return stack, target, install
 
@@ -121,7 +119,12 @@ class ReportPrivacyTests(unittest.TestCase):
                 return '7'
 
             target.side_effect = before_probe
-            install.side_effect = RuntimeError('fixture failed after dispatch')
+
+            def failed(*args, before_dispatch, **kwargs):
+                before_dispatch()
+                raise RuntimeError('fixture failed after dispatch')
+
+            install.side_effect = failed
             with stack, self.assertRaises(SystemExit):
                 access.main(['--install', str(root / 'candidate.apk')])
             report = next((root / 'device-access/private').glob('apk-install-result*.json'))
@@ -131,6 +134,25 @@ class ReportPrivacyTests(unittest.TestCase):
             self.assertNotIn('installed', data)
             self.assertNotIn('fixture failed', report.read_text())
             self.assertEqual(install.call_count, 1)
+
+    def test_missing_apk_leaves_prepared_receipt_without_dispatch(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'device-access').mkdir()
+            actual_install = access.install
+            stack, _, _ = self.scope(root)
+            with (
+                stack,
+                patch.object(access, 'install', actual_install),
+                patch.object(access, 'install_stream') as dispatch,
+                self.assertRaises(SystemExit),
+            ):
+                access.main(['--install', str(root / 'missing.apk')])
+            dispatch.assert_not_called()
+            report = next((root / 'device-access/private').glob('apk-install-result*.json'))
+            data = json.loads(report.read_text())
+            self.assertEqual(data['report_state'], 'prepared')
+            self.assertEqual(data['installation_result'], 'not_started')
 
     def test_report_save_failure_after_install_does_not_retry_or_claim_no_install(self):
         with tempfile.TemporaryDirectory() as folder:

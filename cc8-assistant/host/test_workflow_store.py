@@ -104,6 +104,21 @@ class DefinitionTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 due_slot(value, now)
 
+    def test_daily_grace_after_midnight_uses_previous_weekday(self):
+        slot = int(datetime(2026, 11, 10, 23, 55, tzinfo=BEIJING).timestamp())
+        flow = scheduled()
+        flow['schedule'] = dict(
+            kind='daily',
+            enabled=True,
+            configured_at=slot - 3600,
+            minute_of_day=23 * 60 + 55,
+            weekdays=[1],
+        )
+        self.assertEqual(due_slot(flow, slot + 420), slot)
+        self.assertIsNone(due_slot(flow, slot + 901))
+        flow['schedule']['weekdays'] = [2]
+        self.assertIsNone(due_slot(flow, slot + 420))
+
 
 class StoreTests(unittest.TestCase):
     def setUp(self):

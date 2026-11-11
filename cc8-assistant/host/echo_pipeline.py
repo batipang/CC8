@@ -58,16 +58,16 @@ class EchoPipeline:
         self.paired_filter = PairedReferenceFilter()
 
     def reset_transport(self):
-        self.timeline = RenderTimeline()
         with self.dsp_lock:
+            self.timeline = RenderTimeline()
             self.paired_filter.clear()
 
     def reset_session(self):
         with self.dsp_lock:
             self.paired_filter.clear()
-        self.timeline = RenderTimeline()
-        self.calibration_frames = []
-        self.reference_shift_ns = 0
+            self.timeline = RenderTimeline()
+            self.calibration_frames = []
+            self.reference_shift_ns = 0
 
     def open(self, frames=(), *, shift_ns=0):
         with self.dsp_lock, ExitStack() as pending:
@@ -119,16 +119,20 @@ class EchoPipeline:
             del self.calibration_frames[:-MAX_CALIBRATION_FRAMES]
 
     def add_render(self, packet, pcm):
-        self.timeline.add(packet.generation, packet.frame, packet.nanos, pcm)
+        with self.dsp_lock:
+            self.timeline.add(packet.generation, packet.frame, packet.nanos, pcm)
 
     def cancel_pause(self):
-        self.timeline.cancel_pause()
+        with self.dsp_lock:
+            self.timeline.cancel_pause()
 
     def pause_at(self, nanos):
-        self.timeline.pause_at(nanos)
+        with self.dsp_lock:
+            self.timeline.pause_at(nanos)
 
     def resume_at(self, nanos):
-        self.timeline.resume_at(nanos)
+        with self.dsp_lock:
+            self.timeline.resume_at(nanos)
 
     def process(self, nanos, raw, device_reference=None):
         with self.dsp_lock:
@@ -166,7 +170,8 @@ class EchoPipeline:
             # The digital timeline still needs its original gate/evidence mapping.
             # This shift never changes the same-grid reference used by paired AEC.
             mic = np.concatenate([item[1] for item in frames])
-            render = np.concatenate([self.timeline.at(item[0], FRAME) for item in frames])
+            with self.dsp_lock:
+                render = np.concatenate([self.timeline.at(item[0], FRAME) for item in frames])
             shift, correlation = estimate_reference_shift(mic, render)
             with self.dsp_lock:
                 if not self.hooks.active():

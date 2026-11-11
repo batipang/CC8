@@ -33,3 +33,9 @@ device-access/private/
 .pre-commit-cache/
 .hypothesis/
 mac-window-input/.build/
+mac-notifier/.build/
+
+# Local recordings and raw capture files
+*.wav
+*.pcm
+!cc8-diagnostics/app/src/main/assets/reference.wav

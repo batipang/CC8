@@ -1,5 +1,12 @@
 # Changelog
 
+## Backend 0.16.37 / Assistant 0.9.129 / Diagnostics 1.0.7 — review fixes
+
+- Bound LAN authentication, preserve MiniMax bearer authentication and keep diagnostic speech text out of saved status and logs.
+- Serialize capture lifetime changes with packet consumption. Fence late playback, camera and chat callbacks by route or request, and stop system recreation from rearming the microphone.
+- Preserve reminder and workflow schedule boundaries, meeting exports and final audio chunks, and the distinction between install preparation and an installation whose result is unconfirmed.
+- Export recording data directly to the selected document and remove old app-owned WAV copies through the diagnostics cleanup control.
+
 ## Backend 0.16.21 / Assistant 0.9.91 — explicitly saved report delivery progress
 
 - Explicitly save up to eight owner-private delivery checkpoints within 256 KiB, retaining bounded result excerpts, source identities, range and actual device-confirmed summary delivery. View and delete checkpoints without changing live progress, source registrations, saved reports or original tasks. Normal reporting remains in RAM; no automatic checkpoint updates.

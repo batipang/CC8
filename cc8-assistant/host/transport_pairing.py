@@ -4,14 +4,14 @@ from __future__ import annotations
 import hashlib
 import hmac
 import ipaddress
-import json
 import os
 from pathlib import Path
 import re
 import secrets
 import ssl
 import subprocess
-from protocol import JsonObject, JsonValue, decode_json_object
+from protocol import JsonObject, JsonValue
+from reminder_store import ReminderStore
 
 ROOT = Path(__file__).resolve().parents[2]
 PAIR_DIR = ROOT / '.toolchains/cc8/transport'
@@ -57,11 +57,28 @@ class Pairing:
             raise ValueError('Invalid TLS port')
         self.port = port
         self.folder = Path(folder)
-        self.folder.mkdir(parents=True, exist_ok=True)
-        os.chmod(self.folder, 0o700)
+        store = ReminderStore(self.folder / 'pairing.json', max_bytes=4096)
+        with store.directory(create=True):
+            pass
+        try:
+            data = store.load()
+        except RecursionError:
+            raise ValueError('Invalid local transport pairing file') from None
+        new_pair = data is None and store.expected is None
+        if new_pair:
+            data = {'server_id': secrets.token_hex(16), 'token': secrets.token_hex(32)}
+        if not isinstance(data, dict):
+            raise ValueError('Invalid local transport pairing file')
+        server_id, token = data.get('server_id'), data.get('token')
+        if (
+            not isinstance(server_id, str)
+            or not re.fullmatch('[0-9a-f]{32}', server_id)
+            or not isinstance(token, str)
+            or not re.fullmatch('[0-9a-f]{64}', token)
+        ):
+            raise ValueError('Invalid local transport pairing file')
         cert = self.folder / 'server.pem'
         key = self.folder / 'server-key.pem'
-        config = self.folder / 'pairing.json'
         if not cert.exists() or not key.exists():
             subprocess.run(
                 [
@@ -89,22 +106,8 @@ class Pairing:
             )
         os.chmod(key, 0o600)
         os.chmod(cert, 0o600)
-        if config.exists():
-            data = decode_json_object(config.read_bytes(), max_bytes=4096)
-        else:
-            data = {'server_id': secrets.token_hex(16), 'token': secrets.token_hex(32)}
-            fd = os.open(config, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, 'w') as out:
-                json.dump(data, out)
-        os.chmod(config, 0o600)
-        server_id, token = data.get('server_id'), data.get('token')
-        if (
-            not isinstance(server_id, str)
-            or not re.fullmatch('[0-9a-f]{32}', server_id)
-            or not isinstance(token, str)
-            or not re.fullmatch('[0-9a-f]{64}', token)
-        ):
-            raise ValueError('Invalid local transport pairing file')
+        if new_pair:
+            store.save(data)
         self.server_id = server_id
         self.token = token
         der = ssl.PEM_cert_to_DER_cert(cert.read_text())

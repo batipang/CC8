@@ -84,7 +84,13 @@ def install_notice(*parts: str) -> None:
 
 
 def install_stream(
-    transport: str, package: str, payload: bytes, digest: str, shared_staging: bool = False
+    transport: str,
+    package: str,
+    payload: bytes,
+    digest: str,
+    shared_staging: bool = False,
+    *,
+    before_dispatch=lambda: None,
 ):
     # 调用系统 PackageInstaller；成功必须有流哈希与安装回调，不能只凭 shell 退出码。
     helper = helper_artifact()
@@ -120,6 +126,7 @@ def install_stream(
             + ' '
             + digest
         )
+        before_dispatch()
         output = shell(transport, command, payload, timeout=90)
         if (
             'CC8_APK_STREAM_VERIFIED bytes=' + str(len(payload)) not in output
@@ -308,14 +315,23 @@ def prepare_apk(transport, apk, launch=False):
     return package, activity, payload, signature
 
 
-def install(transport: str, apk: Path, launch: bool, shared_staging: bool = False) -> dict:
+def install(
+    transport: str,
+    apk: Path,
+    launch: bool,
+    shared_staging: bool = False,
+    *,
+    before_dispatch=lambda: None,
+) -> dict:
     package, activity, payload, signature = prepare_apk(transport, apk, launch)
     return _install_verified(
-        transport, package, activity, payload, launch, shared_staging, signature
+        transport, package, activity, payload, launch, shared_staging, signature, before_dispatch
     )
 
 
-def _install_verified(transport, package, activity, payload, launch, shared_staging, signature):
+def _install_verified(
+    transport, package, activity, payload, launch, shared_staging, signature, before_dispatch
+):
     if launch and not activity:
         raise ValueError('APK does not declare a launchable activity')
     digest = hashlib.sha256(payload).hexdigest()
@@ -331,7 +347,14 @@ def _install_verified(transport, package, activity, payload, launch, shared_stag
     }
     # The shipped pm command advertises installation but rejects it at runtime.
     # The temporary helper calls the stock PackageInstaller API at shell UID.
-    install_stream(transport, package, payload, digest, shared_staging=shared_staging)
+    install_stream(
+        transport,
+        package,
+        payload,
+        digest,
+        shared_staging=shared_staging,
+        before_dispatch=before_dispatch,
+    )
     installed_path = shell(transport, 'pm path ' + shlex.quote(package)).strip()
     if not installed_path.startswith('package:'):
         raise RuntimeError('Package manager could not locate the installed package')
@@ -425,13 +448,25 @@ def _perform_actions(args, output=None):
         package, _, _, signature = prepare_apk(transport, args.verify_apk)
         print(json.dumps({'package': package, **signature, 'installed': False}), flush=True)
     if args.install:
-        # A crash/failed callback after entering install cannot prove whether the
-        # package changed; leave an explicit unconfirmed receipt, never retry.
-        output.write(
-            {**report, 'report_state': 'result_unconfirmed', 'installation_result': 'unconfirmed'}
-        )
+
+        def dispatch():
+            # Only the verified helper invocation can start an installation.
+            output.write(
+                {
+                    **report,
+                    'report_state': 'result_unconfirmed',
+                    'installation_result': 'unconfirmed',
+                }
+            )
+
         report.update(
-            install(transport, args.install, args.launch, shared_staging=args.shared_staging)
+            install(
+                transport,
+                args.install,
+                args.launch,
+                shared_staging=args.shared_staging,
+                before_dispatch=dispatch,
+            )
         )
         try:
             output.write({**report, 'report_state': 'installation_verified'})

@@ -88,7 +88,7 @@ class PairedWireTests(unittest.TestCase):
                 *args,
             ],
             text=True,
-            stderr=subprocess.STDOUT,
+            stderr=subprocess.PIPE,
             timeout=10,
         ).strip()
 

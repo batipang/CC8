@@ -42,7 +42,7 @@ python3 device-access/cc8_install.py --check
 
 - `artifacts/cc8-installer-shell-1.0.jar`：临时 Java / DEX 安装助手。
 - `artifacts/cc8-installer-shell-1.0.json`：助手 SHA-256 与 Java 源码 SHA-256。
-- `artifacts/cc8-diagnostics-1.0.1.apk`：签名后的示例应用。
+- `artifacts/cc8-diagnostics-1.0.7.apk`：签名后的示例应用。
 - 对应 APK 的 `.sha256` 文件。
 
 `--check` 只检查电脑上的 ADB、AAPT、apksigner / JDK 和助手 / 源码哈希，不连接设备。修改 Java 安装助手后必须重新构建，不能复用旧哈希元数据。
@@ -74,14 +74,14 @@ dumpsys activity com.ailabs.emode >/dev/null 2>&1; <普通 shell 命令>
 以下命令显式选择已验证的共享目录兼容路线 `--shared-staging`，只适用于你信任设备上现有应用的环境。共享目录不能提供受保护的装载保证，传输哈希也无法消除此类竞态；如果不接受此风险，保持默认模式并停止安装，不能靠关闭系统安全策略解决。
 
 ```sh
-python3 device-access/cc8_install.py --install artifacts/cc8-diagnostics-1.0.1.apk --launch --shared-staging
+python3 device-access/cc8_install.py --install artifacts/cc8-diagnostics-1.0.7.apk --launch --shared-staging
 ```
 
 安装语音助手：
 
 ```sh
 python3 cc8-assistant/tools/build.py
-python3 device-access/cc8_install.py --install artifacts/cc8-assistant-0.8.7.apk --launch --shared-staging
+python3 device-access/cc8_install.py --install artifacts/cc8-assistant-0.9.129.apk --launch --shared-staging
 ```
 
 安装其他单 APK 时替换 `--install` 后的路径。不想启动就省略 `--launch`。没有桌面入口的 APK 不能使用 `--launch`。

@@ -12,7 +12,7 @@ import threading
 import time
 import uuid
 from typing import Callable, Protocol
-from protocol import Packet, receive, EVENT, decode_json_object, JsonValue, JsonObject
+from protocol import HEADER, Packet, receive, EVENT, decode_json_object, JsonValue, JsonObject
 from tls_stream import TLSStream
 from transport_channel import Channel as Channel, DuplexStream, TransportEvent, TransportKind
 from transport_pairing import (
@@ -25,6 +25,8 @@ from transport_pairing import (
 )
 
 DISCOVERY_PORT = 18767
+AUTH_TIMEOUT_SECONDS = 3
+MAX_AUTH_JSON_BYTES = 1024
 CHANNEL_PRIORITY: tuple[TransportKind, ...] = ('usb', 'wifi')
 
 
@@ -34,6 +36,21 @@ class LogSink(Protocol):
 
 def quiet_log(event: str, **fields: JsonValue) -> None:
     pass
+
+
+class AuthenticationReader:
+    """Use the same deadline for the handshake and each read of its auth frame."""
+
+    def __init__(self, stream: ssl.SSLSocket, deadline: float):
+        self.stream = stream
+        self.deadline = deadline
+
+    def recv(self, count: int) -> bytes:
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('LAN authentication deadline exceeded')
+        self.stream.settimeout(remaining)
+        return self.stream.recv(count)
 
 
 class TransportHub:
@@ -124,15 +141,18 @@ class TransportHub:
             if time.monotonic() < self.all_disabled_until or not private_ipv4(peer[0]):
                 raw.close()
                 continue
-            # Bound expensive unauthenticated handshakes. One paired device.
             tls: ssl.SSLSocket | None = None
             try:
-                raw.settimeout(3)
+                deadline = time.monotonic() + AUTH_TIMEOUT_SECONDS
+                raw.settimeout(AUTH_TIMEOUT_SECONDS)
                 tls = self.pairing.context.wrap_socket(raw, server_side=True)
-                packet = receive(tls)
+                packet = receive(
+                    AuthenticationReader(tls, deadline),
+                    max_packet=HEADER.size + MAX_AUTH_JSON_BYTES,
+                )
                 auth: JsonObject = (
-                    decode_json_object(packet.data, max_bytes=1024)
-                    if packet.kind == EVENT and len(packet.data) <= 1024
+                    decode_json_object(packet.data, max_bytes=MAX_AUTH_JSON_BYTES)
+                    if packet.kind == EVENT
                     else {}
                 )
                 if not isinstance(auth, dict):

@@ -160,7 +160,7 @@ class InstallerTests(unittest.TestCase):
                 if closed_stream == 'stderr':
                     pipe_reader.close()
                 receipt = access._install_verified(
-                    '7', 'com.example.app', None, payload, False, True, {}
+                    '7', 'com.example.app', None, payload, False, True, {}, lambda: None
                 )
                 self.assertTrue(receipt['installed_apk_hash_verified'])
                 self.assertEqual(sum(command.startswith('CLASSPATH=') for command in commands), 1)

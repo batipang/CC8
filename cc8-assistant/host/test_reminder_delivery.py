@@ -88,6 +88,19 @@ class DeliveryTests(unittest.TestCase):
         self.assertFalse(restarted.finish_reminders(self.scheduler.claims, True))
         self.assertEqual(len(self.jobs), 1)
 
+    def test_completed_repeat_advances_after_wall_clock_rollback(self):
+        item = self.create(repeat='daily')
+        self.now += timedelta(minutes=2)
+        claims = self.board.claim_reminders()
+        self.assertEqual(len(claims), 1)
+        self.now -= timedelta(minutes=5)
+        self.assertTrue(self.board.finish_reminders(claims, True))
+        saved = self.board.snapshot()['reminders'][0]
+        self.assertEqual(
+            datetime.fromisoformat(saved['due']),
+            datetime.fromisoformat(item['due']) + timedelta(days=1),
+        )
+
     def test_real_isolated_process_exit_after_claim_leaves_no_restart_replay(self):
         self.create()
         script = """import os,sys

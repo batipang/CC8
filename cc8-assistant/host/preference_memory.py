@@ -235,9 +235,20 @@ def command(text):
     }
     if text in simple:
         return {'action': simple[text]}
-    match = re.fullmatch(r'记住[，,\s]*(?:我的)?(.{1,40}?)(?:是|为|叫|=|：|:)(.{1,200})', text)
+    if re.match(
+        r'记住[，,\s]*(?:(?:今[天晚]|明[天早晚]|后天)[^，,。]{0,20})?(?:提醒|通知|叫)我', text
+    ):
+        return None
+    # Voice keys are short labels. “叫” applies only to a name or form of address.
+    match = re.fullmatch(
+        r'记住[，,\s]*(?:我的)?([^，,。！？!?；;：:=\n]{1,40}?)(是|为|叫|=|：|:)(.{1,200})', text
+    )
     if match:
-        return {'action': 'put', 'key': match[1], 'value': match[2]}
+        key, separator, value = match.groups()
+        if (separator != '叫' or key in ('名字', '姓名', '昵称', '称呼')) and not re.search(
+            r'因为|所以|这件事|那件事', key
+        ):
+            return {'action': 'put', 'key': key, 'value': value}
     match = re.fullmatch(r'把记忆中的(.{1,40}?)改成(.{1,200})', text)
     if match:
         return {'action': 'replace', 'key': match[1], 'value': match[2]}

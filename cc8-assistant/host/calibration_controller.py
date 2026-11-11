@@ -106,21 +106,26 @@ class CalibrationController:
                     return
                 self.active = False
                 self.hooks.reset_activity()
-            if self.pending:
-                self.pending = False
+                check_echo = self.pending
+                if check_echo:
+                    self.pending = False
+                    self.running = True
+                elif self.hooks.wake():
+                    self.hooks.status('listening', WAITING)
+                else:
+                    self.hooks.status('listening', '我在听，可以开始说话')
+            if check_echo:
                 self.hooks.check_echo(generation)
-            elif self.hooks.wake():
-                self.hooks.status('listening', WAITING)
-            else:
-                self.hooks.status('listening', '我在听，可以开始说话')
             self.hooks.save_status()
             self.hooks.log('calibration_finished')
         except Exception as e:
-            if self.hooks.valid(generation):
-                self.hooks.failure('校准未完成，请停止后重试', e)
+            with self.hooks.lock:
+                if self.hooks.valid(generation):
+                    self.hooks.failure('校准未完成，请停止后重试', e)
         finally:
-            if generation == self.hooks.generation():
-                self.active = False
+            with self.hooks.lock:
+                if generation == self.hooks.generation():
+                    self.active = False
 
     def check_echo(self, generation):
         """One-shot diagnostic, ONLY after the device's foreground Start.
@@ -137,7 +142,7 @@ class CalibrationController:
             'unmatched_candidates': 0,
             'echo_rejections': 0,
             'seconds': 0,
-            'diagnostic_text_pairs': [],
+            'transcript_comparisons': 0,
         }
         self.hooks.metric('echo_self_check', report)
         lines = [

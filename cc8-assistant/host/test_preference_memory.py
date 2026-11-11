@@ -289,6 +289,11 @@ class ControllerTests(unittest.TestCase):
         self.voice('确认清空偏好记忆')
         self.assertEqual(self.memory.snapshot()['items'], [])
 
+    def test_reminder_and_sentence_do_not_write_preferences(self):
+        self.assertIsNone(self.voice('记住，明天叫我起床'))
+        self.assertIn('请明确', self.voice('记住，这件事很重要，因为老板是这样说的'))
+        self.assertFalse(self.memory.path.exists())
+
     def test_disable_does_not_delete_and_saved_while_disabled_is_honest(self):
         self.voice('关闭记忆')
         self.assertIn('目前已关闭', self.voice('记住，称呼是公开姓名'))

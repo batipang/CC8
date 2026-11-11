@@ -297,9 +297,9 @@ class MeetingController:
                 )
             )
         if action == 'edit':
+            self.model.edit(request['row_id'], request['revision'], request['text'])
             self.offer = None
             self.analyses.invalidate('source_changed')
-            self.model.edit(request['row_id'], request['revision'], request['text'])
             return {}
         if action == 'delete':
             if self.model.state == 'capturing' or self.worker.busy():

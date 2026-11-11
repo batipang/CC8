@@ -19,7 +19,7 @@
 python3 device-access/installer-helper/build.py
 python3 cc8-assistant/tools/build.py
 python3 device-access/cc8_install.py --probe
-python3 device-access/cc8_install.py --install artifacts/cc8-assistant-0.8.6.apk --launch --shared-staging
+python3 device-access/cc8_install.py --install artifacts/cc8-assistant-0.9.129.apk --launch --shared-staging
 ```
 
 `--shared-staging` 的共享存储替换风险、安装条件和更新签名问题见[安装步骤](../docs/APK_INSTALL.md)。新克隆不会拥有原开发机签名，首次构建生成独立本地开发证书。

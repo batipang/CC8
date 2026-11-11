@@ -294,7 +294,7 @@ public final class MainActivity extends Activity
             });
     resultDetails = new ResultDetailsDialog(this, session);
     savedTasks = new SavedTasksDialog(this, session, resultDetails);
-    requestOpenVoice(getIntent());
+    if (state == null) requestOpenVoice(getIntent());
     build();
   }
 
@@ -2189,6 +2189,7 @@ public final class MainActivity extends Activity
           if (!session.currentRoute(route)) return;
           linked = connected;
           if (workspaceRoute != route || !connected) {
+            LargeDialogBuilder.dismissAll(this);
             peerRelease = null;
             clearSources();
             workspaceRoute = route;
@@ -2476,6 +2477,7 @@ public final class MainActivity extends Activity
 
   @Override
   protected void onPause() {
+    LargeDialogBuilder.dismissAll(this);
     if (versions != null) versions.close();
     peerRelease = null;
     clearSources();

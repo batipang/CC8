@@ -243,8 +243,13 @@ final class LanConnector {
         DatagramPacket response = new DatagramPacket(bytes, bytes.length);
         socket.receive(response);
         if (!response.getAddress().isSiteLocalAddress()) continue;
-        JSONObject offer =
-            new JSONObject(new String(bytes, 0, response.getLength(), StandardCharsets.UTF_8));
+        JSONObject offer;
+        try {
+          offer =
+              new JSONObject(new String(bytes, 0, response.getLength(), StandardCharsets.UTF_8));
+        } catch (org.json.JSONException malformed) {
+          continue;
+        }
         String sid = offer.optString("server_id");
         int port = offer.optInt("port");
         String expected = TransportAuth.sign(token, "offer:" + nonce + ":" + sid + ":" + port);

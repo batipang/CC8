@@ -81,7 +81,7 @@ python3 device-access/cc8_install.py --check
 
 # CC8 正常开机、进入工程模式、用 USB 数据线连接后
 python3 device-access/cc8_install.py --probe
-python3 device-access/cc8_install.py --install artifacts/cc8-diagnostics-1.0.1.apk --launch --shared-staging
+python3 device-access/cc8_install.py --install artifacts/cc8-diagnostics-1.0.7.apk --launch --shared-staging
 ```
 
 这些命令不能替代设备端工程入口；若 `--probe` 未通过，不继续安装。示例中的 `--shared-staging` 是本固件已验证路线的显式兼容选项：临时助手位于共享存储，其他具备存储权限的应用可能替换它，仅适用于你信任设备上应用的环境。默认不加该选项时只使用受保护目录；本机固件会拒绝写入该目录，工具因此停止，不自动回退。详细的成功条件、失败处理与签名注意事项见安装文档。

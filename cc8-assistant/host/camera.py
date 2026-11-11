@@ -13,7 +13,7 @@ import stat
 import sys
 
 from announce import SOCKET
-from vision import HD_IMAGE, image_policy, jpeg_dimensions
+from vision import HD_IMAGE, VisionError, image_policy, jpeg_dimensions
 
 PHOTOS = Path(__file__).resolve().parents[2] / 'device-access/private/photos'
 MAX_RESPONSE = HD_IMAGE.max_bytes * 4 // 3 + 4096
@@ -107,7 +107,7 @@ def main():
         result['path'] = str(target)
         print(json.dumps(result, ensure_ascii=False))
         return 0
-    except (OSError, ValueError):
+    except (OSError, ValueError, VisionError):
         print(
             json.dumps(
                 {

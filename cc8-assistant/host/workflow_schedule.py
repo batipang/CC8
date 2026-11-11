@@ -1,6 +1,6 @@
 """Beijing schedule slots; no catch-up beyond a bounded grace, no work on activation."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import math
 
 from work_reports import BEIJING
@@ -32,14 +32,15 @@ def due_slot(flow, now):
     else:
         try:
             local = datetime.fromtimestamp(now, BEIJING)
-            if local.weekday() not in schedule['weekdays']:
-                return None
             minute = schedule['minute_of_day']
-            slot = int(
-                local.replace(
-                    hour=minute // 60, minute=minute % 60, second=0, microsecond=0
-                ).timestamp()
+            scheduled = local.replace(
+                hour=minute // 60, minute=minute % 60, second=0, microsecond=0
             )
+            if scheduled > local:
+                scheduled -= timedelta(days=1)
+            if scheduled.weekday() not in schedule['weekdays']:
+                return None
+            slot = int(scheduled.timestamp())
         except (OverflowError, OSError, ValueError):
             raise ValueError('Workflow local date unavailable') from None
         grace = GRACE_SECONDS

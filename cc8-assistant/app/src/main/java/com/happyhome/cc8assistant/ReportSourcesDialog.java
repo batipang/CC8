@@ -98,7 +98,7 @@ final class ReportSourcesDialog {
 
   void close() {
     watch.close();
-    if (!pending.isEmpty() && session.currentRoute(route)) session.dotChatCancel(pending);
+    if (!pending.isEmpty()) session.dotChatCancel(pending, route);
     pending = action = "";
     snapshot = null;
     copy = null;

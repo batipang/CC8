@@ -221,8 +221,10 @@ class AnnouncementServer:
                         text = validate_text(request.get('text'))
                         job = self.bridge.announce(text)
                         finished = job.done.wait(120)
-                        if not finished and self.bridge.generation == job.generation:
-                            self.bridge.cancel('announcement_timeout')
+                        if not finished:
+                            with self.bridge.guard:
+                                if self.bridge.generation == job.generation:
+                                    self.bridge.cancel('announcement_timeout')
                         result = {
                             'status': job.result if finished else 'timeout',
                             'characters': len(text),
