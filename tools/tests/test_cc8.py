@@ -34,7 +34,7 @@ class CommandTests(unittest.TestCase):
     def test_real_metadata_probe_without_model_imports(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'requirements.txt'
-            path.write_text('cc8-missing-test-package==1.0\n')
+            path.write_text('cc8-missing-test-package==1.0 --hash=sha256:' + 'a' * 64 + '\n')
             result = cc8.python_info(sys.executable, path)
             self.assertEqual(result['version'], list(sys.version_info[:2]))
             self.assertEqual(result['missing_or_wrong'], ['cc8-missing-test-package'])

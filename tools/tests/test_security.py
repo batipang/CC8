@@ -94,7 +94,10 @@ class AuditTests(unittest.TestCase):
             for requirements in security.REQUIREMENTS:
                 path = Path(folder) / requirements
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text('x==1\n')
+                pin = 'x==1'
+                if requirements == security.RUNTIME_REQUIREMENTS:
+                    pin += ' --hash=sha256:' + 'a' * 64
+                path.write_text(pin + '\n')
             with patch.object(security, 'ROOT', Path(folder)):
                 self.assertEqual(security.audit(run=run), 1)
         self.assertEqual(len(commands), 3)
@@ -117,7 +120,20 @@ class AuditTests(unittest.TestCase):
     def test_empty_unpinned_or_include_manifest_is_not_accepted_as_inventory(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'requirements.txt'
-            for source in ('# empty\n', 'x>=1\n', '-r elsewhere.txt\n'):
+            path.write_text('Example_Package==1.0 --hash=sha256:' + 'a' * 64 + '\n')
+            self.assertEqual(
+                security.pinned_inventory(path, require_hashes=True), {('example-package', '1.0')}
+            )
+            path.write_text('x==1\n')
+            with self.assertRaises(ValueError):
+                security.pinned_inventory(path, require_hashes=True)
+            for source in (
+                '# empty\n',
+                'x>=1\n',
+                '-r elsewhere.txt\n',
+                'x==1 --hash=sha256:bad\n',
+                'x==1 --index-url https://example.invalid\n',
+            ):
                 path.write_text(source)
                 with self.assertRaises(ValueError):
                     security.pinned_inventory(path)

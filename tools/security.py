@@ -13,22 +13,28 @@ else:
     from ci_tools import binary
 
 ROOT = Path(__file__).resolve().parents[1]
+RUNTIME_REQUIREMENTS = 'cc8-assistant/host/requirements-runtime.txt'
 REQUIREMENTS = (
     'requirements-dev.txt',
     'requirements-security.txt',
-    'cc8-assistant/host/requirements-runtime.txt',
+    RUNTIME_REQUIREMENTS,
 )
 
 
-def pinned_inventory(path):
+def pinned_inventory(path, *, require_hashes=False):
     expected = set()
     for line in path.read_text().splitlines():
         line = line.split('#', 1)[0].strip()
         if not line:
             continue
-        match = re.fullmatch(r'([A-Za-z0-9_.-]+)==([A-Za-z0-9_.!+\-]+)', line)
+        match = re.fullmatch(
+            r'([A-Za-z0-9_.-]+)==([A-Za-z0-9_.!+\-]+)((?:[ \t]+--hash=sha256:[a-f0-9]{64})*)',
+            line,
+        )
         if not match:
             raise ValueError('Audit requires a flat pinned manifest: ' + path.name)
+        if require_hashes and not match[3]:
+            raise ValueError('Runtime pin has no wheel hash: ' + match[1])
         expected.add((re.sub(r'[-_.]+', '-', match[1]).lower(), match[2]))
     if not expected:
         raise ValueError('Audit manifest is empty: ' + path.name)
@@ -40,7 +46,9 @@ def audit(run=subprocess.run):
     directory.mkdir(parents=True, exist_ok=True)
     failed = False
     for index, requirements in enumerate(REQUIREMENTS):
-        expected = pinned_inventory(ROOT / requirements)
+        expected = pinned_inventory(
+            ROOT / requirements, require_hashes=requirements == RUNTIME_REQUIREMENTS
+        )
         report = directory / f'audit-{index}.json'
         report.unlink(missing_ok=True)
         # Each environment has its own lock; do not merge conflicting versions.

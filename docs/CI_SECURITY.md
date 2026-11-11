@@ -38,13 +38,13 @@ setup 才下载；工具官方 release 归档的 SHA-256 锁在 `tools/resources
 
 secrets 扫描**已经提交的历史**，不等于扫描所有未提交文件；提交前仍需检查 staged diff，提交后的 PR CI 扫描该提交。`.gitleaksignore` 的两个条目均限定到原提交、文件、规则及行号：原 SenseVoice 的 `tokens.txt` 公共词表 SHA-256，以及 P1-09 backup() 的单行英文注释被匹配成 generic-api-key。后者对应 aa61861 的 upgrade_preparation.py:81，实际代码段不含凭据；当前注释也已改写以避免后续重复命中。没有忽略整个文件、目录或默认规则。新增例外必须说明具体误报证据，不能用通用 baseline 隐藏未核查条目。
 
-审计 JSON 在忽略的 `artifacts/security/`；开发、审计工具和运行环境分开查询，避免相同包不同版本发生冲突。直接扫描三份标准、非空、平铺的固定版本清单（运行清单用 host 下的 requirements-runtime.txt），不将兼容 -r 入口交给 --disable-pip；逐一核对报告包名、版本和数量与源码声明一致，空报告、缺包、版本偏差都失败。`--no-deps --disable-pip` 只查询已声明的固定版本，不在 Ubuntu 安装 Apple Silicon 原生轮子。**覆盖的是三个锁定清单中的包，不证明所有运行时自动解析的间接依赖、Gradle 依赖、模型或二进制工具都无漏洞。** 增加/调整实际运行环境时仍需审核完整依赖变化，不用零告警代表无风险。
+审计 JSON 在忽略的 `artifacts/security/`；开发、审计工具和运行环境分开查询，避免相同包不同版本发生冲突。直接扫描三份标准、非空、平铺的固定版本清单（运行清单用 host 下的 requirements-runtime.txt），不将兼容 -r 入口交给 --disable-pip；运行清单另要求每条版本声明含 SHA-256，逐一核对报告包名、版本和数量与源码声明一致，空报告、缺包、版本偏差都失败。`--no-deps --disable-pip` 只查询已声明的固定版本，不在 Ubuntu 安装 Apple Silicon 原生轮子。**覆盖的是三个锁定清单中的包，不证明所有运行时自动解析的间接依赖、Gradle 依赖、模型或二进制工具都无漏洞。** 增加/调整实际运行环境时仍需审核完整依赖变化，不用零告警代表无风险。
 
 本轮把源代码中的 `mlx` / `mlx-metal` 从 0.29.3 更新到 0.29.4，修复上游明确列出的 NPY / GGUF 文件解析问题；未忽略这些告警。见 [NPY 公告](https://github.com/ml-explore/mlx/security/advisories/GHSA-w6vg-jg77-2qg6)、[GGUF 公告](https://github.com/ml-explore/mlx/security/advisories/GHSA-j842-xgm4-wf88)。当前运行助手的环境不会被 CI 或审计自动升级；模型回归和运行环境补丁部署仍需独立验证。
 
 ## 更新与下载来源
 
-Dependabot 每周检查根目录 pip 清单、GitHub Actions 和两个 Gradle 工程，只创建 PR，不自动合并、发布或安装。运行依赖版本唯一来源为 `cc8-assistant/host/requirements-runtime.txt`（标准命名便于更新器发现），原 `.lock` 路径保留为 `-r` 兼容入口；根目录同名文件用于跨目录发现，不复制版本列表，不能装进轻量开发环境。首次 updater 未取回非标准 `.lock` 引用的真实失败记录保留在验证日志，修复不以忽略整个运行清单代替。跨清单更新、Ruff required-version、pre-commit 锁版和原生资源校验值应一起审查，不能为了通过 CI 取消版本约束。
+Dependabot 每周检查根目录 pip 清单、GitHub Actions 和两个 Gradle 工程，只创建 PR，不自动合并、发布或安装。运行依赖版本唯一来源为 `cc8-assistant/host/requirements-runtime.txt`（标准命名便于更新器发现），原 `.lock` 路径引用同一份包含 SHA-256 的轮子清单，Mac 语音安装使用 `--require-hashes --only-binary=:all:`；根目录同名文件用于跨目录发现，不复制版本列表，不能装进轻量开发环境。首次 updater 未取回非标准 `.lock` 引用的真实失败记录保留在验证日志，修复不以忽略整个运行清单代替。跨清单更新、Ruff required-version、pre-commit 锁版和原生资源校验值应一起审查，不能为了通过 CI 取消版本约束。
 
 | 来源 | 更新/校验方式 | 不包含的承诺 |
 | --- | --- | --- |

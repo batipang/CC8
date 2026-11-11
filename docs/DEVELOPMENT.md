@@ -10,7 +10,7 @@ Python 安装工具和构建脚本使用 Python 3.10+；语音后台使用 Pytho
 
 ## 轻量测试与质量检查
 
-开发测试与设备运行环境分开：Python 3.11+（本轮实测 3.13）、JDK 21+、OpenSSL CLI、C++17 编译器；不需要 Android SDK、API Key、Codex 登录、MLX、ASR 模型或私人录音。C++仅编译固定关键词源码回归，不构建或加载整套语音库。运行语音服务仍使用下文的 Apple Silicon / Python 3.13 专用环境，requirements-runtime.lock 不变。
+开发测试与设备运行环境分开：Python 3.11+（本轮实测 3.13）、JDK 21+、OpenSSL CLI、C++17 编译器；不需要 Android SDK、API Key、Codex 登录、MLX、ASR 模型或私人录音。C++仅编译固定关键词源码回归，不构建或加载整套语音库。运行语音服务仍使用下文的 Apple Silicon / Python 3.13 专用环境，运行清单固定 Apple Silicon macOS 15+／CPython 3.13 的完整依赖及轮子哈希。
 
 ```sh
 python3.13 -m venv .venv

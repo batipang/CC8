@@ -26,13 +26,13 @@ python3 device-access/cc8_install.py --install artifacts/cc8-assistant-0.9.129.a
 
 ## Mac 运行环境
 
-使用 Apple Silicon Mac 上的 CPython 3.13：
+使用 Apple Silicon、macOS 15 或更高版本及 CPython 3.13：
 
 ```sh
 python3.13 scripts/setup-voice.py
 ```
 
-脚本创建 `.toolchains/cc8/voice-venv`、安装 `host/requirements-runtime.lock`，校验 AEC3 轮子，并下载和校验本地停止词模型。依赖和模型不进入 Git。可选本机 ASR：增加 `--sensevoice` 下载固定版本 SenseVoice 文件。
+脚本创建 `.toolchains/cc8/voice-venv`、使用 `host/requirements-runtime.lock` 按 SHA-256 校验并安装完整运行时轮子，另核对 AEC3 轮子，并下载和校验本地停止词模型。依赖和模型不进入 Git。可选本机 ASR：增加 `--sensevoice` 下载固定版本 SenseVoice 文件。
 
 Dot 模式还需要本机已安装并登录的 `codex` CLI；后台沿用其当前模型、推理、技能、插件 / MCP 和审批配置，创建独立临时语音上下文，不复制桌面当前聊天。没有安装 CLI 或服务无权限时明确报错，不偷偷换模型。
 

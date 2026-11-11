@@ -47,8 +47,9 @@ print(json.dumps(dict(version=list(sys.version_info[:2]),system=platform.system(
     expected = {}
     if manifest:
         for line in manifest.read_text().splitlines():
-            if line.strip() and not line.startswith('#'):
-                name, version = line.strip().split('==')
+            fields = line.split('#', 1)[0].split()
+            if fields:
+                name, version = fields[0].split('==')
                 expected[name] = version
     result = subprocess.run(
         [str(python), '-c', code, json.dumps(expected)],

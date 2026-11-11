@@ -1,2 +1,2 @@
-# Compatibility entry for existing setup scripts; versions live in one standard manifest.
+# Compatibility entry for existing setup scripts; versions and hashes live in one standard manifest.
 -r requirements-runtime.txt
