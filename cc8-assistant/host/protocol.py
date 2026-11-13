@@ -328,6 +328,7 @@ def validate_device_event(value: object) -> JsonObject:
         'capture_sample_rate': 32,
         'capture_channels': 32,
         'playout_receipt_version': 32,
+        'live_caption_version': 32,
         'render_clock_report_version': 32,
         'playback_done_id_version': 32,
         'playback_pause_applied_version': 32,

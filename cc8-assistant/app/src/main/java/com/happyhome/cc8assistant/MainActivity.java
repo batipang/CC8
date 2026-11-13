@@ -91,6 +91,7 @@ public final class MainActivity extends Activity
       AMBER = Color.rgb(255, 199, 91);
   private CaptionViewport captionScroll;
   private String brainProvider = "dot", recognitionEngine = "minimax", dotResult = "";
+  private boolean liveTrial;
   private SourcesPresentation displayedSources;
   private AlertDialog sourcesDialog;
   private boolean foreground,
@@ -2196,12 +2197,16 @@ public final class MainActivity extends Activity
       privacyText.setText("语音在 Mac 本机识别、复述和播报");
       return;
     }
-    String ears = "minimax".equals(recognitionEngine) ? "语音片段发送 MiniMax 云端识别" : "语音在当前 Mac 本机识别";
+    boolean useLive = liveTrial && wake.isChecked() && "dot".equals(brainProvider);
+    String ears =
+        useLive
+            ? "本地唤醒后，语音发往 OpenAI GPT-Live"
+            : "minimax".equals(recognitionEngine) ? "语音片段发送 MiniMax 云端识别" : "语音在当前 Mac 本机识别";
     privacyText.setText(
         ears
             + "\n"
             + ("dot".equals(brainProvider) ? "Dot 思考" : "MiniMax 思考")
-            + " · MiniMax 播报\n"
+            + (useLive ? " · GPT-Live 试用播报\n" : " · MiniMax 播报\n")
             + (!active
                 ? "首次开启请安静等待 6 秒校准"
                 : wake.isChecked() ? "15 分钟黑屏待机 · 大黄蜂 / Bumblebee 唤醒" : "自由对话 · 闲置 15 分钟后等待唤醒")
@@ -2213,6 +2218,15 @@ public final class MainActivity extends Activity
     postIdentityUi(
         () -> {
           recognitionEngine = engine;
+          updatePrivacy();
+        });
+  }
+
+  @Override
+  public void liveTrial(boolean enabled) {
+    postIdentityUi(
+        () -> {
+          liveTrial = enabled;
           updatePrivacy();
         });
   }

@@ -46,6 +46,9 @@ class SpeakerIntegrationTests(unittest.TestCase):
     def test_old_route_controls_and_pcm_cannot_touch_new_same_generation_player(self):
         self.check('route')
 
+    def test_live_pcm_rejects_previous_playback_within_same_generation(self):
+        self.check('live_pcm')
+
     def test_native_volume_error_result_releases_the_track_instead_of_using_default_gain(self):
         self.check('volume_result')
 

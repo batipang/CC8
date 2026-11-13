@@ -182,7 +182,7 @@ class BrainRouter:
                 'Vision request failed', stage='brain', kind=error_kind(error)
             ) from None
 
-    def clauses(self, text, history, is_current=lambda: True, on_web=None):
+    def clauses(self, text, history, is_current=lambda: True, on_web=None, *, force_dot=False):
         is_current = self.bind_identity(is_current)
         self.current_report_delivery = None
         if not is_current():
@@ -267,7 +267,7 @@ class BrainRouter:
             return
         if self.work_reports:
             self.work_reports.forget()
-        provider = 'dot' if match else self.selected
+        provider = 'dot' if match or force_dot else self.selected
         target = self.dot if provider == 'dot' else self.minimax
         self.last_metrics = {'provider': provider}
         if not prompt:

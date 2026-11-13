@@ -91,6 +91,7 @@ class Bridge:
         self.brain = brain
         self.local_mode = local_mode
         self.identity = self.identity_runtime = None
+        self.live = None
         self.library = library
         self.workspace = workspace or Workspace()
         self.owner_workspace = self.workspace
@@ -102,6 +103,10 @@ class Bridge:
             'interruptions': 0,
             'utterances': 0,
             'raw_audio_saved': False,
+            'live_barge_ins': 0,
+            'live_transcript_fragments': 0,
+            'live_sessions': 0,
+            'live_failures': 0,
         }
         self.session = build_session(self, capture_frontend=capture_frontend)
         self.owner_voice_preferences = self.session.voice_preferences
@@ -315,6 +320,9 @@ class Bridge:
 
     def heartbeat_tick(self):
         try:
+            if self.live is not None:
+                with self.guard:
+                    self.live.tick()
             self.response.expire_corrections()
             self.meetings.tick()
             if self.session.connection is not None:

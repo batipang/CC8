@@ -79,6 +79,8 @@ def voice_busy(host: Bridge, *, include_meeting: bool = True) -> bool:
     return (
         host.calibration.active
         or host.calibration.running
+        or host.live is not None
+        and host.live.active
         or host.playback.playing
         or host.playback.pause_state is not None
         or host.recognition.busy
@@ -668,6 +670,8 @@ def build_session(host: Bridge, *, capture_frontend: str = 'mono') -> SessionCon
             wake_tick=lambda: host.wake.tick(),
             prepare_brain=lambda generation: host.response.prepare(generation),
             cancel_observation=lambda: host.cancel_playback_observation(),
+            live_trial_enabled=lambda: host.live is not None,
+            cancel_live=lambda: host.live and host.live.cancel(stop_device=False),
             discard_corrections=lambda preserve: host.response.clear_corrections(
                 preserve_source=preserve, publish=False
             ),

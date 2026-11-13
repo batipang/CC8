@@ -18,6 +18,7 @@ from dot_receipt import UnconfirmedTurnStart
 from operation_failure import OperationFailure, KINDS
 from reply_types import (
     Reply,
+    LiveReply,
     TextReply,
     VisualReply,
     BrainPreparation,
@@ -427,6 +428,13 @@ class ResponseWorker:
         try:
             if type(job) is Reply and self.handle_correction_voice(job):
                 pass
+            elif isinstance(job, LiveReply):
+                if job.current():
+                    try:
+                        self.answer(job.text, job.generation, live=job)
+                    except Exception:
+                        job.deliver('Dot 没有确认任务结果，请查看屏幕上的任务状态。')
+                        raise
             elif isinstance(job, MeetingReply):
                 if self.hooks.run_meeting is None:
                     raise RuntimeError('Meeting document executor unavailable')
@@ -444,13 +452,20 @@ class ResponseWorker:
         finally:
             self.busy = False
 
-    def answer(self, text, generation, image=None):
-        command = reading_command(text) if image is None and self.hooks.owner_access() else None
+    def answer(self, text, generation, image=None, *, live=None):
+        def current():
+            return self.hooks.valid(generation) and (live is None or live.current())
+
+        command = (
+            reading_command(text)
+            if image is None and live is None and self.hooks.owner_access()
+            else None
+        )
         if command is not None:
             with self.hooks.lock:
                 tasks = self.hooks.workspace().snapshot()['tasks']
                 task = self.reading.target(tasks)
-                if not self.hooks.valid(generation):
+                if not current():
                     return
                 if task is None:
                     self.hooks.diagnostics().ensure(generation, 'text')
@@ -464,7 +479,7 @@ class ResponseWorker:
             return
         # 任务成功以大脑真实回执为准，后续停止朗读不能把已完成工作改为取消。
         with self.hooks.lock:
-            if not self.hooks.valid(generation):
+            if not current():
                 return
             self.hooks.diagnostics().ensure(generation, 'vision' if image is not None else 'text')
             self.hooks.diagnostics().mark(generation, 'brain_start')
@@ -476,7 +491,7 @@ class ResponseWorker:
         def web_update(kind, payload):
             if kind == 'brain_stage':
                 with self.hooks.lock:
-                    if not self.hooks.valid(generation):
+                    if not current():
                         return
                     if (
                         not isinstance(payload, dict)
@@ -492,7 +507,7 @@ class ResponseWorker:
                 with self.hooks.lock:
                     scenario = payload.get('scenario')
                     if (
-                        self.hooks.valid(generation)
+                        current()
                         and isinstance(scenario, str)
                         and scenario in ROUTE_COMPLETION_STAGES
                     ):
@@ -500,7 +515,7 @@ class ResponseWorker:
                 return
             if kind == 'dot_result':
                 with self.hooks.lock:
-                    if not self.hooks.valid(generation):
+                    if not current():
                         return
                     self.hooks.diagnostics().task_result(generation, 'completed')
                     self.hooks.diagnostics().link_turn(
@@ -517,7 +532,7 @@ class ResponseWorker:
                 return
             if kind == 'result_provenance':
                 with self.hooks.lock:
-                    if self.hooks.valid(generation):
+                    if current():
                         self.hooks.workspace().task_provenance(task_id, payload)
                         try:
                             self.hooks.publish_workspace()
@@ -526,7 +541,7 @@ class ResponseWorker:
                             # authoritative result from committing locally.
                             pass
                 return
-            if not self.hooks.valid(generation):
+            if not current():
                 return
             if kind == 'progress':
                 message = payload.get('message', '正在处理…')
@@ -586,23 +601,22 @@ class ResponseWorker:
         spoken = []
         try:
             with self.hooks.lock:
-                if not self.hooks.valid(generation):
+                if not current():
                     return
                 self.hooks.publish_workspace()
-                self.hooks.status('thinking', '正在准备回答…')
-            clauses = (
-                self.hooks.brain().vision_clauses(
-                    text, image, self.history, lambda: self.hooks.valid(generation), web_update
-                )
-                if image is not None
-                else self.hooks.brain().clauses(
-                    text, self.history, lambda: self.hooks.valid(generation), web_update
-                )
-                if self.hooks.brain()
-                else iter(['语音识别已完成。你刚才说：' + text])
-            )
+                if live is None:
+                    self.hooks.status('thinking', '正在准备回答…')
+            brain = self.hooks.brain()
+            if image is not None:
+                clauses = brain.vision_clauses(text, image, self.history, current, web_update)
+            elif live is not None:
+                clauses = brain.clauses(text, self.history, current, web_update, force_dot=True)
+            elif brain:
+                clauses = brain.clauses(text, self.history, current, web_update)
+            else:
+                clauses = iter(['语音识别已完成。你刚才说：' + text])
             for clause in clauses:
-                if not self.hooks.valid(generation):
+                if not current():
                     completed = False
                     break
                 self.hooks.diagnostics().mark(generation, 'first_clause')
@@ -610,6 +624,9 @@ class ResponseWorker:
                     self.hooks.diagnostics().link_turn(
                         generation, self.hooks.brain().last_metrics.get('turn_id')
                     )
+                if live is not None:
+                    spoken.append(clause)
+                    continue
                 # A successful TTS call is not delivery. Capture this clause's
                 # immutable plan token while the router is suspended at yield;
                 # advance only after a matched device play_done receipt.
@@ -667,7 +684,7 @@ class ResponseWorker:
                 )
                 status = (
                     'cancelled'
-                    if not self.hooks.valid(generation)
+                    if not current()
                     else 'failed'
                     if sys.exc_info()[0] or not completed or failed
                     else 'completed'
@@ -689,10 +706,28 @@ class ResponseWorker:
                         'failed_response_workspace_undelivered',
                         error_type=type(delivery_error).__name__,
                     )
+        if live is not None:
+            with self.hooks.lock:
+                if current():
+                    answer = ''.join(spoken) or result_text[0]
+                    if status != 'completed':
+                        live.deliver('Dot 没有确认任务成功，请查看屏幕。')
+                    elif brain.last_metrics.get('provider') in ('work_report', 'preference_memory'):
+                        # Keep private store contents on the existing result surface.
+                        live.deliver('已处理，请在屏幕上查看结果。')
+                    else:
+                        self.history.extend(
+                            [
+                                {'role': 'user', 'content': text},
+                                {'role': 'assistant', 'content': answer},
+                            ]
+                        )
+                        live.deliver(answer)
+            return
         # Do not let a new turn start between ownership admission and its
         # predecessor's final status or history update.
         with self.hooks.lock:
-            if not completed or not self.hooks.valid(generation):
+            if not completed or not current():
                 return
             answer = ''.join(spoken)
             # Local report excerpts are not automatic context for a later model

@@ -48,6 +48,7 @@ class SessionController:
         self.capture_rejection_supported = False
         self.correction_ui_supported = False
         self.rejected_capture_id = None
+        self.live_caption_supported = False
         self.capture_start_ack = False
         self.capture_start_token = uuid.uuid4().hex
         self.capture_id = None
@@ -129,6 +130,7 @@ class SessionController:
             self.capture_route_pending = True
             self.capture_rejection_supported = False
             self.correction_ui_supported = False
+            self.live_caption_supported = False
             self.capture_start_ack = False
             self.capture_frontend_requested = 'mono'
         try:
@@ -424,6 +426,7 @@ class SessionController:
             )
             self.generation += 1
             generation = self.generation
+            self.hooks.cancel_live()
             cleared_correction = False
             if reason not in ('voice', 'verified_voice'):
                 # Erase the draft without display callbacks during cleanup.

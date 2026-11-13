@@ -481,6 +481,8 @@ class DeviceFeedbackTests(unittest.TestCase):
             'announcement_done',
             'cancel',
             'vision_done',
+            'live_caption',
+            'live_playback_stop',
         )
         # Compile the real event branch bodies, not a Python reimplementation.
         # Minimal interfaces exclude Android I/O; actual device rendering remains
@@ -488,7 +490,7 @@ class DeviceFeedbackTests(unittest.TestCase):
         methods = '\n'.join(
             'void '
             + event
-            + '(int gen, String next, String message){Packet p=new Packet(gen);Data j=new Data(next,message);j.startFailure=suppliedStartFailure;j.provenance=suppliedResultProvenance;j.memory=suppliedPreferenceMemory;j.modes=suppliedVisionModes;j.photos=suppliedPhotoFollowup;j.listening=suppliedListeningState;j.captureId=suppliedCaptureId!=null?suppliedCaptureId:captureWindow==null?null:captureWindow.id;j.epoch=suppliedCaptureEpoch!=null?suppliedCaptureEpoch:Integer.valueOf(epoch);'
+            + '(int gen, String next, String message){Packet p=new Packet(gen);Data j=new Data(next,message);j.playbackId=suppliedPlaybackId;j.startFailure=suppliedStartFailure;j.provenance=suppliedResultProvenance;j.memory=suppliedPreferenceMemory;j.modes=suppliedVisionModes;j.photos=suppliedPhotoFollowup;j.listening=suppliedListeningState;j.captureId=suppliedCaptureId!=null?suppliedCaptureId:captureWindow==null?null:captureWindow.id;j.epoch=suppliedCaptureEpoch!=null?suppliedCaptureEpoch:Integer.valueOf(epoch);'
             + branch(source, event)
             + '}'
             for event in events
@@ -530,8 +532,15 @@ class FeedbackCheck {
  Object suppliedResultProvenance,suppliedPreferenceMemory,suppliedVisionModes,suppliedPhotoFollowup;
  String pendingVisionNonce="",desktopVisionNonce="";
  static class Packet{int generation;Packet(int g){generation=g;}}
+ static class Player{boolean liveCaption=true;int generation=8,playbackId=7;String text="";int timings;}
+ Player player;
+ int suppliedPlaybackId=7;
+ int timings(Object data,int length){return length;}
  static class Data{String next,message;Object listening="unknown",captureId,epoch,startFailure,provenance,memory,modes,photos;Data(String n,String m){next=n;message=m;}
   Object optJSONObject(String key){return null;}
+  Object optJSONArray(String key){return null;}
+  int optInt(String key,int fallback){return playbackId;}
+  int playbackId;
   String optString(String k){return "phase".equals(k)?next:"listening_state".equals(k)?String.valueOf(listening):message;}
   String optString(String k,String fallback){return optString(k);}
   Object opt(String k){
@@ -560,12 +569,12 @@ class FeedbackCheck {
   void playback(boolean active){playing=active;}
   void vision(boolean active,String message){vision(active,message,false);}
   void vision(boolean active,String message,boolean preserve){visionCalls++;preserveVisionError=preserve;}
-  void recognition(String engine){} void heard(String text){} void caption(String text,String mood){} void announcement(){}}
+  void recognition(String engine){} void liveTrial(boolean enabled){} void heard(String text){} void caption(String text,String mood){} void announcement(){}}
  final Listener listener=new Listener();
  static class Output {void endTask(int generation){}void endTasksThrough(int generation){}}
  final Output speakerOwner=new Output();
  void beginTaskOutput(String role,int generation){}
- void cancelPlaybackForCommand(int generation,long route){}
+ void cancelPlaybackForCommand(int generation,long route){player=null;}
  static void yes(boolean value,String message){if(!value)throw new AssertionError(message);}
 """
             + field
@@ -782,6 +791,19 @@ class FeedbackCheck {
  c.status(9,"thinking","new");c.status(9,"speaking","first clause");
  c.status(9,"speaking","second clause");c.announcement_done(9,"","completed");
  yes(!c.announcement&&!c.listener.playing&&c.listener.phase.equals("idle"),"successful multi-clause cleanup failed");""")
+
+    def test_live_caption_and_stop_only_apply_to_the_current_playback(self):
+        self.compile_and_run("""
+ c.recording=true;c.player=new Player();c.listener.playing=true;
+ c.live_caption(8,"","你好");yes(c.player.text.equals("你好")&&c.player.timings==2,"first caption missing");
+ c.live_caption(8,"","你好🤖");yes(c.player.timings==4,"UTF-16 length mismatch");
+ c.live_caption(8,"","你好");yes(c.player.text.equals("你好🤖"),"late update shortened caption");
+ c.suppliedPlaybackId=6;c.live_caption(8,"","你好🤖旧");c.live_playback_stop(8,"","");
+ yes(c.player!=null&&c.player.text.equals("你好🤖"),"old playback reached current player");
+ c.suppliedPlaybackId=7;c.live_playback_stop(7,"","");yes(c.player!=null,"wrong generation stopped output");
+ c.live_playback_stop(8,"","");yes(c.player==null&&!c.listener.playing&&c.recording,"stop affected capture");
+ c.live_caption(8,"","你好🤖迟到");yes(c.player==null,"stopped caption reappeared");
+ """)
 
     def test_announcement_cleanup_keeps_error_without_stuck_speaking(self):
         self.compile_and_run("""c.announcement_begin(8,"","");c.status(8,"error","固定合成失败指引");

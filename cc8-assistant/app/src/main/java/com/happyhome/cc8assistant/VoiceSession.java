@@ -48,6 +48,8 @@ final class VoiceSession {
 
     void recognition(String engine);
 
+    default void liveTrial(boolean enabled) {}
+
     void dotResult(String text, boolean truncated, String sourceTitle);
 
     void dotChats(JSONObject data);
@@ -723,6 +725,7 @@ final class VoiceSession {
       Wire.put(hello, "meeting_version", 1);
       Wire.put(hello, "playback_pause_applied_version", 1);
       Wire.put(hello, "playout_receipt_version", 1);
+      Wire.put(hello, "live_caption_version", 1);
       Wire.put(hello, "render_clock_report_version", 1);
       Wire.put(hello, "playback_done_id_version", 1);
       Wire.put(hello, "desktop_camera_version", 1);
@@ -1075,6 +1078,7 @@ final class VoiceSession {
           dotChatSupported = Boolean.TRUE.equals(j.opt("supports_dot_chat_handoff"));
           savedTasksSupported = Boolean.TRUE.equals(j.opt("supports_saved_task_results"));
           listener.recognition(j.optString("asr_engine", "sensevoice"));
+          listener.liveTrial(Boolean.TRUE.equals(j.opt("gpt_live_trial")));
           synchronized (routeLock) {
             if (!foreground || !currentRoute(route) || p.generation < minimumGeneration) return;
             listener.releaseInfo(j.optJSONObject("release_info"), route);
@@ -1373,6 +1377,31 @@ final class VoiceSession {
               || (j.has("nonce") && !j.optString("nonce").equals(pendingVisionNonce))) return;
           pendingVisionNonce = "";
           listener.vision(false, j.optString("message", "看图暂不可用"), false);
+        } else if ("live_playback_stop".equals(event)) {
+          Player current = player;
+          if (current != null
+              && current.liveCaption
+              && current.generation == p.generation
+              && current.playbackId == j.optInt("playback_id", -1)) {
+            cancelPlaybackForCommand(p.generation, route);
+            listener.playback(false);
+            listener.caption("", "attentive");
+            if (recording) listener.state("listening", "我在听，你继续说");
+          }
+        } else if ("live_caption".equals(event)) {
+          Player current = player;
+          if (current != null
+              && current.liveCaption
+              && current.generation == p.generation
+              && current.playbackId == j.optInt("playback_id", -1)) {
+            String text = j.optString("text");
+            if (text.length() <= 8192 && text.startsWith(current.text)) {
+              synchronized (current) {
+                current.text = text;
+                current.timings = timings(j.optJSONArray("timings"), text.length());
+              }
+            }
+          }
         } else if ("caption_timing".equals(event)) {
           Player current = player;
           if (current != null
@@ -1555,11 +1584,15 @@ final class VoiceSession {
                   timings(j.optJSONArray("timings"), j.optString("text").length()),
                   PlayoutProbe.requested(j.opt("playout_receipt_version")),
                   Boolean.TRUE.equals(j.opt("report_audio_clock")));
+          next.liveCaption = Boolean.TRUE.equals(j.opt("live_caption"));
           player = next;
           next.start();
         } else if ("play_end".equals(event)) {
           Player current = player;
-          if (current != null && current.generation == p.generation) current.ended = true;
+          if (current != null
+              && current.generation == p.generation
+              && (!current.liveCaption || current.playbackId == j.optInt("playback_id", -1)))
+            current.ended = true;
         }
       }
     } else if (p.type == Wire.SPEAKER) {
@@ -1570,6 +1603,7 @@ final class VoiceSession {
           && current.playbackRoute == route
           && currentRoute(route)
           && current.generation == p.generation
+          && (current.liveCaption ? p.nanos == current.playbackId : p.nanos == 0)
           && p.generation >= minimumGeneration) current.offer(p.data);
     }
   }
@@ -3165,7 +3199,9 @@ final class VoiceSession {
     final boolean reportPlayout;
     final RenderClockStats clockStats;
     final PlayoutProbe playout = new PlayoutProbe();
-    final String text, mood, role;
+    volatile String text;
+    final String mood, role;
+    boolean liveCaption;
     // A content-free local token separates even reused server IDs after reconnect.
     // Do not retain the Player (and its PCM queue) in the view's pose state.
     final Object speechOwner = new Object();
@@ -3348,10 +3384,15 @@ final class VoiceSession {
         }
       } catch (IllegalStateException ignored) {
       }
-      CaptionTimeline line = timings;
+      CaptionTimeline line;
+      String caption;
+      synchronized (this) {
+        line = timings;
+        caption = text;
+      }
       return new CaptionProgress(
           playbackId,
-          text,
+          caption,
           line.position(head),
           line.rows.length > 0,
           true,

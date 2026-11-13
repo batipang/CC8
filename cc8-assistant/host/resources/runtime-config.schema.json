@@ -10,6 +10,31 @@
     "schema_version": {
       "const": 1
     },
+    "voice_mode": {
+      "default": "minimax",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "not": {
+        "type": "string",
+        "pattern": "sk-(?:cp-|proj-|ant-)|^Bearer |[\\u0000-\\u001f]|^\\s|\\s$"
+      },
+      "enum": [
+        "minimax",
+        "gpt-live-1"
+      ]
+    },
+    "gpt_live_voice": {
+      "default": "marin",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "not": {
+        "type": "string",
+        "pattern": "sk-(?:cp-|proj-|ant-)|^Bearer |[\\u0000-\\u001f]|^\\s|\\s$"
+      },
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,95}$"
+    },
     "asr": {
       "default": "minimax",
       "type": "string",

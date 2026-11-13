@@ -23,6 +23,9 @@ def complete_handshake(session: SessionController, j):
     session.correction_ui_supported = owner and (
         type(j.get('speech_correction_version')) is int and j['speech_correction_version'] == 1
     )
+    session.live_caption_supported = (
+        type(j.get('live_caption_version')) is int and j['live_caption_version'] == 1
+    )
     frontend = session.negotiate_capture_frontend(j)
     hooks.capture().paired_peer_ready = frontend == 'paired'
     session.capture_rejection_supported = (
@@ -89,6 +92,7 @@ def complete_handshake(session: SessionController, j):
         supports_result_provenance=owner,
         supports_result_reading=owner,
         voice_preferences=session.voice_preferences_state(),
+        gpt_live_trial=owner and session.live_caption_supported and hooks.live_trial_enabled(),
         asr_engine=getattr(getattr(hooks.speech(), 'recognizer', None), 'engine', 'sensevoice'),
         **(
             {'capture_start_token': session.capture_start_token}

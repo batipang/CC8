@@ -41,6 +41,10 @@ class ToolSampleGate:
     def __init__(self):
         self._sample: ToolSample | None = None
 
+    @property
+    def reserved(self):
+        return self._sample is not None
+
     def arm(self, session: SessionController, case, *, compare_engine=None, diagnose_engine=None):
         if not tool_sample_request({'operation': 'tool_sample_arm', 'case': case}):
             raise ValueError('Invalid tool sample case')
