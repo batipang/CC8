@@ -19,10 +19,22 @@ LIMIT = 32
 MAX_BYTES = 512 * 1024
 LOCK_WAIT_SECONDS = 2
 TERMINAL = ('completed', 'failed', 'cancelled')
+HANDOFF_DRAFT_LABEL = '\n\n本次识别到的下一步，请核对后复制：\n'
 
 
 class SavedTaskCapacityError(ValueError):
     pass
+
+
+def desktop_handoff_pending(item):
+    return (
+        item['status'] == 'completed'
+        and item.get('provenance', {}).get('provider') == 'work_report'
+        and any(
+            step['id'] == 'desktop_handoff' and step['status'] == 'completed'
+            for step in item['steps']
+        )
+    )
 
 
 def text(value, maximum):

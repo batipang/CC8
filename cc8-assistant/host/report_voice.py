@@ -27,6 +27,7 @@ from report_progress import (
     version,
 )
 from result_provenance import validate as validate_provenance
+from saved_tasks import HANDOFF_DRAFT_LABEL
 from report_sources import ReportScope
 from thread_queue import MAX_QUEUE_ITEMS
 
@@ -780,7 +781,7 @@ class ReportVoice:
                         '请在该桌面聊天中提交下一步。没有向原聊天追加请求。'
                     )
                     if draft:
-                        text += '\n\n本次识别到的下一步，请核对后复制：\n' + draft.text
+                        text += HANDOFF_DRAFT_LABEL + draft.text
                     return ReportReply(
                         text, (spoken,), source_title, 'desktop_handoff', provenance=provenance
                     )

@@ -564,6 +564,13 @@ def main():
         from upgrade_preparation import main as upgrade_main
 
         return upgrade_main(sys.argv[2:])
+    if sys.argv[1:2] == ['saved-handoff']:
+        if sys.version_info < (3, 11):
+            print('Saved handoffs require Python 3.11 or later.', file=sys.stderr)
+            return 2
+        from saved_handoff import main as saved_handoff_main
+
+        return saved_handoff_main(sys.argv[2:])
     if sys.argv[1:2] == ['measure']:
         from measure import main as measure_main
 
@@ -642,6 +649,7 @@ def main():
         'upgrade',
         help='Offline source checks, explicit settings backup and restore staging; never deploys',
     )
+    commands.add_parser('saved-handoff', help='Read explicitly saved desktop handoffs on the Mac')
     commands.add_parser(
         'observe', help='Read-only bounded health/resource curves; never starts capture'
     )
