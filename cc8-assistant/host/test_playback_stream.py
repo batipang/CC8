@@ -4,6 +4,8 @@ import unittest
 import numpy as np
 
 from bridge import Bridge
+from unittest.mock import Mock
+from types import SimpleNamespace
 from minimax_client import MiniMaxError
 from operation_failure import OperationFailure
 from protocol import receive, EVENT, SPEAKER
@@ -75,6 +77,106 @@ class StreamPlaybackTests(unittest.TestCase):
                 for p in b.session.connection.packets
             )
         )
+
+    def test_empty_tts_keeps_synthesis_stage_and_allows_next_request(self):
+        b = self.bridge()
+        generation = b.generation
+        b.diagnostics.begin('text', generation)
+        b.speech = SimpleNamespace(stream=lambda *_: iter([np.zeros(0, dtype=np.int16)]))
+        with self.assertRaises(OperationFailure) as failure:
+            b.speak('test', generation)
+        self.assertEqual(
+            (failure.exception.stage, failure.exception.kind), ('tts', 'provider_or_runtime')
+        )
+        self.assertEqual(
+            b.diagnostics.failure_record(generation),
+            {'stage': 'tts', 'kind': 'provider_or_runtime'},
+        )
+        self.assertFalse(b.playback.playing)
+        self.assertEqual(b.session.connection.packets, [])
+        b.speech.stream = lambda *_: iter([np.ones(480, dtype=np.int16)])
+        next_generation = b.cancel('test_next_request')
+        self.assertTrue(b.speak('next', next_generation))
+
+    def test_empty_prerendered_and_live_audio_report_playback_stage(self):
+        for source in ('prerendered', 'live'):
+            with self.subTest(source=source):
+                b = self.bridge()
+                generation = b.generation
+                b.diagnostics.begin('text', generation)
+                with self.assertRaises(OperationFailure) as failure:
+                    if source == 'prerendered':
+                        b.play(np.zeros(0, dtype=np.int16), 'test', generation)
+                    else:
+                        b.playback.play_stream(iter(()), '', generation, live=Mock())
+                self.assertEqual(failure.exception.stage, 'playback')
+                self.assertEqual(b.diagnostics.failure_record(generation)['stage'], 'playback')
+                self.assertFalse(b.playback.playing)
+                self.assertEqual(b.session.connection.packets, [])
+
+    def test_iterator_close_error_does_not_replace_primary_send_error(self):
+        b = self.bridge()
+        generation = b.generation
+        b.diagnostics.begin('text', generation)
+        timing = SimpleNamespace(rows=lambda: [], publish=None)
+        closed = []
+
+        def chunks():
+            try:
+                yield np.ones(3200, dtype=np.int16)
+            finally:
+                closed.append(True)
+                raise RuntimeError('PRIVATE_STREAM_CLOSE_DETAIL')
+
+        original = b.send
+
+        def send(packet):
+            if packet.kind == SPEAKER:
+                raise BrokenPipeError('PRIVATE_DEVICE_ERROR')
+            original(packet)
+
+        b.send = send
+        b.log = Mock()
+        with self.assertRaises(OperationFailure) as failure:
+            b.play_stream(chunks(), 'test', generation, timing=timing)
+        self.assertEqual(
+            (failure.exception.stage, failure.exception.kind), ('transport', 'transport_or_io')
+        )
+        self.assertEqual(closed, [True])
+        self.assertIsNone(timing.publish)
+        self.assertFalse(b.playback.playing)
+        self.assertEqual(
+            b.diagnostics.failure_record(generation),
+            {'stage': 'transport', 'kind': 'transport_or_io'},
+        )
+        b.log.assert_any_call('playback_iterator_close_failed', error_type='RuntimeError')
+        self.assertNotIn('PRIVATE', str(b.log.call_args_list))
+
+    def test_cleanup_error_does_not_undo_confirmed_playback(self):
+        class Chunks:
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                return next(self.pcm)
+
+            def close(self):
+                self.closed = True
+                raise OSError('PRIVATE_CLOSE_DETAIL')
+
+        b = self.bridge()
+        generation = b.generation
+        b.diagnostics.begin('text', generation)
+        b.log = Mock()
+        chunks = Chunks()
+        chunks.pcm = iter([np.ones(480, dtype=np.int16)])
+        chunks.closed = False
+        self.assertTrue(b.play_stream(chunks, 'test', generation))
+        self.assertTrue(chunks.closed)
+        self.assertFalse(b.playback.playing)
+        self.assertIsNone(b.diagnostics.failure_record(generation))
+        b.log.assert_any_call('playback_iterator_close_failed', error_type='OSError')
+        self.assertNotIn('PRIVATE', str(b.log.call_args_list))
 
     def test_cloud_failure_after_partial_audio_cancels_playback(self):
         def failing():
