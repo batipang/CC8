@@ -1,5 +1,6 @@
 import json
 import unittest
+from unittest.mock import patch
 from minimax_client import MiniMaxBrain, MiniMaxError, MiniMaxSearchError, Cancelled, Transport
 from web_search import normalize, public_url, parse_plan, SpeechClauses, wants_web
 
@@ -156,6 +157,41 @@ class SearchData(unittest.TestCase):
 
 
 class WebTurns(unittest.TestCase):
+    def test_search_and_answer_share_the_question_date_across_midnight(self):
+        before = '2026-10-30T23:59:59+08:00'
+        after = '2026-10-31T00:00:03+08:00'
+        f = Fake()
+        b = MiniMaxBrain(f)
+        updates = {}
+        with patch('minimax_client.now', side_effect=[before, after]) as clock:
+            list(b.clauses('今天有什么新闻', [], on_web=updates.__setitem__))
+        self.assertEqual(clock.call_count, 2)
+        for request in (f.calls[0][1], f.calls[-1][1]):
+            self.assertIn(before, request['messages'][0]['content'])
+            self.assertNotIn(after, request['messages'][0]['content'])
+        self.assertEqual(updates['sources']['retrieved_at'], after)
+        self.assertEqual(updates['sources']['items'][0]['observed_at'], after)
+        self.assertIn(after, f.calls[-1][1]['messages'][-1]['content'])
+
+    def test_weather_clarification_keeps_the_original_question_date(self):
+        before = '2026-10-30T23:59:59+08:00'
+        after = '2026-10-31T00:00:03+08:00'
+        f = Fake(plan={'query': '', 'clarification': '请问哪个城市？'})
+        b = MiniMaxBrain(f)
+        with patch('minimax_client.now', side_effect=[before, after, after]):
+            b.reply('今天天气怎么样', [])
+            f.plan = {'query': '上海 2026-10-30 天气', 'clarification': ''}
+            b.reply('上海', [])
+        for request in (f.calls[1][1], f.calls[-1][1]):
+            self.assertIn(after, request['messages'][0]['content'])
+            self.assertTrue(
+                any(
+                    before in m['content'] and '今天天气' in m['content']
+                    for m in request['messages']
+                )
+            )
+        self.assertIsNone(b.pending_web)
+
     def test_lookup_happens_before_answer_and_sources_have_no_snippets(self):
         f = Fake()
         b = MiniMaxBrain(f)
