@@ -241,7 +241,7 @@ class UpgradeTests(unittest.TestCase):
             self.assertTrue(upgrade.plan(before, after)['reminder_storage']['compatible'])
             self.assertEqual(path.read_bytes(), raw)
 
-    def transition_fixture(self, folder, *, settings_schema=False):
+    def transition_fixture(self, folder, *, settings_schema=False, saved_task_reader=False):
         base, candidate, recovery = (Path(folder) / x for x in ('base', 'candidate', 'recovery'))
 
         def git(root, *args):
@@ -265,7 +265,7 @@ class UpgradeTests(unittest.TestCase):
 
         base.mkdir()
         git(base, 'init', '-q')
-        (base / '.gitignore').write_text('artifacts/\n')
+        (base / '.gitignore').write_text('artifacts/\n/device-access/private/\n')
         manifest = json.loads((ROOT / 'release.json').read_bytes())
         manifest.pop('transport', None)  # Exercise the published pre-TLS baseline.
         initial_code = manifest['assistant']['version_code']
@@ -278,6 +278,10 @@ class UpgradeTests(unittest.TestCase):
             schema['properties']['brain']['enum'] = ['dot', 'minimax']
             (base / schema_path).parent.mkdir(parents=True)
             (base / schema_path).write_text(json.dumps(schema))
+        reader_path = Path('cc8-assistant/host/saved_tasks.py')
+        if saved_task_reader:
+            (base / reader_path).parent.mkdir(parents=True, exist_ok=True)
+            (base / reader_path).write_text('READER_VERSION = 2\n')
         git(base, 'add', '.')
         git(base, 'commit', '-qm', 'fixed baseline')
         git(base, 'worktree', 'add', '--detach', str(candidate))
@@ -293,6 +297,8 @@ class UpgradeTests(unittest.TestCase):
                     data['transport'] = {'usb_authentication': 'paired_tls'}
                     if settings_schema:
                         (root / schema_path).write_text(json.dumps(upgrade.config_schema()))
+                    if saved_task_reader:
+                        (root / reader_path).write_text('READER_VERSION = 3\n')
                 (root / 'release.json').write_text(json.dumps(data))
                 git(root, 'commit', '-qam', 'fixed build')
             (root / 'artifacts').mkdir()
@@ -510,6 +516,80 @@ class UpgradeTests(unittest.TestCase):
             self.assertEqual(self.invoke(args)[0], 2)
             saved.write_bytes(original)
             self.assertEqual(self.invoke(args)[0], 0)
+
+    def test_storage_recheck_uses_current_candidate_archive_and_pinned_recovery(self):
+        from saved_tasks import SavedTasks
+        from test_saved_tasks import task
+
+        with tempfile.TemporaryDirectory() as folder:
+            roots, apks, checked, _ = self.transition_fixture(folder, saved_task_reader=True)
+            base, candidate, recovery = roots
+            transition = Path(folder) / 'transition.json'
+            with patch('tools.release.check_apk', side_effect=checked):
+                report = upgrade.verify_assistant_transition(
+                    *roots, apks[0], hashlib.sha256(apks[0].read_bytes()).hexdigest()
+                )
+            upgrade.output(report, transition)
+            args = [
+                'recheck-storage',
+                '--transition',
+                str(transition),
+                '--runtime-root',
+                str(candidate),
+                '--target-root',
+                str(recovery),
+                '--stage',
+                'recovery',
+            ]
+            code, output, error = self.invoke(args)
+            self.assertEqual(code, 0, error)
+            self.assertFalse(json.loads(output)['ready_for_installation'])
+            upgrade_args = args[:4] + [
+                str(base),
+                '--target-root',
+                str(candidate),
+                '--stage',
+                'candidate',
+            ]
+            self.assertEqual(self.invoke(upgrade_args)[0], 0)
+
+            path = candidate / 'device-access/private/voice-runtime/saved-task-results.json'
+            path.parent.mkdir(parents=True, mode=0o700)
+            SavedTasks(path).save(
+                {
+                    **task(),
+                    'window_input': {
+                        'window_id': 7,
+                        'application': 'Synthetic',
+                        'title': 'PRIVATE_FIXTURE',
+                        'width': 640,
+                        'height': 480,
+                    },
+                }
+            )
+            raw = path.read_bytes()
+            code, output, error = self.invoke(args)
+            self.assertEqual(code, 2)
+            receipt = json.loads(output)
+            self.assertEqual(
+                receipt['target_commit'], report['stages']['recovery']['source_commit']
+            )
+            self.assertFalse(receipt['saved_task_storage']['compatible'])
+            self.assertEqual(receipt['saved_task_storage']['store_version'], 3)
+            self.assertEqual(receipt['saved_task_storage']['reader_max_version'], 2)
+            self.assertNotIn('PRIVATE_FIXTURE', output + error)
+            self.assertEqual(path.read_bytes(), raw)
+            self.assertTrue(
+                upgrade.read_private_json(transition)['saved_task_storage']['recovery'][
+                    'compatible'
+                ]
+            )
+
+            args[4] = str(recovery)
+            self.assertEqual(self.invoke(args)[:2], (2, ''))
+            args[4] = str(candidate)
+            args[6] = str(candidate)
+            self.assertEqual(self.invoke(args)[:2], (2, ''))
 
     def test_transition_accepts_only_candidate_identical_build_support_and_reports_it(self):
         with tempfile.TemporaryDirectory() as folder:
