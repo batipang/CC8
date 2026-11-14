@@ -237,7 +237,13 @@ def package_paths(transport, package):
     return [lines[0][len('package:') :]]
 
 
-def signature_preflight(transport, package, candidate, directory):
+def signature_preflight(
+    transport, package, candidate, directory, *, expected_installed_sha256=None
+):
+    if expected_installed_sha256 is not None and not re.fullmatch(
+        r'[a-f0-9]{64}', expected_installed_sha256
+    ):
+        raise ValueError('Expected installed APK SHA-256 must be 64 lowercase hexadecimal digits')
     java = require_java(root=ROOT) / 'java'
     candidate_signers = signer_fingerprints(candidate, java, APKSIGNER)
     paths = package_paths(transport, package)
@@ -249,11 +255,17 @@ def signature_preflight(transport, package, candidate, directory):
             raise RuntimeError(
                 'Package absence could not be verified; installation was not attempted'
             )
+        if expected_installed_sha256 is not None:
+            raise SignatureError('Expected installed APK is absent; installation was not attempted')
         return {'apk_signature_verified_sdk27': True, 'signature_continuity': 'new_package'}
     remote = paths[0]
     before = shell(transport, 'sha256sum ' + shlex.quote(remote)).split()
     if not before or not re.fullmatch(r'[a-fA-F0-9]{64}', before[0]):
         raise RuntimeError('Installed APK hash unreadable; installation was not attempted')
+    if expected_installed_sha256 is not None and before[0].lower() != expected_installed_sha256:
+        raise SignatureError(
+            'Installed APK differs from the verified baseline; installation was not attempted'
+        )
     installed = directory / 'installed-base.apk'
     try:
         # Bound the device's output before it reaches disk. No raw image/code from
@@ -297,10 +309,11 @@ def signature_preflight(transport, package, candidate, directory):
     return {
         'apk_signature_verified_sdk27': True,
         'signature_continuity': 'matching_installed_signers',
+        'installed_baseline_sha256': local_hash,
     }
 
 
-def prepare_apk(transport, apk, launch=False):
+def prepare_apk(transport, apk, launch=False, *, expected_installed_sha256=None):
     # A private byte snapshot binds aapt, certificate verification and the actual
     # stream to the same APK even if the original build output is replaced.
     with apk.open('rb') as source:
@@ -315,7 +328,13 @@ def prepare_apk(transport, apk, launch=False):
         package, activity = apk_package(candidate)
         if launch and not activity:
             raise ValueError('APK does not declare a launchable activity')
-        signature = signature_preflight(transport, package, candidate, directory)
+        signature = signature_preflight(
+            transport,
+            package,
+            candidate,
+            directory,
+            expected_installed_sha256=expected_installed_sha256,
+        )
     return package, activity, payload, signature
 
 
@@ -326,8 +345,11 @@ def install(
     shared_staging: bool = False,
     *,
     before_dispatch=lambda: None,
+    expected_installed_sha256=None,
 ) -> dict:
-    package, activity, payload, signature = prepare_apk(transport, apk, launch)
+    package, activity, payload, signature = prepare_apk(
+        transport, apk, launch, expected_installed_sha256=expected_installed_sha256
+    )
     return _install_verified(
         transport, package, activity, payload, launch, shared_staging, signature, before_dispatch
     )
@@ -412,6 +434,11 @@ def main(argv=None):
     )
     parser.add_argument('--launch', action='store_true')
     parser.add_argument(
+        '--expect-installed-sha256',
+        metavar='SHA256',
+        help='Require the installed APK to match the verified baseline before staging an update',
+    )
+    parser.add_argument(
         '--shared-staging',
         action='store_true',
         help='Explicit legacy shared-directory mode; other storage-enabled apps may replace the helper. See docs/APK_INSTALL.md',
@@ -419,6 +446,13 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if (args.launch or args.shared_staging) and not args.install:
         parser.error('--launch and --shared-staging require --install APK')
+    if args.expect_installed_sha256 is not None and (
+        not (args.verify_apk or args.install)
+        or not re.fullmatch(r'[a-f0-9]{64}', args.expect_installed_sha256)
+    ):
+        parser.error(
+            '--expect-installed-sha256 requires --verify-apk or --install and a lowercase SHA-256'
+        )
     if not ADB.is_file() or not AAPT.is_file() or not APKSIGNER.is_file():
         raise SystemExit('Local Android tools are missing')
     if args.check:
@@ -449,7 +483,9 @@ def _perform_actions(args, output=None):
     report = probe(transport)
     print(json.dumps(report), flush=True)
     if args.verify_apk:
-        package, _, _, signature = prepare_apk(transport, args.verify_apk)
+        package, _, _, signature = prepare_apk(
+            transport, args.verify_apk, expected_installed_sha256=args.expect_installed_sha256
+        )
         print(json.dumps({'package': package, **signature, 'installed': False}), flush=True)
     if args.install:
 
@@ -471,6 +507,7 @@ def _perform_actions(args, output=None):
                     args.launch,
                     shared_staging=args.shared_staging,
                     before_dispatch=dispatch,
+                    expected_installed_sha256=args.expect_installed_sha256,
                 )
             )
         except ProtectedStagingDenied:

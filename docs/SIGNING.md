@@ -18,6 +18,8 @@ python3 device-access/cc8_install.py --verify-apk artifacts/cc8-assistant-0.8.6.
 
 `--verify-apk` 只读核验唯一正常 Android USB 设备的型号 / SDK / shell UID、候选 APK 和同包名已装 APK 的签名；不传助手、不写设备、不安装、不启动界面。通过后再执行原来的 `--install`；正式安装会重新做同样核验，不能用旧结果跳过。原签名丢失时停止覆盖更新，不自动卸载、清数据、改包名或生成新钥代替。
 
+只读核验成功时，`installed_baseline_sha256` 是从同一份已装包快照取得的摘要。组合升级或恢复可用 `--expect-installed-sha256` 要求设备仍处于核对过的基线。
+
 ## 校验过程与失败处理
 
 候选 APK 先读为有界字节快照，AAPT、签名验证和安装流都使用同一份内容，避免编译产物在核验后被覆盖。Android SDK 35 的官方 [apksigner](https://developer.android.com/tools/apksigner) 通过 JDK 21+ 验证签名；本设备固定按 API 27 校验（`--min-sdk-version 27 --max-sdk-version 27 --print-certs --verbose`，参数语义见 [官方 help](https://android.googlesource.com/platform/tools/apksig/+/master/src/apksigner/java/com/android/apksigner/help_verify.txt)）。

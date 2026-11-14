@@ -17,7 +17,14 @@ SPEC.loader.exec_module(access)
 
 class PreflightTests(unittest.TestCase):
     def exercise(
-        self, *, signers=None, changed=False, installed=True, blocked=False, read_error=False
+        self,
+        *,
+        signers=None,
+        changed=False,
+        installed=True,
+        blocked=False,
+        read_error=False,
+        pin=None,
     ):
         data = b'installed APK fixture'
         digest = hashlib.sha256(data).hexdigest()
@@ -56,7 +63,13 @@ class PreflightTests(unittest.TestCase):
                 patch.object(access, 'apk_package', return_value=('com.example.app', None)),
                 patch.object(access.subprocess, 'run', side_effect=read),
             ):
-                result = access.signature_preflight('7', 'com.example.app', candidate, directory)
+                result = access.signature_preflight(
+                    '7',
+                    'com.example.app',
+                    candidate,
+                    directory,
+                    expected_installed_sha256=digest if pin == 'matching' else pin,
+                )
             for name in written:
                 self.assertEqual(Path(name).stat().st_mode & 0o777, 0o600)
             return result
@@ -64,6 +77,14 @@ class PreflightTests(unittest.TestCase):
     def test_matching_installed_signers_and_confirmed_new_install(self):
         self.assertEqual(self.exercise()['signature_continuity'], 'matching_installed_signers')
         self.assertEqual(self.exercise(installed=False)['signature_continuity'], 'new_package')
+
+    def test_verified_baseline_digest_is_required_when_pinned(self):
+        receipt = self.exercise(pin='matching')
+        self.assertRegex(receipt['installed_baseline_sha256'], r'^[0-9a-f]{64}$')
+        with self.assertRaisesRegex(access.SignatureError, 'differs from the verified baseline'):
+            self.exercise(pin='f' * 64)
+        with self.assertRaisesRegex(access.SignatureError, 'Expected installed APK is absent'):
+            self.exercise(installed=False, pin='f' * 64)
 
     def test_mismatch_changed_unreadable_or_ambiguous_absence_fail_closed(self):
         for options in (
@@ -132,8 +153,9 @@ class PreflightTests(unittest.TestCase):
             apk.write_bytes(b'original')
             snapshots = []
 
-            def verify(transport, package, snapshot, directory):
+            def verify(transport, package, snapshot, directory, *, expected_installed_sha256):
                 self.assertEqual(snapshot.read_bytes(), b'original')
+                self.assertEqual(expected_installed_sha256, 'f' * 64)
                 snapshots.append(snapshot)
                 apk.write_bytes(b'replaced build output')
                 return {'signature_continuity': 'matching_installed_signers'}
@@ -143,7 +165,7 @@ class PreflightTests(unittest.TestCase):
                 patch.object(access, 'signature_preflight', side_effect=verify),
                 patch.object(access, '_install_verified', return_value={}) as install,
             ):
-                access.install('7', apk, False)
+                access.install('7', apk, False, expected_installed_sha256='f' * 64)
             self.assertEqual(install.call_args.args[3], b'original')
             self.assertFalse(snapshots[0].parent.exists())
 
