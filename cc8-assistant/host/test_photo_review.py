@@ -187,14 +187,14 @@ public class SurfaceCheck {
  final PreviewDelay delay=new PreviewDelay();
  final PhotoReviewClock reviewClock=new PhotoReviewClock();
  SurfaceTexture surface=new SurfaceTexture();boolean wanted=true,frameReceived=true,opening;
- long retakeVisibleBaseline=10;int serial=7,fails,releases,fits,countdowns,opens;
+ long reviewTask,retakeVisibleBaseline=10;int serial=7,fails,releases,fits,countdowns,opens;
  Result result=reason->fails++;String lastError;
  void open(int token,SurfaceTexture target){yes(token==serial&&surface==target);opens++;}
  void release(){releases++;}void fitPreview(){fits++;}void countdown(int token){yes(token==serial);countdowns++;}
  static void yes(boolean b){if(!b)throw new AssertionError();}
  METHODS
  public static void main(String[] args){
- SurfaceCheck c=new SurfaceCheck();long task=c.reviewClock.begin(0,true);
+ SurfaceCheck c=new SurfaceCheck();long task=c.reviewClock.begin(0,true);c.reviewTask=task;
  SurfaceTexture active=c.surface,old=new SurfaceTexture();
  c.onSurfaceTextureUpdated(old);yes(!c.delay.started()&&c.countdowns==0);
  c.onSurfaceTextureSizeChanged(old,100,100);yes(c.fits==0);
@@ -226,14 +226,19 @@ public class SurfaceCheck {
   }
  }
  // A surface failure may already be queued when a valid frame finishes.
- SurfaceCheck queued=new SurfaceCheck();
- long request=queued.reviewClock.begin(0,true);
- queued.worker.defer=true;
- queued.onSurfaceTextureDestroyed(queued.surface);
- yes(queued.worker.pending!=null);
- yes(queued.reviewClock.captured(request,1,5100));
- queued.worker.flush();
- yes(queued.fails==0&&queued.releases==0&&queued.reviewClock.reviewing());
+ for(String reason:new String[]{"attempt_timeout","preview_surface_lost"}){
+  SurfaceCheck queued=new SurfaceCheck();
+  long request=queued.reviewClock.begin(0,true);
+  queued.worker.defer=true;
+  queued.fail(queued.serial,reason);
+  yes(queued.worker.pending!=null);
+  yes(queued.reviewClock.captured(request,1,5100));
+  queued.worker.flush();
+  yes(queued.fails==0&&queued.releases==0&&queued.reviewClock.reviewing());
+ }
+ SurfaceCheck expired=new SurfaceCheck();expired.reviewTask=expired.reviewClock.begin(0,true);
+ SystemClock.now=11000;expired.onSurfaceTextureUpdated(expired.surface);yes(!expired.delay.started());
+ expired.fail(expired.serial,"attempt_timeout");yes(expired.fails==1&&"camera_timeout".equals(expired.lastError));
  }
 }""".replace('METHODS', methods)
         java = java_bin()
@@ -282,6 +287,12 @@ public class ReviewCheck {
  yes(!c.finish(next,100000));c.cancel();yes(!c.current(next,35000));
  long automatic=c.begin(0,false);yes(c.remaining(automatic,0)==11000);yes(c.captured(automatic,1,5000));yes(!c.reviewing());yes(!c.retake(automatic,6000));yes(c.finish(automatic,6000));
  long old=c.begin(100000,true);c.cancel();long fresh=c.begin(100001,true);yes(!c.sameTask(old)&&c.sameTask(fresh));
+ long slow=c.begin(200000,true);
+ yes(c.current(slow,211000));yes(!c.captured(slow,1,211000));
+ long retake=c.begin(230000,true);yes(c.captured(retake,1,235000));
+ yes(c.retake(retake,250000));yes(c.framing(retake,260999));yes(!c.captured(retake,2,261000));
+ long onTime=c.begin(300000,true);yes(c.captured(onTime,1,310999));
+ yes(c.finish(onTime,345000));
  // 1280x960 in a 1000x1000 square has 125px top/bottom letterboxing.
  region(CropRegion.fromDrag(1000,1000,1280,960,0,125,1000,875),0,0,1280,960);
  region(CropRegion.fromDrag(1000,1000,1280,960,250,312.5f,750,687.5f),320,240,960,720);
