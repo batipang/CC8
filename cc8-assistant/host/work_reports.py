@@ -223,13 +223,21 @@ class WorkReportReader:
             selected = candidates[:MAX_CARDS]
             report['unconfirmed_final_answer'] = len(candidates) - len(selected)
             for index, (completed, ident) in enumerate(selected):
+                if self.clock() >= deadline:
+                    report['unconfirmed_final_answer'] += len(selected) - index
+                    break
                 try:
                     card, absence_confirmed = self.items(request, source.source_id, ident)
                 except DotError as error:
                     if error.kind not in PARTIAL_READ_ERRORS:
                         raise
-                    report['unconfirmed_final_answer'] += len(selected) - index
-                    break
+                    if error.kind == 'transport_or_io':
+                        report['unconfirmed_final_answer'] += len(selected) - index
+                        break
+                    # A request timeout can leave the RPC connection usable.
+                    # Check another turn while time remains; never retry this one.
+                    report['unconfirmed_final_answer'] += 1
+                    continue
                 if card is None:
                     field = (
                         'missing_final_answer' if absence_confirmed else 'unconfirmed_final_answer'
@@ -326,12 +334,14 @@ class WorkReportReader:
                         unreadable_final = True
                         continue
                     display = ''.join(c for c in text if ord(c) >= 32 or c == '\n')
-                    if display.strip():
-                        last_final = dict(
-                            item_id=ident,
-                            excerpt=display[:500],
-                            excerpt_truncated=len(display) > 500,
-                        )
+                    if not display.strip():
+                        unreadable_final = True
+                        continue
+                    last_final = dict(
+                        item_id=ident,
+                        excerpt=display[:500],
+                        excerpt_truncated=len(display) > 500,
+                    )
                 elif kind == 'commandExecution':
                     if is_test:
                         exit_code = item.get('exitCode')

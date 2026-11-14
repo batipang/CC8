@@ -165,25 +165,79 @@ class ReportTests(unittest.TestCase):
                 self.assertNotIn('PRIVATE_PROVIDER_MESSAGE', repr(result))
                 self.assertTrue(rpc.closed)
 
-    def test_first_answer_timeout_retains_observed_turn_states(self):
+    def test_answer_disconnect_retains_observed_turn_states_and_stops_reading(self):
         f = Fixture()
-        f.turn_pages[0]['data'].append(turn('failed', status='failed'))
+        f.turn_pages[0]['data'].extend(
+            [turn('failed', status='failed'), turn('older', completed=149)]
+        )
         rpc = f.factory()
         request = rpc.request
 
         def interrupted(method, params, **options):
             if method == 'thread/items/list':
+                self.assertEqual(params['turnId'], 'turn-1')
                 raise DotError('PRIVATE_PROVIDER_MESSAGE', kind='transport_or_io')
             return request(method, params, **options)
 
         rpc.request = interrupted
         result = WorkReportReader(lambda: rpc).read(self.source, ReportWindow(100, 200))
         self.assertEqual(result['failed_turns'], 1)
-        self.assertEqual(result['unconfirmed_final_answer'], 1)
+        self.assertEqual(result['unconfirmed_final_answer'], 2)
         self.assertEqual(result['missing_final_answer'], 0)
         self.assertFalse(result['empty_confirmed'])
         self.assertFalse(result['coverage_complete'])
         self.assertNotIn('PRIVATE_PROVIDER_MESSAGE', repr(result))
+        self.assertTrue(rpc.closed)
+
+    def test_one_answer_timeout_still_reads_the_next_completed_turn(self):
+        f = Fixture()
+        f.turn_pages[0]['data'].append(turn('older', completed=149))
+        f.item_pages['older'] = [
+            dict(
+                data=[dict(turnId='older', item=final(text='可核对的另一条成果'))], nextCursor=None
+            )
+        ]
+        rpc = f.factory()
+        request = rpc.request
+
+        def interrupted(method, params, **options):
+            if params.get('turnId') == 'turn-1':
+                raise DotError('PRIVATE_PROVIDER_MESSAGE', kind='timeout')
+            return request(method, params, **options)
+
+        rpc.request = interrupted
+        result = WorkReportReader(lambda: rpc).read(self.source, ReportWindow(100, 200))
+        self.assertEqual([row['turn_id'] for row in result['items']], ['older'])
+        self.assertEqual(result['unconfirmed_final_answer'], 1)
+        self.assertEqual(result['missing_final_answer'], 0)
+        self.assertFalse(result['coverage_complete'])
+        self.assertNotIn('PRIVATE_PROVIDER_MESSAGE', repr(result))
+        self.assertTrue(rpc.closed)
+
+    def test_answer_timeout_at_the_shared_deadline_does_not_request_more_turns(self):
+        f = Fixture()
+        f.turn_pages[0]['data'].extend(
+            [turn('older', completed=149), turn('oldest', completed=148)]
+        )
+        rpc = f.factory()
+        request = rpc.request
+        now = [0.0]
+
+        def interrupted(method, params, **options):
+            if method == 'thread/items/list':
+                self.assertEqual(params['turnId'], 'turn-1')
+                self.assertEqual(options['timeout'], 3.0)
+                now[0] = 3.0
+                raise DotError('Deadline reached', kind='timeout')
+            return request(method, params, **options)
+
+        rpc.request = interrupted
+        result = WorkReportReader(lambda: rpc, clock=lambda: now[0]).read(
+            self.source, ReportWindow(100, 200), deadline=3.0
+        )
+        self.assertEqual(result['items'], [])
+        self.assertEqual(result['unconfirmed_final_answer'], 3)
+        self.assertFalse(result['empty_confirmed'])
         self.assertTrue(rpc.closed)
 
     def test_revocation_during_answer_read_still_aborts(self):
@@ -293,7 +347,7 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(item['verification'], 'not_assessed')
 
     def test_unreadable_final_does_not_erase_other_results_or_select_an_older_answer(self):
-        for invalid in ('\ud800', True, '长' * 64001):
+        for invalid in ('\ud800', True, '长' * 64001, '', '\x01 \n'):
             with self.subTest(
                 text_type=type(invalid), length=len(invalid) if isinstance(invalid, str) else None
             ):
@@ -324,7 +378,12 @@ class ReportTests(unittest.TestCase):
 
     def test_no_final_answer_is_missing_evidence_instead_of_empty_success(self):
         f = Fixture()
-        f.item_pages['turn-1'][0]['data'] = [dict(turnId='turn-1', item=final(text='\x01'))]
+        f.item_pages['turn-1'][0]['data'] = [
+            dict(
+                turnId='turn-1',
+                item=dict(id='partial', type='agentMessage', phase='partial_answer'),
+            )
+        ]
         r = self.report(f)
         self.assertEqual(r['missing_final_answer'], 1)
         self.assertEqual(r['unconfirmed_final_answer'], 0)
