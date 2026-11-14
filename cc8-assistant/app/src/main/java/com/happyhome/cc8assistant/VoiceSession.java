@@ -260,6 +260,18 @@ final class VoiceSession {
     return identity.owner();
   }
 
+  boolean canEnrollPairing() {
+    return foreground && !identity.guestRequested() && !lan.paired();
+  }
+
+  void enrollPairing(String source) throws Exception {
+    synchronized (routeLock) {
+      if (!canEnrollPairing()) throw new IOException("Pairing unavailable");
+      lan.enroll(source);
+      lan.acquire();
+    }
+  }
+
   String identityLabel() {
     return !identity.ready() ? "身份待确认" : identity.owner() ? "主人 · Dot" : "访客 · MiniMax";
   }
@@ -864,7 +876,7 @@ final class VoiceSession {
   }
 
   private final class Link implements Runnable {
-    final Socket connection;
+    volatile Socket connection;
     final String kind;
     final int ticket;
     final ArrayBlockingQueue<Wire.Packet> queue = new ArrayBlockingQueue<>(128);
@@ -916,6 +928,17 @@ final class VoiceSession {
 
     public void run() {
       try {
+        if ("usb".equals(kind)) {
+          Socket authenticated =
+              lan.authenticateUsb(connection, () -> !closed && foreground && lifecycle == ticket);
+          synchronized (this) {
+            if (closed) {
+              TransportClose.asynchronously(authenticated);
+              return;
+            }
+            connection = authenticated;
+          }
+        }
         connection.setTcpNoDelay(true);
         connection.setKeepAlive(true);
         connection.setSoTimeout(10000);

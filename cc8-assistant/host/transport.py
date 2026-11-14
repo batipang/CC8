@@ -48,9 +48,45 @@ class AuthenticationReader:
     def recv(self, count: int) -> bytes:
         remaining = self.deadline - time.monotonic()
         if remaining <= 0:
-            raise TimeoutError('LAN authentication deadline exceeded')
+            raise TimeoutError('Transport authentication deadline exceeded')
         self.stream.settimeout(remaining)
         return self.stream.recv(count)
+
+
+def authenticate_device(raw: socket.socket, pairing: Pairing, kind: TransportKind) -> ssl.SSLSocket:
+    deadline = time.monotonic() + AUTH_TIMEOUT_SECONDS
+    raw.settimeout(AUTH_TIMEOUT_SECONDS)
+    tls = pairing.context.wrap_socket(raw, server_side=True)
+    try:
+        packet = receive(
+            AuthenticationReader(tls, deadline), max_packet=HEADER.size + MAX_AUTH_JSON_BYTES
+        )
+        auth = (
+            decode_json_object(packet.data, max_bytes=MAX_AUTH_JSON_BYTES)
+            if packet.kind == EVENT
+            else {}
+        )
+        token = auth.get('token')
+        if (
+            auth.get('event') != 'transport_auth'
+            or not isinstance(token, str)
+            or not re.fullmatch('[0-9a-f]{64}', token)
+            or not hmac.compare_digest(token, pairing.token)
+            or (kind == 'usb' and set(auth) != {'event', 'token', 'transport'})
+            or (kind == 'usb' and auth.get('transport') != 'usb')
+            or (kind == 'wifi' and auth.get('transport') not in (None, 'wifi'))
+        ):
+            raise ValueError('Transport authentication failed')
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('Transport authentication deadline exceeded')
+        tls.settimeout(remaining)
+        tls.sendall(Packet.event('transport_welcome').encode())
+        tls.settimeout(10)
+        return tls
+    except BaseException:
+        tls.close()
+        raise
 
 
 class TransportHub:
@@ -143,31 +179,8 @@ class TransportHub:
                 continue
             tls: ssl.SSLSocket | None = None
             try:
-                deadline = time.monotonic() + AUTH_TIMEOUT_SECONDS
-                raw.settimeout(AUTH_TIMEOUT_SECONDS)
-                tls = self.pairing.context.wrap_socket(raw, server_side=True)
-                packet = receive(
-                    AuthenticationReader(tls, deadline),
-                    max_packet=HEADER.size + MAX_AUTH_JSON_BYTES,
-                )
-                auth: JsonObject = (
-                    decode_json_object(packet.data, max_bytes=MAX_AUTH_JSON_BYTES)
-                    if packet.kind == EVENT
-                    else {}
-                )
-                if not isinstance(auth, dict):
-                    raise ValueError('Invalid authentication object')
-                token = auth.get('token', '')
-                if (
-                    auth.get('event') != 'transport_auth'
-                    or not isinstance(token, str)
-                    or not re.fullmatch('[0-9a-f]{64}', token)
-                    or not hmac.compare_digest(token, self.pairing.token)
-                ):
-                    raise ValueError('LAN authentication failed')
-                tls.settimeout(10)
+                tls = authenticate_device(raw, self.pairing, 'wifi')
                 tls.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                tls.sendall(Packet.event('transport_welcome').encode())
                 self.register(tls, 'wifi')
             except (OSError, EOFError, ValueError, RuntimeError):
                 if not self.stop.is_set():
@@ -210,7 +223,7 @@ class TransportHub:
                         stream.close()
                         break
                     self.register(stream, 'usb')
-            except (OSError, RuntimeError, subprocess.SubprocessError):
+            except (OSError, EOFError, RuntimeError, ValueError, subprocess.SubprocessError):
                 pass
             self.stop.wait(1)
 

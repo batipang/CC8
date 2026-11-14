@@ -450,6 +450,29 @@ def run_runtime(args, root=ROOT):
     return subprocess.run(command, cwd=root).returncode
 
 
+def pairing_export(args, root=ROOT):
+    if __package__:
+        from .private_output import PrivateOutput
+    else:
+        from private_output import PrivateOutput
+    from transport_pairing import Pairing
+
+    destination = args.output.parent.resolve() / args.output.name
+    root = root.resolve()
+    if destination.is_relative_to(root) and not destination.is_relative_to(
+        root / 'device-access/private'
+    ):
+        raise SetupError(
+            'Choose an owner-private output outside the repository or under device-access/private'
+        )
+    config = load_config(root=root)
+    pairing = Pairing(root / '.toolchains/cc8/transport', port=config.tls_port, create=False)
+    with PrivateOutput(destination) as output:
+        output.write(pairing.device_config())
+        print(output.path)
+    return 0
+
+
 def main():
     if sys.argv[1:2] == ['verify-failure-ui']:
         if not __package__:
@@ -580,6 +603,10 @@ def main():
         'verify-service', help='Plan or explicitly check managed backend crash recovery'
     )
     commands.add_parser('verify-login', help='Plan or explicitly arm one passive post-login check')
+    enrollment = commands.add_parser(
+        'pairing-export', help='Export the existing Mac pairing to a new private JSON file'
+    )
+    enrollment.add_argument('--output', type=Path, required=True)
     commands.add_parser(
         'recover-storage', help='Inspect and explicitly quarantine unreadable private data'
     )
@@ -605,6 +632,8 @@ def main():
             return setup(args)
         if args.command == 'run':
             return run_runtime(args)
+        if args.command == 'pairing-export':
+            return pairing_export(args)
         result = doctor(args.profile)
         if args.json:
             print(json.dumps(result, ensure_ascii=False, indent=2))

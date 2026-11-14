@@ -1371,7 +1371,55 @@ public final class MainActivity extends Activity
     dialog.show();
   }
 
+  private void showPairingImport() {
+    if (!foreground || !session.canEnrollPairing()) return;
+    autoVoice.cancel();
+    pending = false;
+    handler.removeCallbacks(autoVoiceTick);
+    EditText input = new EditText(this);
+    input.setHint("粘贴 Mac 配对内容");
+    input.setInputType(
+        android.text.InputType.TYPE_CLASS_TEXT
+            | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+    input.setFilters(
+        new android.text.InputFilter[] {new android.text.InputFilter.LengthFilter(2048)});
+    input.setSaveEnabled(false);
+    if (android.os.Build.VERSION.SDK_INT >= 26)
+      input.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
+    AlertDialog dialog =
+        new LargeDialogBuilder(this)
+            .setTitle("连接 Mac")
+            .setMessage("请从你信任的 Mac 导出配对内容，再粘贴到这里。配对完成后可手动开始语音。")
+            .setView(input)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("确认配对", null)
+            .create();
+    dialog.getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+    dialog.setOnDismissListener(d -> input.getText().clear());
+    dialog.show();
+    dialog
+        .getButton(AlertDialog.BUTTON_POSITIVE)
+        .setOnClickListener(
+            button -> {
+              if (!foreground || !session.canEnrollPairing()) {
+                dialog.dismiss();
+                return;
+              }
+              try {
+                session.enrollPairing(input.getText().toString().trim());
+                dialog.dismiss();
+                Toast.makeText(this, "已保存配对，正在等待 Mac 连接", Toast.LENGTH_LONG).show();
+              } catch (Exception error) {
+                input.setError("配对内容无效，或当前无法保存");
+              }
+            });
+  }
+
   private void showSettings() {
+    if (session.canEnrollPairing()) {
+      showPairingImport();
+      return;
+    }
     if (!session.ownerMode()) {
       showIdentity();
       return;

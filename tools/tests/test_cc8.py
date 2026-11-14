@@ -31,6 +31,33 @@ class CommandTests(unittest.TestCase):
         (root / 'requirements-dev.txt').write_text('example==1.0\n')
         (root / 'cc8-assistant/host/requirements-runtime.txt').write_text('example==1.0\n')
 
+    def test_pairing_export_preserves_legacy_identity_and_refuses_overwrite(self):
+        from transport_pairing import Pairing
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            self.fixture(root)
+            pairing_path = root / '.toolchains/cc8/transport'
+            destination = root / 'device-access/private/cc8-pairing.json'
+            destination.parent.mkdir(parents=True, mode=0o700)
+            args = argparse.Namespace(output=destination)
+            with self.assertRaises(FileNotFoundError):
+                cc8.pairing_export(args, root)
+            self.assertFalse(pairing_path.exists())
+            legacy = Pairing(pairing_path)
+            original = {p.name: p.read_bytes() for p in pairing_path.iterdir()}
+            with patch('sys.stdout', new_callable=io.StringIO) as out:
+                self.assertEqual(cc8.pairing_export(args, root), 0)
+            self.assertNotIn(legacy.token, out.getvalue())
+            exported = json.loads(destination.read_text())
+            self.assertEqual(exported['token'], legacy.token)
+            self.assertEqual(exported['server_id'], legacy.server_id)
+            self.assertEqual(exported['certificate_sha256'], legacy.pin)
+            self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
+            with self.assertRaises(FileExistsError):
+                cc8.pairing_export(args, root)
+            self.assertEqual({p.name: p.read_bytes() for p in pairing_path.iterdir()}, original)
+
     def test_real_metadata_probe_without_model_imports(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'requirements.txt'

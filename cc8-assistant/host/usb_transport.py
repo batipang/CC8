@@ -8,10 +8,14 @@ import os
 from pathlib import Path
 import re
 import selectors
+import socket
 import subprocess
 import sys
 import threading
 import time
+
+from tls_stream import TLSStream
+from transport import authenticate_device
 
 ROOT = Path(__file__).resolve().parents[2]
 DEVICE_ACCESS = str(ROOT / 'device-access')
@@ -92,17 +96,7 @@ class USBPipe:
         # Terminating the child wakes blocking stdout reads. The Channel reader
         # still owns descriptor release, and a writer may be inside its poll.
         with self._shutdown:
-            if self.child.poll() is not None:
-                return
-            self.child.terminate()
-            try:
-                self.child.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                self.child.kill()
-                try:
-                    self.child.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    raise OSError('USB child exit could not be confirmed') from None
+            reap_child(self.child)
 
     def close(self):
         try:
@@ -154,11 +148,59 @@ def usb_present():
         return False
 
 
-def connect_device():
+def reap_child(child):
+    if child.poll() is not None:
+        return
+    child.terminate()
+    try:
+        child.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        child.kill()
+        try:
+            child.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            raise OSError('USB child exit could not be confirmed') from None
+
+
+class AuthenticatedUSB(TLSStream):
+    """The adb process owns the other end of the TLS stream, never its plaintext."""
+
+    def __init__(self, stream, child):
+        super().__init__(stream)
+        self.child = child
+        self._reap_lock = threading.Lock()
+
+    def close(self):
+        try:
+            super().close()
+        finally:
+            with self._reap_lock:
+                reap_child(self.child)
+
+
+def connect_authenticated_usb(argv, pairing):
+    local, remote = socket.socketpair()
+    child = None
+    stream = None
+    try:
+        with remote:
+            child = subprocess.Popen(
+                argv, stdin=remote, stdout=remote, stderr=subprocess.DEVNULL, bufsize=0
+            )
+        stream = authenticate_device(local, pairing, 'usb')
+        return AuthenticatedUSB(stream, child)
+    except BaseException:
+        (stream or local).close()
+        if child is not None:
+            reap_child(child)
+        raise
+
+
+def connect_device(pairing):
     import cc8_install as access
 
     transport = usb_target()
-    return USBPipe(
+    return connect_authenticated_usb(
         [
             str(access.ADB),
             '-t',
@@ -166,5 +208,6 @@ def connect_device():
             'shell',
             '-T',
             access.PREFIX + 'toybox nc -w 5 127.0.0.1 18765',
-        ]
+        ],
+        pairing,
     )
