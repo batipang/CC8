@@ -474,6 +474,19 @@ class ActionCheck extends Activity {
     c.savedTasks.open();AlertDialog waiting=AlertDialog.last;s.change();c.answer("items",new JSONArray(task("completed")));
     yes(AlertDialog.last==waiting&&waiting.dismissed&&s.sent.size()==1,"Old saved-result response must not open a new view or request");break;
    }
+   case "saved_open_handoff":{
+    JSONObject row=task("completed");row.values.put("desktop_handoff_can_open",true);
+    c.savedTasks.open();c.answer("items",new JSONArray(row));AlertDialog.last.item(0);c.answer("item",row);
+    LinearLayout body=(LinearLayout)((ScrollView)AlertDialog.last.builder.view).child;
+    Button open=(Button)body.children.get(1);
+    yes(open.getText().equals("在 Mac 打开原聊天"),"Expected the saved chat action");
+    open.performClick();AlertDialog.last.positive();
+    JSONObject request=s.sent.get(2);
+    yes(request.optString("action").equals("open_handoff")&&request.optString("id").equals(row.optString("id")),"Only submit the saved record ID");
+    c.answer("action","open_handoff","open_requested",true);
+    open.performClick();AlertDialog confirm=AlertDialog.last;s.change();confirm.positive();
+    yes(s.sent.size()==3,"Stale handoff confirmation cannot cross a route");break;
+   }
    case "saved_pending":{
     c.savedTasks.open();c.answer("items",new JSONArray(task("completed")));AlertDialog old=AlertDialog.last;
     s.change();c.savedTasks.open();AlertDialog current=AlertDialog.last;old.item(0);
@@ -686,6 +699,9 @@ boolean savedTaskRequest(String requestId,String action,String id,long ignored){
 
     def test_saved_handoff_list_and_detail_keep_pending_status(self):
         self.scenario('saved_handoff')
+
+    def test_saved_handoff_requires_confirmation_on_the_same_route(self):
+        self.scenario('saved_open_handoff')
 
     def test_task_send_boundary_checks_after_preparation(self):
         self.scenario('boundary_task')

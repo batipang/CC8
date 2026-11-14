@@ -6,32 +6,16 @@ from pathlib import Path
 import subprocess
 import sys
 
-from saved_tasks import HANDOFF_DRAFT_LABEL, SavedTasks, desktop_handoff_pending, ident
-from source_identity import identifier
+from desktop_handoff import confirm_open, launch_chat
+from saved_tasks import HANDOFF_DRAFT_LABEL, SavedTasks, desktop_handoff_source, ident
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def open_chat(thread_id):
-    if sys.platform != 'darwin':
-        print('打开原聊天需要在 Mac 上运行。', file=sys.stderr)
-        return 2
-    # The desktop app reserves this route for creating a new chat.
-    if identifier(thread_id).lower() == 'new':
-        print('该记录没有可打开的原聊天标识。', file=sys.stderr)
-        return 2
+def request_open(thread_id):
     try:
-        result = subprocess.run(
-            ['/usr/bin/open', '-b', 'com.openai.codex', 'codex://threads/' + thread_id],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-            timeout=5,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        result = None
-    if result is None or result.returncode:
+        confirm_open(launch_chat(thread_id))
+    except (OSError, ValueError, subprocess.TimeoutExpired):
         print('无法确认 Mac 已接收打开请求，请在桌面查找原聊天。', file=sys.stderr)
         return 2
     print('已请求桌面打开原聊天，请在窗口中核对后提交草稿。')
@@ -56,15 +40,8 @@ def main(argv=None):
         )
         records = []
         for item in reversed(store.snapshot()):
-            if not desktop_handoff_pending(item):
-                continue
-            provenance = item['provenance']
-            source = provenance['original_source']
-            if (
-                source is None
-                or source['thread_id'] != provenance['thread_id']
-                or provenance['turn_id'] is None
-            ):
+            source = desktop_handoff_source(item)
+            if source is None:
                 continue
             record = {
                 'id': item['id'],
@@ -73,11 +50,11 @@ def main(argv=None):
             }
             if selected == item['id']:
                 if args.action == 'open':
-                    return open_chat(source['thread_id'])
+                    return request_open(source['thread_id'])
                 _, _, draft = item['result'].partition(HANDOFF_DRAFT_LABEL)
                 record.update(
                     thread_id=source['thread_id'],
-                    turn_id=provenance['turn_id'],
+                    turn_id=item['provenance']['turn_id'],
                     next_step=draft or None,
                 )
                 print(json.dumps(record, ensure_ascii=False, indent=2))

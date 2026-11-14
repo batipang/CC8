@@ -38,6 +38,21 @@ def desktop_handoff_pending(item):
     )
 
 
+def desktop_handoff_source(item):
+    """Resolve the source only from a validated archive item."""
+    if not desktop_handoff_pending(item):
+        return None
+    provenance = item['provenance']
+    source = provenance['original_source']
+    if (
+        source is None
+        or provenance['turn_id'] is None
+        or source['thread_id'] != provenance['thread_id']
+    ):
+        return None
+    return source
+
+
 def execution_unconfirmed(item):
     return item['status'] in ('failed', 'cancelled') and any(
         step['id'] == EXECUTION_UNCONFIRMED_STEP and step['status'] == item['status']

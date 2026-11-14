@@ -8,11 +8,17 @@ import threading
 from typing import Callable, ContextManager
 from saved_tasks import (
     desktop_handoff_pending,
+    desktop_handoff_source,
     execution_unconfirmed,
     ident,
     SavedTaskCapacityError,
 )
 from result_files import reveal_file
+from desktop_handoff import can_open_chat, confirm_open, launch_chat
+
+
+REVEAL_ACTIONS = ('reveal_live', 'reveal_saved')
+OPEN_HANDOFF = 'open_handoff'
 
 
 @dataclass(frozen=True)
@@ -22,6 +28,8 @@ class SavedTaskHooks:
     tasks: Callable[[], list]
     event: Callable[..., None]
     reveal: Callable = reveal_file
+    launch_chat: Callable = launch_chat
+    owner_scope: Callable = lambda: None
 
 
 class SavedTaskController:
@@ -31,7 +39,7 @@ class SavedTaskController:
         self.lock = threading.Lock()
         self.busy = False
         self.worker = None
-        self.reveal_requests = deque(maxlen=64)
+        self.desktop_requests = deque(maxlen=64)
 
     def reply(self, request_id, **fields):
         self.hooks.event('saved_task_result', request_id=request_id, **fields)
@@ -45,11 +53,11 @@ class SavedTaskController:
         request_id, action = data.get('request_id'), data.get('action')
         if not isinstance(request_id, str) or not re.fullmatch('[a-f0-9]{32}', request_id):
             raise ValueError('Invalid saved result request ID')
-        if action not in ('list', 'get', 'save', 'delete', 'reveal_live', 'reveal_saved'):
+        if action not in ('list', 'get', 'save', 'delete', *REVEAL_ACTIONS, OPEN_HANDOFF):
             raise ValueError('Invalid saved result action')
         task_id = ident(data.get('id')) if action != 'list' else None
         file_index = data.get('file_index')
-        revealing = action in ('reveal_live', 'reveal_saved')
+        revealing = action in REVEAL_ACTIONS
         if revealing and (type(file_index) is not int or not 0 <= file_index < 8):
             raise ValueError('Invalid result file index')
         with self.hooks.lock:
@@ -72,19 +80,20 @@ class SavedTaskController:
                 if self.busy:
                     self.reply(request_id, ok=False, message='正在处理保存记录，请稍后再试')
                     return
-                if revealing:
-                    if request_id in self.reveal_requests:
+                if revealing or action == OPEN_HANDOFF:
+                    if request_id in self.desktop_requests:
                         self.reply(
                             request_id,
                             ok=False,
-                            message='这个定位请求已经处理或结果未确认，不会重复执行；请在 Mac 查看。',
+                            message='这个桌面请求已经处理或结果未确认，请在 Mac 查看。',
                         )
                         return
-                    self.reveal_requests.append(request_id)
+                    self.desktop_requests.append(request_id)
+                owner = self.hooks.owner_scope()
                 self.busy = True
         self.worker = threading.Thread(
             target=self.run,
-            args=(request_id, action, task_id, task, connection, file_index),
+            args=(request_id, action, task_id, task, connection, file_index, owner),
             daemon=True,
             name='cc8-saved-results',
         )
@@ -95,19 +104,33 @@ class SavedTaskController:
                 self.busy = False
             raise
 
-    def run(self, request_id, action, task_id, task, connection, file_index=None):
+    def run(self, request_id, action, task_id, task, connection, file_index=None, owner=None):
+        def current():
+            return connection is self.hooks.connection() and owner == self.hooks.owner_scope()
+
         try:
             fields = {'ok': True, 'action': action}
-            if action in ('reveal_live', 'reveal_saved'):
-                if action == 'reveal_saved':
+            if action in (*REVEAL_ACTIONS, OPEN_HANDOFF):
+                if action != 'reveal_live':
                     task = next((t for t in self.store.snapshot() if t['id'] == task_id), None)
                 if task is None:
                     raise ValueError('Result no longer exists')
                 with self.hooks.lock:
-                    if connection is not self.hooks.connection():
+                    if not current():
                         return
-                self.hooks.reveal(task, file_index)
-                fields['revealed'] = True
+                    if action == OPEN_HANDOFF:
+                        source = desktop_handoff_source(task)
+                        if source is None:
+                            raise ValueError('No matching saved handoff')
+                        # Commit the local launch against the authenticated owner.
+                        # Waiting for LaunchServices must stay off the route lock.
+                        process = self.hooks.launch_chat(source['thread_id'])
+                if action == OPEN_HANDOFF:
+                    confirm_open(process)
+                    fields['open_requested'] = True
+                else:
+                    self.hooks.reveal(task, file_index)
+                    fields['revealed'] = True
             elif action == 'save':
                 item = self.store.save(task)
                 fields['id'] = item['id']
@@ -126,19 +149,22 @@ class SavedTaskController:
                 item = next((t for t in self.store.snapshot() if t['id'] == task_id), None)
                 if item is None:
                     raise ValueError('Saved task no longer exists')
+                source = desktop_handoff_source(item)
                 fields['item'] = {
                     **item,
                     'desktop_handoff_pending': desktop_handoff_pending(item),
+                    'desktop_handoff_can_open': source is not None
+                    and can_open_chat(source['thread_id']),
                     'execution_unconfirmed': execution_unconfirmed(item),
                 }
             with self.hooks.lock:
                 self.finish_slot()
-                if connection is self.hooks.connection():
+                if current():
                     self.reply(request_id, **fields)
         except Exception as error:
             with self.hooks.lock:
                 self.finish_slot()
-                if connection is self.hooks.connection():
+                if current():
                     try:
                         self.reply(
                             request_id,
@@ -146,7 +172,9 @@ class SavedTaskController:
                             message='最多保存 32 条结果，请先删除不再需要的保存记录。原记录不变。'
                             if isinstance(error, SavedTaskCapacityError)
                             else '文件定位未确认：文件可能已移动、删除或不是可定位的普通文件。请在 Mac 核对；不会自动重试或打开文件内容。'
-                            if action in ('reveal_live', 'reveal_saved')
+                            if action in REVEAL_ACTIONS
+                            else '无法确认已请求打开原聊天，请在 Mac 打开 Codex 并核对。'
+                            if action == OPEN_HANDOFF
                             else '保存记录状态未确认，请刷新查看；异常文件保留，原任务和已执行操作不会撤销',
                         )
                     except (OSError, EOFError, ValueError):

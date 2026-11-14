@@ -1,6 +1,7 @@
 """Real private files and concurrent writes; no replay, capture or provider calls."""
 
 from contextlib import redirect_stdout, redirect_stderr
+from dataclasses import replace
 import fcntl
 from io import StringIO
 import json
@@ -11,7 +12,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from bridge import Bridge
 from protocol import Packet, validate_device_event
 from saved_tasks import SavedTasks, SavedTaskCapacityError, LIMIT
@@ -147,8 +148,8 @@ class StoreTests(Fixture):
                 code = saved_handoff.main(['open', saved_id, '--runtime-root', str(self.root)])
             return code, stdout.getvalue(), stderr.getvalue()
 
-        with patch.object(saved_handoff.subprocess, 'run') as run:
-            run.return_value.returncode = 0
+        with patch.object(saved_handoff.subprocess, 'Popen') as run:
+            run.return_value.wait.return_value = 0
             code, output, _ = invoke(valid)
             self.assertEqual(code, 0)
             self.assertIn('已请求桌面打开', output)
@@ -158,20 +159,19 @@ class StoreTests(Fixture):
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                check=False,
-                timeout=5,
             )
             run.reset_mock()
             for saved_id in (task(1)['id'], reserved, mismatch, task(9)['id'], '../new'):
                 self.assertEqual(invoke(saved_id)[:2], (2, ''))
             self.assertEqual(invoke(valid, 'linux')[:2], (2, ''))
             run.assert_not_called()
-            run.return_value.returncode = 1
+            run.return_value.wait.return_value = 1
             self.assertEqual(invoke(valid)[:2], (2, ''))
-            run.side_effect = subprocess.TimeoutExpired('PRIVATE_COMMAND', 5)
+            run.return_value.wait.side_effect = [subprocess.TimeoutExpired('PRIVATE_COMMAND', 5), 1]
             code, output, error = invoke(valid)
             self.assertEqual((code, output), (2, ''))
             self.assertNotIn('PRIVATE_COMMAND', error)
+            run.return_value.kill.assert_called_once()
         self.assertEqual(store.read_bytes(), before)
 
     def test_save_restart_read_delete_and_no_automatic_creation(self):
@@ -386,6 +386,75 @@ class ControllerTests(Fixture):
         self.assertEqual(detail['provenance']['turn_id'], 'turn-two')
         self.assertNotIn('desktop_handoff_pending', self.path.read_text())
         self.assertTrue(restored.response.queue.empty())
+
+    def test_saved_handoff_opens_only_its_original_chat_once(self):
+        from dot_handoff import Handoff
+        from report_voice import report_source
+
+        b = self.session()
+        task_id = b.workspace.task_start(b.generation, '继续第二项')
+        b.workspace.task_provenance(
+            task_id, report_source(Handoff('chat-one', '原聊天', (), False), 'turn-two')
+        )
+        b.workspace.task_finish(task_id, 'completed', '私有草稿', desktop_handoff=True)
+        self.request(b, 'save', task_id)
+        self.store.save(task(1))
+        before = self.path.read_bytes()
+        b = self.session()
+        launch = Mock()
+        launch.return_value.wait.return_value = 0
+        b.saved_tasks.hooks = replace(b.saved_tasks.hooks, launch_chat=launch)
+        with patch.object(sys, 'platform', 'darwin'):
+            self.request(b, 'get', task_id)
+        self.assertIs(b.events[-1][1]['item']['desktop_handoff_can_open'], True)
+        with self.assertRaises(ValueError):
+            self.request(b, 'open_handoff', task_id, thread_id='injected')
+        self.request(b, 'open_handoff', task_id)
+        self.assertEqual(
+            b.events[-1][1],
+            {'request_id': 'a' * 32, 'ok': True, 'action': 'open_handoff', 'open_requested': True},
+        )
+        self.request(b, 'open_handoff', task_id)
+        self.assertFalse(b.events[-1][1]['ok'])
+        b.on_event(
+            {
+                'event': 'saved_task_request',
+                'request_id': 'b' * 32,
+                'action': 'open_handoff',
+                'id': task(1)['id'],
+            }
+        )
+        b.saved_tasks.worker.join(2)
+        self.assertFalse(b.events[-1][1]['ok'])
+        launch.assert_called_once_with('chat-one')
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertTrue(b.response.queue.empty())
+
+    def test_saved_handoff_cannot_launch_on_a_rebound_route(self):
+        from dot_handoff import Handoff
+        from report_voice import report_source
+
+        b = self.session()
+        self.store.save(
+            {
+                **task(2),
+                'provenance': report_source(Handoff('chat-one', '原聊天', (), False), 'turn-two'),
+                'steps': [{'id': 'desktop_handoff', 'title': '待桌面接续', 'status': 'completed'}],
+            }
+        )
+        launch = Mock()
+        b.saved_tasks.hooks = replace(b.saved_tasks.hooks, launch_chat=launch)
+        snapshot = self.store.snapshot
+
+        def rebound():
+            with b.guard:
+                b.session.bound_route_token = 'new-route'
+            return snapshot()
+
+        with patch.object(self.store, 'snapshot', side_effect=rebound):
+            self.request(b, 'open_handoff', task(2)['id'])
+        launch.assert_not_called()
+        self.assertEqual(b.events, [])
 
     def test_restart_preserves_unconfirmed_execution_for_failed_or_cancelled_task(self):
         live = self.session()
