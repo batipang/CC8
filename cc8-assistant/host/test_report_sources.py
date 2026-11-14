@@ -333,6 +333,34 @@ class GroupTests(unittest.TestCase):
         self.assertFalse(view['coverage_complete'])
         self.assertEqual(updated.status()['pending'], 1)
 
+        context = (selected, object(), 0)
+        voice = ReportVoice(
+            ReportVoiceHooks(
+                threading.RLock(),
+                lambda: context,
+                lambda *a: self.fail('Follow-up re-read sources'),
+            ),
+            clock=lambda: 0,
+        )
+        self.assertTrue(voice.remember(selected, view))
+        detail = voice.answer(ReportCommand('item', 1), lambda: True)
+        self.assertIn('尚未重新核验', detail.text)
+        self.assertEqual(detail.provenance['thread_id'], unheard['source_thread_id'])
+        for command in (
+            ReportCommand('continue', 1),
+            voice.command('继续第一项，下一步：检查构建结果'),
+        ):
+            result = voice.answer(command, lambda: True)
+            self.assertEqual(result.operation, 'clarification')
+            self.assertIsNone(result.provenance)
+            self.assertIn('请重新读取原来源', result.text)
+            self.assertNotIn('检查构建结果', result.text)
+        self.assertTrue(voice.remember(selected, original))
+        handoff = voice.answer(voice.command('继续第二项，下一步：检查构建结果'), lambda: True)
+        self.assertEqual(handoff.operation, 'desktop_handoff')
+        self.assertIn('检查构建结果', handoff.text)
+        self.assertIn(unheard['item_id'], handoff.text)
+
     def test_numbered_detail_uses_frozen_real_chat_provenance_not_a_fake_collection_thread(self):
         f = GroupFixture()
         selected = scope()

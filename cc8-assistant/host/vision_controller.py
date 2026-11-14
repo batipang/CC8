@@ -447,7 +447,9 @@ class VisionController:
                 return
             self.generation = generation
             self.nonce = nonce
-            self.hooks.diagnostics().begin('vision', generation)
+            self.hooks.diagnostics().begin(
+                'vision', generation, camera_ocr=origin != 'mac_window' and text == OCR_PROMPT
+            )
             self.hooks.touch()
             self.hooks.event(
                 'vision_begin',
@@ -574,10 +576,15 @@ class VisionController:
                     followup_allowed=capture.followup_allowed,
                 )
                 image = self.inbox.wait(capture, lambda: self.hooks.valid(generation))
-            if not self.hooks.valid(generation):
-                return
+            with self.hooks.lock:
+                if not self.hooks.valid(generation):
+                    return
+                if not retained and not window:
+                    self.hooks.diagnostics().camera_frame(
+                        generation, capture.width, capture.height, len(image)
+                    )
+                    self.hooks.metric('vision_frames_received', increment=True)
             if not retained and not window:
-                self.hooks.metric('vision_frames_received', increment=True)
                 self.hooks.log(
                     'vision_frame_received',
                     bytes=len(image),

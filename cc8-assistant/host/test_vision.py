@@ -326,6 +326,11 @@ class BridgeVisionTests(unittest.TestCase):
         b.event = event
         b.answer_visual(b.job)
         self.assertEqual(answers, [jpeg()])
+        evidence = b.diagnostics.report()
+        row = next(row for row in evidence['requests'] if row['generation'] == b.job.generation)
+        self.assertEqual(row['camera_frame'], {'dimensions': [640, 480], 'bytes': len(jpeg())})
+        self.assertNotIn('camera_ocr', row)
+        self.assertFalse(evidence['contains_content'])
         self.assertIsNone(b.visual.inbox.pending)
         self.assertIsNone(b.visual.generation)
         self.assertNotIn('image', b.metrics)
@@ -334,7 +339,7 @@ class BridgeVisionTests(unittest.TestCase):
 
     def test_failure_never_runs_dot_with_a_stale_or_missing_image(self):
         b = self.bridge()
-        b.begin_visual('看图', 'button', 'a' * 32)
+        b.begin_visual('读一下镜头里的文字', 'voice')
         b.answer = lambda *a, **kw: self.fail('No image should reach Dot')
         old = b.event
 
@@ -353,6 +358,9 @@ class BridgeVisionTests(unittest.TestCase):
         b.event = event
         b.answer_visual(b.job)
         self.assertEqual(b.events[-1][1]['result'], 'failed')
+        row = b.diagnostics.report()['requests'][-1]
+        self.assertIs(row['camera_ocr'], True)
+        self.assertNotIn('camera_frame', row)
 
 
 if __name__ == '__main__':

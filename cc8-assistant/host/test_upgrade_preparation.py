@@ -208,7 +208,7 @@ class UpgradeTests(unittest.TestCase):
             self.assertTrue(upgrade.plan(before, after)['reminder_storage']['compatible'])
             self.assertEqual(path.read_bytes(), raw)
 
-    def transition_fixture(self, folder):
+    def transition_fixture(self, folder, *, settings_schema=False):
         base, candidate, recovery = (Path(folder) / x for x in ('base', 'candidate', 'recovery'))
 
         def git(root, *args):
@@ -237,6 +237,14 @@ class UpgradeTests(unittest.TestCase):
         manifest.pop('transport', None)  # Exercise the published pre-TLS baseline.
         initial_code = manifest['assistant']['version_code']
         (base / 'release.json').write_text(json.dumps(manifest))
+        schema_path = Path('cc8-assistant/host/resources/runtime-config.schema.json')
+        if settings_schema:
+            schema = upgrade.config_schema()
+            del schema['properties']['voice_mode']
+            del schema['properties']['gpt_live_voice']
+            schema['properties']['brain']['enum'] = ['dot', 'minimax']
+            (base / schema_path).parent.mkdir(parents=True)
+            (base / schema_path).write_text(json.dumps(schema))
         git(base, 'add', '.')
         git(base, 'commit', '-qm', 'fixed baseline')
         git(base, 'worktree', 'add', '--detach', str(candidate))
@@ -250,6 +258,8 @@ class UpgradeTests(unittest.TestCase):
                 if i == 1:
                     data['backend']['version'] = '9.0.1'
                     data['transport'] = {'usb_authentication': 'paired_tls'}
+                    if settings_schema:
+                        (root / schema_path).write_text(json.dumps(upgrade.config_schema()))
                 (root / 'release.json').write_text(json.dumps(data))
                 git(root, 'commit', '-qam', 'fixed build')
             (root / 'artifacts').mkdir()
@@ -323,6 +333,88 @@ class UpgradeTests(unittest.TestCase):
                 self.assertFalse(gate['physical_transport_verified'])
             self.assertEqual(report['recovery_source']['candidate_matching_build_support'], [])
             self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+
+    def test_transition_checks_explicit_backup_without_copying_settings(self):
+        with tempfile.TemporaryDirectory() as folder:
+            roots, apks, checked, _ = self.transition_fixture(folder, settings_schema=True)
+            root = Path(folder)
+            pin = hashlib.sha256(apks[0].read_bytes()).hexdigest()
+            profile = self.profile(folder, {'schema_version': 1, 'brain': 'dot'})
+            saved = root / 'settings-backup.json'
+            upgrade.output(upgrade.backup(profile, roots[0]), saved)
+            original = saved.read_bytes()
+            with patch('tools.release.check_apk', side_effect=checked):
+                report = upgrade.verify_assistant_transition(
+                    *roots, apks[0], pin, settings_backup_path=saved
+                )
+            self.assertEqual(
+                report['settings_compatibility'],
+                {
+                    'candidate': {'compatible': True, 'omitted_default_fields': []},
+                    'recovery': {
+                        'compatible': True,
+                        'omitted_default_fields': ['gpt_live_voice', 'voice_mode'],
+                    },
+                },
+            )
+            self.assertNotIn('credential_file', json.dumps(report))
+            self.assertEqual(saved.read_bytes(), original)
+            pin_settings = report['settings_sha256']
+            self.assertEqual(pin_settings, upgrade.fingerprint(upgrade.verify_backup(saved)))
+            staged = root / 'staged.json'
+            stage = [
+                'stage-restore',
+                str(saved),
+                '--target-root',
+                str(roots[2]),
+                '--expect-settings-sha256',
+                pin_settings,
+                '--output',
+                str(staged),
+            ]
+            code, _, error = self.invoke(stage)
+            self.assertEqual(code, 0, error)
+            self.assertEqual(json.loads(staged.read_text())['brain'], 'dot')
+            staged.unlink()
+            alternate = self.profile(folder, {'schema_version': 1, 'brain': 'minimax'})
+            other_backup = root / 'other-backup.json'
+            upgrade.output(upgrade.backup(alternate, roots[0]), other_backup)
+            stage[1] = str(other_backup)
+            code, _, error = self.invoke(stage)
+            self.assertEqual(code, 2)
+            self.assertIn('do not match the transition digest', error)
+            self.assertFalse(staged.exists())
+            trial = self.profile(folder, {'schema_version': 1, 'voice_mode': 'gpt-live-1'})
+            trial_backup = root / 'trial-backup.json'
+            upgrade.output(upgrade.backup(trial, roots[0]), trial_backup)
+            output = root / 'blocked-transition.json'
+            with patch(
+                'tools.release.check_apk',
+                side_effect=AssertionError('Must stop before APK tooling'),
+            ):
+                code, _, error = self.invoke(
+                    [
+                        'verify-transition',
+                        '--from-root',
+                        str(roots[0]),
+                        '--to-root',
+                        str(roots[1]),
+                        '--recovery-root',
+                        str(roots[2]),
+                        '--baseline-apk',
+                        str(apks[0]),
+                        '--baseline-sha256',
+                        pin,
+                        '--settings-backup',
+                        str(trial_backup),
+                        '--output',
+                        str(output),
+                    ]
+                )
+            self.assertEqual(code, 2)
+            self.assertIn('incompatible with recovery', error)
+            self.assertNotIn(str(trial_backup), error)
+            self.assertFalse(output.exists())
 
     def test_transition_accepts_only_candidate_identical_build_support_and_reports_it(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -601,6 +693,7 @@ class UpgradeTests(unittest.TestCase):
             schema = upgrade.config_schema()
             del schema['properties']['voice_mode']
             del schema['properties']['gpt_live_voice']
+            schema['properties']['brain']['enum'] = ['dot', 'minimax']
             declaration = root / 'cc8-assistant/host/resources/runtime-config.schema.json'
             declaration.parent.mkdir(parents=True)
             declaration.write_text(json.dumps(schema))
@@ -616,6 +709,16 @@ class UpgradeTests(unittest.TestCase):
             self.assertEqual(json.loads(staged.read_text()), expected)
             self.assertEqual(profile.read_bytes(), original)
             self.assertEqual(upgrade.verify_backup(saved), snapshot['settings'])
+            self.assertEqual(
+                upgrade.settings_for_target({**expected, 'brain': 'minimax'}, root),
+                {**expected, 'brain': 'minimax'},
+            )
+            with self.assertRaisesRegex(ValueError, 'field contract differs'):
+                upgrade.settings_for_target({**expected, 'brain': 'echo'}, root)
+            schema['properties']['brain']['maxLength'] = 6
+            declaration.write_text(json.dumps(schema))
+            with self.assertRaisesRegex(ValueError, 'field contract differs'):
+                upgrade.settings_for_target(expected, root)
 
     def test_targeted_restore_rejects_active_trial_and_different_field_contract(self):
         with tempfile.TemporaryDirectory() as folder:
