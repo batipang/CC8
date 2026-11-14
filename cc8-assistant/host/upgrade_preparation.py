@@ -241,6 +241,16 @@ def plan(before_root, after_root, assistant_apk=None):
     return value
 
 
+def require_worktree_root(root):
+    top = subprocess.check_output(
+        ['git', '-C', str(root), 'rev-parse', '--show-toplevel'],
+        text=True,
+        timeout=10,
+    ).strip()
+    if Path(top).resolve() != root:
+        raise ValueError('Expected a Git workspace root')
+
+
 def verify_assistant_transition(
     baseline_root,
     candidate_root,
@@ -261,13 +271,7 @@ def verify_assistant_transition(
     if len(set(roots)) != 3:
         raise ValueError('Expected separate baseline, candidate and recovery workspaces')
     for root in roots:
-        top = subprocess.check_output(
-            ['git', '-C', str(root), 'rev-parse', '--show-toplevel'],
-            text=True,
-            timeout=10,
-        ).strip()
-        if Path(top).resolve() != root:
-            raise ValueError('Expected a Git workspace root')
+        require_worktree_root(root)
     states = [git_state(root) for root in roots]
     if any(dirty or not re.fullmatch('[a-f0-9]{40}', commit) for commit, dirty in states):
         raise ValueError('Expected three clean, pinned source workspaces')
@@ -541,6 +545,44 @@ def settings_for_target(settings, target_root):
     return result
 
 
+def verify_staged_settings(transition_path, backup_path, staged_path, target_root, stage):
+    """Recheck a staged file against the backup and the verified target checkout."""
+    from tools.release import git_state
+
+    transition = read_private_json(transition_path)
+    if (
+        not isinstance(transition, dict)
+        or type(transition.get('schema_version')) is not int
+        or transition['schema_version'] != 1
+        or transition.get('kind') != 'cc8_assistant_transition_artifacts'
+        or transition.get('verified_against_pinned_baseline') is not True
+        or stage not in ('candidate', 'recovery')
+    ):
+        raise ValueError('Expected a verified assistant transition')
+    target_root = Path(target_root).resolve()
+    require_worktree_root(target_root)
+    commit, dirty = git_state(target_root)
+    if (
+        dirty
+        or not re.fullmatch('[a-f0-9]{40}', commit)
+        or transition['stages'][stage]['source_commit'] != commit
+    ):
+        raise ValueError('Target checkout differs from the verified transition')
+    settings = verify_backup(backup_path)
+    if not hmac.compare_digest(transition['settings_sha256'], fingerprint(settings)):
+        raise ValueError('Backup settings differ from the verified transition')
+    expected = settings_for_target(settings, target_root)
+    if transition['settings_compatibility'][stage] != {
+        'compatible': True,
+        'omitted_default_fields': sorted(settings.keys() - expected.keys()),
+    }:
+        raise ValueError('Target settings contract differs from the verified transition')
+    if not hmac.compare_digest(fingerprint(read_private_json(staged_path)), fingerprint(expected)):
+        raise ValueError('Staged settings differ from the verified backup')
+    if git_state(target_root) != (commit, dirty):
+        raise ValueError('Target checkout changed during verification')
+
+
 def output(value, path=None):
     if path is None:
         private = private_directory(ROOT / 'device-access/private')
@@ -604,8 +646,26 @@ def main(argv=None):
         '--expect-settings-sha256',
         help='Require the normalized settings digest from the transition report',
     )
+    verify_staged = commands.add_parser(
+        'verify-staged', help='Check a staged settings file without applying it'
+    )
+    verify_staged.add_argument('--transition', type=Path, required=True)
+    verify_staged.add_argument('--settings-backup', type=Path, required=True)
+    verify_staged.add_argument('--staged-profile', type=Path, required=True)
+    verify_staged.add_argument('--target-root', type=Path, required=True)
+    verify_staged.add_argument('--stage', choices=('candidate', 'recovery'), required=True)
     args = parser.parse_args(argv)
     try:
+        if args.action == 'verify-staged':
+            verify_staged_settings(
+                args.transition,
+                args.settings_backup,
+                args.staged_profile,
+                args.target_root,
+                args.stage,
+            )
+            print('Staged settings verified against the transition and backup; no profile changed.')
+            return 0
         if args.action == 'verify':
             verify_backup(args.backup)
             print('Private settings backup verified; no profile changed.')

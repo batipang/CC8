@@ -416,6 +416,68 @@ class UpgradeTests(unittest.TestCase):
             self.assertNotIn(str(trial_backup), error)
             self.assertFalse(output.exists())
 
+    def test_verify_staged_checks_both_targets_and_rejects_a_changed_profile_or_checkout(self):
+        with tempfile.TemporaryDirectory() as folder:
+            roots, apks, checked, git = self.transition_fixture(folder, settings_schema=True)
+            base, candidate, recovery = roots
+            path = Path(folder)
+            profile = self.profile(folder, {'schema_version': 1, 'brain': 'dot'})
+            saved, transition = path / 'settings.json', path / 'transition.json'
+            upgrade.output(upgrade.backup(profile, base), saved)
+            with patch('tools.release.check_apk', side_effect=checked):
+                report = upgrade.verify_assistant_transition(
+                    *roots,
+                    apks[0],
+                    hashlib.sha256(apks[0].read_bytes()).hexdigest(),
+                    settings_backup_path=saved,
+                )
+            upgrade.output(report, transition)
+            for label, target in (('candidate', candidate), ('recovery', recovery)):
+                with self.subTest(label=label):
+                    staged = path / (label + '.json')
+                    upgrade.output(
+                        upgrade.settings_for_target(upgrade.verify_backup(saved), target), staged
+                    )
+                    args = [
+                        'verify-staged',
+                        '--transition',
+                        str(transition),
+                        '--settings-backup',
+                        str(saved),
+                        '--staged-profile',
+                        str(staged),
+                        '--target-root',
+                        str(target),
+                        '--stage',
+                        label,
+                    ]
+                    original = staged.read_bytes()
+                    code, output, error = self.invoke(args)
+                    self.assertEqual(code, 0, error)
+                    self.assertNotIn('signing', output)
+                    self.assertEqual(staged.read_bytes(), original)
+                    args[-1] = 'recovery' if label == 'candidate' else 'candidate'
+                    self.assertEqual(self.invoke(args)[0], 2)
+                    args[-1] = label
+                    staged.write_bytes(original.replace(b'"dot"', b'"minimax"'))
+                    self.assertEqual(self.invoke(args)[0], 2)
+                    staged.write_bytes(original)
+                    staged.chmod(0o644)
+                    self.assertEqual(self.invoke(args)[0], 2)
+                    staged.chmod(0o600)
+                    runtime = target / 'release.json'
+                    runtime.write_bytes(runtime.read_bytes() + b'\n')
+                    self.assertEqual(self.invoke(args)[0], 2)
+                    git(target, 'restore', 'release.json')
+                    self.assertEqual(self.invoke(args)[0], 0)
+            original = saved.read_bytes()
+            saved.unlink()
+            alternate = self.profile(folder, {'schema_version': 1, 'brain': 'minimax'})
+            upgrade.output(upgrade.backup(alternate, base), saved)
+            self.assertEqual(self.invoke(args)[0], 2)
+            saved.write_bytes(original)
+            self.assertEqual(self.invoke(args)[0], 0)
+
     def test_transition_accepts_only_candidate_identical_build_support_and_reports_it(self):
         with tempfile.TemporaryDirectory() as folder:
             roots, apks, checked, git = self.transition_fixture(folder)
