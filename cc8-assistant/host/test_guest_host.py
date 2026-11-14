@@ -110,6 +110,12 @@ class GuestHostTests(unittest.TestCase):
         packets = [
             {'event': 'dot_chat_request', 'request_id': 'a' * 32, 'action': 'state'},
             {'event': 'saved_task_request', 'request_id': 'a' * 32, 'action': 'list'},
+            {
+                'event': 'saved_task_request',
+                'request_id': 'a' * 32,
+                'action': 'open_live_handoff',
+                'id': 'b' * 16,
+            },
             {'event': 'preference_request', 'request_id': 'a' * 32, 'action': 'list'},
             {'event': 'vocabulary_request', 'request_id': 'a' * 32, 'action': 'list'},
             {

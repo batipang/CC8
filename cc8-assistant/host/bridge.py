@@ -29,6 +29,7 @@ from guest_brain import GuestBrain
 from identity_runtime import IdentityRuntime
 from identity_mode import IdentityModeStore
 from workspace import Workspace
+from saved_task_controller import handoff_can_open
 from result_reading import ResultReading
 from voice_preferences import VoicePreferences
 from diagnostics import TraceBook
@@ -338,7 +339,12 @@ class Bridge:
     def publish_workspace(self):
         with self.guard:
             if self.dialogue_access() and self.session.connection is not None:
-                self.event('workspace', **self.workspace.snapshot())
+                snapshot = self.workspace.snapshot()
+                if self.owner_access():
+                    for task in snapshot['tasks']:
+                        if handoff_can_open(task):
+                            task['desktop_handoff_can_open'] = True
+                self.event('workspace', **snapshot)
 
     def health(self):
         return self.reporting.health()

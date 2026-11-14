@@ -41,7 +41,7 @@ def desktop_handoff_pending(item):
 
 
 def desktop_handoff_source(item):
-    """Resolve the source only from a validated archive item."""
+    """Resolve the source from a validated task receipt."""
     if not desktop_handoff_pending(item):
         return None
     provenance = item['provenance']

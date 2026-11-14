@@ -482,6 +482,19 @@ class ActionCheck extends Activity {
     c.savedTasks.open();AlertDialog waiting=AlertDialog.last;s.change();c.answer("items",new JSONArray(task("completed")));
     yes(AlertDialog.last==waiting&&waiting.dismissed&&s.sent.size()==1,"Old saved-result response must not open a new view or request");break;
    }
+   case "live_open_handoff":{
+    JSONObject row=task("completed");row.values.put("desktop_handoff_can_open",true);
+    c.tasksData=new JSONArray(row);c.showTaskList();AlertDialog.last.item(1);
+    LinearLayout body=(LinearLayout)((ScrollView)AlertDialog.last.builder.view).child;
+    Button open=(Button)body.children.get(1);
+    yes(open.getText().equals("在 Mac 打开原聊天")&&s.sent.stream().noneMatch(j->j.optString("event").equals("saved_task_request")),"Opening current details must not open or save a chat");
+    open.performClick();AlertDialog.last.positive();
+    int count=s.sent.size();JSONObject request=s.sent.get(count-1);
+    yes(request.optString("action").equals("open_live_handoff")&&request.optString("id").equals(row.optString("id")),"Only submit the live result ID");
+    c.answer("action","open_live_handoff","open_requested",true);
+    open.performClick();AlertDialog confirm=AlertDialog.last;s.change();confirm.positive();
+    yes(s.sent.size()==count,"Stale live handoff confirmation cannot cross a route");break;
+   }
    case "saved_open_handoff":{
     JSONObject row=task("completed");row.values.put("desktop_handoff_can_open",true);
     c.savedTasks.open();c.answer("items",new JSONArray(row));AlertDialog.last.item(0);c.answer("item",row);
@@ -710,6 +723,9 @@ boolean savedTaskRequest(String requestId,String action,String id,long ignored){
 
     def test_window_input_receipt_is_visible_without_command_or_file_action(self):
         self.scenario('window_source')
+
+    def test_live_handoff_uses_current_result_without_saving_and_blocks_old_route(self):
+        self.scenario('live_open_handoff')
 
     def test_saved_handoff_requires_confirmation_on_the_same_route(self):
         self.scenario('saved_open_handoff')

@@ -297,6 +297,7 @@ def validate_device_event(value: object) -> JsonObject:
                 'reveal_live',
                 'reveal_saved',
                 'open_handoff',
+                'open_live_handoff',
             ):
                 raise ValueError('Invalid saved result action')
             if value['action'] != 'list':
@@ -311,7 +312,7 @@ def validate_device_event(value: object) -> JsonObject:
                     or set(value) != {'event', 'request_id', 'action', 'id', 'file_index'}
                 ):
                     raise ValueError('Invalid result reveal request')
-            if value['action'] == 'open_handoff' and set(value) != {
+            if value['action'] in ('open_handoff', 'open_live_handoff') and set(value) != {
                 'event',
                 'request_id',
                 'action',

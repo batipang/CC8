@@ -48,6 +48,30 @@ final class SavedTasksDialog {
         .show();
   }
 
+  void addHandoffButton(LinearLayout content, JSONObject task, boolean saved, long route) {
+    if (!Boolean.TRUE.equals(task.opt("desktop_handoff_can_open"))) return;
+    String nextAction = saved ? "open_handoff" : "open_live_handoff";
+    String taskId = task.optString("id");
+    Button openChat = new Button(activity);
+    openChat.setText("在 Mac 打开原聊天");
+    openChat.setTextSize(28);
+    openChat.setOnClickListener(
+        v -> {
+          if (!available(route)) return;
+          new LargeDialogBuilder(activity)
+              .setTitle("在 Mac 打开原聊天？")
+              .setMessage("打开这份回执对应的 Codex 聊天。请在 Mac 核对聊天和草稿，再手动提交。")
+              .setPositiveButton("打开原聊天", (d, n) -> request(nextAction, taskId, route))
+              .setNegativeButton("取消", null)
+              .show();
+        });
+    content.addView(openChat);
+  }
+
+  private static boolean isHandoff(String nextAction) {
+    return "open_handoff".equals(nextAction) || "open_live_handoff".equals(nextAction);
+  }
+
   void close() {
     pending = "";
     pendingRoute = -1;
@@ -76,9 +100,8 @@ final class SavedTasksDialog {
     String requestId = pending;
     progress =
         new LargeDialogBuilder(activity)
-            .setTitle("已保存结果")
-            .setMessage(
-                "open_handoff".equals(nextAction) ? "正在请求 Mac 打开原聊天…" : "正在处理…关闭等待不会撤销已经提交的保存或删除。")
+            .setTitle(isHandoff(nextAction) ? "打开原聊天" : "已保存结果")
+            .setMessage(isHandoff(nextAction) ? "正在请求 Mac 打开原聊天…" : "正在处理…关闭等待不会撤销已经提交的保存或删除。")
             .setNegativeButton("关闭等待", (d, n) -> close())
             .create();
     progress.setOnCancelListener(d -> close());
@@ -87,7 +110,7 @@ final class SavedTasksDialog {
         () -> {
           if (!requestId.equals(pending)) return;
           close();
-          toast("open_handoff".equals(nextAction) ? "打开请求未确认，请在 Mac 核对" : "保存记录状态未确认，请刷新查看");
+          toast(isHandoff(nextAction) ? "打开请求未确认，请在 Mac 核对" : "保存记录状态未确认，请刷新查看");
         };
     handler.postDelayed(timeout, 15000);
     if (!session.savedTaskRequest(requestId, nextAction, id, route)) {
@@ -114,9 +137,9 @@ final class SavedTasksDialog {
     else if ("delete".equals(completedAction)) {
       toast(data.optBoolean("deleted") ? "已删除保存记录，原任务不变" : "这条记录已不在列表中");
       request("list", null, route);
-    } else if ("open_handoff".equals(completedAction)) {
+    } else if (isHandoff(completedAction)) {
       toast(
-          "open_handoff".equals(data.optString("action"))
+          completedAction.equals(data.optString("action"))
                   && Boolean.TRUE.equals(data.opt("open_requested"))
               ? "已请求 Mac 打开原聊天，请在桌面核对后提交草稿"
               : "打开请求未确认，请在 Mac 核对");
@@ -177,23 +200,7 @@ final class SavedTasksDialog {
     LinearLayout content = new LinearLayout(activity);
     content.setOrientation(LinearLayout.VERTICAL);
     content.addView(detail);
-    if (Boolean.TRUE.equals(item.opt("desktop_handoff_can_open"))) {
-      Button openChat = new Button(activity);
-      openChat.setText("在 Mac 打开原聊天");
-      openChat.setTextSize(28);
-      openChat.setOnClickListener(
-          v -> {
-            if (!available(route)) return;
-            new LargeDialogBuilder(activity)
-                .setTitle("在 Mac 打开原聊天？")
-                .setMessage("打开这份回执对应的 Codex 聊天。请在 Mac 核对聊天和草稿，再手动提交。")
-                .setPositiveButton(
-                    "打开原聊天", (d, n) -> request("open_handoff", item.optString("id"), route))
-                .setNegativeButton("取消", null)
-                .show();
-          });
-      content.addView(openChat);
-    }
+    addHandoffButton(content, item, true, route);
     if (item.optJSONObject("provenance") != null || item.optJSONObject("window_input") != null) {
       Button source = new Button(activity);
       source.setText("来源与文件");
