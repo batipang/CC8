@@ -1849,12 +1849,14 @@ public final class MainActivity extends Activity
             return;
           }
           final boolean keepPhoto = retainCapturedPhoto && profile.followupAllowed;
+          final boolean requestedHD = highDefinitionImage;
           eyes.start(
               new SingleFrameCamera.Result() {
-                public void image(byte[] jpeg, int width, int height) {
+                public void image(byte[] jpeg, int width, int height, boolean edited) {
                   if (foreground && session.isVisionRequestCurrent(request)) {
                     state("thinking", "摄像头已关闭 · 正在把本次画面交给 Dot");
-                    session.imageReady(request, jpeg, width, height, keepPhoto);
+                    session.imageReady(
+                        request, jpeg, width, height, keepPhoto, requestedHD, edited);
                   }
                 }
 
@@ -1862,7 +1864,7 @@ public final class MainActivity extends Activity
                   session.cameraFailed(request, reason);
                 }
               },
-              highDefinitionImage,
+              requestedHD,
               profile,
               reviewCapturedImage,
               () -> foreground && session.isVisionRequestCurrent(request));

@@ -146,7 +146,7 @@ def receipt_index(report):
     return rows
 
 
-def receipt_dimensions(rows, used, ident, status):
+def receipt_frame(rows, used, ident, status):
     if status == 'not_run' and ident is None:
         return None
     if not isinstance(ident, str) or ident not in rows or ident in used:
@@ -168,7 +168,11 @@ def receipt_dimensions(rows, used, ident, status):
         or not 32 <= frame['bytes'] <= 768 * 1024
     ):
         raise ValueError('OCR request has no verified frame')
-    return frame.get('dimensions')
+    mode, edited = frame.get('requested_mode'), frame.get('edited')
+    if 'requested_mode' in frame or 'edited' in frame:
+        if mode not in MODES or type(edited) is not bool:
+            raise ValueError('Invalid OCR capture mode or edit receipt')
+    return frame
 
 
 def score(data, *, diagnostics=None):
@@ -190,6 +194,7 @@ def score(data, *, diagnostics=None):
     totals = {mode: {'recognized': 0, 'failed': 0, 'not_run': 0} for mode in MODES}
     paired = {mode: {'errors': 0, 'reference_units': 0} for mode in MODES}
     complete_pairs = hd_standard_fallbacks = hd_without_pixel_gain = 0
+    excluded_pairs = dict(mode_mismatch=0, edited_frame=0, capture_metadata_missing=0)
     for ident, reference in expected.items():
         entry = data['samples'][ident]
         if not isinstance(entry, dict) or set(entry) != set(MODES):
@@ -200,10 +205,15 @@ def score(data, *, diagnostics=None):
             if not isinstance(result, dict) or set(result) != {'status', 'text', frame_field}:
                 raise ValueError('Invalid OCR sample result')
             status, text = result['status'], result['text']
+            frame = (
+                None
+                if receipts is None
+                else receipt_frame(receipts, used, result[frame_field], status)
+            )
             dimensions = (
                 result[frame_field]
                 if receipts is None
-                else receipt_dimensions(receipts, used, result[frame_field], status)
+                else (frame.get('dimensions') if frame else None)
             )
             if (
                 status not in ('recognized', 'failed', 'not_run')
@@ -213,7 +223,10 @@ def score(data, *, diagnostics=None):
                 or (status != 'recognized' and text)
                 or (
                     status == 'recognized'
-                    and (not text.strip() or not valid_dimensions(dimensions, mode))
+                    and (
+                        not text.strip()
+                        or not valid_dimensions(dimensions, 'hd' if frame else mode)
+                    )
                 )
                 or (status != 'recognized' and dimensions is not None)
             ):
@@ -224,11 +237,35 @@ def score(data, *, diagnostics=None):
                 marks = text.count(UNREADABLE)
                 counts = edit_counts(normalize(reference), normalize(text.replace(UNREADABLE, '')))
                 row[mode].update(counts, unreadable_marks=marks, dimensions=dimensions)
+                if frame is not None:
+                    reason = (
+                        'capture_metadata_missing'
+                        if 'requested_mode' not in frame
+                        else 'mode_mismatch'
+                        if frame['requested_mode'] != mode
+                        else 'edited_frame'
+                        if frame['edited']
+                        else None
+                    )
+                    if reason is None and not valid_dimensions(dimensions, mode):
+                        reason = 'mode_mismatch'
+                    row[mode]['comparison_exclusion'] = reason
         hd_dimensions = row['hd'].get('dimensions')
-        fallback = hd_dimensions is not None and valid_dimensions(hd_dimensions, 'standard')
+        fallback = (
+            hd_dimensions is not None
+            and not row['hd'].get('comparison_exclusion')
+            and valid_dimensions(hd_dimensions, 'standard')
+        )
         hd_standard_fallbacks += fallback
         samples.append(row)
-        if all(row[mode]['status'] == 'recognized' for mode in MODES) and not fallback:
+        if all(row[mode]['status'] == 'recognized' for mode in MODES):
+            reasons = {row[mode].get('comparison_exclusion') for mode in MODES}
+            if any(reasons):
+                for reason in excluded_pairs.keys() & reasons:
+                    excluded_pairs[reason] += 1
+                continue
+            if fallback:
+                continue
             if prod(hd_dimensions) <= prod(row['standard']['dimensions']):
                 hd_without_pixel_gain += 1
                 continue
@@ -247,6 +284,7 @@ def score(data, *, diagnostics=None):
         'recognized_pairs': complete_pairs,
         'hd_standard_fallbacks': hd_standard_fallbacks,
         'hd_without_pixel_gain': hd_without_pixel_gain,
+        'excluded_pairs': excluded_pairs,
         'full_coverage': complete_pairs == len(expected),
         'mode_counts': totals,
         'paired_scores': paired,

@@ -171,7 +171,7 @@ class TraceBook:
             row = self._row(key)
             return deepcopy(row.get('capture')) if row else None
 
-    def camera_frame(self, key, width, height, byte_count):
+    def camera_frame(self, key, width, height, byte_count, *, requested_mode=None, edited=None):
         from vision import HD_IMAGE
 
         if (
@@ -183,7 +183,10 @@ class TraceBook:
         with self.lock:
             row = self._row(key)
             if row is not None and row['origin'] == 'vision' and row['outcome'] is None:
-                row.setdefault('camera_frame', {'dimensions': [width, height], 'bytes': byte_count})
+                frame = {'dimensions': [width, height], 'bytes': byte_count}
+                if requested_mode in ('standard', 'hd') and type(edited) is bool:
+                    frame.update(requested_mode=requested_mode, edited=edited)
+                row.setdefault('camera_frame', frame)
 
     def asr_start(self, key, samples):
         with self.lock:

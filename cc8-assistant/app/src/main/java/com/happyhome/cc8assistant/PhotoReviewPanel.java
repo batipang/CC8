@@ -21,7 +21,7 @@ final class PhotoReviewPanel {
 
     boolean retake();
 
-    void send(byte[] jpeg, int width, int height);
+    void send(byte[] jpeg, int width, int height, boolean edited);
 
     void cancel();
 
@@ -71,9 +71,10 @@ final class PhotoReviewPanel {
           if (!usable() || busy || image.cropping()) return;
           Actions owner = actions;
           byte[] frame = jpeg;
+          boolean edited = frame != original;
           int w = width, h = height;
           clear();
-          owner.send(frame, w, h);
+          owner.send(frame, w, h, edited);
         });
     retake.setOnClickListener(
         v -> {

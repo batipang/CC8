@@ -15,7 +15,7 @@ import android.widget.*;
 final class SingleFrameCamera implements TextureView.SurfaceTextureListener {
   // serial 隔离每次前台拍摄；取消、超时或 Surface 销毁后，旧回调不能再提交图片。
   interface Result {
-    void image(byte[] jpeg, int width, int height);
+    void image(byte[] jpeg, int width, int height, boolean edited);
 
     void error(String reason);
   }
@@ -347,7 +347,7 @@ final class SingleFrameCamera implements TextureView.SurfaceTextureListener {
                     }
                     opening = false;
                     if (reviewEnabled) showReview(token, frame);
-                    else complete(token, frame.bytes, frame.width, frame.height);
+                    else complete(token, frame.bytes, frame.width, frame.height, false);
                   });
             } catch (Exception | OutOfMemoryError error) {
               fail(token, "image_encode_failed");
@@ -426,8 +426,8 @@ final class SingleFrameCamera implements TextureView.SurfaceTextureListener {
             return true;
           }
 
-          public void send(byte[] jpeg, int width, int height) {
-            complete(token, jpeg, width, height);
+          public void send(byte[] jpeg, int width, int height, boolean edited) {
+            complete(token, jpeg, width, height, edited);
           }
 
           public void cancel() {
@@ -440,7 +440,7 @@ final class SingleFrameCamera implements TextureView.SurfaceTextureListener {
         });
   }
 
-  private void complete(int token, byte[] jpeg, int width, int height) {
+  private void complete(int token, byte[] jpeg, int width, int height, boolean edited) {
     if (!current(token)) {
       retire(token);
       return;
@@ -456,7 +456,7 @@ final class SingleFrameCamera implements TextureView.SurfaceTextureListener {
     panel.setVisibility(View.GONE);
     Result done = result;
     result = null;
-    if (done != null) done.image(jpeg, width, height);
+    if (done != null) done.image(jpeg, width, height, edited);
   }
 
   private void release() {

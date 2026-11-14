@@ -232,6 +232,8 @@ class Capture:
     width: int = 0
     height: int = 0
     digest: str = ''
+    requested_mode: str | None = None
+    edited: bool | None = None
     error: str = ''
 
 
@@ -315,6 +317,16 @@ class CameraInbox:
                     width = value.get('width')
                     height = value.get('height')
                     digest = value.get('sha256')
+                    mode, edited = value.get('requested_mode'), value.get('edited')
+                    if 'requested_mode' in value or 'edited' in value:
+                        if (
+                            mode not in ('standard', 'hd')
+                            or type(edited) is not bool
+                            or edited
+                            and not c.review_allowed
+                        ):
+                            raise VisionError('request_not_authorized')
+                        c.requested_mode, c.edited = mode, edited
                     if type(size) is not int or not 32 <= size <= c.policy.max_bytes:
                         raise VisionError('image_size_exceeded')
                     if not c.policy.valid_dimensions(width, height):
