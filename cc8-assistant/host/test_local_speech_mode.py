@@ -11,6 +11,7 @@ from unittest.mock import Mock, patch
 import numpy as np
 
 from app_runtime import run_backend
+from bridge import runtime_bridge
 from configuration import load_config
 from speech_providers import LocalSpeech
 
@@ -75,6 +76,16 @@ class LocalSpeechModeTests(unittest.TestCase):
         dependencies.direct_speech.assert_not_called()
         dependencies.minimax_brain.assert_not_called()
         dependencies.brain_router.assert_not_called()
+
+    def test_local_runtime_cannot_admit_meeting_or_scheduled_cloud_work(self):
+        with patch('bridge.IdentityModeStore') as store, patch('threading.Thread.start'):
+            store.return_value.snapshot.return_value.mode = 'owner'
+            bridge = runtime_bridge(Mock(), None)
+        bridge.session.connection = object()
+        self.assertTrue(bridge.local_mode)
+        self.assertIsNone(bridge.meetings.hooks.owner())
+        self.assertIsNone(bridge.workflows.hooks.owner())
+        self.assertIsNone(bridge.chats.watch_ui.scheduler)
 
     def test_synthesized_pcm_is_not_delivered_after_cancellation(self):
         recognizer = Mock()

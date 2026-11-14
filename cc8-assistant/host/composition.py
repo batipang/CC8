@@ -449,7 +449,9 @@ def build_components(
                     host.brain,
                     getattr(host.brain, 'selected', None),
                 )
-                if host.owner_access() and host.session.connection is not None
+                if not host.local_mode
+                and host.owner_access()
+                and host.session.connection is not None
                 else None
             ),
             idle=lambda: (
@@ -498,7 +500,9 @@ def build_components(
                     host.brain,
                     getattr(host.brain, 'selected', None),
                 )
-                if host.owner_access() and host.session.connection is not None
+                if not host.local_mode
+                and host.owner_access()
+                and host.session.connection is not None
                 else None
             ),
             activation=lambda: host.session.capture_id if host.session.active else None,
@@ -523,7 +527,8 @@ def build_components(
             lock=host.session.guard,
             owner=lambda: (
                 (host.session.connection, host.session.bound_route_token, host.session.generation)
-                if host.owner_access()
+                if not host.local_mode
+                and host.owner_access()
                 and host.session.connection is not None
                 and getattr(host.session.connection, 'application_ready', True) is True
                 else None

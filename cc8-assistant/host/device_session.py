@@ -77,7 +77,7 @@ def complete_handshake(session: SessionController, j):
         supports_saved_task_results=owner,
         supports_preference_memory=owner,
         supports_vocabulary=owner,
-        supports_workflows=owner,
+        supports_workflows=owner and not echo,
         supports_meetings=owner
         and not echo
         and type(j.get('meeting_version')) is int
