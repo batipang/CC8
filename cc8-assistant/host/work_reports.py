@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import math
+import re
 import time
 import uuid
 from dot_handoff import Handoff, identifier
@@ -11,6 +12,36 @@ from dot_client import Cancelled, DotError
 PERIODS = ('half_hour', 'two_hours', 'today')
 BEIJING = timezone(timedelta(hours=8))
 MAX_TURN_PAGES, MAX_ITEM_PAGES, PAGE_SIZE, MAX_CARDS = 4, 2, 25, 20
+
+
+# Accept only direct test runners with simple arguments. Shell composition,
+# discovery-only flags, and arbitrary wrapper scripts have ambiguous exits.
+SIMPLE_COMMAND = re.compile(r'[A-Za-z0-9_./:@ -]{1,1024}')
+TEST_PYTHON = re.compile(r'python(?:3(?:\.\d+)?)?')
+TEST_TARGET = re.compile(r'[A-Za-z0-9_./:]+')
+TEST_FLAGS = frozenset(
+    ('-q', '-v', '-vv', '-x', '--quiet', '--verbose', '--fail-fast', '--exitfirst')
+)
+
+
+def direct_test_command(value):
+    if not isinstance(value, str) or not SIMPLE_COMMAND.fullmatch(value):
+        return False
+    args = value.split()
+    if not args:
+        return False
+    runner = args.pop(0).rsplit('/', 1)[-1]
+    python_module = TEST_PYTHON.fullmatch(runner) and len(args) >= 2 and args[0] == '-m'
+    if python_module:
+        runner, args = args[1], args[2:]
+    if runner == 'unittest' and python_module:
+        if args[:1] == ['discover']:
+            args = args[1:]
+            if len(args) >= 2 and args[0] == '-s' and TEST_TARGET.fullmatch(args[1]):
+                args = args[2:]
+    elif runner != 'pytest':
+        return False
+    return all(arg in TEST_FLAGS or TEST_TARGET.fullmatch(arg) for arg in args)
 
 
 @dataclass(frozen=True)
@@ -187,6 +218,7 @@ class WorkReportReader:
             file_change_failures=0,
             unconfirmed_tool_items=0,
         )
+        tests = dict(exit_zero=0, exit_nonzero=0, unconfirmed=0)
         complete = False
         for _ in range(MAX_ITEM_PAGES):
             params = dict(threadId=source_id, turnId=turn_id, limit=50, sortDirection='desc')
@@ -204,12 +236,14 @@ class WorkReportReader:
                     raise DotError('Invalid work report item')
                 ident = identifier(item.get('id'))
                 kind, state = item.get('type'), item.get('status')
+                is_test = kind == 'commandExecution' and direct_test_command(item.get('command'))
                 signature = (
                     kind,
                     state,
                     type(item.get('exitCode')),
                     item.get('exitCode'),
                     item.get('phase'),
+                    is_test,
                     item.get('text')
                     if kind == 'agentMessage' and item.get('phase') == 'final_answer'
                     else None,
@@ -234,6 +268,15 @@ class WorkReportReader:
                             excerpt_truncated=len(text) > 500,
                         )
                 elif kind == 'commandExecution':
+                    if is_test:
+                        exit_code = item.get('exitCode')
+                        if state in ('completed', 'failed') and type(exit_code) is int:
+                            if exit_code != 0 or state == 'completed':
+                                tests['exit_zero' if exit_code == 0 else 'exit_nonzero'] += 1
+                            else:
+                                tests['unconfirmed'] += 1
+                        else:
+                            tests['unconfirmed'] += 1
                     if state == 'completed' and type(item.get('exitCode')) is int:
                         evidence[
                             'command_successes' if item['exitCode'] == 0 else 'command_failures'
@@ -261,4 +304,5 @@ class WorkReportReader:
             evidence_complete=complete and evidence['unconfirmed_tool_items'] == 0,
             verification='not_assessed',
             result_kind='quoted_final_answer',
+            **({'test_processes': tests} if any(tests.values()) else {}),
         )

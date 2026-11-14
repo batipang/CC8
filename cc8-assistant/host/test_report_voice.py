@@ -146,6 +146,25 @@ class VoiceTests(unittest.TestCase):
         self.now[0] = 600
         self.assertIn('已失效', voice.answer(ReportCommand('item_evidence', 2), lambda: True).text)
 
+    def test_evidence_followup_reports_process_exit_without_claiming_acceptance(self):
+        data = report('测试已通过')
+        item = data['items'][0]
+        item['evidence'].update(command_successes=1, command_failures=1)
+        item['test_processes'] = dict(exit_zero=1, exit_nonzero=1, unconfirmed=0)
+        voice = self.session(data)
+        overview = voice.answer(ReportCommand('report', 'today'), lambda: True)
+        reply = voice.answer(ReportCommand('item_evidence', 1), lambda: True)
+        for result in (overview, reply):
+            self.assertIn('退出码为零1次，非零退出1次', result.text)
+        self.assertIn('无法确认全部测试范围或整项验收', reply.text)
+        self.assertNotIn('测试已通过', reply.text)
+        for malformed in (
+            dict(exit_zero=True, exit_nonzero=1, unconfirmed=0),
+            dict(exit_zero=2, exit_nonzero=1, unconfirmed=0),
+        ):
+            item['test_processes'] = malformed
+            self.assertFalse(voice.valid_report(SOURCE, data))
+
     def test_range_errors_and_unsupported_continue_never_reexecute_original_work(self):
         voice = self.session()
         voice.answer(ReportCommand('report', 'today'), lambda: True)

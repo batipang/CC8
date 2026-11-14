@@ -222,10 +222,19 @@ def item_text(item, number):
         f'文件变更成功／失败回执：{evidence["file_change_successes"]}／{evidence["file_change_failures"]}；'
         f'待确认：{evidence["unconfirmed_tool_items"]}。'
     )
+    if item.get('test_processes'):
+        lines.append(test_process_summary(item['test_processes']))
     if not item['evidence_complete']:
         lines.append('执行回执未读取完整。')
     lines.append('回合完成不代表任务已验证，以上原答复尚未独立核验。')
     return '\n'.join(lines)
+
+
+def test_process_summary(tests):
+    return (
+        f'可识别的测试进程：退出码为零{tests["exit_zero"]}次，'
+        f'非零退出{tests["exit_nonzero"]}次，退出结果未确认{tests["unconfirmed"]}次。'
+    )
 
 
 def spoken_evidence(item):
@@ -432,6 +441,26 @@ class ReportVoice:
                         or not 0 <= item['evidence'][name] <= 100
                     ):
                         return False
+                if 'test_processes' in item:
+                    counts = item['test_processes']
+                    if (
+                        not isinstance(counts, dict)
+                        or set(counts) != {'exit_zero', 'exit_nonzero', 'unconfirmed'}
+                        or any(type(n) is not int or not 0 <= n <= 100 for n in counts.values())
+                        or not 1 <= sum(counts.values()) <= 100
+                        or counts['exit_zero'] > item['evidence']['command_successes']
+                        or counts['exit_nonzero'] > item['evidence']['command_failures']
+                        or sum(counts.values())
+                        > sum(
+                            item['evidence'][name]
+                            for name in (
+                                'command_successes',
+                                'command_failures',
+                                'unconfirmed_tool_items',
+                            )
+                        )
+                    ):
+                        return False
                 if item['evidence_complete'] and item['evidence']['unconfirmed_tool_items']:
                     return False
             if report['coverage_complete'] and (
@@ -559,7 +588,12 @@ class ReportVoice:
                     lines.append(spoken_evidence(item))
                     if not item['evidence_complete']:
                         lines.append('执行回执未读取完整。')
-                    lines.append('现有回执不能确定哪些命令是测试，也不能确认测试已通过。')
+                    tests = item.get('test_processes')
+                    if tests:
+                        lines.append(test_process_summary(tests))
+                        lines.append('这些是进程退出回执，无法确认全部测试范围或整项验收。')
+                    else:
+                        lines.append('现有回执不能确定哪些命令是测试，也不能确认测试已通过。')
                     return ReportReply(
                         '\n'.join(lines),
                         tuple(lines),
