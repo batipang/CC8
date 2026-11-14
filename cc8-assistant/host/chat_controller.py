@@ -83,6 +83,7 @@ class ChatController:
                 ),
                 read=self.read_voice_report,
                 revoked=self.display_snapshot.clear,
+                read_queue=self.read_voice_queue,
             )
         )
         self.progress_ui = CheckpointController(self, checkpoints)
@@ -158,6 +159,29 @@ class ChatController:
         )
 
     def read_voice_report(self, source, period, is_current):
+        return self.read_voice_source(
+            source,
+            is_current,
+            lambda current: self.catalog.report(source, period, is_current=current),
+        )
+
+    def read_voice_queue(self, source, member, is_current):
+        return self.read_voice_source(
+            source,
+            is_current,
+            lambda current: self.catalog.queue(
+                dict(
+                    provider='codex',
+                    host='local',
+                    thread_id=member.thread_id,
+                    title=member.title,
+                    project=member.project,
+                ),
+                is_current=current,
+            ),
+        )
+
+    def read_voice_source(self, source, is_current, read):
         with self.hooks.lock:
             if (
                 not is_current()
@@ -174,6 +198,7 @@ class ChatController:
                 self.busy = True
                 ident = self.active_request = uuid.uuid4().hex
             connection = self.hooks.connection()
+            route = self.hooks.transport_revision()
 
         def current():
             with self.hooks.lock:
@@ -184,10 +209,14 @@ class ChatController:
                         and self.report_source() is source
                         and self.scope_current(source)
                         and connection is self.hooks.connection()
+                        and route == self.hooks.transport_revision()
                     )
 
         try:
-            return self.catalog.report(source, period, is_current=current)
+            value = read(current)
+            if not current():
+                raise Cancelled('Work report cancelled')
+            return value
         finally:
             with self.lock:
                 self.busy = False

@@ -11,6 +11,7 @@ from work_reports import BEIJING
 
 PAGE_SIZE = 8
 MAX_PAGES = 4
+MAX_QUEUE_ITEMS = PAGE_SIZE * MAX_PAGES
 MAX_PREVIEW = 160
 
 

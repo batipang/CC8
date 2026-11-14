@@ -13,7 +13,7 @@ import uuid
 from unittest.mock import patch
 
 from dot_handoff import ChatCatalog, Handoff
-from dot_client import Cancelled
+from dot_client import Cancelled, DotError
 from report_sources import ReportSources, ReportScope
 from report_voice import ReportCommand
 from protocol import validate_device_event
@@ -247,6 +247,98 @@ class SourcesControllerTests(unittest.TestCase):
             self.assertEqual(len(fixture.calls), 1)
             self.assertFalse(b.chats.busy)
             self.assertTrue(all(c.closed for c in fixture.clients))
+
+    def test_numbered_queue_voice_followup_reads_only_the_committed_card_source(self):
+        with tempfile.TemporaryDirectory() as folder:
+            b = self.session(folder)
+            store = b.chats.sources
+            store.apply('register', 0, entry=entry('chat-a'))
+            store.apply('register', 1, entry=entry('chat-b'))
+            self.request(b, 'use_sources', revision=2)
+            fixture = GroupFixture()
+            fixture.completed = int(time.time()) - 10
+            b.chats.catalog = ChatCatalog(fixture.factory)
+            self.request(b, 'report', period='half_hour')
+            snapshot = b.chats.voice.snapshot
+            wanted = snapshot[2]['items'][1]['source_thread_id']
+            calls, closed = [], []
+            failure = None
+
+            class QueueRpc:
+                def start(self):
+                    pass
+
+                def request(self, method, params, **kwargs):
+                    calls.append((method, params))
+                    if failure == 'unavailable' or failure == 'partial' and params.get('cursor'):
+                        raise DotError('PRIVATE_RPC_ERROR')
+                    if failure == 'revoke':
+                        store.apply('clear', 2)
+                    items = (
+                        []
+                        if failure == 'empty'
+                        else [
+                            dict(
+                                id='queue-id',
+                                clientUserMessageId='client-id',
+                                input=[
+                                    dict(type='text', text='PRIVATE_QUEUE_BODY'),
+                                    dict(type='image', url='PRIVATE_ATTACHMENT'),
+                                ],
+                            )
+                        ]
+                    )
+                    return dict(data=items, nextCursor='next' if failure == 'partial' else None)
+
+                def close(self):
+                    closed.append(True)
+
+            b.chats.catalog.rpc_factory = QueueRpc
+            command = b.chats.voice.command('大黄蜂，查看这次汇报的第二项待办队列')
+            self.assertEqual(command, ReportCommand('item_queue', 2))
+            self.assertIn(
+                '没有该编号',
+                b.chats.voice.answer(ReportCommand('item_queue', 3), lambda: True).text,
+            )
+            self.assertEqual(calls, [])
+            for cause, text in (
+                (None, '看到1条排队请求'),
+                ('empty', '看到0条排队请求'),
+                ('partial', '至少看到1条排队请求'),
+                ('unavailable', '未能确认待办队列'),
+            ):
+                with (
+                    self.subTest(cause=cause),
+                    patch.object(
+                        b.brain.dot, 'clauses', side_effect=AssertionError('Must stay local')
+                    ),
+                ):
+                    failure = cause
+                    events = []
+                    spoken = list(
+                        b.brain.clauses(
+                            '查看这次汇报的第二项待办队列',
+                            [],
+                            lambda: True,
+                            lambda kind, data: events.append((kind, data)),
+                        )
+                    )
+                    self.assertIn(text, ''.join(spoken))
+                    self.assertIn(wanted, dict(events)['dot_result']['text'])
+                    self.assertNotIn('PRIVATE_', str((spoken, events)))
+                    self.assertIs(b.chats.voice.snapshot, snapshot)
+                    self.assertFalse(b.chats.busy)
+            self.assertEqual(len(closed), 4)
+            self.assertTrue(
+                all(
+                    method == 'thread/queue/list' and p['threadId'] == wanted for method, p in calls
+                )
+            )
+            failure = 'revoke'
+            with self.assertRaises(Cancelled):
+                b.chats.voice.answer(command, lambda: True)
+            self.assertFalse(b.chats.busy)
+            self.assertEqual(len(closed), 5)
 
     def test_uncertain_delete_revokes_old_numbered_body_without_retrying_the_mutation(self):
         with tempfile.TemporaryDirectory() as folder:
