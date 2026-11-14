@@ -1,6 +1,8 @@
 """Real private files and concurrent writes; no replay, capture or provider calls."""
 
+from contextlib import redirect_stdout, redirect_stderr
 import fcntl
+from io import StringIO
 import json
 import os
 from pathlib import Path
@@ -99,6 +101,78 @@ class StoreTests(Fixture):
         refused = cli('show', receipt['id'])
         self.assertEqual(refused.returncode, 2)
         self.assertEqual(refused.stdout, '')
+
+    def test_open_handoff_targets_only_a_valid_saved_local_chat(self):
+        from tools import saved_handoff
+
+        store = self.root / 'device-access/private/voice-runtime/saved-task-results.json'
+        store.parent.mkdir(parents=True, mode=0o700)
+        archive = SavedTasks(store)
+        archive.save(task(1))
+
+        def save(number, thread_id, source_id):
+            return archive.save(
+                {
+                    **task(number),
+                    'result': '私有草稿',
+                    'provenance': {
+                        'version': 1,
+                        'provider': 'work_report',
+                        'host': 'local',
+                        'thread_id': thread_id,
+                        'turn_id': 'original-turn',
+                        'ephemeral': False,
+                        'original_source': {'thread_id': source_id, 'title': '私有来源'},
+                        'files': [],
+                        'files_truncated': False,
+                    },
+                    'steps': [
+                        {'id': 'desktop_handoff', 'title': '待桌面接续', 'status': 'completed'}
+                    ],
+                }
+            )['id']
+
+        valid = save(2, 'original-chat', 'original-chat')
+        reserved = save(3, 'new', 'new')
+        mismatch = save(4, 'another-chat', 'original-chat')
+        before = store.read_bytes()
+
+        def invoke(saved_id, platform='darwin'):
+            stdout, stderr = StringIO(), StringIO()
+            with (
+                redirect_stdout(stdout),
+                redirect_stderr(stderr),
+                patch.object(sys, 'platform', platform),
+            ):
+                code = saved_handoff.main(['open', saved_id, '--runtime-root', str(self.root)])
+            return code, stdout.getvalue(), stderr.getvalue()
+
+        with patch.object(saved_handoff.subprocess, 'run') as run:
+            run.return_value.returncode = 0
+            code, output, _ = invoke(valid)
+            self.assertEqual(code, 0)
+            self.assertIn('已请求桌面打开', output)
+            self.assertNotIn('私有', output)
+            run.assert_called_once_with(
+                ['/usr/bin/open', '-b', 'com.openai.codex', 'codex://threads/original-chat'],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=5,
+            )
+            run.reset_mock()
+            for saved_id in (task(1)['id'], reserved, mismatch, task(9)['id'], '../new'):
+                self.assertEqual(invoke(saved_id)[:2], (2, ''))
+            self.assertEqual(invoke(valid, 'linux')[:2], (2, ''))
+            run.assert_not_called()
+            run.return_value.returncode = 1
+            self.assertEqual(invoke(valid)[:2], (2, ''))
+            run.side_effect = subprocess.TimeoutExpired('PRIVATE_COMMAND', 5)
+            code, output, error = invoke(valid)
+            self.assertEqual((code, output), (2, ''))
+            self.assertNotIn('PRIVATE_COMMAND', error)
+        self.assertEqual(store.read_bytes(), before)
 
     def test_save_restart_read_delete_and_no_automatic_creation(self):
         self.assertEqual(self.store.snapshot(), [])
