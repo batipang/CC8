@@ -220,6 +220,36 @@ class CorrectionFlowTests(unittest.TestCase):
         self.assertEqual(b.generation, generation)
         self.assertEqual(b.brain.calls, 1)
 
+    def test_queued_voice_confirmation_or_retraction_cannot_target_a_replacement_draft(self):
+        for command_text in ('确认更正', '撤回更正', '查看更正'):
+            with self.subTest(command=command_text):
+                b = self.session()
+                old = self.draft(b)
+                b.cancel('voice')
+                b.enqueue_response(Reply(b.generation, command_text))
+                owner = b.response.hooks.correction_owner()
+                source_id = b.response.corrections.source_token(owner)
+                b.response.prepare_vocabulary('苏州', '沧州', source_id)
+                new = b.response.corrections.draft
+                self.assertNotEqual(new.ident, old.ident)
+                self.drain(b)
+                self.assertIs(b.response.corrections.draft, new)
+                self.assertEqual(b.brain.calls, 1)
+                self.assertIn('草稿', b.speech_lines[-1])
+
+    def test_queued_confirmation_without_draft_never_consumes_later_draft(self):
+        b = self.session()
+        self.voice(b, '只读查询沧州今天的天气')
+        b.cancel('voice')
+        b.enqueue_response(Reply(b.generation, '确认更正'))
+        source_id = b.response.corrections.source_token(b.response.hooks.correction_owner())
+        b.response.prepare_vocabulary('常州', '沧州', source_id)
+        draft = b.response.corrections.draft
+        self.drain(b)
+        self.assertIs(b.response.corrections.draft, draft)
+        self.assertEqual(b.brain.calls, 1)
+        self.assertIn('没有对应', b.speech_lines[-1])
+
     def test_asr_correction_body_cannot_trigger_camera_before_confirmation(self):
         b = self.session()
         b.speech = SimpleNamespace(recognize=lambda _: '我说的是看一看摄像头的画面')
