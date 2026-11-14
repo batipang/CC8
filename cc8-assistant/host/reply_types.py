@@ -21,6 +21,15 @@ class Reply:
 
 
 @dataclass
+class CorrectionReply(Reply):
+    """Recognized management intent bound to the source or draft present at enqueue."""
+
+    action: str
+    body: str
+    target_id: str | None
+
+
+@dataclass
 class LiveReply(Reply):
     current: Callable[[], bool] = field(repr=False)
     deliver: Callable[[str], None] = field(repr=False)

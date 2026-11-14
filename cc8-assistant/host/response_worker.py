@@ -24,6 +24,7 @@ from reply_types import (
     BrainPreparation,
     ResultRead,
     CorrectedReply,
+    CorrectionReply,
     WorkflowReply,
     MeetingReply,
 )
@@ -172,29 +173,31 @@ class ResponseWorker:
             except (OSError, EOFError):
                 pass
 
-    def handle_correction_voice(self, job):
-        if not self.hooks.owner_access():
-            return False
-        action = correction_command(job.text)
-        if action is None:
-            return False
+    def handle_correction_voice(self, job: CorrectionReply):
         with self.hooks.lock:
-            if not self.hooks.owner_access():
-                return False
-            if not self.hooks.valid(job.generation):
-                return True
+            if not self.hooks.owner_access() or not self.hooks.valid(job.generation):
+                return
             self.hooks.diagnostics().ensure(job.generation, 'text')
             owner = self.hooks.correction_owner()
             try:
-                if action[0] == 'draft':
-                    self.corrections.prepare(action[1], owner)
+                if job.action == 'draft':
+                    if (
+                        job.target_id is None
+                        or self.corrections.source_token(owner) != job.target_id
+                    ):
+                        raise CorrectionUnavailable(
+                            '可更正的原问题已变化或不存在，请直接说完整的新问题。'
+                        )
+                    self.corrections.prepare(job.body, owner)
                     message = '更正已准备，请核对屏幕中的完整问题。'
                 else:
-                    draft = self.corrections.current(owner)
-                    if action[0] == 'confirm':
+                    if job.target_id is None:
+                        raise CorrectionUnavailable('这次指令没有对应的更正草稿。')
+                    draft = self.corrections.current(owner, job.target_id)
+                    if job.action == 'confirm':
                         self.submit_correction(owner, draft.ident)
-                        return True
-                    if action[0] == 'cancel':
+                        return
+                    if job.action == 'cancel':
                         self.clear_corrections(preserve_source=True)
                         message = '已撤回未提交的更正；原来已经执行的操作不会撤销。'
                     else:
@@ -205,7 +208,6 @@ class ResponseWorker:
         played = self.hooks.speak(message, job.generation)
         with self.hooks.lock:
             self.hooks.diagnostics().finish(job.generation, 'completed' if played else 'cancelled')
-        return True
 
     def result_task(self, ident):
         if not self.hooks.owner_access():
@@ -344,11 +346,22 @@ class ResponseWorker:
             if not self.hooks.valid(job.generation):
                 self.discard_announcement(job)
                 return
+            action = correction_command(job.text) if type(job) is Reply else None
             if not self.hooks.owner_access():
                 # Guest questions do not become an owner correction source.
                 pass
-            elif type(job) is Reply and correction_command(job.text) is not None:
-                pass
+            elif action is not None:
+                kind, body = action
+                owner = self.hooks.correction_owner()
+                target = None
+                if kind == 'draft':
+                    target = self.corrections.source_token(owner)
+                else:
+                    try:
+                        target = self.corrections.current(owner).ident
+                    except CorrectionUnavailable:
+                        pass
+                job = CorrectionReply(job.generation, job.text, kind, body, target)
             else:
                 text = job.text if type(job) is Reply or isinstance(job, CorrectedReply) else ''
                 owner = self.hooks.correction_owner() if text else None
@@ -432,8 +445,11 @@ class ResponseWorker:
             return
         self.busy = True
         try:
-            if type(job) is Reply and self.handle_correction_voice(job):
-                pass
+            if isinstance(job, CorrectionReply):
+                self.handle_correction_voice(job)
+            elif type(job) is Reply and correction_command(job.text) and self.hooks.owner_access():
+                # An unbound management utterance cannot act on current state.
+                return
             elif isinstance(job, LiveReply):
                 if job.current():
                     try:
