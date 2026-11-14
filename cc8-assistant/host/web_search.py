@@ -151,6 +151,7 @@ class SpeechClauses:
     @staticmethod
     def clean(value):
         value = re.sub(r'\[([^\]]+)\]\(https?://[^\s)]+\)', r'\1', value)
+        value = re.sub(r'<https?://[^\s<>]+>', '', value)
         value = re.sub(r'https?://[^\s，。！？；）)>]+', '', value)
         value = re.sub(r'www\.[^\s，。！？；）)>]+', '', value)
         value = re.sub(r'\[\d+(?:[,，、-]\d+)*\]|【\d+】', '', value)
