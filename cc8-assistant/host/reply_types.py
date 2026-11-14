@@ -1,7 +1,11 @@
 """In-memory work items and presentation mood; no worker/session ownership."""
 
+from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
+
+if TYPE_CHECKING:
+    from report_voice import BoundReportFollowup
 
 
 def mood(text):
@@ -18,6 +22,7 @@ def mood(text):
 class Reply:
     generation: int
     text: str
+    report_followup: BoundReportFollowup | None = field(default=None, kw_only=True, repr=False)
 
 
 @dataclass

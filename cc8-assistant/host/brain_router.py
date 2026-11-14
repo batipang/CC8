@@ -182,7 +182,21 @@ class BrainRouter:
                 'Vision request failed', stage='brain', kind=error_kind(error)
             ) from None
 
-    def clauses(self, text, history, is_current=lambda: True, on_web=None, *, force_dot=False):
+    def bind_report_followup(self, text):
+        if self.identity[0] == 'owner' and self.work_reports is not None:
+            return self.work_reports.bind_followup(DELEGATE.sub('', text, count=1).strip())
+        return None
+
+    def clauses(
+        self,
+        text,
+        history,
+        is_current=lambda: True,
+        on_web=None,
+        *,
+        force_dot=False,
+        report_followup=None,
+    ):
         is_current = self.bind_identity(is_current)
         self.current_report_delivery = None
         if not is_current():
@@ -209,7 +223,8 @@ class BrainRouter:
             return
         match = DELEGATE.match(text)
         prompt = text[match.end() :].strip() if match else text
-        if self.preferences:
+        command = report_followup.command if report_followup is not None else None
+        if self.preferences and command is None:
             answer = self.preferences.voice(prompt, is_current)
             if answer is not None:
                 self.last_metrics = {'provider': 'preference_memory', 'completed': True}
@@ -223,7 +238,8 @@ class BrainRouter:
                     raise Cancelled('Memory answer cancelled')
                 yield answer
                 return
-        command = self.work_reports.command(prompt) if self.work_reports else None
+        if report_followup is None and self.work_reports is not None:
+            command = self.work_reports.command(prompt)
         if command is not None:
             self.last_metrics = {'provider': 'work_report', 'completed': False}
             try:
@@ -236,7 +252,7 @@ class BrainRouter:
                         'continue': '正在核对本次汇报的原聊天…',
                     }.get(command.kind, '正在读取所选聊天的工作汇报…')
                     on_web('progress', {'message': message})
-                reply = self.work_reports.answer(command, is_current)
+                reply = self.work_reports.answer(report_followup or command, is_current)
                 if not is_current():
                     raise Cancelled('Report cancelled')
                 self.last_metrics = {
