@@ -48,6 +48,7 @@ class ResultReading:
                 generation=generation,
                 text=None,
                 heard='',
+                original_gap=False,
                 aligned=True,
                 offset=0,
                 serial=0,
@@ -68,10 +69,16 @@ class ResultReading:
             entry['aligned'] &= entry['text'].startswith(entry['heard'])
             entry['offset'] = len(entry['heard']) if entry['aligned'] else 0
 
-    def original_ack(self, ident, generation, clause):
+    def original_ack(self, ident, generation, clause, *, confirmed=True):
         with self.lock:
             entry = self.entries.get(ident)
             if entry is None or entry['generation'] != generation or entry['serial']:
+                return
+            # Offset counts only the contiguous confirmed prefix. A later
+            # matching clause may repeat the exact missing words.
+            if not confirmed:
+                entry['original_gap'] = True
+            if entry['original_gap']:
                 return
             heard = entry['heard'] + clause
             if len(heard) > MAX_TEXT:

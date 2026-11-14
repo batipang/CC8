@@ -666,11 +666,11 @@ class ResponseWorker:
                 try:
                     played = self.hooks.speak(clause, generation)
                 finally:
-                    if diagnostics.confirmed_playback_count(generation) > before:
-                        self.reading.original_ack(task_id, generation, clause)
-                        if delivery:
-                            owner, token = delivery
-                            owner.confirm(token)
+                    confirmed = diagnostics.confirmed_playback_count(generation) > before
+                    self.reading.original_ack(task_id, generation, clause, confirmed=confirmed)
+                    if confirmed and delivery:
+                        owner, token = delivery
+                        owner.confirm(token)
                 if not played:
                     completed = False
                     break
