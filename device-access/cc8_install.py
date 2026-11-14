@@ -41,6 +41,10 @@ MAX_APK_BYTES = 150 * 1024 * 1024
 PREFIX = 'dumpsys activity com.ailabs.emode >/dev/null 2>&1; '
 
 
+class ProtectedStagingDenied(RuntimeError):
+    """The verified helper could not be staged before PackageInstaller was invoked."""
+
+
 def helper_artifact() -> bytes:
     # 源文件和 JAR 同时核对构建清单，避免把旧助手或被替换的产物送入设备。
     helper = ROOT / 'artifacts/cc8-installer-shell-1.0.jar'
@@ -107,7 +111,7 @@ def install_stream(
             shell(transport, 'umask 077; cat > ' + quoted, helper)
         except RuntimeError as error:
             if not shared_staging and 'Permission denied' in str(error):
-                raise RuntimeError(
+                raise ProtectedStagingDenied(
                     'Protected staging is blocked by device policy; APK installation was not attempted. See docs/APK_INSTALL.md for the explicit --shared-staging compatibility mode and its risks.'
                 ) from None
             raise
@@ -459,15 +463,31 @@ def _perform_actions(args, output=None):
                 }
             )
 
-        report.update(
-            install(
-                transport,
-                args.install,
-                args.launch,
-                shared_staging=args.shared_staging,
-                before_dispatch=dispatch,
+        try:
+            report.update(
+                install(
+                    transport,
+                    args.install,
+                    args.launch,
+                    shared_staging=args.shared_staging,
+                    before_dispatch=dispatch,
+                )
             )
-        )
+        except ProtectedStagingDenied:
+            # This typed error originates before dispatch. Other failures keep
+            # the prior receipt, including unconfirmed after dispatch.
+            try:
+                output.write(
+                    {
+                        **report,
+                        'report_state': 'pre_dispatch_failed',
+                        'installation_result': 'not_started',
+                        'failure_reason': 'protected_staging_denied',
+                    }
+                )
+            except (OSError, ValueError, RuntimeError):
+                install_notice('Could not update private APK installation report.')
+            raise
         try:
             output.write({**report, 'report_state': 'installation_verified'})
         except (OSError, ValueError):

@@ -100,6 +100,8 @@ python3 device-access/cc8_install.py --install artifacts/cc8-assistant-0.9.129.a
 | `installed_apk_hash_verified: true` | 已安装 APK 的哈希与本地签名 APK 相同 |
 | `launched: true` | `--launch` 后通过前台 Activity 再次确认 |
 
+受保护的临时目录若在系统安装调用之前拒绝写入，私有回执记录 `pre_dispatch_failed`、`not_started` 和固定原因 `protected_staging_denied`。若已发起系统安装但未得到完成确认，保留 `result_unconfirmed`，先读取实际已装包状态再决定后续步骤。
+
 如果安装成功但启动未确认，应查看 `launch_error`、`launch_command_accepted` 与设备画面，不能将“命令已发送”当成“应用已在前台”。如果设备不允许读取已安装文件的哈希，工具会以非零状态退出并明确说明“已安装但验证不完整”，不会继续启动或报告完整成功；不会自动卸载应用。
 
 麦克风、摄像头等运行时权限仍由用户在设备前台授权。仅安装不打开界面时不会启动录音或预览。助手自 0.5.3 起的普通 `--launch` 会遵循用户选择的自动语音行为；若只做维护检查，先不加 `--launch`，随后使用 `launch.py --no-auto-voice` 打开。摄像头只在前台明确的看图/拍照请求或检测页操作时启动，维护打开不触发。

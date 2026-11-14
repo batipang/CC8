@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -262,6 +263,46 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse(any(command.startswith('CLASSPATH') for command in calls))
         self.assertFalse(any('/sdcard/' in command for command in calls))
         self.assertTrue(calls[-1].startswith('rm -f '))
+
+    def test_failure_receipt_distinguishes_staging_refusal_from_dispatched_install(self):
+        args = SimpleNamespace(
+            verify_apk=None, install=Path('candidate.apk'), launch=False, shared_staging=False
+        )
+        for dispatched in (False, True):
+            with (
+                self.subTest(dispatched=dispatched),
+                tempfile.TemporaryDirectory() as folder,
+                patch.object(access, 'target', return_value='7'),
+                patch.object(access, 'probe', return_value={'shell_verified': True}),
+            ):
+                path = Path(folder) / 'install.json'
+
+                def install(*args, before_dispatch, **kwargs):
+                    if dispatched:
+                        before_dispatch()
+                        raise RuntimeError('private details from a lost receipt')
+                    raise access.ProtectedStagingDenied('private details from device')
+
+                with (
+                    access.PrivateOutput(path) as output,
+                    patch.object(access, 'install', side_effect=install),
+                    patch('sys.stdout', new_callable=io.StringIO),
+                    self.assertRaises(RuntimeError),
+                ):
+                    access._perform_actions(args, output)
+                receipt = json.loads(path.read_text())
+                self.assertNotIn('private details', path.read_text())
+                self.assertEqual(
+                    receipt['installation_result'], 'unconfirmed' if dispatched else 'not_started'
+                )
+                self.assertEqual(
+                    receipt['report_state'],
+                    'result_unconfirmed' if dispatched else 'pre_dispatch_failed',
+                )
+                self.assertEqual(
+                    receipt.get('failure_reason'),
+                    None if dispatched else 'protected_staging_denied',
+                )
 
     def test_shared_path_is_used_only_when_explicitly_selected(self):
         calls = []
