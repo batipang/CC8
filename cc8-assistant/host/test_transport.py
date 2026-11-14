@@ -57,6 +57,30 @@ class TransportTests(unittest.TestCase):
         self.assertEqual([c.args[0] for c in socket.settimeout.call_args_list], [3, 2])
         self.assertEqual(socket.recv.call_count, 2)
 
+    def test_live_health_distinguishes_standby_and_unconfirmed_routes(self):
+        bridge = Bridge(None, None)
+        hub = TransportHub(self.pairing, Mock(), Mock())
+        bridge.transport_hub = hub
+        for kind in ('usb', 'wifi'):
+            stream = Mock()
+            channel = Channel(stream, kind, hub.events)
+            hub.channels[kind] = channel
+        usb, wifi = hub.channels['usb'], hub.channels['wifi']
+        wifi.ready = usb.ready = True
+        self.assertEqual(
+            bridge.health()['transport_routes'],
+            {'usb_ready': True, 'wifi_ready': True, 'selected': 'none'},
+        )
+        hub.active = usb
+        usb.application_ready = True
+        bridge.session.connection = usb
+        bridge.session.transport_kind = 'usb'
+        self.assertEqual(bridge.health()['transport_routes']['selected'], 'usb')
+        hub.role_uncertain = True
+        self.assertEqual(bridge.health()['transport_routes']['selected'], 'none')
+        wifi.closed = True
+        self.assertFalse(bridge.health()['transport_routes']['wifi_ready'])
+
     def test_packet_limit_is_checked_before_reading_its_body(self):
         source = Mock()
         source.recv.return_value = (HEADER.size + 1025).to_bytes(4, 'big')

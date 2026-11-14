@@ -24,7 +24,7 @@ class SnapshotBridgeTests(unittest.TestCase):
         b = Bridge(None, None)
         b.session.connection = object()
         b.visual.challenge = 'c' * 32
-        b.transport_hub = SimpleNamespace(pairing=SimpleNamespace(token='a' * 64))
+        b.transport_hub = SimpleNamespace(pairing=SimpleNamespace(token='a' * 64), diagnostics=dict)
         b.save_status = lambda: None
         b.events = []
         b.event = lambda name, **kw: b.events.append((name, kw))
