@@ -313,13 +313,20 @@ def signature_preflight(
     }
 
 
-def prepare_apk(transport, apk, launch=False, *, expected_installed_sha256=None):
+def prepare_apk(
+    transport, apk, launch=False, *, expected_installed_sha256=None, expected_apk_sha256=None
+):
     # A private byte snapshot binds aapt, certificate verification and the actual
     # stream to the same APK even if the original build output is replaced.
     with apk.open('rb') as source:
         payload = source.read(MAX_APK_BYTES + 1)
     if not 0 < len(payload) <= MAX_APK_BYTES:
         raise ValueError('Candidate APK is empty or exceeds the size budget')
+    if expected_apk_sha256 is not None and (
+        not re.fullmatch(r'[a-f0-9]{64}', expected_apk_sha256)
+        or hashlib.sha256(payload).hexdigest() != expected_apk_sha256
+    ):
+        raise ValueError('Candidate APK does not match the verified SHA-256')
     with tempfile.TemporaryDirectory(prefix='cc8-apk-preflight-') as folder:
         directory = Path(folder)
         candidate = directory / 'candidate.apk'
@@ -346,9 +353,14 @@ def install(
     *,
     before_dispatch=lambda: None,
     expected_installed_sha256=None,
+    expected_apk_sha256=None,
 ) -> dict:
     package, activity, payload, signature = prepare_apk(
-        transport, apk, launch, expected_installed_sha256=expected_installed_sha256
+        transport,
+        apk,
+        launch,
+        expected_installed_sha256=expected_installed_sha256,
+        expected_apk_sha256=expected_apk_sha256,
     )
     return _install_verified(
         transport, package, activity, payload, launch, shared_staging, signature, before_dispatch
@@ -439,6 +451,11 @@ def main(argv=None):
         help='Require the installed APK to match the verified baseline before staging an update',
     )
     parser.add_argument(
+        '--expect-apk-sha256',
+        metavar='SHA256',
+        help='Require the candidate APK bytes to match the verified upgrade or recovery artifact',
+    )
+    parser.add_argument(
         '--shared-staging',
         action='store_true',
         help='Explicit legacy shared-directory mode; other storage-enabled apps may replace the helper. See docs/APK_INSTALL.md',
@@ -446,13 +463,14 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if (args.launch or args.shared_staging) and not args.install:
         parser.error('--launch and --shared-staging require --install APK')
-    if args.expect_installed_sha256 is not None and (
-        not (args.verify_apk or args.install)
-        or not re.fullmatch(r'[a-f0-9]{64}', args.expect_installed_sha256)
+    for option, pin in (
+        ('--expect-installed-sha256', args.expect_installed_sha256),
+        ('--expect-apk-sha256', args.expect_apk_sha256),
     ):
-        parser.error(
-            '--expect-installed-sha256 requires --verify-apk or --install and a lowercase SHA-256'
-        )
+        if pin is not None and (
+            not (args.verify_apk or args.install) or not re.fullmatch(r'[a-f0-9]{64}', pin)
+        ):
+            parser.error(f'{option} requires --verify-apk or --install and a lowercase SHA-256')
     if not ADB.is_file() or not AAPT.is_file() or not APKSIGNER.is_file():
         raise SystemExit('Local Android tools are missing')
     if args.check:
@@ -483,10 +501,23 @@ def _perform_actions(args, output=None):
     report = probe(transport)
     print(json.dumps(report), flush=True)
     if args.verify_apk:
-        package, _, _, signature = prepare_apk(
-            transport, args.verify_apk, expected_installed_sha256=args.expect_installed_sha256
+        package, _, payload, signature = prepare_apk(
+            transport,
+            args.verify_apk,
+            expected_installed_sha256=args.expect_installed_sha256,
+            expected_apk_sha256=args.expect_apk_sha256,
         )
-        print(json.dumps({'package': package, **signature, 'installed': False}), flush=True)
+        print(
+            json.dumps(
+                {
+                    'package': package,
+                    'apk_sha256': hashlib.sha256(payload).hexdigest(),
+                    **signature,
+                    'installed': False,
+                }
+            ),
+            flush=True,
+        )
     if args.install:
 
         def dispatch():
@@ -508,6 +539,7 @@ def _perform_actions(args, output=None):
                     shared_staging=args.shared_staging,
                     before_dispatch=dispatch,
                     expected_installed_sha256=args.expect_installed_sha256,
+                    expected_apk_sha256=args.expect_apk_sha256,
                 )
             )
         except ProtectedStagingDenied:

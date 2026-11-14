@@ -154,7 +154,7 @@ class ReportPrivacyTests(unittest.TestCase):
             self.assertEqual(data['report_state'], 'prepared')
             self.assertEqual(data['installation_result'], 'not_started')
 
-    def test_install_cli_passes_baseline_pin_and_rejects_invalid_pins_before_probe(self):
+    def test_install_cli_passes_both_pins_and_rejects_invalid_pins_before_probe(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             (root / 'device-access').mkdir()
@@ -164,14 +164,32 @@ class ReportPrivacyTests(unittest.TestCase):
             with stack:
                 for args in (
                     ['--probe', '--expect-installed-sha256', pin],
+                    ['--check', '--expect-apk-sha256', pin],
+                    ['--verify-apk', candidate, '--expect-apk-sha256', 'invalid'],
                     ['--install', candidate, '--expect-installed-sha256', 'invalid'],
                 ):
                     with self.assertRaises(SystemExit):
                         access.main(args)
                 target.assert_not_called()
                 install.assert_not_called()
-                access.main(['--install', candidate, '--expect-installed-sha256', pin])
+                candidate_pin = 'b' * 64
+                access.main(
+                    [
+                        '--install',
+                        candidate,
+                        '--expect-installed-sha256',
+                        pin,
+                        '--expect-apk-sha256',
+                        candidate_pin,
+                    ]
+                )
                 self.assertEqual(install.call_args.kwargs['expected_installed_sha256'], pin)
+                self.assertEqual(install.call_args.kwargs['expected_apk_sha256'], candidate_pin)
+                with patch.object(
+                    access, 'prepare_apk', return_value=('com.example.app', None, b'apk', {})
+                ) as prepare:
+                    access.main(['--verify-apk', candidate, '--expect-apk-sha256', candidate_pin])
+                    self.assertEqual(prepare.call_args.kwargs['expected_apk_sha256'], candidate_pin)
 
     def test_report_save_failure_after_install_does_not_retry_or_claim_no_install(self):
         with tempfile.TemporaryDirectory() as folder:

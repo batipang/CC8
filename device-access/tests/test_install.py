@@ -271,6 +271,7 @@ class InstallerTests(unittest.TestCase):
             launch=False,
             shared_staging=False,
             expect_installed_sha256=None,
+            expect_apk_sha256=None,
         )
         for dispatched in (False, True):
             with (
