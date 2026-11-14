@@ -83,7 +83,7 @@ class EndpointHooks:
     complete_chinese_pending: Callable[[WaitingUtterance | None], bool] = lambda _: False
     complete_chinese_guard: Callable[[], ContextManager[object]] = nullcontext
     natural_barge_enabled: Callable[[], bool] = lambda: True
-    live_audio: Callable[[object, bool, bool], bool] = lambda *_: False
+    live_audio: Callable[[object, bool, bool, list[np.ndarray]], bool] = lambda *_: False
     complete_chinese_ticket: Callable[[WaitingUtterance, int], WaitingUtterance | None] = (
         lambda *_: None
     )
@@ -109,6 +109,7 @@ class EndpointPipeline:
         self.turn_local_wake = False
         self.turn_during_playback = False
         self.turn_echo_risk = False
+        self.turn_prefix_echo_risk = False
         self.turn_capture_started = 0
         self.last_capture_render_ns = None
         self.turn_pause_token = None
@@ -196,7 +197,7 @@ class EndpointPipeline:
         # microphone stream has not delivered the matching render reference.
         # Use that context for both wake and the utterance's admission gate.
         capture_echo_risk = echo_risk or recent_output
-        self.hooks.wake_feed(
+        woke = self.hooks.wake_feed(
             cleaned,
             self.hooks.generation(),
             capture_nanos=stamp,
@@ -264,7 +265,19 @@ class EndpointPipeline:
                     )
             else:
                 self.complete_wake.reset()
-        if self.hooks.live_audio(frame, voiced, credible):
+        # The keyword can be confirmed after the user has started the request.
+        # Reuse only this local utterance's prefix after the streaming verdict.
+        wake_prefix = []
+        if (
+            woke
+            and self.vad.talking
+            and self.live_turn == self.hooks.generation()
+            and not capture_echo_risk
+            and not self.turn_echo_risk
+            and not self.turn_prefix_echo_risk
+        ):
+            wake_prefix = self.vad.audio
+        if self.hooks.live_audio(frame, voiced, credible, wake_prefix):
             if self.vad.talking or self.waiting_turn is not None:
                 self.reset_voice_activity()
             return
@@ -286,10 +299,14 @@ class EndpointPipeline:
         )
         if began:
             prefix_frames = len(getattr(self.vad, 'audio', ()))
+            self.turn_prefix_echo_risk = (
+                any(risk for _, risk in list(self.vad_stamps)[-prefix_frames:])
+                if prefix_frames
+                else False
+            )
             first_stamp = (
                 self.vad_stamps[-prefix_frames][0]
-                if 0 < prefix_frames <= len(self.vad_stamps)
-                and not any(risk for _, risk in list(self.vad_stamps)[-prefix_frames:])
+                if 0 < prefix_frames <= len(self.vad_stamps) and not self.turn_prefix_echo_risk
                 else None
             )
             self.waiting_turn = self.hooks.wake_ticket(first_stamp)
