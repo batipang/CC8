@@ -37,6 +37,10 @@ class ReminderRescheduleRequired(ValueError):
     pass
 
 
+class ReminderRevisionConflict(ValueError):
+    pass
+
+
 class TaskStep(TypedDict):
     id: str
     title: str
@@ -96,6 +100,7 @@ class Snapshot(TypedDict):
     reminder_policy: ReminderPolicy
     reminder_history: list[ReminderRecord]
     reminder_channels_version: int
+    reminder_revision_version: int
 
 
 class ReminderResult(TypedDict):
@@ -334,6 +339,7 @@ class Workspace:
                 'server_time': self.now().isoformat(timespec='seconds'),
                 'reminder_policy': deepcopy(self.reminder_policy),
                 'reminder_channels_version': 1,
+                'reminder_revision_version': 1,
                 'reminder_history': cast(ReminderHistory, self.reminder({'action': 'history'}))[
                     'reminders'
                 ],
@@ -483,9 +489,16 @@ class Workspace:
             'repeat',
             'policy',
             'channel',
+            'expected_revision',
         }:
             raise ValueError('提醒参数不正确')
         action = args.get('action')
+        if 'expected_revision' in args and (
+            action not in ('update', 'cancel')
+            or type(args['expected_revision']) is not int
+            or args['expected_revision'] < 0
+        ):
+            raise ValueError('提醒修订参数不正确')
         with self.lock:
             if not is_current():
                 return {'ok': False, 'error': 'turn_cancelled'}
@@ -582,6 +595,8 @@ class Workspace:
                 )
                 if current is None:
                     raise ValueError('这条提醒不存在或已经结束')
+                if 'expected_revision' in args and args['expected_revision'] != current['revision']:
+                    raise ReminderRevisionConflict('这条提醒已更新，请重新打开提醒后再操作')
                 item = current
                 if action == 'cancel':
                     if item['status'] == 'delivering':

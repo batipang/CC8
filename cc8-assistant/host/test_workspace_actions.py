@@ -288,6 +288,7 @@ class ActionCheck extends Activity {
  JSONObject reminderPolicyData;
  JSONArray reminderHistoryData=new JSONArray();
  boolean reminderChannelsSupported=true;
+ boolean reminderRevisionSupported;
  AlertDialog reminderPolicyDialog,reminderEditorDialog,reminderHistoryDialog;
  static final int INK=1,MUTED=2;
  int dp(int value){return value;}TextView text(String value,int size,int color){TextView v=new TextView(this);v.setText(value);return v;}
@@ -295,7 +296,7 @@ class ActionCheck extends Activity {
  String dateLabel(String value){return value;}void inputTask(){throw new AssertionError("Unrequested text task");}
  ACTIVITY_METHODS
  static JSONObject task(String status){return new JSONObject("id","public-task","status",status,"title","公开测试任务","stage","固定阶段","steps",new JSONArray(),"result","公开测试结果");}
- static JSONObject reminder(){return new JSONObject("id","public-reminder","title","公开测试提醒","due","2099-01-01T10:00:00+08:00","repeat","none");}
+ static JSONObject reminder(){return new JSONObject("id","public-reminder","title","公开测试提醒","due","2099-01-01T10:00:00+08:00","repeat","none","revision",5);}
  static void yes(boolean value,String message){if(!value)throw new AssertionError(message);}
  void detail(String status){tasksData=new JSONArray(task(status));showTaskList();AlertDialog.last.item(1);}
  void reminderOptions(){remindersData=new JSONArray(reminder());showReminders();AlertDialog.last.item(0);}
@@ -321,9 +322,11 @@ class ActionCheck extends Activity {
     yes(Spinner.all.size()==before&&s.sent.size()==1,"Unsupported desktop edit must not silently convert to speech");break;
    }
    case "reminder_channel_save":{
-    JSONObject item=new JSONObject("id","public-reminder","title","公开固定提醒","due",c.formatDue(System.currentTimeMillis()+3600000),"repeat","none","channel","desktop");
+    c.reminderRevisionSupported=true;
+    JSONObject item=new JSONObject("id","public-reminder","title","公开固定提醒","due",c.formatDue(System.currentTimeMillis()+3600000),"repeat","none","channel","desktop","revision",4);
     c.editReminder(item,s.routeEpoch);yes(Spinner.all.get(1).getSelectedItemPosition()==1,"Editing lost the original desktop choice");
     AlertDialog.last.positive();yes("desktop".equals(s.sent.get(0).optJSONObject("arguments").optString("channel")),"Native save must preserve explicit desktop channel");
+    yes(s.sent.get(0).optJSONObject("arguments").optInt("expected_revision",-1)==4,"Save must keep the editor's original reminder revision");
     c.editReminder(null,s.routeEpoch);yes(Spinner.all.get(3).getSelectedItemPosition()==0,"New reminders must default to CC8");
     Spinner.all.get(3).setSelection(1);EditText.last.setText("另一个公开固定提醒");AlertDialog.last.positive();
     yes(s.sent.size()==2&&"desktop".equals(s.sent.get(1).optJSONObject("arguments").optString("channel")),"An explicit new channel selection was not sent");break;
@@ -496,6 +499,7 @@ class ActionCheck extends Activity {
     yes(!queued&&s.sent.isEmpty()&&s.eventCalls==1,"A failed owned write must not retry on a new route or claim it was queued");break;
    }
    case "current_controls":{
+    c.reminderRevisionSupported=true;
     c.detail("running");AlertDialog.last.positive();
     c.reminderOptions();AlertDialog.last.item(1);
     c.reminderOptions();AlertDialog.last.item(0);AlertDialog.last.positive();
@@ -503,7 +507,10 @@ class ActionCheck extends Activity {
     yes(s.sent.size()==4,"Current explicit operations must remain usable exactly once");
     yes("task_cancel".equals(s.sent.get(0).optString("event")),"Current stop event preserved");
     yes("update".equals(s.sent.get(1).optJSONObject("arguments").optString("action")),"Current snooze preserved");
-    yes("save".equals(s.sent.get(3).optString("action")),"Current explicit result save preserved");break;
+    yes(s.sent.get(1).optJSONObject("arguments").optInt("expected_revision",-1)==5,"Snooze must match the displayed reminder revision");
+    yes("save".equals(s.sent.get(3).optString("action")),"Current explicit result save preserved");
+    c.reminderOptions();AlertDialog.last.item(2);
+    yes(s.sent.size()==5&&s.sent.get(4).optJSONObject("arguments").optInt("expected_revision",-1)==5,"Cancel must match the displayed reminder revision");break;
    }
    case "policy_apply":case "policy_reset":case "policy_stale":case "policy_invalid":case "policy_cancel":{
     c.reminderPolicyData=new JSONObject("revision",7,"quiet_enabled",true,"quiet_start","21:00","quiet_end","08:00","late_policy","skip","max_late_minutes",30);
@@ -550,6 +557,7 @@ class WorkspaceActionTests(unittest.TestCase):
                 'private void reminderOptions(',
                 'private void editReminder(',
                 'private String formatDue(',
+                'private boolean bindReminderRevision(',
                 'private String repeatLabel(',
                 'private String taskStatus(',
                 'private void reminderDeliverySettings(',
