@@ -8,6 +8,7 @@ import re
 import threading
 from typing import Callable, ContextManager
 from saved_tasks import (
+    approval_declined,
     desktop_handoff_pending,
     desktop_handoff_source,
     execution_unconfirmed,
@@ -163,6 +164,7 @@ class SavedTaskController:
                         **{key: item[key] for key in ('id', 'title', 'status', 'saved_at')},
                         'desktop_handoff_pending': desktop_handoff_pending(item),
                         'execution_unconfirmed': execution_unconfirmed(item),
+                        'approval_declined': approval_declined(item),
                     }
                     for item in reversed(self.store.snapshot())
                 ]
@@ -175,6 +177,7 @@ class SavedTaskController:
                     'desktop_handoff_pending': desktop_handoff_pending(item),
                     'desktop_handoff_can_open': handoff_can_open(item),
                     'execution_unconfirmed': execution_unconfirmed(item),
+                    'approval_declined': approval_declined(item),
                 }
             with self.hooks.lock:
                 self.finish_slot()

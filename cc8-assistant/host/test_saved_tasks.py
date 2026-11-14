@@ -577,6 +577,25 @@ class ControllerTests(Fixture):
             self.assertIs(restored.events[-1][1]['item']['execution_unconfirmed'], unconfirmed)
         self.assertTrue(restored.response.queue.empty())
 
+    def test_approval_receipt_survives_restart_without_opening_or_resuming(self):
+        live = self.session()
+        for declined in (True, False):
+            task_id = live.workspace.task_start(live.generation, '需要权限的请求')
+            live.workspace.task_finish(task_id, 'failed', '请求已结束', approval_declined=declined)
+            self.request(live, 'save', task_id, approval_declined=not declined)
+            self.assertTrue(live.events[-1][1]['ok'])
+
+        restored = self.session()
+        self.request(restored, 'list')
+        rows = restored.events[-1][1]['items']
+        self.assertEqual([row['approval_declined'] for row in rows], [False, True])
+        self.request(restored, 'get', rows[1]['id'])
+        item = restored.events[-1][1]['item']
+        self.assertTrue(item['approval_declined'])
+        self.assertFalse(item['desktop_handoff_can_open'])
+        self.assertFalse(item['execution_unconfirmed'])
+        self.assertTrue(restored.response.queue.empty())
+
     def test_explicit_save_freezes_confirmed_narration_separately_from_task_completion(self):
         live = self.session()
         task_id = live.workspace.task_start(live.generation, '有播报的请求')

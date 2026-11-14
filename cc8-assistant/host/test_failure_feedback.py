@@ -98,6 +98,10 @@ class FailureFeedbackTests(unittest.TestCase):
                     self.assertEqual(mini.calls, 0)
                     self.assertFalse(b.response.busy)
                     self.assertEqual(b.workspace.tasks[-1]['status'], 'failed')
+                    self.assertEqual(
+                        b.workspace.tasks[-1]['stage'],
+                        '需审批 · 已结束' if kind == 'approval_declined' else '请求未完成',
+                    )
                     row = b.diagnostics.report()['requests'][-1]
                     self.assertEqual(row['outcome'], 'failed')
                     self.assertEqual(row['error'], {'stage': 'brain', 'kind': kind})

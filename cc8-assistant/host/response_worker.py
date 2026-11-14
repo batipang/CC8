@@ -739,11 +739,13 @@ class ResponseWorker:
                 if failure:
                     stage, error = failure
                     unconfirmed = isinstance(error, UnconfirmedTurnStart)
+                    kind = error_kind(error)
                     self.hooks.workspace().task_finish(
                         task_id,
                         'failed',
-                        feedback(stage, error_kind(error), unconfirmed=unconfirmed).message,
+                        feedback(stage, kind, unconfirmed=unconfirmed).message,
                         unconfirmed=unconfirmed,
+                        approval_declined=stage == 'brain' and kind == 'approval_declined',
                     )
                 failed = bool(
                     self.hooks.brain()

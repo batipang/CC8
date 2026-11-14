@@ -241,6 +241,8 @@ final class SavedTasksDialog {
     if ("completed".equals(status) && Boolean.TRUE.equals(item.opt("desktop_handoff_pending")))
       return "待桌面接续";
     if (needsExecutionCheck(item)) return "执行结果待核对";
+    if ("failed".equals(status) && Boolean.TRUE.equals(item.opt("approval_declined")))
+      return "需审批 · 已结束";
     return label(status);
   }
 
