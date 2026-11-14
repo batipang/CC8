@@ -245,6 +245,71 @@ def report_watch_storage_gate(before_root, after_root):
     )
 
 
+REPORT_STORES = {
+    'sources': ('work-report-sources.json', 'report_sources.py'),
+    'archive': ('work-report-archive.json', 'report_archive.py'),
+    'progress': ('work-report-progress.json', 'report_checkpoint.py'),
+}
+
+
+def report_collection_storage_gate(before_root, after_root):
+    """Check only private file formats against target validators, without importing them."""
+    from reminder_store import ReminderStore
+
+    result = {}
+    for name, (filename, module) in REPORT_STORES.items():
+        store = ReminderStore(Path(before_root) / 'device-access/private/voice-runtime' / filename)
+        value = store.load()
+        if value is None:
+            result[name] = dict(present=False, store_version=None, compatible=True)
+            continue
+        if (
+            not isinstance(value, dict)
+            or set(value) != {'schema', 'revision', 'items'}
+            or type(value['schema']) is not int
+            or value['schema'] < 1
+            or type(value['revision']) is not int
+            or value['revision'] < 0
+            or not isinstance(value['items'], list)
+        ):
+            raise ValueError('Invalid private report collection envelope')
+        reader = Path(after_root) / 'cc8-assistant/host' / module
+        reader_version = None
+        if reader.is_file() and not reader.is_symlink():
+            tree = ast.parse(reader.read_text())
+            # The current and historical readers validate exactly one version.
+            # A module that no longer declares this contract is unverified.
+            checks = [
+                node.comparators[0].value
+                for function in tree.body
+                if isinstance(function, ast.FunctionDef) and function.name == 'validate'
+                for node in ast.walk(function)
+                if isinstance(node, ast.Compare)
+                and len(node.ops) == 1
+                and isinstance(node.ops[0], ast.NotEq)
+                and isinstance(node.left, ast.Subscript)
+                and isinstance(node.left.value, ast.Name)
+                and node.left.value.id == 'value'
+                and isinstance(node.left.slice, ast.Constant)
+                and node.left.slice.value == 'schema'
+                and isinstance(node.comparators[0], ast.Constant)
+                and type(node.comparators[0].value) is int
+            ]
+            if len(checks) == 1:
+                reader_version = checks[0]
+        result[name] = dict(
+            present=True,
+            store_version=value['schema'],
+            reader_version=reader_version,
+            compatible=value['schema'] == reader_version,
+        )
+    return dict(
+        stores=result,
+        compatible=all(row['compatible'] for row in result.values()),
+        report_content_exported=False,
+    )
+
+
 def transport_gate(before, after):
     """A compatible application protocol alone cannot establish an interim USB link."""
     old = before.usb_authentication
@@ -294,10 +359,12 @@ def plan(before_root, after_root, assistant_apk=None):
             'mixed_version_transport_plan',
             'reminder_store_compatibility',
             'report_watch_store_compatibility',
+            'report_collection_store_compatibility',
             'saved_task_store_compatibility',
         ],
         'reminder_storage': reminder_storage_gate(before_root, after_root),
         'report_watch_storage': report_watch_storage_gate(before_root, after_root),
+        'report_collection_storage': report_collection_storage_gate(before_root, after_root),
         'saved_task_storage': saved_task_storage_gate(before_root, after_root),
         'identity_storage': identity_storage_gate(before_root, after_root),
     }
@@ -375,6 +442,12 @@ def verify_assistant_transition(
         raise ValueError(
             'Scheduled report store is not readable by candidate/recovery; keep it intact'
         )
+    collection_gates = {
+        name: report_collection_storage_gate(roots[0], target)
+        for name, target in (('candidate', roots[1]), ('recovery', roots[2]))
+    }
+    if not all(gate['compatible'] for gate in collection_gates.values()):
+        raise ValueError('Saved work report collections are not readable by candidate/recovery')
     task_gates = {
         name: saved_task_storage_gate(roots[0], target)
         for name, target in (('candidate', roots[1]), ('recovery', roots[2]))
@@ -462,6 +535,7 @@ def verify_assistant_transition(
         'device_acceptance': 'not_asserted',
         'reminder_storage': reminder_gates,
         'report_watch_storage': watch_gates,
+        'report_collection_storage': collection_gates,
         'saved_task_storage': task_gates,
         'identity_storage': identity_gates,
         'recovery_source': recovery_source,
@@ -663,6 +737,7 @@ def recheck_transition_storage(transition_path, runtime_root, target_root, stage
     gates = {
         'reminder_storage': reminder_storage_gate(runtime_root, target_root),
         'report_watch_storage': report_watch_storage_gate(runtime_root, target_root),
+        'report_collection_storage': report_collection_storage_gate(runtime_root, target_root),
         'saved_task_storage': saved_task_storage_gate(runtime_root, target_root),
         'identity_storage': identity_storage_gate(runtime_root, target_root),
     }
@@ -841,6 +916,7 @@ def main(argv=None):
             not value['declared_protocol_compatible']
             or not value['reminder_storage']['compatible']
             or not value['report_watch_storage']['compatible']
+            or not value['report_collection_storage']['compatible']
             or not value['saved_task_storage']['compatible']
             or not value['identity_storage']['compatible']
         ):
