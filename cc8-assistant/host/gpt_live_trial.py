@@ -246,6 +246,12 @@ class LiveTrial:
             if references and resembles_playback(text, references):
                 return False
             self.near_at = float('-inf')
+            if host.visual.voice_followup(text, host.generation):
+                # Successful follow-up changes generation and closes this Live
+                # session. A local rejection can acknowledge without photo data.
+                if self.current(owner):
+                    owner.result(ident, '请查看设备上的照片追问提示。')
+                return True
             if visual_request(text):
                 self.cancel()
                 host.begin_visual(text, 'voice')

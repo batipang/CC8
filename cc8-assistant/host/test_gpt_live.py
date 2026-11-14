@@ -391,7 +391,7 @@ class LiveAdmissionTests(unittest.TestCase):
             calibration=NS(active=False, running=False, failed=False),
             brain=BrainRouter(Mock(), Mock()),
             recognition=NS(busy=False),
-            visual=NS(generation=None),
+            visual=NS(generation=None, voice_followup=Mock(return_value=False)),
             announcements=NS(generation=None),
             meetings=NS(reserved=lambda: False),
             capture=NS(
@@ -427,6 +427,27 @@ class LiveAdmissionTests(unittest.TestCase):
         self.assertFalse(trial.play(owner, LivePlayback(host.generation)))
         self.assertIsNone(trial.output)
         self.assertIsNone(trial.pending_output)
+
+    def test_local_photo_followup_owns_the_request_before_dot_delegation(self):
+        trial, host, owner = self.make_trial()
+        host.visual.voice_followup.return_value = True
+        host.begin_visual = Mock()
+        self.assertTrue(trial.handoff(np.full(FRAME, 0.1)))
+        self.assertTrue(trial.delegate(owner, 'photo', '大黄蜂，追问这张照片，上面写了什么？'))
+        host.visual.voice_followup.assert_called_once_with('追问这张照片，上面写了什么？', 7)
+        host.enqueue_response.assert_not_called()
+        host.begin_visual.assert_not_called()
+        owner.result.assert_called_once_with('photo', '请查看设备上的照片追问提示。')
+
+    def test_stale_or_echo_delegation_leaves_photo_state_untouched(self):
+        trial, host, owner = self.make_trial()
+        self.assertTrue(trial.handoff(np.full(FRAME, 0.1)))
+        text = '追问这张照片，上面写了什么？'
+        with patch('gpt_live_trial.LiveTrial.references', return_value=[text]):
+            self.assertFalse(trial.delegate(owner, 'echo', text))
+        host.generation += 1
+        self.assertFalse(trial.delegate(owner, 'stale', text))
+        host.visual.voice_followup.assert_not_called()
 
     def test_wake_owner_capability_and_capture_route_gate_upload(self):
         trial, host, owner = self.make_trial()
