@@ -5,6 +5,7 @@ from test_memory_fixture import isolated_memory
 import subprocess
 import tempfile
 import threading
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import numpy as np
@@ -76,6 +77,29 @@ class TextFailureTests(unittest.TestCase):
                     self.assertEqual(b.workspace.tasks[-1]['status'], 'failed')
                     self.assertEqual(result['generation'], job.generation)
                     self.assertNotIn(SECRET, str((b.events, b.logs)))
+
+    def test_empty_speech_uses_same_stage_in_task_trace_and_status(self):
+        brain = Brain()
+        b = self.bridge(brain)
+        b.speech = SimpleNamespace(stream=lambda *_: iter(()), cancel=lambda: None)
+        b.submit_text('固定公开测试指令')
+        job = b.response.queue.get_nowait()
+        self.work(b, [job])
+        message = feedback('tts', 'provider_or_runtime').message
+        self.assertEqual(b.workspace.tasks[-1]['status'], 'failed')
+        self.assertEqual(b.workspace.tasks[-1]['result'], message)
+        self.assertEqual(
+            b.diagnostics.failure_record(job.generation),
+            {'stage': 'tts', 'kind': 'provider_or_runtime'},
+        )
+        errors = [
+            fields['message']
+            for event, fields in b.events
+            if event == 'status' and fields.get('phase') == 'error'
+        ]
+        self.assertEqual(errors, [message])
+        self.assertEqual(brain.calls, 1)
+        self.assertIsNone(b.session.text_generation)
 
     def test_workspace_send_failure_preserves_unconfirmed_start_guidance(self):
         for send_error in (BrokenPipeError, EOFError):

@@ -18,7 +18,7 @@ from diagnostics import error_kind
 from failure_feedback import FailureSink
 from operation_failure import OperationFailure
 from dsp import RATE
-from minimax_client import MiniMaxError, Cancelled
+from minimax_client import Cancelled
 from protocol import Packet, SPEAKER
 from reply_types import mood
 from speech_providers import DirectSpeech
@@ -152,7 +152,7 @@ class PlaybackController:
         return self.pause.wait_playback(generation)
 
     def play(self, pcm, text, generation, role='assistant'):
-        return self.play_stream(iter([pcm]), text, generation, role)
+        return self.play_stream(iter([pcm]), text, generation, role, source_stage='playback')
 
     def output_event(self, name, **fields):
         try:
@@ -170,15 +170,19 @@ class PlaybackController:
                 'Device PCM send failed', stage='transport', kind=error_kind(error)
             ) from None
 
-    def audio_chunks(self, chunks):
-        try:
-            yield from chunks
-        except (Cancelled, OperationFailure):
-            raise
-        except Exception as error:
-            raise OperationFailure(
-                'Speech provider failed', stage='tts', kind=error_kind(error)
-            ) from None
+    def audio_chunks(self, chunks, stage):
+        while True:
+            try:
+                piece = next(chunks)
+            except StopIteration:
+                return
+            except (Cancelled, OperationFailure):
+                raise
+            except Exception as error:
+                raise OperationFailure(
+                    'Audio source failed', stage=stage, kind=error_kind(error)
+                ) from None
+            yield piece
 
     def play_stream(
         self,
@@ -191,18 +195,29 @@ class PlaybackController:
         live=None,
         current=None,
         before_playback=None,
+        source_stage='tts',
     ):
         def valid():
             return self.hooks.valid(generation) and (current is None or current())
 
         # Each clause owns its iterator, caption publisher and playback_id.
         # Sending all PCM is not a device play_done acknowledgement.
-        iterator = self.audio_chunks(chunks)
+        stage = 'playback' if live is not None else source_stage
+        source = None
         prefill = []
         count = 0
         started = False
         completed = False
         try:
+            try:
+                source = iter(chunks)
+            except (Cancelled, OperationFailure):
+                raise
+            except Exception as error:
+                raise OperationFailure(
+                    'Audio source unavailable', stage=stage, kind=error_kind(error)
+                ) from None
+            iterator = self.audio_chunks(source, stage)
             # Keep 200 ms buffered while cloud audio continues to arrive.
             while count < 3200 and valid():
                 try:
@@ -216,7 +231,9 @@ class PlaybackController:
             if not valid():
                 return False
             if not prefill:
-                raise MiniMaxError('No audio available for playback')
+                raise OperationFailure(
+                    'Audio source produced no PCM', stage=stage, kind='provider_or_runtime'
+                )
             with self.done:
                 self.completed.discard(generation)
             self.wait_playback(generation)
@@ -415,11 +432,18 @@ class PlaybackController:
                 with self.publication_lock:
                     if self.live_output is live and not self.playing:
                         self.live_output = None
-            close = getattr(iterator, 'close', None)
-            if close:
-                close()
             if timing:
                 timing.publish = None
+            # Closing the source after an early stop must not replace a
+            # confirmed play_done or the primary TTS/transport failure.
+            close = getattr(source, 'close', None)
+            if close is not None:
+                try:
+                    close()
+                except Exception as error:
+                    self.hooks.log(
+                        'playback_iterator_close_failed', error_type=type(error).__name__
+                    )
 
     def speak(self, text, generation, *, before_playback=None):
         if before_playback is not None:
