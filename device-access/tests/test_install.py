@@ -264,8 +264,49 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse(any('/sdcard/' in command for command in calls))
         self.assertTrue(calls[-1].startswith('rm -f '))
 
+    def test_protected_staging_probe_only_verifies_empty_marker_creation_and_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory:
+
+            def local_shell(_transport, command, *, timeout):
+                self.assertNotIn('app_process', command)
+                self.assertNotIn('/sdcard', command)
+                return subprocess.check_output(
+                    ['/bin/sh', '-c', command], timeout=timeout, text=True
+                )
+
+            with (
+                patch.object(access, 'private_staging', return_value=directory),
+                patch.object(access, 'shell', side_effect=local_shell),
+            ):
+                self.assertEqual(access.probe_protected_staging('7'), 'verified')
+            self.assertEqual(list(Path(directory).iterdir()), [])
+
+    def test_staging_preflight_stops_on_creation_cleanup_or_channel_failure(self):
+        for outcome, expected in (
+            ('CC8_STAGING_CREATE_FAILED\n', 'create_failed'),
+            ('CC8_STAGING_CLEANUP_UNCONFIRMED\n', 'cleanup_unconfirmed'),
+            ('unexpected\nCC8_STAGING_OK\n', 'unconfirmed'),
+            (subprocess.TimeoutExpired('adb', 10), 'unconfirmed'),
+        ):
+            stdout = io.StringIO()
+            with (
+                self.subTest(expected=expected),
+                patch.object(access, 'target', return_value='7'),
+                patch.object(access, 'probe', return_value={'shell_verified': True}),
+                patch.object(access, 'shell', side_effect=['2000 2000 771', outcome]) as shell,
+                patch.object(access.sys, 'stdout', stdout),
+                self.assertRaises(SystemExit) as failure,
+            ):
+                access._perform_actions(SimpleNamespace(probe_staging=True))
+            self.assertEqual(failure.exception.code, 1)
+            report = json.loads(stdout.getvalue())
+            self.assertEqual(report['protected_staging'], expected)
+            self.assertIs(report['installation_started'], False)
+            self.assertEqual(shell.call_count, 2)
+
     def test_failure_receipt_distinguishes_staging_refusal_from_dispatched_install(self):
         args = SimpleNamespace(
+            probe_staging=False,
             verify_apk=None,
             install=Path('candidate.apk'),
             launch=False,
