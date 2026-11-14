@@ -12,6 +12,7 @@ import json
 import re
 
 MAX_ACTIONS = 64
+MAX_SOURCES = 6
 
 
 def publication_labels(values):
@@ -136,7 +137,7 @@ class WebEvidence:
         result = []
         seen = set()
         if not isinstance(links, list):
-            return result
+            links = []
         with self.page_lock:
             pages = tuple(self.pages)
         reads_by_url = {}
@@ -184,22 +185,34 @@ class WebEvidence:
                 # Two citations backed by the same attempt share a card.
                 # Separate attempts can still report different outcomes.
                 shown_reads.add(read_index)
-                read = pages[read_index]
-                result[-1].update(
-                    access_evidence='page_body_received' if read['ok'] else 'page_fetch_failed',
-                    observed_at=read['observed_at'],
-                    page_excerpt=read.get('excerpt', ''),
-                    page_dates=read.get('dates', ''),
-                    page_modified_dates=read.get('updated_dates', ''),
-                    page_bytes=read.get('size', 0),
-                    final_url=read.get('final_url', ''),
-                    page_text_chars=read.get('text_chars'),
-                    page_text_truncated=read.get('text_truncated'),
-                    page_error_code=read.get('error_code', ''),
-                    page_http_status=200 if read['ok'] else read.get('http_status'),
+                result[-1].update(self.page_fields(pages[read_index]))
+
+        # Keep real comparison attempts visible even when the final answer
+        # omitted their URLs or placed weaker links first.
+        for index, read in enumerate(pages):
+            if index not in shown_reads and reads_by_url[source_key(read['url'])] == index:
+                result.append(
+                    {
+                        'title': '本次页面读取',
+                        'url': read['url'],
+                        'published_at': '',
+                        'event_at': '',
+                        'body_verified': False,
+                        'answer_cited': False,
+                        **self.page_fields(read),
+                    }
                 )
-            if len(result) == 6:
-                break
+        if len(result) > MAX_SOURCES:
+            spare = MAX_SOURCES - sum('page_bytes' in row for row in result)
+            kept = []
+            for row in result:
+                if 'page_bytes' in row:
+                    kept.append(row)
+                elif spare > 0:
+                    kept.append(row)
+                    spare -= 1
+            result = kept
+            result[-1]['list_limited'] = True
 
         # A source event shares the 64KiB authenticated packet budget. Preserve
         # URLs/receipt truth first; omit optional detail explicitly when needed.
@@ -219,3 +232,19 @@ class WebEvidence:
             if result:
                 result[-1]['list_limited'] = True
         return result
+
+    @staticmethod
+    def page_fields(read):
+        return {
+            'access_evidence': 'page_body_received' if read['ok'] else 'page_fetch_failed',
+            'observed_at': read['observed_at'],
+            'page_excerpt': read.get('excerpt', ''),
+            'page_dates': read.get('dates', ''),
+            'page_modified_dates': read.get('updated_dates', ''),
+            'page_bytes': read.get('size', 0),
+            'final_url': read.get('final_url', ''),
+            'page_text_chars': read.get('text_chars'),
+            'page_text_truncated': read.get('text_truncated'),
+            'page_error_code': read.get('error_code', ''),
+            'page_http_status': 200 if read['ok'] else read.get('http_status'),
+        }

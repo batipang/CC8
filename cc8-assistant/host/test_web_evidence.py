@@ -46,6 +46,33 @@ class WebEvidenceTests(unittest.TestCase):
             **extra,
         )
 
+    def test_uncited_reads_keep_real_outcomes_even_after_many_answer_links(self):
+        failed = 'https://example.com/conflict'
+        self.evidence.page(self.page())
+        self.evidence.page(dict(ok=False, url=failed, error='http_error', http_status=404))
+        links = [dict(title='回答链接', url=f'https://example.com/answer/{i}') for i in range(8)]
+        links.append(dict(title='引用了原文', url=self.url, answer_cited=False))
+        rows = self.evidence.sources(links)
+        self.assertEqual(len(rows), 6)
+        cited, uncited = rows[-2:]
+        self.assertEqual((cited['url'], cited['access_evidence']), (self.url, 'page_body_received'))
+        self.assertNotIn('answer_cited', cited)
+        self.assertEqual((uncited['url'], uncited['page_http_status']), (failed, 404))
+        self.assertIs(uncited['answer_cited'], False)
+        self.assertTrue(uncited['list_limited'])
+
+    def test_uncited_aliases_and_retries_do_not_duplicate_or_resurrect_old_text(self):
+        final = 'https://example.com/final'
+        self.evidence.page({**self.page(), 'final_url': final})
+        self.assertEqual(len(self.evidence.sources([dict(title='终点', url=final)])), 1)
+        self.evidence.page(
+            dict(ok=False, url=self.url, final_url=final, error='http_error', http_status=404)
+        )
+        (row,) = self.evidence.sources([])
+        self.assertIs(row['answer_cited'], False)
+        self.assertEqual((row['url'], row['final_url']), (self.url, final))
+        self.assertEqual(row['page_excerpt'], '')
+
     def test_valid_unicode_title_and_url_use_scalar_budgets(self):
         title = '\U0001f600' * 160
         prefix = 'https://example.com/'

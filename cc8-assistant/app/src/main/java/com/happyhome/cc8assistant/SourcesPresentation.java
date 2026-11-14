@@ -10,7 +10,7 @@ final class SourcesPresentation {
   static final class Source {
     final String title, url, evidence, observedAt, publishedAt, pageExcerpt, pageDates, finalUrl;
     final String pageModifiedDates;
-    final boolean pageRead, detailLimited, listLimited;
+    final boolean pageRead, detailLimited, listLimited, uncitedRead;
     final int pageBytes, textChars, shownChars, httpStatus;
     final Boolean textTruncated;
     final String errorCode;
@@ -39,6 +39,9 @@ final class SourcesPresentation {
       int status = integer(row.opt("page_http_status"), 599);
       httpStatus = status >= 100 ? status : 0;
       errorCode = text(row.opt("page_error_code"), 40);
+      uncitedRead =
+          Boolean.FALSE.equals(row.opt("answer_cited"))
+              && (pageRead || "page_fetch_failed".equals(evidence));
       detailLimited = Boolean.TRUE.equals(row.opt("page_details_limited"));
       listLimited = Boolean.TRUE.equals(row.opt("list_limited"));
     }
@@ -66,7 +69,12 @@ final class SourcesPresentation {
     }
 
     String summary() {
-      return title + "\n" + URI.create(url).getHost() + " · " + access();
+      return title
+          + "\n"
+          + URI.create(url).getHost()
+          + " · "
+          + access()
+          + (uncitedRead ? "\n回答未引用" : "");
     }
 
     private String failureDetails() {
@@ -94,11 +102,7 @@ final class SourcesPresentation {
     }
 
     String label() {
-      return title
-          + "\n"
-          + URI.create(url).getHost()
-          + " · "
-          + access()
+      return summary()
           + observationDetails()
           + failureDetails()
           + "\n来源标注日期："

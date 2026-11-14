@@ -82,6 +82,11 @@ public class SourceCheck {
  yes(failed.contains("UTF-8")&&failed.contains("HTTP 响应：200；未取得可用正文")&&!failed.contains("正文摘录"),"HTTP 200 or stale excerpt manufactured body evidence");
  yes(failed.contains("最后尝试的地址：https://other.example/final"),"terminal failure destination hidden");
  yes(failed.contains("页面读取结束的北京时间 未知"),"missing failed-read timestamp became known");
+ failure.data.put("answer_cited",false);
+ SourcesPresentation.Source uncited=new SourcesPresentation(new JSONArray(failure),"","",null,4,9).at(0);
+ yes(uncited.summary().contains("回答未引用")&&uncited.label().contains("回答未引用"),"uncited read not distinguished");
+ failure.data.put("answer_cited","false");
+ yes(!new SourcesPresentation(new JSONArray(failure),"","",null,4,9).at(0).label().contains("回答未引用"),"malformed citation status considered known");
  failure.data.put("final_url","http://127.0.0.1/private");
  failure.data.put("page_error_code","/private/credential-secret");failure.data.put("page_http_status",true);
  failed=new SourcesPresentation(new JSONArray(failure),"","",null,4,9).at(0).label();
