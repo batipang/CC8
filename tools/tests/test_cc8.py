@@ -140,6 +140,26 @@ class CommandTests(unittest.TestCase):
             self.assertFalse(next(c['ok'] for c in result['checks'] if c['id'] == 'configuration'))
             self.assertNotIn('SECRET_VALUE', json.dumps(result))
 
+    def test_voice_doctor_checks_local_tools_without_cloud_credentials_or_codex(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            self.fixture(root)
+            with (
+                patch.dict('os.environ', {'CC8_BRAIN_PROVIDER': 'echo'}, clear=True),
+                patch.object(cc8, 'credential_ready') as credential,
+                patch.object(cc8, 'dot_ready') as dot,
+                patch.object(cc8, 'local_voice_tools', return_value=False),
+                patch.object(cc8, 'verified_models', return_value=True) as models,
+                patch.object(cc8, 'other_runtime', return_value=False),
+            ):
+                report = cc8.doctor('voice', root)
+            models.assert_called_once_with(root, 'sensevoice')
+            credential.assert_not_called()
+            dot.assert_not_called()
+            checks = {item['id']: item for item in report['checks']}
+            self.assertFalse(checks['local_voice_tools']['ok'])
+            self.assertTrue(checks['local_voice_tools']['required'])
+
     def test_voice_doctor_requires_optional_chinese_model_only_when_selected(self):
         for mode in ('off', 'sensevoice', 'sensevoice_complete'):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as folder:

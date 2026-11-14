@@ -30,7 +30,7 @@ python3 cc8-assistant/host/configuration.py check
 | --- | --- |
 | schema_version | 当前为整数 1；未知版本失败 |
 | asr | minimax / sensevoice / whisper；失败不更换引擎，不扩大上传范围 |
-| brain | dot / minimax；MiniMax ASR/TTS 与大脑选择分开 |
+| brain | dot / minimax / echo；echo 使用本机识别与播报 |
 | capture_frontend | `mono` 默认；`paired` 为 0.15.45／APK 0.9.43 的成对参考候选，通过 `CC8_CAPTURE_FRONTEND` 或私有配置显式选择。仍需设备能力协商，格式不支持时在采样前回退单声道。参考 [协议](PROTOCOL_BOUNDARIES.md#成对参考输入候选)；候选尚需实时实机 A/B，不改变现用默认。 |
 | minimax_base | 保留三个官方 HTTPS 域名，不允许凭证、查询参数、第三方端点或其他路径 |
 | minimax_model / asr_model / tts_model | MiniMax 对应模型 ID 格式；不等于订阅支持或服务可用性保证 |
@@ -48,6 +48,14 @@ python3 cc8-assistant/host/configuration.py check
 配置在新后台启动时形成快照，修改文件不会在当前对话中途换模型。交互 launcher 在创建后台前校验；后台入口在加载模型/凭证前校验；登录服务在写 plist / 启用前校验。LaunchAgent 默认仍只保存 PATH；若安装时明确给了白名单中的非敏感环境覆盖，则规范化并保存这些覆盖及可选配置路径，保证登录后选择一致，永远不复制整个环境或持久化 API key。UI 当前会话的 provider 切换不自动改私有文件。
 
 USB 本机通道 18765 和广播发现 18767 保持原协议。改 tls_port 后需经原 USB 下发的 lan_config 更新设备已保存端口；旧配对不会接受端口不同的广播而静默切换。广播签名、TLS pin、令牌校验和 USB 优先不变。
+
+## 本机语音模式
+
+Mac 上设置 `CC8_BRAIN_PROVIDER=echo`，或在私有配置 JSON 中设置 `"brain": "echo"`。ASR 未显式设置时采用 SenseVoice，显式配置只允许 SenseVoice 或已准备好的本机 Whisper。现有私有配置如果写了 MiniMax ASR，需要同时改为 `"asr": "sensevoice"`。安装本机模型、macOS 普通话 Tingting 音色及 ffmpeg 后运行 `./cc8 doctor --profile voice`。配置切换需重启后台。
+
+该模式用本机识别、复述和播报，保留设备上的本地唤醒和停止。需要联网查询、桌面工具、视觉分析或 MiniMax 访客模式时，切回原配置。已有访客状态需先通过原模式恢复主人。回到 Dot 或 MiniMax 时，恢复原先的 ASR 设置。
+
+可用 `.toolchains/cc8/voice-venv/bin/python cc8-assistant/host/bridge.py --speech-smoke` 测一段固定合成音。此检查不连接设备、不启用录音，仅输出识别文字和 PCM 帧数。
 
 ## 检查、迁移与恢复
 

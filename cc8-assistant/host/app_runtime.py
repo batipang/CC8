@@ -6,7 +6,7 @@ one injection boundary; construction does not open device capture or a camera.
 
 from __future__ import annotations
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import os
 from pathlib import Path
@@ -83,6 +83,12 @@ def run_backend(dependencies: BackendDependencies):
         parser.error(str(error))
     except OSError:
         parser.error('CC8 configuration file unavailable; check path and owner access')
+    if args.brain == 'echo' and config.brain != 'echo':
+        # Keep the legacy CLI entry local even with the default cloud ASR.
+        config = replace(
+            config, brain='echo', asr='sensevoice' if config.asr == 'minimax' else config.asr
+        )
+    local = config.brain == 'echo'
     if not args.speech_smoke:
         # A direct backend start also needs an owned PID before any provider
         # or transport starts. The global runtime lease is already held.
@@ -90,11 +96,16 @@ def run_backend(dependencies: BackendDependencies):
             atomic_private_bytes(dependencies.private / 'bridge.pid', f'{os.getpid()}\n'.encode())
         except OSError:
             parser.error('语音后台未能登记进程。请检查运行目录的权限和磁盘空间。')
-    speech = (
-        dependencies.direct_speech(config=config)
-        if args.brain == 'minimax'
-        else dependencies.local_speech(config=config)
-    )
+    try:
+        speech = (
+            dependencies.local_speech(config=config)
+            if local
+            else dependencies.direct_speech(config=config)
+        )
+    except (OSError, RuntimeError):
+        if not local:
+            raise
+        parser.error('本机语音无法初始化。运行 ./cc8 doctor --profile voice 检查本机模型和播报。')
     print(
         'ASR provider configured ('
         + str(speech.recognizer.engine)
@@ -135,7 +146,7 @@ def run_backend(dependencies: BackendDependencies):
     bridge = dependencies.bridge(
         speech,
         dependencies.brain_router(dependencies.minimax_brain(config=config), selected=config.brain)
-        if args.brain == 'minimax'
+        if not local
         else None,
         fast_stop=fast_stop,
         wake_detector=wake_detector,

@@ -32,7 +32,7 @@ class Field:
 
 FIELDS = {
     'asr': Field('choice', 'minimax', ('minimax', 'sensevoice', 'whisper')),
-    'brain': Field('choice', 'dot', ('dot', 'minimax')),
+    'brain': Field('choice', 'dot', ('dot', 'minimax', 'echo')),
     'capture_frontend': Field('choice', 'mono', ('mono', 'paired')),
     'minimax_base': Field(
         'endpoint',

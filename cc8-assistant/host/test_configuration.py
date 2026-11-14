@@ -24,6 +24,22 @@ class ConfigurationTests(unittest.TestCase):
     def save(self, **values):
         write_profile(self.profile, {'schema_version': 1, **values})
 
+    def test_explicit_echo_profile_uses_only_local_recognition(self):
+        env = {'CC8_BRAIN_PROVIDER': 'echo'}
+        settings = load_config(self.root, env)
+        self.assertEqual((settings.brain, settings.asr), ('echo', 'sensevoice'))
+        self.assertEqual(dict(settings.sources)['asr'], 'local_profile')
+        self.assertEqual(settings.service_environment(env), env)
+        self.assertEqual(
+            load_config(self.root, {**env, 'CC8_ASR_ENGINE': 'whisper'}).asr, 'whisper'
+        )
+        with self.assertRaisesRegex(ConfigError, 'echo_requires_local_recognition'):
+            load_config(self.root, {**env, 'CC8_ASR_ENGINE': 'minimax'})
+        self.save(brain='echo', asr='minimax')
+        with self.assertRaisesRegex(ConfigError, 'echo_requires_local_recognition'):
+            load_config(self.root, {})
+        self.assertEqual(load_config(self.root, {'CC8_BRAIN_PROVIDER': 'dot'}).asr, 'minimax')
+
     def test_priority_sources_and_normalized_numeric_environment(self):
         self.save(asr='whisper', brain='minimax', tts_speed=1.1)
         config = load_config(self.root, {'CC8_ASR_ENGINE': 'sensevoice', 'CC8_TTS_SPEED': '1.20'})

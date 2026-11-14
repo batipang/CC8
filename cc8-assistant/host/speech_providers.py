@@ -4,6 +4,7 @@ No session, transport, playback or device-capture state is stored here.
 """
 
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import wave
@@ -13,6 +14,7 @@ from recognition import MandarinRecognizer
 from minimax_client import MiniMaxVoice, MiniMaxError
 from dsp import RATE
 from voice_preferences import RATES
+from runtime_env import command_path
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -47,9 +49,22 @@ class LocalSpeech:
     def recognize_current(self, samples, is_current):
         return self.recognizer.recognize(samples, is_current=is_current)
 
+    def cancel(self):
+        self.recognizer.cancel()
+
+    def stream(self, text, is_current=lambda: True):
+        if not is_current():
+            return
+        pcm = self.synthesize(text)
+        if is_current():
+            yield pcm
+
     def synthesize(self, text):
         if text in self.cache:
             return self.cache[text]
+        converter = shutil.which('ffmpeg', path=command_path())
+        if not converter:
+            raise RuntimeError('Local speech requires ffmpeg')
         with tempfile.TemporaryDirectory(prefix='cc8-tts-') as folder:
             source = Path(folder) / 'speech.aiff'
             subprocess.run(
@@ -62,7 +77,7 @@ class LocalSpeech:
             )
             raw = subprocess.check_output(
                 [
-                    '/opt/homebrew/bin/ffmpeg',
+                    converter,
                     '-v',
                     'error',
                     '-i',
