@@ -110,6 +110,31 @@ class ReviewGrantTests(unittest.TestCase):
         self.assertFalse(b.session.active)
         self.assertIsNone(b.visual.inbox.pending)
 
+    def test_voice_ocr_uses_the_same_transcription_prompt_and_current_frame(self):
+        b = fixtures.BridgeVisionTests().bridge()
+        b.on_event({'event': 'vision_request', 'mode': 'ocr', 'nonce': 'a' * 32})
+        button_prompt = b.job.text
+        b.begin_visual('大黄蜂，读一下这张纸上的字。', 'voice')
+        job = b.job
+        self.assertEqual(job.origin, 'voice')
+        self.assertEqual(job.text, button_prompt)
+        self.assertIn('无法辨认', job.text)
+        received = []
+        b.answer = lambda text, generation, image=None: received.append((text, image))
+        original = b.event
+
+        def event(name, **fields):
+            original(name, **fields)
+            if name == 'camera_capture':
+                self.assertEqual(fields['origin'], 'voice')
+                for row in fixtures.events(b.visual.inbox.pending):
+                    b.on_event(row)
+
+        b.event = event
+        b.answer_visual(job)
+        self.assertEqual(received, [(button_prompt, fixtures.jpeg())])
+        self.assertIsNone(b.visual.inbox.pending)
+
     def test_malformed_new_modes_reject_before_touching_current_task(self):
         b = fixtures.BridgeVisionTests().bridge()
         b.on_event({'event': 'vision_request', 'nonce': 'a' * 32})
