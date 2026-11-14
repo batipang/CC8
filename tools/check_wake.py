@@ -287,6 +287,11 @@ def evaluate(model_root, output):
     return state, summary(rows)
 
 
+def require_evaluation_python(parser):
+    if sys.version_info < (3, 11):
+        parser.error('执行唤醒评测需要 Python 3.11+。请用语音环境的 Python 3.13 运行同一命令。')
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--model-root', type=Path, required=True)
@@ -308,6 +313,7 @@ def main(argv=None):
             )
         )
         return 0
+    require_evaluation_python(parser)
     try:
         if platform.system() != 'Darwin':
             raise ValueError('Mac synthesizer required')

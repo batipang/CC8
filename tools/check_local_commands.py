@@ -301,6 +301,7 @@ def main(argv=None):
             )
         )
         return 0
+    check_wake.require_evaluation_python(parser)
     try:
         if platform.system() != 'Darwin':
             raise ValueError('Mac synthesizer required')

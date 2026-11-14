@@ -1,6 +1,8 @@
 """Public synthetic checks never silently treat missing/failed inputs as success."""
 
+from contextlib import redirect_stderr, redirect_stdout
 import hashlib
+import io
 import json
 from pathlib import Path
 import subprocess
@@ -54,6 +56,28 @@ class SyntheticWakeTests(unittest.TestCase):
             self.assertFalse(plan['network_requested'])
             self.assertEqual(plan['sample_count'], len(CASES))
             self.assertFalse(path.exists())
+
+    def test_old_system_python_can_plan_but_cannot_execute_native_checks(self):
+        from tools import check_local_commands, check_wake
+
+        for probe in (check_wake, check_local_commands):
+            with (
+                self.subTest(probe=probe.__name__),
+                patch.object(sys, 'version_info', (3, 9, 6)),
+                patch.object(probe, 'evaluate') as evaluate,
+                patch.object(probe, 'private_directory') as private_directory,
+                redirect_stdout(io.StringIO()) as stdout,
+                redirect_stderr(io.StringIO()) as stderr,
+            ):
+                args = ['--model-root', '/unused']
+                self.assertEqual(probe.main(args), 0)
+                self.assertFalse(json.loads(stdout.getvalue())['execute'])
+                with self.assertRaises(SystemExit) as failed:
+                    probe.main([*args, '--execute'])
+                self.assertEqual(failed.exception.code, 2)
+                self.assertIn('Python 3.13', stderr.getvalue())
+                evaluate.assert_not_called()
+                private_directory.assert_not_called()
 
     def test_fixed_corpus_has_distinct_cases_and_real_near_name_negatives(self):
         self.assertEqual(len({c[0] for c in CASES}), len(CASES))
