@@ -313,6 +313,26 @@ class ControllerTests(Fixture):
         self.assertNotIn('desktop_handoff_pending', self.path.read_text())
         self.assertTrue(restored.response.queue.empty())
 
+    def test_restart_preserves_unconfirmed_execution_for_failed_or_cancelled_task(self):
+        live = self.session()
+        cases = [('failed', True), ('cancelled', True), ('failed', False)]
+        receipts = {}
+        for status, unconfirmed in cases:
+            task_id = live.workspace.task_start(live.generation, '核对执行回执')
+            live.workspace.task_finish(task_id, status, '回执', unconfirmed=unconfirmed)
+            self.request(live, 'save', task_id, execution_unconfirmed=not unconfirmed)
+            self.assertTrue(live.events[-1][1]['ok'])
+            receipts[task_id] = (status, unconfirmed)
+        restored = self.session()
+        self.request(restored, 'list')
+        for row in restored.events[-1][1]['items']:
+            status, unconfirmed = receipts[row['id']]
+            self.assertEqual(row['status'], status)
+            self.assertIs(row['execution_unconfirmed'], unconfirmed)
+            self.request(restored, 'get', row['id'])
+            self.assertIs(restored.events[-1][1]['item']['execution_unconfirmed'], unconfirmed)
+        self.assertTrue(restored.response.queue.empty())
+
     def test_running_unknown_and_corrupt_records_do_not_change_live_task(self):
         b = self.session()
         task_id = b.workspace.task_start(b.generation, '尚未结束')
