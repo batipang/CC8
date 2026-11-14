@@ -42,6 +42,7 @@ public final class MainActivity extends Activity
   private AlertDialog reminderPolicyDialog, reminderEditorDialog, reminderHistoryDialog;
   private JSONArray reminderHistoryData = new JSONArray();
   private boolean reminderChannelsSupported;
+  private boolean reminderRevisionSupported;
   // RAM-only notice: a lost connection cannot undo tool effects or prove failure.
   // Keep this separate from authoritative task receipts and never replay work.
   private boolean taskResultUnconfirmed;
@@ -159,6 +160,7 @@ public final class MainActivity extends Activity
     reminderHistoryData = new JSONArray();
     reminderPolicyData = null;
     reminderChannelsSupported = false;
+    reminderRevisionSupported = false;
     workspaceRevision = -1;
     dotResult = dotResultSource = "";
     taskResultUnconfirmed = false;
@@ -738,6 +740,7 @@ public final class MainActivity extends Activity
           remindersData = reminders;
           reminderPolicyData = data.optJSONObject("reminder_policy");
           reminderChannelsSupported = data.optInt("reminder_channels_version", 0) == 1;
+          reminderRevisionSupported = data.optInt("reminder_revision_version", 0) == 1;
           JSONArray history = data.optJSONArray("reminder_history");
           reminderHistoryData =
               history != null && history.length() <= 12 ? history : new JSONArray();
@@ -1226,6 +1229,7 @@ public final class MainActivity extends Activity
               args.remove("event");
               Wire.put(args, "action", n == 1 ? "update" : "cancel");
               Wire.put(args, "id", item.optString("id"));
+              if (!bindReminderRevision(args, item)) return;
               if (n == 1) Wire.put(args, "due", formatDue(System.currentTimeMillis() + 600000));
               if (!session.reminderAction(args, route)) workspaceNotSent();
             })
@@ -1238,6 +1242,17 @@ public final class MainActivity extends Activity
         new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US);
     f.setTimeZone(java.util.TimeZone.getTimeZone("Asia/Shanghai"));
     return f.format(new java.util.Date(millis)) + "+08:00";
+  }
+
+  private boolean bindReminderRevision(JSONObject args, JSONObject item) {
+    if (!reminderRevisionSupported) return true;
+    Object value = item.opt("revision");
+    if (!(value instanceof Integer || value instanceof Long) || ((Number) value).longValue() < 0) {
+      Toast.makeText(this, "提醒修订不可用，请重新打开提醒", Toast.LENGTH_LONG).show();
+      return false;
+    }
+    Wire.put(args, "expected_revision", value);
+    return true;
   }
 
   private void editReminder(JSONObject item, long route) {
@@ -1367,7 +1382,10 @@ public final class MainActivity extends Activity
                     if (!requireWorkspaceRoute(route)) return;
                     JSONObject args = new JSONObject();
                     Wire.put(args, "action", item == null ? "create" : "update");
-                    if (item != null) Wire.put(args, "id", item.optString("id"));
+                    if (item != null) {
+                      Wire.put(args, "id", item.optString("id"));
+                      if (!bindReminderRevision(args, item)) return;
+                    }
                     Wire.put(args, "title", value);
                     Wire.put(args, "due", formatDue(date.getTimeInMillis()));
                     Wire.put(args, "repeat", keys[repeat.getSelectedItemPosition()]);
@@ -2308,6 +2326,7 @@ public final class MainActivity extends Activity
             reminderPolicyData = null;
             reminderHistoryData = new JSONArray();
             reminderChannelsSupported = false;
+            reminderRevisionSupported = false;
             renderWorkspace();
           }
           brainText.setText(brainLabel(connected));

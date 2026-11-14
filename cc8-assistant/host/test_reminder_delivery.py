@@ -225,6 +225,51 @@ os._exit(23)
         self.assertFalse(self.board.finish_reminders(claimed, True))
         self.assertEqual(len(self.jobs), 1)
 
+    def test_stale_editor_and_tool_cannot_overwrite_new_occurrence(self):
+        item = self.create(repeat='daily')
+        self.now += timedelta(minutes=2)
+        claims = self.board.claim_reminders()
+        self.assertTrue(self.board.finish_reminders(claims, True))
+        new = self.board.snapshot()['reminders'][0]
+        self.assertGreater(new['revision'], item['revision'])
+        before = self.path.read_bytes()
+        with patch('threading.Thread.start'):
+            bridge = Bridge(None, None, workspace=self.board)
+        bridge.session.connection = object()
+        events = []
+        bridge.event = lambda name, **fields: events.append((name, fields))
+        for action in ('update', 'cancel'):
+            args = {'action': action, 'id': item['id'], 'expected_revision': item['revision']}
+            bridge.on_event({'event': 'reminder_action', 'arguments': args})
+            self.assertIn('已更新，请重新打开', events[-1][1]['message'])
+            self.assertFalse(events[-1][1]['ok'])
+            self.assertEqual(self.path.read_bytes(), before)
+        tools = VoiceTools(reminders=self.board.reminder)
+        missing = tools.call('cc8_reminder', {'action': 'cancel', 'id': item['id']})
+        self.assertEqual(missing['error'], 'reminder_revision_required')
+        self.assertFalse(missing['ok'])
+        conflict = tools.call(
+            'cc8_reminder',
+            {'action': 'cancel', 'id': item['id'], 'expected_revision': item['revision']},
+        )
+        self.assertEqual(conflict['error'], 'reminder_revision_conflict')
+        self.assertFalse(conflict['ok'])
+        self.assertEqual(self.path.read_bytes(), before)
+        with self.assertRaises(ValueError):
+            self.board.reminder({'action': 'cancel', 'id': item['id'], 'expected_revision': True})
+        saved = tools.call(
+            'cc8_reminder',
+            {
+                'action': 'update',
+                'id': item['id'],
+                'title': '新事项',
+                'expected_revision': new['revision'],
+            },
+        )['reminder']
+        self.assertEqual(saved['due'], new['due'])
+        self.assertEqual(saved['title'], '新事项')
+        self.assertEqual(saved['revision'], new['revision'] + 1)
+
     def test_history_uses_last_state_change_instead_of_original_creation_order(self):
         first = self.create()
         self.now += timedelta(minutes=1)

@@ -87,7 +87,7 @@ class ActivityCheck {
  JSONObject reminderPolicyData;
  AlertDialog reminderPolicyDialog,reminderEditorDialog,reminderHistoryDialog,imageQualityDialog;
  JSONArray reminderHistoryData=new JSONArray();
- boolean reminderChannelsSupported;
+ boolean reminderChannelsSupported,reminderRevisionSupported;
  long workspaceRevision=-1,workspaceRoute=0;boolean linked=true,taskResultUnconfirmed;
  Object peerRelease;
  String brainProvider="dot";
