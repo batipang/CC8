@@ -69,6 +69,15 @@
 
 若已用上述升级预检核对备份，可给 `stage-restore` 同时传入 `--expect-settings-sha256` 和预检报告里的摘要。即使换成了另一份自身校验有效的备份，只要设置内容不同，也会在创建输出前停止。摘要对应省略默认字段前的设置。
 
+在实际选用配置副本之前，可再次比对备份、预检回执、目标提交和副本内容。升级填 `candidate`，恢复填 `recovery`，并分别提供对应的 Git 工作区。此命令只读，拒绝目标提交或副本内容发生变化，输出不含设置值。
+
+```sh
+./cc8 upgrade verify-staged --transition /absolute/private/transition.json \
+  --settings-backup /absolute/private/backup.json \
+  --staged-profile /absolute/private/staged-settings.json \
+  --target-root /absolute/candidate-source --stage candidate
+```
+
 先校验 backup schema、规范化 settings 和 SHA-256，再创建**新** settings 文件。SHA-256 用于内容完整性检查，不是发布者签名。备份中的数据不决定恢复路径，输出只能来自命令明确指定；不允许覆盖原配置或已有文件。损坏、篡改、权限错误、未知 schema 和写失败不会改动原配置。
 
 本命令不应用 staged 文件。真正升级/恢复仍须先明确停止原服务，核对原签名/配对/资源和配置环境，将核对后的配置应用到目标，再按 SIGNING / RELEASES / TODO 做实机验收。没有自动回放工具任务、播报或开启采集。
