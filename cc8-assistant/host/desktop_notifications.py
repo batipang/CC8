@@ -324,19 +324,19 @@ class DesktopDelivery:
         def deliver():
             try:
                 receipt = notifier.post(ident, body, is_current)
-                self.result = (
-                    'notification_center'
-                    if receipt.get('result') == 'notification_center'
-                    else 'unconfirmed'
-                )
-                if receipt.get('result') in (
+                outcome = receipt.get('result')
+                # The local IPC client returns cancelled only before sending
+                # any request bytes. It is never accepted from the helper.
+                if outcome in ('notification_center', 'cancelled'):
+                    self.result = outcome
+                if outcome in (
                     'permission_denied',
                     'not_installed',
                     'unsupported',
                     'submitted_unconfirmed',
                     'rejected',
                 ):
-                    self.detail = receipt['result']
+                    self.detail = outcome
             except Exception:
                 self.result = 'unconfirmed'
             finally:
