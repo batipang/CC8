@@ -74,14 +74,16 @@ class WebEvidenceTests(unittest.TestCase):
         self.assertEqual(self.sources()[0]['access_evidence'], 'answer_link_only')
 
     def test_actual_reader_receipt_exposes_text_and_labels_without_verifying_facts(self):
-        receipt = self.page()
+        receipt = self.page(modification_labels=['2026-11-11', '2026-11-11', 'bad\udfff', 5])
         self.evidence.page(receipt)
         receipt['text'] = 'Mutated after receipt'
         receipt['publication_labels'].append('mutated')
+        receipt['modification_labels'].append('2026-11-12')
         row = self.sources()[0]
         self.assertEqual(row['access_evidence'], 'page_body_received')
         self.assertEqual(row['page_excerpt'], 'Actual source text')
         self.assertEqual(row['page_dates'], '2026-11-10')
+        self.assertEqual(row['page_modified_dates'], '2026-11-11')
         self.assertEqual(row['published_at'], '')
         self.assertIs(row['body_verified'], False)
         self.assertEqual(row['event_at'], '')
@@ -194,11 +196,12 @@ class WebEvidenceTests(unittest.TestCase):
         self.assertEqual(self.sources()[0]['access_evidence'], 'answer_link_only')
 
     def test_later_failed_read_does_not_keep_the_old_success_label(self):
-        self.evidence.page(self.page())
+        self.evidence.page(self.page(modification_labels=['2026-11-11']))
         self.evidence.page(dict(ok=False, url=self.url, error='http_error'))
         row = self.sources()[0]
         self.assertEqual(row['access_evidence'], 'page_fetch_failed')
         self.assertEqual(row['page_excerpt'], '')
+        self.assertEqual(row['page_modified_dates'], '')
         self.assertIsNone(row['page_text_chars'])
         self.assertIsNone(row['page_text_truncated'])
 

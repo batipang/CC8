@@ -59,6 +59,8 @@ Dot 新增 `cc8_read_source` 只读工具，可在当前事实查询中读取实
 
 部分新闻页用 [Parse.ly `parsely-pub-date`](https://docs.parse.ly/installation-resources/parsely-integration/metadata/metatags/) 标注发布日期。符合 ISO 日期格式的值按原时区显示。`og:updated_time` 和未明确标为发布日期的 `time` 元素不进入发布日期列表。NASA 新闻稿实测读取到 `2026-04-11T02:31:50Z`，页面另标有 5 月 7 日更新时间。[NASA 新闻稿](https://www.nasa.gov/news-release/nasa-welcomes-record-setting-artemis-ii-moonfarers-back-to-earth/)
 
+来源详情将页面标注的发布日期和更新日期分行显示。更新日期仅来自明确的 HTML 标记或已匹配正文的 JSON-LD 文章，保留原时区和相互冲突的值。无效字段不影响已读取的正文；HTTP `Last-Modified`、推荐文章的更新和未标明用途的日期均不进入该字段。重新读取失败后清除旧标注，事件日期继续单独显示。见 [Open Graph 文章属性](https://ogp.me/#type_article) 与 [Schema.org `dateModified`](https://schema.org/dateModified)。
+
 ## 真实 Dot 文字链路复核
 
 2026-11-14 在主分支提交 `18ce3c7` 上，从五个独立临时 Dot 会话发起固定文字问题，用公开页面核对回答，再检查同回合来源事件。五组均取得正确的关键事实和预期回执，查询与来源汇总时间均为北京时间。来源事件覆盖四个成功读取的网页、跳转后的最终网址及两次实际 404；失败页的摘录为空。未启用麦克风、语音合成或 CC8 屏幕。

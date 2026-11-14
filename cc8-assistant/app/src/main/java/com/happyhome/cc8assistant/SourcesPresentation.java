@@ -9,6 +9,7 @@ import org.json.JSONObject;
 final class SourcesPresentation {
   static final class Source {
     final String title, url, evidence, observedAt, publishedAt, pageExcerpt, pageDates, finalUrl;
+    final String pageModifiedDates;
     final boolean pageRead, detailLimited, listLimited;
     final int pageBytes, textChars, shownChars, httpStatus;
     final Boolean textTruncated;
@@ -22,6 +23,7 @@ final class SourcesPresentation {
       publishedAt = text(row.opt("published_at"), 64);
       pageExcerpt = text(row.opt("page_excerpt"), 2000);
       pageDates = text(row.opt("page_dates"), 519); // Eight 64-scalar labels and seven separators.
+      pageModifiedDates = text(row.opt("page_modified_dates"), 519);
       String target = text(row.opt("final_url"), 2048);
       finalUrl = safeUrl(target) ? target : "";
       int bytes = integer(row.opt("page_bytes"), 1048576);
@@ -96,8 +98,10 @@ final class SourcesPresentation {
           + "；事件日期未知"
           + (pageRead
               ? coverageDetails()
-                  + "\n页面日期标注："
+                  + "\n页面发布日期标注："
                   + (pageDates.isEmpty() ? "未提供或未展示" : pageDates)
+                  + "\n页面更新日期标注："
+                  + (pageModifiedDates.isEmpty() ? "未提供或未展示" : pageModifiedDates)
                   + "\n这是页面自述，不是事件日期的核实结果。"
                   + (finalUrl.isEmpty() || finalUrl.equals(url) ? "" : "\n读取的最终地址：" + finalUrl)
                   + "\n\n正文摘录（可能不完整）：\n"

@@ -44,11 +44,12 @@ public class SourceCheck {
  yes(s.heading().startsWith("检索返回时间"),"actual search timestamp lost basis");
  JSONObject read=new JSONObject("title","已读取页面","url",url,"access_evidence","page_body_received",
   "observed_at","2026-11-10T20:00:00+08:00","page_bytes",577,"page_excerpt","实际页面文本",
-  "page_dates","2026-11-10；2026-11-09","final_url","https://other.example/final");
+  "page_dates","2026-11-10；2026-11-09","page_modified_dates","2026-11-12","final_url","https://other.example/final");
  s=new SourcesPresentation(new JSONArray(read),"now","answer_completed",null,4,9);
  yes(s.at(0).summary().contains("HTTP 页面已读取，事实仍需核对"),"HTTP receipt became fact verification or was hidden");
  yes(s.at(0).label().contains("实际页面文本")&&s.at(0).label().contains("事件日期未知")&&s.at(0).label().contains("https://other.example/final"),"real text, unknown event date or redirect receipt lost");
- read.data.put("page_excerpt","mutated");read.data.put("page_dates","mutated");
+ yes(s.at(0).label().contains("页面发布日期标注：2026-11-10；2026-11-09")&&s.at(0).label().contains("页面更新日期标注：2026-11-12"),"publication and modification were conflated");
+ read.data.put("page_excerpt","mutated");read.data.put("page_dates","mutated");read.data.put("page_modified_dates","mutated");
  yes(!s.at(0).label().contains("mutated"),"mutable page data rewrote the source view");
  read.data.put("page_bytes",true);
  yes(!new SourcesPresentation(new JSONArray(read),"","",null,4,9).at(0).summary().contains("HTTP 页面已读取"),"malformed page receipt promoted");

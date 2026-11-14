@@ -6,7 +6,7 @@ independent proof that a cited claim or the page body was verified.
 """
 
 from web_search import now, public_url, source_key
-from source_page import FAILURE_CODES, MAX_TEXT, visible_text
+from source_page import FAILURE_CODES, MAX_TEXT, iso_date_label, visible_text
 import threading
 import json
 import re
@@ -58,6 +58,9 @@ class WebEvidence:
                 truncated = receipt.get('text_truncated')
                 if type(truncated) is not bool or (truncated and len(text) != MAX_TEXT):
                     truncated = None
+                updated = receipt.get('modification_labels')
+                if not isinstance(updated, list) or len(updated) > 8:
+                    updated = []
                 row.update(
                     ok=True,
                     final_url=final,
@@ -65,6 +68,7 @@ class WebEvidence:
                     text_chars=len(text),
                     text_truncated=truncated,
                     dates='；'.join(visible_text(v) for v in dates),
+                    updated_dates='；'.join(dict.fromkeys(v for v in updated if iso_date_label(v))),
                     size=size,
                 )
             elif receipt.get('ok') is not False:
@@ -169,6 +173,7 @@ class WebEvidence:
                     observed_at=read['observed_at'],
                     page_excerpt=read.get('excerpt', ''),
                     page_dates=read.get('dates', ''),
+                    page_modified_dates=read.get('updated_dates', ''),
                     page_bytes=read.get('size', 0),
                     final_url=read.get('final_url', ''),
                     page_text_chars=read.get('text_chars'),
@@ -184,7 +189,7 @@ class WebEvidence:
         def size():
             return len(json.dumps(result, ensure_ascii=False).encode('utf-8'))
 
-        for key in ('page_excerpt', 'page_dates', 'final_url'):
+        for key in ('page_excerpt', 'page_modified_dates', 'page_dates', 'final_url'):
             if size() <= 56000:
                 break
             for row in reversed(result):
