@@ -61,12 +61,13 @@ def feedback(stage, kind, *, unconfirmed=False, input_source=None):
     if input_source not in (None, 'mac_window'):
         raise ValueError('Invalid input source')
     if stage == 'vision' and input_source == 'mac_window':
-        return FailureFeedback(
-            stage,
-            kind,
-            'Mac 窗口输入未完成。请在 Mac 系统面板重新选择一个仍打开的窗口，核对预览后点击发送；'
-            '如系统提示权限，请在 Mac 核对屏幕录制权限。本次不会改抓全屏或自动重试。',
-        )
+        message = {
+            'credential_or_permission': (
+                'Mac 未授予屏幕录制权限。请在 Mac 的系统设置中核对屏幕录制权限，再重新发起窗口输入。'
+            ),
+            'timeout': 'Mac 窗口选择已超时。请重新发起，选好窗口并在预览中确认发送。',
+        }.get(kind, 'Mac 未能取得选定窗口的画面。请重新选择一个仍打开的窗口，核对预览后发送。')
+        return FailureFeedback(stage, kind, message)
     if unconfirmed:
         return FailureFeedback(
             stage,

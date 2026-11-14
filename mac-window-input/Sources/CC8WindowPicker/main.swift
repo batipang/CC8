@@ -46,8 +46,9 @@ final class PickerObserver: NSObject, SCContentSharingPickerObserver {
         }
     }
     func contentSharingPickerStartDidFailWithError(_ error: Error) {
+        let outcome = captureFailure(error)
         DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }; self.owner?.pickerCancelled(self)
+            guard let self = self else { return }; self.owner?.pickerFailed(self, outcome: outcome)
         }
     }
 }
@@ -163,6 +164,10 @@ final class PickerApplication: NSObject, NSApplicationDelegate, NSWindowDelegate
         if detach(current) { finish(status: "cancelled") }
     }
 
+    func pickerFailed(_ current: PickerObserver, outcome: String) {
+        if detach(current) { finish(status: outcome) }
+    }
+
     private func clearPreview() {
         previewTicket = nil
         previewApplication = nil
@@ -219,13 +224,19 @@ final class PickerApplication: NSObject, NSApplicationDelegate, NSWindowDelegate
         config.width = dimensions.0; config.height = dimensions.1
         config.capturesAudio = false; config.captureMicrophone = false
         config.showsCursor = false; config.ignoreShadowsSingleWindow = true
-        SCScreenshotManager.captureImage(contentFilter: filter, configuration: config) { [weak self] image, _ in
+        SCScreenshotManager.captureImage(contentFilter: filter, configuration: config) { [weak self] image, error in
+            let outcome = captureFailure(error)
             // Encoding only the selected image runs off the UI thread. Both the
             // attempt ticket and original window identity are checked afterwards.
             DispatchQueue.global(qos: .userInitiated).async {
-                let encoded = image.flatMap { try? WindowImage.encode($0) }
+                let encoded = error == nil ? image.flatMap { try? WindowImage.encode($0) } : nil
                 DispatchQueue.main.async {
                     guard let self = self, !self.terminal else { return }
+                    if outcome == "permission_denied" {
+                        guard self.lease.phase == .selecting else { return }
+                        self.finish(status: outcome)
+                        return
+                    }
                     guard self.stillExists(identity, application: runningApplication) else {
                         self.revokeSelection(current.ticket)
                         return

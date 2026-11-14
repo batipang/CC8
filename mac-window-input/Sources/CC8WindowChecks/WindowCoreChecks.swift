@@ -1,6 +1,7 @@
 import Foundation
 import CoreGraphics
 import ImageIO
+import ScreenCaptureKit
 import CC8WindowCore
 
 private final class SelectionChecks {
@@ -146,6 +147,16 @@ private struct CheckFailure: Error, CustomStringConvertible {
 /// Shared assertions for XCTest CI and CLT-only development; no screen or capture APIs.
 public enum WindowCoreChecks {
     public static func runAll(report: (String) -> Void = { _ in }) throws {
+        let denied = NSError(domain: SCStreamError.errorDomain, code: SCStreamError.Code.userDeclined.rawValue)
+        let differentDomain = NSError(domain: "fixture", code: denied.code)
+        let differentCode = NSError(domain: denied.domain, code: denied.code - 1000)
+        guard captureFailure(denied) == "permission_denied",
+              captureFailure(differentDomain) == "capture_failed",
+              captureFailure(differentCode) == "capture_failed",
+              captureFailure(nil) == "capture_failed" else {
+            throw CheckFailure(message: "ScreenCaptureKit permission outcome was misclassified")
+        }
+        report("PASS testOnlyScreenCaptureKitDenialIndicatesMissingPermission")
         do {
             let checks = SelectionChecks()
             try checks.testRevokedSourceClearsPreviewAndRejectsLateCapture()
