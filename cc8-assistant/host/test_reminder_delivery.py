@@ -171,6 +171,60 @@ os._exit(23)
         self.tick()
         self.assertEqual(len(self.jobs), 2)
 
+    def test_clock_rollback_cannot_rearm_uncertain_occurrence_by_editing_metadata(self):
+        original = self.create()
+        self.now += timedelta(minutes=2)
+        self.tick()
+        claimed = deepcopy(self.scheduler.claims)
+        for status in ('delivering', 'unconfirmed'):
+            if status == 'unconfirmed':
+                self.jobs[0].done.set()
+                self.tick()
+            self.now -= timedelta(minutes=3)
+            unchanged = self.path.read_bytes()
+            for edit in (
+                {'title': '改名'},
+                {'channel': 'desktop'},
+                {'due': '2026-11-09T04:01:00+00:00'},
+                {'due': '2026-11-09T04:01:00.001+00:00'},
+            ):
+                with (
+                    self.subTest(status=status, edit=edit),
+                    self.assertRaisesRegex(ValueError, '明确选择'),
+                ):
+                    self.board.reminder({'action': 'update', 'id': original['id'], **edit})
+                self.assertEqual(self.path.read_bytes(), unchanged)
+                self.assertEqual(self.board.snapshot()['reminders'][0]['status'], status)
+            self.now += timedelta(minutes=3)
+        historical = deepcopy(self.board.reminders[0]['delivery_attempt'])
+        with patch('threading.Thread.start'):
+            bridge = Bridge(None, None, workspace=self.board)
+        bridge.session.connection = object()
+        events = []
+        bridge.event = lambda name, **fields: events.append((name, fields))
+        bridge.on_event(
+            {
+                'event': 'reminder_action',
+                'arguments': {'action': 'update', 'id': original['id'], 'title': '只改标题'},
+            }
+        )
+        self.assertEqual(events[-1][0], 'workspace_result')
+        self.assertFalse(events[-1][1]['ok'])
+        self.assertIn('明确选择新的提醒时间', events[-1][1]['message'])
+        self.now += timedelta(minutes=1)
+        self.board.reminder(
+            {
+                'action': 'update',
+                'id': original['id'],
+                'channel': 'desktop',
+                'due': (self.now + timedelta(minutes=8)).isoformat(),
+            }
+        )
+        self.assertEqual(self.board.reminders[0]['delivery_attempt'], historical)
+        self.assertEqual(self.board.reminders[0]['status'], 'pending')
+        self.assertFalse(self.board.finish_reminders(claimed, True))
+        self.assertEqual(len(self.jobs), 1)
+
     def test_history_uses_last_state_change_instead_of_original_creation_order(self):
         first = self.create()
         self.now += timedelta(minutes=1)
