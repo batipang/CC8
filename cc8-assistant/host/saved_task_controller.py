@@ -1,5 +1,6 @@
 """One bounded archive worker; selected result writes do not replay tasks or audio."""
 
+from contextlib import contextmanager
 from copy import deepcopy
 from collections import deque
 from dataclasses import dataclass
@@ -116,6 +117,13 @@ class SavedTaskController:
         def current():
             return connection is self.hooks.connection() and owner == self.hooks.owner_scope()
 
+        @contextmanager
+        def reveal_guard():
+            with self.hooks.lock:
+                if not current():
+                    raise ValueError('File location owner changed before launch')
+                yield
+
         try:
             fields = {'ok': True, 'action': action}
             if action in DESKTOP_ACTIONS:
@@ -139,7 +147,7 @@ class SavedTaskController:
                     confirm_open(process)
                     fields['open_requested'] = True
                 else:
-                    self.hooks.reveal(task, file_index)
+                    self.hooks.reveal(task, file_index, launch_guard=reveal_guard)
                     fields['revealed'] = True
             elif action == 'save':
                 item = self.store.save(task)
