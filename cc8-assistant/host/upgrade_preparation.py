@@ -365,12 +365,21 @@ def verify_assistant_transition(
 def backup(profile, source_root=ROOT):
     # Reuse bounded configuration validation before constructing the snapshot.
     values, legacy = read_profile(Path(profile), private=True)
+    source_root = Path(source_root).absolute()
+    defaults_path = source_root / 'cc8-assistant/host/voice-config.json'
+    # Back up the source checkout's settings layer, even when the backup
+    # command itself comes from a release with different repository defaults.
+    defaults, _ = (
+        read_profile(defaults_path, private=False)
+        if defaults_path.exists() or defaults_path.is_symlink()
+        else ({}, False)
+    )
     settings = {
         'schema_version': 1,
         **{name: field.default for name, field in FIELDS.items()},
+        **defaults,
         **values,
     }
-    source_root = Path(source_root).absolute()
     # Pin references to their original workspace, without opening key contents.
     for name in ('credential_file', 'signing_keystore'):
         raw = settings[name]

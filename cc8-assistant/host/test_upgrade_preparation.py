@@ -552,6 +552,47 @@ class UpgradeTests(unittest.TestCase):
             for path in (target, staged):
                 self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
+    def test_backup_preserves_original_checkout_defaults_and_private_precedence(self):
+        from configuration import load_config
+
+        with tempfile.TemporaryDirectory() as folder:
+            source_root, target_root = self.manifests(folder)
+            source_defaults = source_root / 'cc8-assistant/host/voice-config.json'
+            source_defaults.parent.mkdir(parents=True)
+            source_defaults.write_text(
+                '{"schema_version":1,"asr":"sensevoice","tts_speed":0.9,"tls_port":18880}'
+            )
+            target_defaults = target_root / 'cc8-assistant/host/voice-config.json'
+            target_defaults.parent.mkdir(parents=True)
+            target_defaults.write_text('{"schema_version":1,"asr":"minimax","tls_port":18881}')
+            source_profile = self.profile(folder)
+            raw = source_profile.read_bytes()
+            source = load_config(source_root, {'CC8_CONFIG_FILE': str(source_profile)})
+            value = upgrade.backup(source_profile, source_root)
+            backup, restored = Path(folder) / 'backup.json', Path(folder) / 'restored.json'
+            upgrade.output(value, backup)
+            code, _, error = self.invoke(['stage-restore', str(backup), '--output', str(restored)])
+            self.assertEqual(code, 0, error)
+            target = load_config(target_root, {'CC8_CONFIG_FILE': str(restored)})
+            self.assertEqual(
+                (source.asr, source.tls_port, source.tts_speed), ('sensevoice', 18880, 1.2)
+            )
+            self.assertEqual(
+                (target.asr, target.tls_port, target.tts_speed),
+                (source.asr, source.tls_port, source.tts_speed),
+            )
+            self.assertEqual(source_profile.read_bytes(), raw)
+
+    def test_invalid_source_repository_defaults_stop_backup(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = self.profile(folder)
+            defaults = root / 'cc8-assistant/host/voice-config.json'
+            defaults.parent.mkdir(parents=True)
+            defaults.write_text('{"schema_version":1,"brain":"unrecognized"}')
+            with self.assertRaises(upgrade.ConfigError):
+                upgrade.backup(source, root)
+
     def test_backup_reads_no_credential_or_key_contents_and_ignores_environment_overrides(self):
         with tempfile.TemporaryDirectory() as folder:
             source = self.profile(folder)
