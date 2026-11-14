@@ -639,11 +639,10 @@ class Workspace:
             before = self.reminders
             working = deepcopy(self.reminders)
             changed = False
+            max_late = timedelta(minutes=self.reminder_policy['max_late_minutes'])
             for item in working:
                 due = self._date(item['due'])
-                if item['status'] != 'pending' or now - due <= timedelta(
-                    minutes=self.reminder_policy['max_late_minutes']
-                ):
+                if item['status'] != 'pending' or now - due <= max_late:
                     continue
                 item['delivery_attempt'] = {
                     'id': uuid.uuid4().hex,
@@ -651,11 +650,22 @@ class Workspace:
                     'started_at': now.isoformat(timespec='seconds'),
                     'finished_at': now.isoformat(timespec='seconds'),
                     'result': 'missed',
+                    'channel': item.get('channel', 'cc8'),
                 }
                 if item['repeat'] == 'none':
                     item['status'] = 'missed'
                 else:
-                    self._advance_repeat(item)
+                    step = 7 if item['repeat'] == 'weekly' else 1
+                    latest = due + timedelta(days=((now - due).days // step) * step)
+                    while item['repeat'] == 'weekdays' and latest.weekday() > 4:
+                        latest -= timedelta(days=1)
+                    if latest > due and now - latest <= max_late:
+                        # Old occurrences expired during downtime. The newest
+                        # occurrence can still be eligible in its own window.
+                        item['due'] = latest.isoformat(timespec='seconds')
+                        item.pop('retry_after', None)
+                    else:
+                        self._advance_repeat(item)
                 item['revision'] += 1
                 item['updated_at'] = self.now().isoformat(timespec='seconds')
                 changed = True
