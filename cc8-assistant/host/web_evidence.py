@@ -10,8 +10,30 @@ from source_page import FAILURE_CODES, MAX_TEXT, visible_text
 import threading
 import json
 import re
+from urllib.parse import urlsplit
 
 MAX_ACTIONS = 64
+
+
+def source_key(url):
+    # Compare public URLs already accepted by public_url. Limit equivalence to
+    # DNS host case, an explicit default port, and the empty root path.
+    parts = urlsplit(url)
+    host = parts.hostname
+    if not host or not re.fullmatch(r'[a-z0-9.-]+', host):
+        return url
+    authority = parts.netloc.lower()
+    port = parts.port
+    if authority not in (host, f'{host}:{port}'):
+        return url
+    default_port = 443 if parts.scheme == 'https' else 80
+    return (
+        parts.scheme,
+        host,
+        default_port if port is None else port,
+        parts.path or '/',
+        parts.query,
+    )
 
 
 class WebEvidence:
@@ -23,12 +45,12 @@ class WebEvidence:
 
     def page(self, receipt):
         """Accept only the local public-reader result, never model-written fields."""
-        if not isinstance(receipt, dict) or public_url(receipt.get('url')) is None:
+        if not isinstance(receipt, dict) or (url := public_url(receipt.get('url'))) is None:
             return
         with self.page_lock:
             if len(self.pages) >= 4:
                 return
-            row = {'url': receipt['url'], 'observed_at': self.clock(), 'ok': False}
+            row = {'url': url, 'observed_at': self.clock(), 'ok': False}
             if receipt.get('ok') is True:
                 text, dates = receipt.get('text'), receipt.get('publication_labels')
                 size = receipt.get('received_bytes')
@@ -118,11 +140,20 @@ class WebEvidence:
             return result
         with self.page_lock:
             pages = tuple(self.pages)
+        reads_by_url = {}
+        for row in pages:
+            reads_by_url[source_key(row['url'])] = row
+            if row.get('final_url'):
+                reads_by_url[source_key(row['final_url'])] = row
+        actions_by_url = {source_key(row['url']): row for row in self.actions.values()}
         for link in links[:30]:
             if not isinstance(link, dict):
                 continue
             url = public_url(link.get('url'))
-            if url is None or url in seen:
+            if url is None:
+                continue
+            key = source_key(url)
+            if key in seen:
                 continue
             title = link.get('title')
             if (
@@ -131,13 +162,11 @@ class WebEvidence:
                 or re.search(r'[\x00-\x1f\x7f-\x9f\ud800-\udfff]', title)
             ):
                 continue
-            seen.add(url)
+            seen.add(key)
             # A later failed access supersedes an earlier completed action for
             # this URL. Neither state establishes article or event dates.
-            matching = [row for row in self.actions.values() if row['url'] == url]
-            receipt = matching[-1] if matching else None
-            reads = [row for row in pages if url in (row['url'], row.get('final_url'))]
-            read = reads[-1] if reads else None
+            receipt = actions_by_url.get(key)
+            read = reads_by_url.get(key)
             result.append(
                 {
                     'title': title,
