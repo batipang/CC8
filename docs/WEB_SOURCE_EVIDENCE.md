@@ -49,6 +49,6 @@ Dot 新增 `cc8_read_source` 只读工具，可在当前事实查询中读取实
 
 若一次公开读取经过跳转后失败，回执同时关联原始链接和最后实际尝试的公网地址。后一次失败会清除这两个引用所关联的旧正文。被拒绝的跳转目标不参与关联，HTTP 状态仍只来自实际取得的终点响应。
 
-来源详情也可显示 [Schema.org `datePublished`](https://schema.org/datePublished) 的原始日期标注。读取器最多检查四段内联 JSON-LD，每段最多 16,384 字符，仅接受声明 Schema.org 上下文且含单一 `Article`、`NewsArticle` 或 `BlogPosting` 的对象或顶层 `@graph`。HTML 日期与结构化日期不同时并列显示，`dateModified` 和事件日期各自保留原有语义。重复字段、多个文章对象、无效日期和超限段落会被忽略。JSON-LD 只按数据解析，日期以外的内容不加入正文摘录，不请求外部上下文。
+来源详情也可显示 [Schema.org `datePublished`](https://schema.org/datePublished) 的原始日期标注。读取器最多检查四段内联 JSON-LD，每段最多 16,384 字符，只考虑声明 Schema.org 上下文的 `Article`、`NewsArticle` 或 `BlogPosting` 对象及顶层 `@graph` 内的文章。跨这些块核对文章的 `mainEntityOfPage`，缺少时用 `url`，优先采用唯一指向本次实际读取最终地址的文章。若整页只识别到一篇且没有这两个字段，仍保留它的日期标注。显式指向其他地址或无法从多篇中确认归属时省略结构化日期。HTML 日期与结构化日期不同时并列显示，`dateModified` 和事件日期各自保留原有语义。重复字段、无效日期和超限段落会被忽略。JSON-LD 只按数据解析，日期以外的内容不加入正文摘录，不请求外部上下文。
 
 部分新闻页用 [Parse.ly `parsely-pub-date`](https://docs.parse.ly/installation-resources/parsely-integration/metadata/metatags/) 标注发布日期。符合 ISO 日期格式的值按原时区显示。`og:updated_time` 和未明确标为发布日期的 `time` 元素不进入发布日期列表。NASA 新闻稿实测读取到 `2026-04-11T02:31:50Z`，页面另标有 5 月 7 日更新时间。[NASA 新闻稿](https://www.nasa.gov/news-release/nasa-welcomes-record-setting-artemis-ii-moonfarers-back-to-earth/)

@@ -5,35 +5,13 @@ publication timestamps. A completed page action must never be presented as
 independent proof that a cited claim or the page body was verified.
 """
 
-from web_search import now, public_url
+from web_search import now, public_url, source_key
 from source_page import FAILURE_CODES, MAX_TEXT, visible_text
 import threading
 import json
 import re
-from urllib.parse import urlsplit
 
 MAX_ACTIONS = 64
-
-
-def source_key(url):
-    # Compare public URLs already accepted by public_url. Limit equivalence to
-    # DNS host case, an explicit default port, and the empty root path.
-    parts = urlsplit(url)
-    host = parts.hostname
-    if not host or not re.fullmatch(r'[a-z0-9.-]+', host):
-        return url
-    authority = parts.netloc.lower()
-    port = parts.port
-    if authority not in (host, f'{host}:{port}'):
-        return url
-    default_port = 443 if parts.scheme == 'https' else 80
-    return (
-        parts.scheme,
-        host,
-        default_port if port is None else port,
-        parts.path or '/',
-        parts.query,
-    )
 
 
 class WebEvidence:
