@@ -130,8 +130,39 @@ HANDOFF_TARGET = re.compile(
     PREFIX + CONTINUE_PREFIX + r'(本次汇报的|这次汇报的|汇报的)?第' + INDEX + r'项'
 )
 HANDOFF_SEPARATOR = re.compile(r'^[，,。；;\s]*(?:下一步[：:]\s*)?')
+RECENT_PROJECT = r'刚才(?:那个|的)(?:项目|工作|任务)'
+OTHER_TARGET = re.compile('第' + INDEX + '项|' + RECENT_PROJECT)
+PROJECT_DETAILS = re.compile(
+    PREFIX + r'(?:详细说说|详细介绍|展开|查看|说说)?' + RECENT_PROJECT + r'(?:的?(?:详情|结果))?'
+)
+PROJECT_EVIDENCE = re.compile(
+    PREFIX
+    + r'(?:查看|核对|说说)?'
+    + RECENT_PROJECT
+    + r'(?:的?(?:执行回执|核验状态|验证情况|测试结果)|(?:是否|有没有)?通过(?:了)?测试)'
+)
+PROJECT_CONTINUE = re.compile(
+    PREFIX + CONTINUE_PREFIX + RECENT_PROJECT + r'(?:[，,；;]\s*下一步[：:]\s*(.+))?'
+)
+PROJECT_FALLBACK = re.compile(
+    PREFIX + r'(?:继续|推进|继续推进|继续做|接着做|详细说说|详细介绍|展开|查看|说说)?'
+    r'(?:刚才那个|刚才的|之前那个|之前的|那个)(?:项目|工作|任务)(.*)'
+)
+PROJECT_OPERATIONS = {
+    'project_item': 'item',
+    'project_evidence': 'item_evidence',
+    'project_continue': 'continue',
+}
 SNAPSHOT_FOLLOWUPS = frozenset(
-    ('item', 'item_evidence', 'item_queue', 'item_choice', 'continue', 'active_sources')
+    (
+        'item',
+        'item_evidence',
+        'item_queue',
+        'item_choice',
+        'continue',
+        'active_sources',
+        *PROJECT_OPERATIONS,
+    )
 )
 STALE_FOLLOWUP = '本次汇报已更换，请按当前汇报的编号重新选择。'
 
@@ -188,7 +219,7 @@ def report_command(text, *, followup=False):
             return ReportCommand('item', ordinal(match[1]))
     if (match := HANDOFF_TARGET.match(original)) and (followup or match[1]):
         tail = original[match.end() :]
-        if re.search('第' + INDEX + '项', ''.join(tail.split())):
+        if OTHER_TARGET.search(''.join(tail.split())):
             return ReportCommand('item_choice')
         number = ordinal(match[2])
         draft = HANDOFF_SEPARATOR.sub('', tail, count=1).strip()
@@ -198,16 +229,30 @@ def report_command(text, *, followup=False):
     if followup and (match := CONTINUE.fullmatch(text)):
         index = next((value for value in match.groups() if value is not None), None)
         return ReportCommand('continue', ordinal(index) if index is not None else '')
+    if followup:
+        if PROJECT_EVIDENCE.fullmatch(text):
+            return ReportCommand('project_evidence')
+        if PROJECT_DETAILS.fullmatch(text):
+            return ReportCommand('project_item')
+        if match := PROJECT_CONTINUE.fullmatch(original):
+            draft = (match[1] or '').strip()
+            if OTHER_TARGET.search(''.join(draft.split())):
+                return ReportCommand('item_choice')
+            return ReportCommand(
+                'project_continue', draft if any(ch.isalnum() for ch in draft) else ''
+            )
+        if (match := PROJECT_CONTINUE.fullmatch(text)) and match[1] is None:
+            return ReportCommand('project_continue')
     if followup or '汇报' in text:
-        if re.fullmatch(
-            PREFIX
-            + r'(?:继续|推进|继续推进|继续做|接着做)?(?:刚才那个|刚才的|之前那个|之前的|那个)(?:项目|工作|任务).*',
-            text,
-        ):
-            return ReportCommand('continue' if SOURCE_ACTION.search(text) else 'item_choice')
+        if match := PROJECT_FALLBACK.fullmatch(text):
+            return ReportCommand(
+                'continue'
+                if not OTHER_TARGET.search(match[1]) and SOURCE_ACTION.search(text)
+                else 'item_choice'
+            )
         if match := CONTEXT_ITEM.match(text):
             rest = text[match.end() :]
-            if re.search('第' + INDEX + '项', rest):
+            if OTHER_TARGET.search(rest):
                 return ReportCommand('item_choice')
             if SOURCE_ACTION.search(rest) or text.startswith(('把', '将')):
                 return ReportCommand('continue', ordinal(match[1]))
@@ -408,19 +453,32 @@ class ReportVoice:
         self.hooks, self.clock, self.wall_clock = hooks, clock, wall_clock
         self.snapshot = None
         self.snapshot_token = None
+        self.selected_number = None
         self.followup = False
         self.revision = 0
         self.progress = self.delivery_plan = None
 
     def command(self, text):
         with self.hooks.lock:
-            return report_command(text, followup=self.followup)
+            return self.resolve_project(report_command(text, followup=self.followup))
 
-    def bind_followup(self, text):
+    def resolve_project(self, command):
+        if command is None or command.kind not in PROJECT_OPERATIONS:
+            return command
+        if self.selected_number is None:
+            return ReportCommand('item_choice')
+        number = self.selected_number
+        if command.kind == 'project_continue' and command.value:
+            return ReportCommand('continue', HandoffDraft(number, command.value))
+        return ReportCommand(PROJECT_OPERATIONS[command.kind], number)
+
+    def bind_followup(self, text, *, include_other_commands=False):
         with self.hooks.lock:
-            command = report_command(text, followup=self.followup)
+            command = self.resolve_project(report_command(text, followup=self.followup))
             if command is not None and command.kind in SNAPSHOT_FOLLOWUPS:
                 return BoundReportFollowup(command, self.snapshot_token)
+            if include_other_commands:
+                return BoundReportFollowup(command, None)
             if command is None and not self.followup:
                 potential = report_command(text, followup=True)
                 if potential is not None and potential.kind in SNAPSHOT_FOLLOWUPS:
@@ -434,6 +492,7 @@ class ReportVoice:
             self.hooks.revoked()
             self.snapshot, self.followup = None, False
             self.snapshot_token = None
+            self.selected_number = None
             self.delivery_plan = None
             self.revision += 1
 
@@ -448,6 +507,7 @@ class ReportVoice:
             self.hooks.revoked()
             self.snapshot, self.followup = None, True
             self.snapshot_token = None
+            self.selected_number = None
             self.delivery_plan = None
             self.revision += 1
             return self.revision
@@ -646,6 +706,7 @@ class ReportVoice:
                 return False
             self.snapshot = (context, self.clock() + 600, deepcopy(report))
             self.snapshot_token = object()
+            self.selected_number = None
             self.progress = progress if progress is not None else ReportProgress(source, report)
             self.delivery_plan = None
             self.followup = True
@@ -797,6 +858,9 @@ class ReportVoice:
         with self.hooks.lock:
             if self.progress is not None and self.progress.source is not self.hooks.context()[0]:
                 self.clear()
+            if bound is None and command.kind in PROJECT_OPERATIONS:
+                bound = BoundReportFollowup(self.resolve_project(command), self.snapshot_token)
+                command = bound.command
         if command.kind == 'period':
             return self.notice(
                 '请明确说“汇报过去半小时的工作”、“汇报今天的工作”、“汇报今天上午八点到上午十点的工作”或“汇报上次汇报后的工作”。'
@@ -811,6 +875,8 @@ class ReportVoice:
             return self.item_queue(command.value, is_current, bound=bound)
         if command.kind in ('item', 'item_evidence', 'continue', 'active_sources'):
             with self.hooks.lock:
+                if not is_current():
+                    raise Cancelled('Report cancelled')
                 context = self.hooks.context()
                 if bound is not None and self.snapshot_token is not bound.snapshot_token:
                     return self.notice(STALE_FOLLOWUP)
@@ -821,6 +887,7 @@ class ReportVoice:
                 ):
                     self.snapshot = None
                     self.snapshot_token = None
+                    self.selected_number = None
                     return self.notice('本次汇报尚未取得或已失效，请重新请求工作汇报。')
                 report = self.snapshot[2]
                 if command.kind == 'active_sources':
@@ -875,6 +942,7 @@ class ReportVoice:
                     return ReportReply(
                         text, (spoken,), source_title, 'desktop_handoff', provenance=provenance
                     )
+                self.selected_number = number
                 if command.kind == 'item_evidence':
                     lines = [f'第{number}项执行回执。']
                     if item.get('since_status') == 'cached_unheard':
@@ -948,6 +1016,7 @@ class ReportVoice:
                 return self.notice(str(error))
             previous = self.snapshot
             previous_token = self.snapshot_token
+            previous_number = self.selected_number
             revision = self.begin()
         report = self.hooks.read(source, window, is_current)
         with self.hooks.lock:
@@ -975,6 +1044,7 @@ class ReportVoice:
                     ):
                         self.snapshot = previous
                         self.snapshot_token = previous_token
+                        self.selected_number = previous_number
                     return self.notice(
                         '汇报账本已达256项容量，原待播记录保留；请先查看待播编号详情，再明确查询新的时间范围。'
                     )

@@ -116,7 +116,6 @@ class VoiceTests(unittest.TestCase):
             '请帮我把第二项重新运行测试',
             '第二项编译失败，帮我修一下',
             '将第2项发给同事',
-            '继续刚才那个项目',
         ):
             self.assertEqual(report_command(text, followup=True).kind, 'continue')
         self.assertEqual(
@@ -132,10 +131,51 @@ class VoiceTests(unittest.TestCase):
         )
         self.assertIsNone(report_command('设计一个按第二项编号展开的界面', followup=True))
         self.assertIsNone(report_command('继续讲故事', followup=True))
-        self.assertEqual(report_command('刚才那个项目的结果', followup=True).kind, 'item_choice')
+        self.assertEqual(report_command('刚才那个项目的结果', followup=True).kind, 'project_item')
         self.assertEqual(
             report_command('把第二项的结果读给我听', followup=True), ReportCommand('item', 2)
         )
+
+    def test_recent_project_uses_only_an_explicit_item_from_the_current_report(self):
+        voice = self.session()
+        self.assertIsNone(voice.command('说说刚才那个项目'))
+        voice.answer(ReportCommand('report', 'today'), lambda: True)
+        self.assertIn(
+            '指定本次汇报', voice.answer(voice.command('刚才那个项目'), lambda: True).text
+        )
+        voice.answer(voice.command('第二项是否通过了测试'), lambda: True)
+        self.assertEqual(voice.command('说说刚才那个项目'), ReportCommand('item', 2))
+        self.assertEqual(voice.command('刚才那个项目的测试结果'), ReportCommand('item_evidence', 2))
+        request = '继续刚才那个项目，下一步：核对 Android CI。'
+        followup = voice.bind_followup(request)
+        voice.answer(voice.command('第一项'), lambda: True)
+        reply = voice.answer(followup, lambda: True)
+        self.assertEqual(reply.provenance['turn_id'], 'turn-1')
+        self.assertIn('核对 Android CI。', reply.text)
+        self.assertNotIn('核对 Android CI', ''.join(reply.spoken))
+        self.assertEqual(voice.command('刚才那个项目'), ReportCommand('item', 1))
+        for ambiguous in ('继续刚才那个项目，下一步：执行第二项', '继续第二项和刚才那个项目'):
+            self.assertEqual(voice.command(ambiguous), ReportCommand('item_choice'))
+        self.assertEqual(self.reads, ['today'])
+
+    def test_recent_project_expires_with_its_snapshot_and_cannot_cross_sources(self):
+        for change in ('replace', 'route', 'expire', 'ordinary'):
+            with self.subTest(change=change):
+                voice = self.session()
+                voice.answer(ReportCommand('report', 'today'), lambda: True)
+                voice.answer(voice.command('第二项'), lambda: True)
+                followup = voice.bind_followup('继续刚才那个项目')
+                if change == 'replace':
+                    voice.remember(SOURCE, report('新结果'))
+                elif change == 'route':
+                    self.context[1] = object()
+                elif change == 'expire':
+                    self.now[0] = 600
+                else:
+                    voice.forget()
+                reply = voice.answer(followup, lambda: True)
+                self.assertIsNone(reply.provenance)
+                self.assertNotEqual(reply.operation, 'desktop_handoff')
 
     def test_explicit_handoff_draft_preserves_wording_and_rejects_multiple_targets(self):
         self.assertEqual(
@@ -546,6 +586,7 @@ class IntegrationTests(unittest.TestCase):
 
         cases = (
             (Reply, '继续第二项，下一步：检查旧结果'),
+            (Reply, '继续刚才那个项目，下一步：检查旧结果'),
             (TextReply, '查看这次汇报的第二项待办队列'),
             (Reply, '第二项是否通过了测试'),
         )
@@ -554,6 +595,8 @@ class IntegrationTests(unittest.TestCase):
                 _, bridge = self.session()
                 voice = bridge.chats.voice
                 list(bridge.brain.clauses('汇报今天的工作', []))
+                if '刚才那个项目' in text:
+                    list(bridge.brain.clauses('详细说说第二项', []))
                 bridge.enqueue_response(job_type(bridge.generation, text))
                 job = bridge.response.queue.get_nowait()
                 replacement = report('更新后的第一项', '更新后的第二项')

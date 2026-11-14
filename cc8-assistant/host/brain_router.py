@@ -239,7 +239,8 @@ class BrainRouter:
                 yield answer
                 return
         if report_followup is None and self.work_reports is not None:
-            command = self.work_reports.command(prompt)
+            report_followup = self.work_reports.bind_followup(prompt, include_other_commands=True)
+            command = report_followup.command
         if command is not None:
             self.last_metrics = {'provider': 'work_report', 'completed': False}
             try:
