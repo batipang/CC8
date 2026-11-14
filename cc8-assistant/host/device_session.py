@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 def complete_handshake(session: SessionController, j):
     hooks = session.hooks
     owner = hooks.owner_access()
+    echo = hooks.brain() is None
     if owner:
         hooks.meeting_peer(j.get('meeting_version'))
         hooks.visual().update_peer(j)
@@ -68,22 +69,23 @@ def complete_handshake(session: SessionController, j):
         transport=session.transport_kind,
         capture_frontend=frontend,
         playback_interrupted_by_transport=interrupted,
-        supports_dot_chat_handoff=owner,
-        supports_report_sources=owner,
-        supports_report_archive=owner,
-        supports_thread_queue=owner,
-        supports_report_progress=owner,
+        supports_dot_chat_handoff=owner and not echo,
+        supports_report_sources=owner and not echo,
+        supports_report_archive=owner and not echo,
+        supports_thread_queue=owner and not echo,
+        supports_report_progress=owner and not echo,
         supports_saved_task_results=owner,
         supports_preference_memory=owner,
         supports_vocabulary=owner,
-        supports_workflows=owner,
+        supports_workflows=owner and not echo,
         supports_meetings=owner
+        and not echo
         and type(j.get('meeting_version')) is int
         and j['meeting_version'] == 1,
         meeting_state=hooks.meeting_state() if owner else {},
-        supports_vision_modes=owner,
-        supports_photo_followup=owner,
-        supports_mac_window=owner and window_available(),
+        supports_vision_modes=owner and not echo,
+        supports_photo_followup=owner and not echo,
+        supports_mac_window=owner and not echo and window_available(),
         supports_result_provenance=owner,
         supports_result_reading=owner,
         voice_preferences=session.voice_preferences_state(),
@@ -114,7 +116,7 @@ def complete_handshake(session: SessionController, j):
     hooks.log('device_handshake_verified', transport=session.transport_kind)
     hooks.event(
         'brain_provider',
-        provider=getattr(hooks.brain(), 'selected', 'minimax') if owner else 'guest_minimax',
+        provider=getattr(hooks.brain(), 'selected', 'echo') if owner else 'guest_minimax',
     )
     hooks.publish_workspace()
     hooks.save_status()

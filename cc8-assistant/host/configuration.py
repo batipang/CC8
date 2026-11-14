@@ -172,6 +172,11 @@ def load_config(root: Path = ROOT, environ: Mapping[str, str] | None = None) -> 
             values[name] = from_environment(name, env[key])
             sources[name] = 'environment'
     values = {name: validate_value(name, value) for name, value in values.items()}
+    if values['brain'] == 'echo' and values['asr'] == 'minimax':
+        if sources['asr'] in ('environment', 'private'):
+            raise ConfigError('asr', 'echo_requires_local_recognition')
+        values['asr'] = 'sensevoice'
+        sources['asr'] = 'local_profile'
     # Every value passed the schema above, including defaults and normalized numeric
     # environment overrides; these casts cross from the heterogeneous schema map.
     return RuntimeConfig(

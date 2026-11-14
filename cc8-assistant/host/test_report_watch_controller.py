@@ -216,11 +216,14 @@ class WatchControllerTests(unittest.TestCase):
             with patch('bridge.run_app', side_effect=lambda dependencies: dependencies):
                 dependencies = production.run_backend()
             with patch('bridge.Bridge') as construct:
-                dependencies.bridge(None, None)
+                dependencies.bridge(None, object())
                 store = construct.call_args.kwargs['report_watch_store']
                 self.assertIsInstance(store, ReportWatchStore)
                 self.assertEqual(store.path, Path(folder) / 'work-report-watch.json')
                 self.assertFalse(store.path.exists())
+                dependencies.bridge(None, None)
+                self.assertTrue(construct.call_args.kwargs['local_mode'])
+                self.assertNotIn('report_watch_store', construct.call_args.kwargs)
 
     def test_background_observation_commits_take_the_same_owner_before_store_lock_as_ui(self):
         for kind in ('empty', 'error'):

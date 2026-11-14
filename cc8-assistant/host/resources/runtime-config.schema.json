@@ -36,7 +36,8 @@
       },
       "enum": [
         "dot",
-        "minimax"
+        "minimax",
+        "echo"
       ]
     },
     "capture_frontend": {

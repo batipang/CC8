@@ -168,6 +168,7 @@ class InterruptedTaskNoticeTests(unittest.TestCase):
             'private void showTasks(',
         )
         helpers = (
+            'private String brainLabel(',
             'private boolean hasRunningTask(',
             'private void showUnconfirmedTaskNotice(',
             'private void showTaskList(',

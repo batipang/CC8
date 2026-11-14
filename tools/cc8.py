@@ -139,6 +139,15 @@ def setup(args, root=ROOT):
     return 0
 
 
+def local_voice_tools():
+    if platform.system() != 'Darwin' or not shutil.which('ffmpeg', path=command_path()):
+        return False
+    voices = subprocess.run(
+        ['/usr/bin/say', '-v', '?'], capture_output=True, text=True, timeout=10, check=True
+    ).stdout
+    return any(re.match(r'^Tingting\s', line) for line in voices.splitlines())
+
+
 def verified_models(root, engine):
     def digest(path):
         value = hashlib.sha256()
@@ -367,11 +376,18 @@ def doctor(profile, root=ROOT):
                         lambda: verified_english_wake_model(root),
                         'Provide the pinned local Whisper snapshot; see docs/LOCAL_WAKE.md',
                     )
-                check(
-                    'minimax_credential_format',
-                    lambda: credential_ready(config, os.environ),
-                    'Configure owner-only MiniMax credential reference; see docs/CONFIGURATION.md',
-                )
+                if config.brain == 'echo':
+                    check(
+                        'local_voice_tools',
+                        local_voice_tools,
+                        'Install macOS Tingting voice and ffmpeg; see docs/CONFIGURATION.md',
+                    )
+                else:
+                    check(
+                        'minimax_credential_format',
+                        lambda: credential_ready(config, os.environ),
+                        'Configure owner-only MiniMax credential reference; see docs/CONFIGURATION.md',
+                    )
                 if config.brain == 'dot':
                     check(
                         'dot_tools',

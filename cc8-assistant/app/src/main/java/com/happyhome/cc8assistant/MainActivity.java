@@ -170,6 +170,10 @@ public final class MainActivity extends Activity
   }
 
   private void showIdentity() {
+    if ("echo".equals(brainProvider) && session.ownerMode()) {
+      showBrainSelector();
+      return;
+    }
     String message =
         session.identityLabel() + "\n访客仅使用 MiniMax 独立问答，不读取主人记录或操作桌面。\n恢复主人模式需在 Mac 发起。切换后麦克风保持关闭。";
     LargeDialogBuilder builder = new LargeDialogBuilder(this, true);
@@ -1914,7 +1918,20 @@ public final class MainActivity extends Activity
     return result;
   }
 
+  private String brainLabel(boolean connected) {
+    if ("echo".equals(brainProvider)) return "本机复述";
+    return "dot".equals(brainProvider) ? (connected ? "Dot 已连接" : "Dot 未连接") : "MiniMax";
+  }
+
   private void showBrainSelector() {
+    if ("echo".equals(brainProvider)) {
+      new LargeDialogBuilder(this)
+          .setTitle("本机语音模式")
+          .setMessage("Mac 正在本机识别和复述。要使用 Dot 或 MiniMax，请在 Mac 上切换配置后重启后台。")
+          .setPositiveButton("关闭", null)
+          .show();
+      return;
+    }
     new LargeDialogBuilder(this)
         .setTitle("选择助理大脑")
         .setSingleChoiceItems(
@@ -1958,9 +1975,8 @@ public final class MainActivity extends Activity
   public void brain(String provider) {
     postIdentityUi(
         () -> {
-          brainProvider = "dot".equals(provider) ? "dot" : "minimax";
-          brainText.setText(
-              "dot".equals(brainProvider) ? (linked ? "Dot 已连接" : "Dot 未连接") : "MiniMax");
+          brainProvider = "dot".equals(provider) || "echo".equals(provider) ? provider : "minimax";
+          brainText.setText(brainLabel(linked));
           updatePrivacy();
         });
   }
@@ -2176,6 +2192,10 @@ public final class MainActivity extends Activity
       privacyText.setText(session.identityLabel() + "\n独立问答 · 不读取主人记录\nMiniMax 识别与播报");
       return;
     }
+    if ("echo".equals(brainProvider)) {
+      privacyText.setText("语音在 Mac 本机识别、复述和播报");
+      return;
+    }
     String ears = "minimax".equals(recognitionEngine) ? "语音片段发送 MiniMax 云端识别" : "语音在当前 Mac 本机识别";
     privacyText.setText(
         ears
@@ -2211,7 +2231,11 @@ public final class MainActivity extends Activity
     if (taskAction != null) taskAction.setEnabled(session.ownerMode());
     if (dotText != null) dotText.setEnabled(session.ownerMode());
     if (visionButton != null) {
-      visionButton.setEnabled(session.ownerMode() && linked && !"calibrating".equals(phase));
+      visionButton.setEnabled(
+          session.ownerMode()
+              && linked
+              && !"echo".equals(brainProvider)
+              && !"calibrating".equals(phase));
       buttonStyle(visionButton, false);
     }
     interrupt.setEnabled(
@@ -2265,8 +2289,7 @@ public final class MainActivity extends Activity
             reminderChannelsSupported = false;
             renderWorkspace();
           }
-          brainText.setText(
-              "dot".equals(brainProvider) ? (connected ? "Dot 已连接" : "Dot 未连接") : "MiniMax");
+          brainText.setText(brainLabel(connected));
           traceAuto("link:" + connected);
           if (!connected) screen(false);
           String transport = "wifi".equals(session.transportName()) ? "Wi-Fi" : "USB";

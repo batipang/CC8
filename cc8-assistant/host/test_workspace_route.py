@@ -845,6 +845,7 @@ class WorkspaceRouteTests(unittest.TestCase):
                 'public void workspace(',
                 'public void workspaceResult(',
                 'public void link(',
+                'private String brainLabel(',
                 'public void sources(',
                 'private int sourceCount(',
                 'private void clearSources(',

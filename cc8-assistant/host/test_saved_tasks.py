@@ -180,7 +180,7 @@ class ControllerTests(Fixture):
             b.on_event({'event': 'device_ready'})
         hello = next(fields for name, fields in events if name == 'hello')
         self.assertTrue(hello['supports_saved_task_results'])
-        self.assertTrue(hello['supports_dot_chat_handoff'])
+        self.assertFalse(hello['supports_dot_chat_handoff'])
         self.assertFalse(b.session.active)
         self.assertEqual(path.read_text(), 'PRIVATE_CORRUPT_CONTENT')
         self.assertNotIn('PRIVATE_CORRUPT_CONTENT', str(events))

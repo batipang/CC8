@@ -83,11 +83,13 @@ class Bridge:
         report_checkpoint_store=None,
         report_watch_store=None,
         identity_store=None,
+        local_mode=False,
     ):
         self.diagnostics = TraceBook()
         started_at = time.monotonic()
         self.speech = speech
         self.brain = brain
+        self.local_mode = local_mode
         self.identity = self.identity_runtime = None
         self.library = library
         self.workspace = workspace or Workspace()
@@ -566,7 +568,7 @@ def runtime_bridge(speech, brain, **kwargs):
             speech,
             brain,
             **kwargs,
-            report_watch_store=ReportWatchStore(PRIVATE / 'work-report-watch.json'),
+            local_mode=True,
         )
     return Bridge(
         speech,
