@@ -71,6 +71,7 @@ class WebEvidence:
                 return
             else:
                 error, status = receipt.get('error'), receipt.get('http_status')
+                row['final_url'] = public_url(receipt.get('final_url')) or ''
                 row['error_code'] = (
                     error if isinstance(error, str) and error in FAILURE_CODES else ''
                 )

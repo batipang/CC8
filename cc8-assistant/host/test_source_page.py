@@ -168,6 +168,23 @@ class PageReaderTests(unittest.TestCase):
         self.assertEqual(result['error'], 'timeout')
         self.assertNotIn('http_status', result)
 
+    def test_failed_redirect_uses_only_the_attempted_public_destination(self):
+        self.rows = [
+            response(status=302, Location='https://other.example/final'),
+            response(status=404),
+        ]
+        result = self.read()
+        self.assertEqual(result['url'], 'https://example.com/page')
+        self.assertEqual(result['final_url'], 'https://other.example/final')
+        self.assertEqual(result['http_status'], 404)
+        self.assertNotIn('text', result)
+
+        self.rows = [response(status=302, Location='http://127.0.0.1/secret')]
+        result = self.read()
+        self.assertEqual(result['error'], 'invalid_redirect')
+        self.assertEqual(result['final_url'], result['url'])
+        self.assertNotIn('127.0.0.1', str(result))
+
     def test_nonpublic_internal_error_text_is_not_returned(self):
         def fail(*args):
             raise PageError('/private/owner/credential-secret')

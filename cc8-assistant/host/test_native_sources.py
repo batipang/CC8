@@ -70,12 +70,15 @@ public class SourceCheck {
  String omitted=new SourcesPresentation(new JSONArray(coverage),"","",4,9).at(0).label();
  yes(omitted.contains("当前摘录：0 字符")&&omitted.contains("受传输大小限制")&&omitted.contains("后文未核对"),"omitted transport data counted as displayed excerpt");
  JSONObject failure=new JSONObject("title","失败来源","url",url,"access_evidence","page_fetch_failed",
-  "page_error_code","unsupported_encoding","page_http_status",200,"page_excerpt","未取得正文");
+  "page_error_code","unsupported_encoding","page_http_status",200,"page_excerpt","未取得正文",
+  "final_url","https://other.example/final");
  String failed=new SourcesPresentation(new JSONArray(failure),"","",4,9).at(0).label();
  yes(failed.contains("UTF-8")&&failed.contains("HTTP 响应：200；未取得可用正文")&&!failed.contains("正文摘录"),"HTTP 200 or stale excerpt manufactured body evidence");
+ yes(failed.contains("最后尝试的地址：https://other.example/final"),"terminal failure destination hidden");
+ failure.data.put("final_url","http://127.0.0.1/private");
  failure.data.put("page_error_code","/private/credential-secret");failure.data.put("page_http_status",true);
  failed=new SourcesPresentation(new JSONArray(failure),"","",4,9).at(0).label();
- yes(!failed.contains("credential-secret")&&failed.contains("未提供可核对的原因")&&failed.contains("未取得可核对状态"),"untrusted reason or malformed status displayed");
+ yes(!failed.contains("127.0.0.1")&&!failed.contains("credential-secret")&&failed.contains("未提供可核对的原因")&&failed.contains("未取得可核对状态"),"untrusted reason or malformed status displayed");
  String emoji=new String(Character.toChars(0x1f600));
  JSONObject unicode=new JSONObject("title",emoji.repeat(160),"url",url);
  s=new SourcesPresentation(new JSONArray(unicode),"","",4,9);

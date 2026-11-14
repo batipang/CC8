@@ -65,7 +65,8 @@ final class SourcesPresentation {
           + failureReason(errorCode)
           + "\nHTTP 响应："
           + (httpStatus == 0 ? "未取得可核对状态" : Integer.toString(httpStatus))
-          + "；未取得可用正文。";
+          + "；未取得可用正文。"
+          + (finalUrl.isEmpty() || finalUrl.equals(url) ? "" : "\n最后尝试的地址：" + finalUrl);
     }
 
     private String coverageDetails() {

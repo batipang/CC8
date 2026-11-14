@@ -93,6 +93,30 @@ class WebEvidenceTests(unittest.TestCase):
         row = self.evidence.sources([dict(title='Final', url=receipt['final_url'])])[0]
         self.assertEqual(row['access_evidence'], 'page_body_received')
 
+    def test_failed_redirect_supersedes_prior_text_for_either_cited_url(self):
+        final = 'https://other.example/final'
+        self.evidence.page(dict(self.page(), final_url=final))
+        self.evidence.page(
+            dict(ok=False, url=self.url, final_url=final, error='http_error', http_status=404)
+        )
+        links = [{'title': 'Original', 'url': self.url}, {'title': 'Final', 'url': final}]
+        rows = self.evidence.sources(links)
+        self.assertEqual([row['url'] for row in rows], [self.url, final])
+        for row in rows:
+            self.assertEqual(row['access_evidence'], 'page_fetch_failed')
+            self.assertEqual(row['final_url'], final)
+            self.assertEqual(row['page_http_status'], 404)
+            self.assertEqual(row['page_excerpt'], '')
+            self.assertEqual(row['page_dates'], '')
+
+    def test_invalid_failure_alias_does_not_create_another_source_receipt(self):
+        self.evidence.page(
+            dict(ok=False, url=self.url, final_url='http://127.0.0.1', error='http_error')
+        )
+        row = self.sources()[0]
+        self.assertEqual(row['access_evidence'], 'page_fetch_failed')
+        self.assertEqual(row['final_url'], '')
+
     def test_model_links_and_malformed_reader_data_cannot_manufacture_body_evidence(self):
         for field, value in [
             ('facts_verified', True),

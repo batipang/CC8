@@ -302,6 +302,9 @@ def read_page(url, current=lambda: True, *, resolve=addresses, request=fetch, cl
             if target in seen:
                 raise PageError('redirect_loop')
             seen.add(target)
+            # Only record a public destination once this hop is attempted.
+            # A rejected redirect target cannot become evidence for another URL.
+            result['final_url'] = target
             host = urlsplit(target).hostname
             address = resolve(host, deadline, current)
             body, raw = request(target, address, deadline, current)
