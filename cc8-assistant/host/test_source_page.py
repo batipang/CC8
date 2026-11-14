@@ -516,6 +516,34 @@ class PageReaderTests(unittest.TestCase):
                 popen=popen,
             )
 
+    def test_curl_exit_receipt_distinguishes_timeout_size_and_other_failures(self):
+        for status, reason in ((28, 'timeout'), (63, 'page_too_large'), (60, 'network_failed')):
+            with self.subTest(status=status):
+
+                def request(url, address, deadline, current):
+                    return fetch(
+                        url,
+                        address,
+                        deadline,
+                        current,
+                        popen=self.child(
+                            f'import sys; print("PRIVATE_CURL_OUTPUT", file=sys.stderr); sys.exit({status})'
+                        ),
+                    )
+
+                url = 'https://example.com/article'
+                receipt = read_page(url, resolve=self.resolve, request=request)
+                self.assertFalse(receipt['ok'])
+                self.assertEqual(receipt['error'], reason)
+                self.assertNotIn('PRIVATE_CURL_OUTPUT', str(receipt))
+                self.assertNotIn('http_status', receipt)
+                evidence = WebEvidence()
+                evidence.page(receipt)
+                (row,) = evidence.sources([{'title': 'Article', 'url': url}])
+                self.assertEqual(row['page_error_code'], reason)
+                self.assertEqual(row['access_evidence'], 'page_fetch_failed')
+                self.assertFalse(row['body_verified'])
+
 
 if __name__ == '__main__':
     unittest.main()
