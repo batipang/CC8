@@ -33,6 +33,11 @@ EXCLUDED = [
     'service_definition',
 ]
 
+
+class IncompatibleTransitionSettings(ValueError):
+    pass
+
+
 # Recovery may carry these reviewed CI-only download fixes, never runtime changes.
 RECOVERY_BUILD_SUPPORT = frozenset(
     ('.github/workflows/ci.yml', 'tools/tests/test_gradle_provision.py')
@@ -237,7 +242,14 @@ def plan(before_root, after_root, assistant_apk=None):
 
 
 def verify_assistant_transition(
-    baseline_root, candidate_root, recovery_root, baseline_apk, pin, *, observation_path=None
+    baseline_root,
+    candidate_root,
+    recovery_root,
+    baseline_apk,
+    pin,
+    *,
+    observation_path=None,
+    settings_backup_path=None,
 ):
     """Bind the two source builds to a previously verified baseline APK."""
     from tools.apk_signing import require_same_signers
@@ -299,6 +311,23 @@ def verify_assistant_transition(
             'Guest privacy state requires an identity-aware backend; restore owner explicitly before legacy recovery'
         )
 
+    settings_gates = {}
+    if settings_backup_path is not None:
+        settings = verify_backup(settings_backup_path)
+        targets = {}
+        for name, target in zip(('candidate', 'recovery'), roots[1:]):
+            try:
+                staged = settings_for_target(settings, target)
+            except (OSError, ValueError, RecursionError):
+                raise IncompatibleTransitionSettings(
+                    f'Settings backup is incompatible with {name}'
+                ) from None
+            targets[name] = {
+                'compatible': True,
+                'omitted_default_fields': sorted(settings.keys() - staged.keys()),
+            }
+        settings_gates['settings_compatibility'] = targets
+
     apks = [Path(baseline_apk)]
     baseline = check_apk('assistant', apks[0], root=roots[0])
     if not hmac.compare_digest(baseline['sha256'], pin):
@@ -353,12 +382,14 @@ def verify_assistant_transition(
         'device_acceptance': 'not_asserted',
         'reminder_storage': reminder_gates,
         'report_watch_storage': watch_gates,
+        'identity_storage': identity_gates,
         'recovery_source': recovery_source,
         'transport_compatibility': {
             'upgrade': transport_gate(before, candidate),
             'rollback': transport_gate(candidate, recovery),
         },
         **observation,
+        **settings_gates,
     }
 
 
@@ -544,6 +575,11 @@ def main(argv=None):
         help='Also require a complete 72-hour private report for the baseline backend version',
     )
     transition.add_argument('--output', type=Path)
+    transition.add_argument(
+        '--settings-backup',
+        type=Path,
+        help='Also check a private settings backup against both destination versions',
+    )
     saved = commands.add_parser(
         'backup', help='Explicitly save only one non-secret settings profile'
     )
@@ -579,6 +615,7 @@ def main(argv=None):
                 args.baseline_apk,
                 args.baseline_sha256,
                 observation_path=args.observation_report,
+                settings_backup_path=args.settings_backup,
             )
         elif args.action == 'stage-restore':
             value = verify_backup(args.backup)
@@ -604,6 +641,9 @@ def main(argv=None):
         if args.action == 'verify-transition' and args.observation_report is not None:
             return 0 if value['observation_gate']['window_verified'] else 2
         return 0
+    except IncompatibleTransitionSettings as error:
+        print(f'{error}. No transition report was written.', file=sys.stderr)
+        return 2
     except (
         OSError,
         ValueError,
