@@ -5,6 +5,7 @@ from dataclasses import replace
 import json
 from pathlib import Path
 import tempfile
+import threading
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -393,11 +394,11 @@ class RevealTests(unittest.TestCase):
     def test_non_mac_does_not_launch_another_program_named_open(self):
         with (
             patch('result_files.sys.platform', 'linux'),
-            patch('result_files.subprocess.run') as run,
+            patch('result_files.subprocess.Popen') as launch,
             self.assertRaises(OSError),
         ):
-            reveal_file(dict(provenance=provenance()), 0, run=run)
-        self.assertFalse(run.called)
+            reveal_file(dict(provenance=provenance()), 0, launch=launch)
+        launch.assert_not_called()
 
     def test_argv_is_single_absolute_receipt_path_without_shell_or_content_open(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -405,11 +406,11 @@ class RevealTests(unittest.TestCase):
             path.write_text('fixed')
             calls = []
 
-            def run(args, **kwargs):
+            def launch(args, **kwargs):
                 calls.append((args, kwargs))
-                return SimpleNamespace(returncode=0)
+                return SimpleNamespace(wait=lambda **_: 0)
 
-            reveal_file(dict(provenance=provenance(str(path))), 0, run=run)
+            reveal_file(dict(provenance=provenance(str(path))), 0, launch=launch)
             self.assertEqual(calls[0][0], ['/usr/bin/open', '-R', str(path)])
             self.assertNotIn('shell', calls[0][1])
             self.assertFalse((Path(folder) / 'NEVER').exists())
@@ -424,11 +425,11 @@ class RevealTests(unittest.TestCase):
             for path in (root / 'missing', link, root):
                 with (
                     self.subTest(path=path),
-                    patch('result_files.subprocess.run') as run,
+                    patch('result_files.subprocess.Popen') as launch,
                     self.assertRaises((ValueError, OSError)),
                 ):
-                    reveal_file(dict(provenance=provenance(str(path))), 0, run=run)
-                self.assertFalse(run.called)
+                    reveal_file(dict(provenance=provenance(str(path))), 0, launch=launch)
+                launch.assert_not_called()
             for status, kind, index in (
                 ('failed', 'update', 0),
                 ('completed', 'delete', 0),
@@ -437,9 +438,12 @@ class RevealTests(unittest.TestCase):
             ):
                 value = provenance(str(file))
                 value['files'][0].update(status=status, kind=kind)
-                with patch('result_files.subprocess.run') as run, self.assertRaises(ValueError):
-                    reveal_file(dict(provenance=value), index, run=run)
-                self.assertFalse(run.called)
+                with (
+                    patch('result_files.subprocess.Popen') as launch,
+                    self.assertRaises(ValueError),
+                ):
+                    reveal_file(dict(provenance=value), index, launch=launch)
+                launch.assert_not_called()
 
     def test_wire_accepts_only_record_id_and_index_and_rejects_client_paths(self):
         value = dict(
@@ -472,7 +476,8 @@ class RevealTests(unittest.TestCase):
             bridge.workspace.task_finish(ident, 'completed', 'done')
             calls = []
             bridge.saved_tasks.hooks = replace(
-                bridge.saved_tasks.hooks, reveal=lambda record, index: calls.append((record, index))
+                bridge.saved_tasks.hooks,
+                reveal=lambda record, index, **_: calls.append((record, index)),
             )
             helper.request(bridge, 'reveal_live', ident, file_index=0)
             self.assertTrue(bridge.events[-1][1]['revealed'])
@@ -496,6 +501,64 @@ class RevealTests(unittest.TestCase):
             self.assertFalse(bridge.session.active)
             self.assertTrue(bridge.response.queue.empty())
 
+    def test_route_rebound_during_file_validation_cannot_launch_finder(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            path = root / 'result.txt'
+            path.write_text('fixed')
+            helper = saved_fixtures.ControllerTests()
+            helper.store = SavedTasks(root / 'saved.json')
+            bridge = helper.session()
+            ident = bridge.workspace.task_start(bridge.generation, '固定任务')
+            bridge.workspace.task_provenance(ident, provenance(str(path)))
+            bridge.workspace.task_finish(ident, 'completed', 'done')
+
+            def rebound(selected):
+                bridge.session.bound_route_token = 'new-route'
+                return SimpleNamespace(st_mode=0o100600)
+
+            with (
+                patch('result_files.Path.lstat', autospec=True, side_effect=rebound),
+                patch('result_files.subprocess.Popen') as launch,
+            ):
+                helper.request(bridge, 'reveal_live', ident, file_index=0)
+            launch.assert_not_called()
+            self.assertEqual(bridge.events, [])
+            self.assertFalse(bridge.saved_tasks.busy)
+
+    def test_finder_wait_does_not_hold_session_lock_and_stale_reply_is_dropped(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            path = root / 'result.txt'
+            path.write_text('fixed')
+            helper = saved_fixtures.ControllerTests()
+            helper.store = SavedTasks(root / 'saved.json')
+            bridge = helper.session()
+            ident = bridge.workspace.task_start(bridge.generation, '固定任务')
+            bridge.workspace.task_provenance(ident, provenance(str(path)))
+            bridge.workspace.task_finish(ident, 'completed', 'done')
+            changed = threading.Event()
+
+            def change_route():
+                with bridge.guard:
+                    bridge.session.bound_route_token = 'new-route'
+                    changed.set()
+
+            def wait(timeout):
+                worker = threading.Thread(target=change_route, daemon=True)
+                worker.start()
+                worker.join(1)
+                self.assertTrue(changed.is_set())
+                return 0
+
+            process = SimpleNamespace(wait=wait)
+            with patch('result_files.subprocess.Popen', return_value=process) as launch:
+                helper.request(bridge, 'reveal_live', ident, file_index=0)
+            self.assertTrue(changed.is_set())
+            launch.assert_called_once()
+            self.assertEqual(bridge.events, [])
+            self.assertFalse(bridge.saved_tasks.busy)
+
     def test_disconnect_during_saved_lookup_prevents_side_effect_and_reply(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -509,7 +572,7 @@ class RevealTests(unittest.TestCase):
             bridge = helper.session()
             calls = []
             bridge.saved_tasks.hooks = replace(
-                bridge.saved_tasks.hooks, reveal=lambda *args: calls.append(args)
+                bridge.saved_tasks.hooks, reveal=lambda *args, **_: calls.append(args)
             )
             original = store.snapshot
 

@@ -1,13 +1,15 @@
 """Explicit Finder location of a receipt-owned regular file; no content open."""
 
+from contextlib import nullcontext
 from pathlib import Path
 import stat
 import subprocess
 import sys
 from result_provenance import validate
+from desktop_handoff import confirm_open
 
 
-def reveal_file(record, index, *, run=subprocess.run):
+def reveal_file(record, index, *, launch_guard=nullcontext, launch=None):
     """Only locate an actual receipt's existing regular file; never execute it."""
     if sys.platform != 'darwin':
         raise OSError('Finder location requires the connected Mac')
@@ -25,6 +27,12 @@ def reveal_file(record, index, *, run=subprocess.run):
         raise ValueError('Result file changed or is not regular')
     # Absolute path is one argv operand, including spaces or shell punctuation.
     # Finder reveal also safely handles executable/document files without opening.
-    result = run(['/usr/bin/open', '-R', str(path)], capture_output=True, timeout=5)
-    if result.returncode:
-        raise OSError('Finder did not confirm the reveal request')
+    launch = subprocess.Popen if launch is None else launch
+    with launch_guard():
+        process = launch(
+            ['/usr/bin/open', '-R', str(path)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    confirm_open(process)
