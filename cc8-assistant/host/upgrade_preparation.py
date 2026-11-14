@@ -314,6 +314,7 @@ def verify_assistant_transition(
     settings_gates = {}
     if settings_backup_path is not None:
         settings = verify_backup(settings_backup_path)
+        settings_gates['settings_sha256'] = fingerprint(settings)
         targets = {}
         for name, target in zip(('candidate', 'recovery'), roots[1:]):
             try:
@@ -599,6 +600,10 @@ def main(argv=None):
     staged.add_argument('backup', type=Path)
     staged.add_argument('--output', type=Path, required=True)
     staged.add_argument('--target-root', type=Path, help='Check the intended recovery checkout')
+    staged.add_argument(
+        '--expect-settings-sha256',
+        help='Require the normalized settings digest from the transition report',
+    )
     args = parser.parse_args(argv)
     try:
         if args.action == 'verify':
@@ -619,6 +624,13 @@ def main(argv=None):
             )
         elif args.action == 'stage-restore':
             value = verify_backup(args.backup)
+            pin = args.expect_settings_sha256
+            if pin is not None and (
+                not re.fullmatch('[a-f0-9]{64}', pin)
+                or not hmac.compare_digest(pin, fingerprint(value))
+            ):
+                print('Backup settings do not match the transition digest.', file=sys.stderr)
+                return 2
             if args.target_root is not None:
                 try:
                     value = settings_for_target(value, args.target_root)

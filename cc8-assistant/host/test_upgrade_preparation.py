@@ -359,6 +359,31 @@ class UpgradeTests(unittest.TestCase):
             )
             self.assertNotIn('credential_file', json.dumps(report))
             self.assertEqual(saved.read_bytes(), original)
+            pin_settings = report['settings_sha256']
+            self.assertEqual(pin_settings, upgrade.fingerprint(upgrade.verify_backup(saved)))
+            staged = root / 'staged.json'
+            stage = [
+                'stage-restore',
+                str(saved),
+                '--target-root',
+                str(roots[2]),
+                '--expect-settings-sha256',
+                pin_settings,
+                '--output',
+                str(staged),
+            ]
+            code, _, error = self.invoke(stage)
+            self.assertEqual(code, 0, error)
+            self.assertEqual(json.loads(staged.read_text())['brain'], 'dot')
+            staged.unlink()
+            alternate = self.profile(folder, {'schema_version': 1, 'brain': 'minimax'})
+            other_backup = root / 'other-backup.json'
+            upgrade.output(upgrade.backup(alternate, roots[0]), other_backup)
+            stage[1] = str(other_backup)
+            code, _, error = self.invoke(stage)
+            self.assertEqual(code, 2)
+            self.assertIn('do not match the transition digest', error)
+            self.assertFalse(staged.exists())
             trial = self.profile(folder, {'schema_version': 1, 'voice_mode': 'gpt-live-1'})
             trial_backup = root / 'trial-backup.json'
             upgrade.output(upgrade.backup(trial, roots[0]), trial_backup)
