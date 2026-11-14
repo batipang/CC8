@@ -276,7 +276,7 @@ class EndpointPipeline:
             and not self.turn_echo_risk
             and not self.turn_prefix_echo_risk
         ):
-            wake_prefix = self.vad.audio
+            wake_prefix = getattr(self.vad, 'audio', wake_prefix)
         if self.hooks.live_audio(frame, voiced, credible, wake_prefix):
             if self.vad.talking or self.waiting_turn is not None:
                 self.reset_voice_activity()
