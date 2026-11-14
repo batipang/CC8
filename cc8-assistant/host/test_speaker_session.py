@@ -94,6 +94,12 @@ class SpeakerSessionTests(unittest.TestCase):
     def test_idle_write_failure_releases_track_and_rejects_acquisition(self):
         self.scenario('idle_failure')
 
+    def test_fatal_native_write_releases_track_and_preserves_the_original_error(self):
+        self.scenario('fatal_write_cleanup')
+
+    def test_fatal_idle_write_does_not_leave_the_worker_waiting_on_itself(self):
+        self.scenario('fatal_idle_write_cleanup')
+
     def test_short_idle_writes_warm_only_the_actual_accepted_frames(self):
         self.scenario('short_warm')
 

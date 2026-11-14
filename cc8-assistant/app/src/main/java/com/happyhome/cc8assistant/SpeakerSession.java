@@ -112,6 +112,14 @@ final class SpeakerSession implements AutoCloseable {
       problem = new IOException("Speaker write failed", error);
     } catch (IOException error) {
       problem = error;
+    } catch (Error error) {
+      // A fatal write still owns the native track until this call unwinds.
+      synchronized (guard) {
+        writing = false;
+        closeLocked();
+        guard.notifyAll();
+      }
+      throw error;
     }
     synchronized (guard) {
       writing = false;

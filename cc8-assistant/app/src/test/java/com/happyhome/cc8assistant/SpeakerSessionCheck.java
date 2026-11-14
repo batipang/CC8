@@ -24,6 +24,7 @@ public final class SpeakerSessionCheck {
     volatile boolean blockSpeech, blockIdle, failPlay, failPause, failFlush;
     volatile int badWrite, limit = 320;
     volatile boolean failIdle;
+    volatile AssertionError fatalWrite;
     volatile CountDownLatch nextIdle;
     long frames, lateFrames;
 
@@ -54,6 +55,7 @@ public final class SpeakerSessionCheck {
           entered.countDown();
           await(unblock);
         }
+        if (fatalWrite != null) throw fatalWrite;
         if (speech && badWrite != 0) {
           if (badWrite == 1) return -6;
           if (badWrite == 2) return count + 1;
@@ -367,6 +369,32 @@ public final class SpeakerSessionCheck {
     }
   }
 
+  private static void fatalWriteCleanup() throws Exception {
+    try (Fixture f = new Fixture()) {
+      SpeakerSession.Lease lease = f.lease(1);
+      AssertionError failure = new AssertionError("fixed native write failure");
+      f.track.fatalWrite = failure;
+      try {
+        f.session.write(lease, new short[] {1}, 0, 1);
+        throw new AssertionError("write failure was swallowed");
+      } catch (AssertionError error) {
+        yes(error == failure, "write changed the fatal error");
+      }
+      yes(f.session.awaitReleased(1000), "failed write left the native track held");
+      rejects(f.session, f.alive);
+    }
+  }
+
+  private static void fatalIdleWriteCleanup() throws Exception {
+    try (Fixture f = new Fixture()) {
+      SpeakerSession.Lease lease = f.lease(1);
+      f.track.fatalWrite = new AssertionError("fixed idle write failure");
+      yes(f.session.finish(lease), "release speech lease before idle write");
+      yes(f.session.awaitReleased(1000), "idle writer could not release its own track");
+      rejects(f.session, f.alive);
+    }
+  }
+
   private static void shortWarm() throws Exception {
     Track track = new Track();
     track.limit = 37;
@@ -585,6 +613,12 @@ public final class SpeakerSessionCheck {
         break;
       case "idle_failure":
         idleFailure();
+        break;
+      case "fatal_write_cleanup":
+        fatalWriteCleanup();
+        break;
+      case "fatal_idle_write_cleanup":
+        fatalIdleWriteCleanup();
         break;
       case "short_warm":
         shortWarm();

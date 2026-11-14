@@ -179,8 +179,10 @@ public class VoiceSession implements AutoCloseable {
   long until=System.nanoTime()+3000000000L;while(!condition.getAsBoolean()&&System.nanoTime()<until)Thread.sleep(2);yes(condition.getAsBoolean(),"bounded wait expired");
  }
  public void close()throws Exception{
+  SpeakerOwner.Ticket ticket=speakerOwner.forPlayback(player==null?epoch:player.generation);
   recording=false;textSession=visual=announcement=false;foreground=false;
   cancelPlayback();speakerOwner.close();
+  if(ticket!=null)yes(ticket.output().awaitReleased(3000),"current speaker worker did not exit");
   waitFor(()->AudioTrack.created.stream().allMatch(t->t.releases.get()==1));
  }
  /*ACTUAL_METHODS*/
