@@ -601,6 +601,7 @@ class UpgradeTests(unittest.TestCase):
             schema = upgrade.config_schema()
             del schema['properties']['voice_mode']
             del schema['properties']['gpt_live_voice']
+            schema['properties']['brain']['enum'] = ['dot', 'minimax']
             declaration = root / 'cc8-assistant/host/resources/runtime-config.schema.json'
             declaration.parent.mkdir(parents=True)
             declaration.write_text(json.dumps(schema))
@@ -616,6 +617,16 @@ class UpgradeTests(unittest.TestCase):
             self.assertEqual(json.loads(staged.read_text()), expected)
             self.assertEqual(profile.read_bytes(), original)
             self.assertEqual(upgrade.verify_backup(saved), snapshot['settings'])
+            self.assertEqual(
+                upgrade.settings_for_target({**expected, 'brain': 'minimax'}, root),
+                {**expected, 'brain': 'minimax'},
+            )
+            with self.assertRaisesRegex(ValueError, 'field contract differs'):
+                upgrade.settings_for_target({**expected, 'brain': 'echo'}, root)
+            schema['properties']['brain']['maxLength'] = 6
+            declaration.write_text(json.dumps(schema))
+            with self.assertRaisesRegex(ValueError, 'field contract differs'):
+                upgrade.settings_for_target(expected, root)
 
     def test_targeted_restore_rejects_active_trial_and_different_field_contract(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -494,6 +494,14 @@ def settings_for_target(settings, target_root):
         if not isinstance(declared, dict):
             raise ValueError('Settings contain fields unsupported by the target checkout')
         expected = current['properties'][name]
+        if (
+            name == 'brain'
+            and expected.get('enum') == ['dot', 'minimax', 'echo']
+            and declared.get('enum') == ['dot', 'minimax']
+            and settings[name] in declared['enum']
+        ):
+            # The previous release accepts both existing provider values.
+            expected = {**expected, 'enum': declared['enum']}
         if {k: v for k, v in declared.items() if k != 'default'} != {
             k: v for k, v in expected.items() if k != 'default'
         }:
