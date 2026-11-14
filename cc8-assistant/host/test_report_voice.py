@@ -93,6 +93,13 @@ class VoiceTests(unittest.TestCase):
             report_command('第二项是否通过了测试', followup=True), ReportCommand('item_evidence', 2)
         )
         self.assertEqual(report_command('第二项和第三项的结果', followup=True).kind, 'item_choice')
+        self.assertEqual(
+            report_command('把第二项和第三项继续做完', followup=True).kind, 'item_choice'
+        )
+        self.assertEqual(report_command('继续第二项', followup=True), ReportCommand('continue', 2))
+        self.assertEqual(
+            report_command('第二项继续推进', followup=True), ReportCommand('continue', 2)
+        )
         self.assertIsNone(report_command('设计一个按第二项编号展开的界面', followup=True))
         self.assertIsNone(report_command('继续讲故事', followup=True))
         self.assertEqual(report_command('刚才那个项目的结果', followup=True).kind, 'item_choice')
@@ -410,7 +417,24 @@ class IntegrationTests(unittest.TestCase):
         ):
             reply = ''.join(bridge.brain.clauses('把第二项继续做完', []))
         self.assertIn('没有向原聊天追加', reply)
+        self.assertIn('所选来源', reply)
+        self.assertEqual(bridge.brain.last_metrics['operation'], 'desktop_handoff')
         self.assertFalse(dot.called or read.called)
+
+    def test_numbered_desktop_handoff_is_bound_to_the_current_snapshot(self):
+        voice = VoiceTests().session()
+        voice.answer(ReportCommand('report', 'today'), lambda: True)
+        reply = voice.answer(ReportCommand('continue', 2), lambda: True)
+        self.assertIn('待桌面接续', reply.text)
+        self.assertEqual(reply.provenance['thread_id'], SOURCE.source_id)
+        self.assertEqual(reply.provenance['turn_id'], 'turn-1')
+        self.assertEqual(reply.delivery, ())
+        for index in (0, 3):
+            self.assertIsNone(
+                voice.answer(ReportCommand('continue', index), lambda: True).provenance
+            )
+        voice.forget()
+        self.assertIsNone(voice.answer(ReportCommand('continue', 2), lambda: True).provenance)
 
     def test_disconnect_during_real_catalog_dispatch_drops_late_report_and_unlocks(self):
         _, bridge = self.session()

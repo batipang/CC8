@@ -229,11 +229,10 @@ class BrainRouter:
             try:
                 if on_web:
                     on_web('clear', {})
-                    message = (
-                        '正在核对本次汇报的执行回执…'
-                        if command.kind == 'item_evidence'
-                        else '正在读取所选聊天的工作汇报…'
-                    )
+                    message = {
+                        'item_evidence': '正在核对本次汇报的执行回执…',
+                        'continue': '正在核对本次汇报的原聊天…',
+                    }.get(command.kind, '正在读取所选聊天的工作汇报…')
                     on_web('progress', {'message': message})
                 reply = self.work_reports.answer(command, is_current)
                 if not is_current():

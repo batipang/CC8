@@ -131,8 +131,9 @@ def report_command(text, *, followup=False):
     if match := DETAIL.fullmatch(text):
         if followup or '汇报' in text:
             return ReportCommand('item', ordinal(match[1]))
-    if followup and CONTINUE.fullmatch(text):
-        return ReportCommand('continue')
+    if followup and (match := CONTINUE.fullmatch(text)):
+        index = next((value for value in match.groups() if value is not None), None)
+        return ReportCommand('continue', ordinal(index) if index is not None else '')
     if followup or '汇报' in text:
         if re.fullmatch(
             PREFIX
@@ -141,10 +142,11 @@ def report_command(text, *, followup=False):
         ):
             return ReportCommand('continue' if SOURCE_ACTION.search(text) else 'item_choice')
         if match := CONTEXT_ITEM.match(text):
-            if SOURCE_ACTION.search(text[match.end() :]) or text.startswith(('把', '将')):
-                return ReportCommand('continue')
-            if re.search('第' + INDEX + '项', text[match.end() :]):
+            rest = text[match.end() :]
+            if re.search('第' + INDEX + '项', rest):
                 return ReportCommand('item_choice')
+            if SOURCE_ACTION.search(rest) or text.startswith(('把', '将')):
+                return ReportCommand('continue', ordinal(match[1]))
             return ReportCommand('item', ordinal(match[1]))
     if re.fullmatch(
         PREFIX
@@ -557,15 +559,13 @@ class ReportVoice:
             return self.notice(
                 '请明确说“汇报过去半小时的工作”、“汇报今天的工作”、“汇报今天上午八点到上午十点的工作”或“汇报上次汇报后的工作”。'
             )
-        if command.kind == 'continue':
-            return self.notice(
-                '当前支持只读工作汇报及编号详情，原聊天续办尚未接入；没有向原聊天追加请求，请分开提出查询和后续操作。'
-            )
+        if command.kind == 'continue' and command.value == '':
+            return self.notice('没有向原聊天追加请求。请先指定本次汇报的一个编号，再到桌面继续。')
         if command.kind == 'item_choice':
             return self.notice(
                 '请先指定本次汇报中的一个编号，例如“详细说说第二项”；当前不会推测或合并多个项目执行。'
             )
-        if command.kind in ('item', 'item_evidence'):
+        if command.kind in ('item', 'item_evidence', 'continue'):
             with self.hooks.lock:
                 context = self.hooks.context()
                 if (
@@ -581,6 +581,20 @@ class ReportVoice:
                     return self.notice('这份汇报没有该编号，请按屏幕上本次汇报的编号查询。')
                 item = report['items'][number - 1]
                 provenance = report_source(context[0], item['turn_id'], item)
+                if command.kind == 'continue':
+                    source_title = item.get('source_title', report['source_title'])
+                    spoken = (
+                        f'第{number}项来自「{source_title}」。请到桌面打开原聊天继续。'
+                        '没有向原聊天追加请求。'
+                    )
+                    text = (
+                        f'待桌面接续 · 第{number}项\n来源：{source_title}\n'
+                        f'原聊天：{provenance["thread_id"]}；回合：{item["turn_id"]}。\n'
+                        '请在该桌面聊天中提交下一步。没有向原聊天追加请求。'
+                    )
+                    return ReportReply(
+                        text, (spoken,), source_title, 'desktop_handoff', provenance=provenance
+                    )
                 if command.kind == 'item_evidence':
                     lines = [f'第{number}项执行回执。']
                     if item.get('since_status') == 'cached_unheard':
