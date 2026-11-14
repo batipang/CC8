@@ -155,6 +155,17 @@ def run_backend(dependencies: BackendDependencies):
         echo_check=args.echo_check_after_start,
         workspace=dependencies.workspace(dependencies.private / 'reminders.json'),
     )
+    if not local and getattr(config, 'voice_mode', 'minimax') == 'gpt-live-1':
+        from gpt_live_trial import create_trial
+
+        try:
+            bridge.live = create_trial(bridge, config, dependencies.private.parents[2])
+        except (OSError, ValueError):
+            print(
+                'GPT-Live 试用未启用，继续使用现有语音。请检查 Dot 和 Mac 的 OpenAI API 密钥。',
+                file=sys.stderr,
+                flush=True,
+            )
     pairing = dependencies.pairing(port=config.tls_port)
     hub = dependencies.transport_hub(
         pairing,

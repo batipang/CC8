@@ -103,7 +103,7 @@ class JSONObject extends HashMap<String,Object> {
 }
 class Wire {
  static final int RENDER=2;
- static class Packet {int generation;byte[] data;Packet(int gen,byte[] data){generation=gen;this.data=data;}}
+ static class Packet {int generation;long nanos;byte[] data;Packet(int gen,byte[] data){generation=gen;this.data=data;}}
  static JSONObject event(String name){JSONObject value=new JSONObject();value.put("event",name);return value;}
  static void put(JSONObject value,String key,Object item){value.put(key,item);}
  static byte[] pcm(short[] samples,int count){ByteBuffer b=ByteBuffer.allocate(count*2).order(ByteOrder.LITTLE_ENDIAN);for(int i=0;i<count;i++)b.putShort(samples[i]);return b.array();}
@@ -366,6 +366,16 @@ public class VoiceSession implements AutoCloseable {
    s.speaker(stale,2);yes(next.queue.size()==1,"current route PCM rejected");
   }
  }
+ static void livePcm()throws Exception{
+  try(VoiceSession s=new VoiceSession()){
+   Player player=s.make(2,4,false);player.liveCaption=true;
+   Wire.Packet pcm=new Wire.Packet(2,new byte[]{1,0});
+   pcm.nanos=3;s.speaker(pcm,s.routeEpoch);
+   yes(player.queue.isEmpty(),"late PCM from the interrupted playback entered the current player");
+   pcm.nanos=4;s.speaker(pcm,s.routeEpoch);
+   yes(player.queue.size()==1,"PCM for the active Live playback was rejected");
+  }
+ }
  static void visionOutput()throws Exception{
   try(VoiceSession s=new VoiceSession()){
    s.stopMicrophone();
@@ -424,6 +434,7 @@ public class VoiceSession implements AutoCloseable {
    case "voice_task":voiceTask();break;
    case "legacy":legacy();break;
    case "route":route();break;
+   case "live_pcm":livePcm();break;
    case "vision_output":visionOutput();break;
    case "invalid":case "volume":case "minimum":case "volume_result":initFailure(args[0]);break;
    default:throw new AssertionError("unknown case");

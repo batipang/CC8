@@ -1,6 +1,7 @@
 """In-memory work items and presentation mood; no worker/session ownership."""
 
 from dataclasses import dataclass, field
+from typing import Callable
 
 
 def mood(text):
@@ -17,6 +18,12 @@ def mood(text):
 class Reply:
     generation: int
     text: str
+
+
+@dataclass
+class LiveReply(Reply):
+    current: Callable[[], bool] = field(repr=False)
+    deliver: Callable[[str], None] = field(repr=False)
 
 
 @dataclass

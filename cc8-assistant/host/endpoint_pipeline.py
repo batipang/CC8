@@ -83,6 +83,7 @@ class EndpointHooks:
     complete_chinese_pending: Callable[[WaitingUtterance | None], bool] = lambda _: False
     complete_chinese_guard: Callable[[], ContextManager[object]] = nullcontext
     natural_barge_enabled: Callable[[], bool] = lambda: True
+    live_audio: Callable[[object, bool, bool], bool] = lambda *_: False
     complete_chinese_ticket: Callable[[WaitingUtterance, int], WaitingUtterance | None] = (
         lambda *_: None
     )
@@ -263,6 +264,10 @@ class EndpointPipeline:
                     )
             else:
                 self.complete_wake.reset()
+        if self.hooks.live_audio(frame, voiced, credible):
+            if self.vad.talking or self.waiting_turn is not None:
+                self.reset_voice_activity()
+            return
         self.observe_voice_onset(stamp, voiced)
         self.vad.external_voice = voiced
         was_talking = self.vad.talking

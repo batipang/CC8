@@ -77,6 +77,8 @@ class SessionHooks:
     wake_tick: Callable[[], None]
     prepare_brain: Callable[[int], None]
     cancel_observation: Callable[[], None] = lambda: None
+    live_trial_enabled: Callable[[], bool] = lambda: False
+    cancel_live: Callable[[], None] = lambda: None
     discard_corrections: Callable[[bool], bool] = lambda _: False
     invalidate_workflows: Callable[[str], None] = lambda reason: None
     invalidate_meetings: Callable[[str], None] = lambda reason: None
@@ -140,3 +142,4 @@ class RecognitionHooks:
     clear_correction_draft: Callable[[], None] = lambda: None
     photo_voice: Callable[[str, int, bool], bool] = lambda *_: False
     owner_access: Callable[[], bool] = lambda: True
+    live_owns_capture: Callable[[object | None], bool] = lambda _: False

@@ -133,6 +133,7 @@ SESSION_INTERFACES = r"""
  int workflowReceipts;
  void workflowResult(JSONObject data,long route){workflowReceipts++;}
  void recognition(String value){}
+ void liveTrial(boolean enabled){}
  void heard(String value){}
  void announcement(){}
  void captureRejected(int stoppedEpoch){}

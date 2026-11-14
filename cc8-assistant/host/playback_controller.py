@@ -7,6 +7,7 @@ Only explicit callbacks cross those boundaries. No microphone is opened here.
 from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass
+from contextlib import nullcontext
 import itertools
 import threading
 import time
@@ -41,6 +42,7 @@ class PlaybackHooks(PauseHooks):
 class PlaybackController:
     def __init__(self, hooks: PlaybackHooks):
         self.hooks = hooks
+        self.live_output = None
         self.playing = False
         self.begin_pending = False
         self.end_frames = None
@@ -69,6 +71,9 @@ class PlaybackController:
         # The caller holds the session guard through the entire cancel transaction.
         with self.publication_lock:
             was_playing = self.playing
+            if self.live_output is not None:
+                self.live_output.interrupted.set()
+                self.live_output = None
             self.playing = False
             self.begin_pending = False
             self.end_frames = None
@@ -175,7 +180,12 @@ class PlaybackController:
                 'Speech provider failed', stage='tts', kind=error_kind(error)
             ) from None
 
-    def play_stream(self, chunks, text, generation, role='assistant', timing=None):
+    def play_stream(
+        self, chunks, text, generation, role='assistant', timing=None, *, live=None, current=None
+    ):
+        def valid():
+            return self.hooks.valid(generation) and (current is None or current())
+
         # Each clause owns its iterator, caption publisher and playback_id.
         # Sending all PCM is not a device play_done acknowledgement.
         iterator = self.audio_chunks(chunks)
@@ -185,7 +195,7 @@ class PlaybackController:
         completed = False
         try:
             # Keep 200 ms buffered while cloud audio continues to arrive.
-            while count < 3200 and self.hooks.valid(generation):
+            while count < 3200 and valid():
                 try:
                     piece = next(iterator)
                 except StopIteration:
@@ -194,21 +204,22 @@ class PlaybackController:
                     self.hooks.diagnostics().mark(generation, 'first_pcm')
                     prefill.append(piece)
                     count += len(piece)
-            if not self.hooks.valid(generation):
+            if not valid():
                 return False
             if not prefill:
                 raise MiniMaxError('No audio available for playback')
             with self.done:
                 self.completed.discard(generation)
             self.wait_playback(generation)
-            if not self.hooks.valid(generation):
+            if not valid():
                 return False
             # Owner cancel takes session guard -> publication -> probe. Render
             # only queries validity (no guard acquisition), so it can still
             # drain while an owner holds the session guard. No wire I/O here.
             with self.publication_lock:
-                if not self.hooks.valid(generation):
+                if not valid():
                     return False
+                self.live_output = live
                 self.playing = True
                 self.begin_pending = True
                 self.end_frames = None
@@ -224,28 +235,39 @@ class PlaybackController:
                 )
             # Output is locally active before any begin notification can fail.
             started = True
-            self.output_event(
-                'play_begin',
-                generation=generation,
-                text=text,
-                mood=mood(text),
-                role='announcement' if generation == self.hooks.announcement_generation() else role,
-                streaming=True,
-                playback_id=playback_id,
-                playout_receipt_version=1 if request_playout else 0,
-                report_audio_clock=request_clock,
-                timings=timing.rows() if timing else [],
+            caption, rows = (
+                live.caption() if live is not None else (text, timing.rows() if timing else [])
             )
-            with self.publication_lock:
-                if not self.hooks.valid(generation) or playback_id != self.playback_serial:
+            # Live barge-in stops a player within the same turn generation.
+            # Order its begin against that stop with the capture-owner guard.
+            with self.hooks.lock if live is not None else nullcontext():
+                if not valid():
                     return False
-                published_at = time.monotonic()
-                self.previous_spoken = self.last_spoken
-                self.previous_spoken_until = published_at + 1
-                self.last_spoken = text
-                self.spoken.append((published_at, text))
-                # Only now can an ordered pause reach the new device player.
-                self.begin_pending = False
+                self.output_event(
+                    'play_begin',
+                    generation=generation,
+                    text=caption,
+                    mood=mood(caption),
+                    role='announcement'
+                    if generation == self.hooks.announcement_generation()
+                    else role,
+                    streaming=True,
+                    playback_id=playback_id,
+                    playout_receipt_version=1 if request_playout else 0,
+                    report_audio_clock=request_clock,
+                    timings=rows,
+                    **({'live_caption': True} if live is not None else {}),
+                )
+                with self.publication_lock:
+                    if not valid() or playback_id != self.playback_serial:
+                        return False
+                    published_at = time.monotonic()
+                    self.previous_spoken = self.last_spoken
+                    self.previous_spoken_until = published_at + 1
+                    self.last_spoken = caption
+                    self.spoken.append((published_at, caption))
+                    # Only now can an ordered pause reach the new device player.
+                    self.begin_pending = False
             if timing:
                 timing.publish = lambda rows: (
                     self.output_event(
@@ -254,44 +276,78 @@ class PlaybackController:
                         playback_id=playback_id,
                         timings=rows,
                     )
-                    if self.hooks.valid(generation)
+                    if valid()
                     else None
                 )
+            if live is not None:
+
+                def publish_live(caption, rows):
+                    with self.hooks.lock:
+                        if (
+                            not valid()
+                            or self.live_output is not live
+                            or not caption.startswith(self.last_spoken)
+                        ):
+                            return
+                        self.output_event(
+                            'live_caption',
+                            generation=generation,
+                            playback_id=playback_id,
+                            text=caption,
+                            timings=rows,
+                        )
+                        self.last_spoken = caption
+                        if self.spoken:
+                            self.spoken[-1] = (time.monotonic(), caption)
+
+                live.subscribe(publish_live)
             sequence = 0
             written = 0
             start = time.monotonic()
             for pcm in itertools.chain(prefill, iterator):
                 start += self.wait_playback(generation)
-                if not self.hooks.valid(generation):
+                if not valid():
                     return False
                 for offset in range(0, len(pcm), 320):
                     start += self.wait_playback(generation)
-                    if not self.hooks.valid(generation):
+                    if not valid():
                         return False
                     piece = pcm[offset : offset + 320].astype('<i2')
                     if request_playout:
                         self.playout_probe.reserve(generation, playback_id, written, piece)
                     self.output_packet(
-                        Packet(SPEAKER, generation, sequence, written, 0, piece.tobytes())
+                        Packet(
+                            SPEAKER,
+                            generation,
+                            sequence,
+                            written,
+                            playback_id if live is not None else 0,
+                            piece.tobytes(),
+                        )
                     )
                     sequence += 1
                     written += len(piece)
                     # Fill the device ahead, then pace; do not starve AudioTrack.
                     deadline = start + max(0, written - 3200) / RATE
-                    while self.hooks.valid(generation) and time.monotonic() < deadline:
+                    while valid() and time.monotonic() < deadline:
                         waited = self.wait_playback(generation)
                         start += waited
                         deadline += waited
                         time.sleep(min(0.01, max(0, deadline - time.monotonic())))
             with self.publication_lock:
-                if not self.hooks.valid(generation) or playback_id != self.playback_serial:
+                if not valid() or playback_id != self.playback_serial:
                     return False
                 # The device can drain and acknowledge before the send returns.
                 self.end_frames = written
-            self.output_event('play_end', generation=generation, frames=written)
+            self.output_event(
+                'play_end',
+                generation=generation,
+                frames=written,
+                **({'playback_id': playback_id} if live is not None else {}),
+            )
             with self.done:
                 deadline = time.monotonic() + 4
-            while self.hooks.valid(generation):
+            while valid():
                 with self.done:
                     if generation in self.completed:
                         break
@@ -299,7 +355,7 @@ class PlaybackController:
                 # Never retain the completion condition across that callback:
                 # owner requests acquire session guard -> completion condition.
                 deadline += self.wait_playback(generation)
-                if not self.hooks.valid(generation):
+                if not valid():
                     break
                 with self.done:
                     # Recheck after dropping/reacquiring the condition so a
@@ -311,13 +367,13 @@ class PlaybackController:
                     self.done.wait(0.1)
             with self.done:
                 completed = generation in self.completed
-            if not completed and self.hooks.valid(generation):
+            if not completed and valid():
                 # Admission, cancellation and error UI belong to one owner
                 # transaction. A new request must not enter between them.
                 with self.hooks.lock:
                     with self.done:
                         completed = generation in self.completed
-                    if not completed and self.hooks.valid(generation):
+                    if not completed and valid():
                         self.hooks.log('playback_completion_timeout')
                         error = OperationFailure(
                             'Playback acknowledgement timed out', stage='playback', kind='timeout'
@@ -326,17 +382,22 @@ class PlaybackController:
                         self.hooks.cancel_session('completion_timeout')
                         self.hooks.failure('设备播放未确认', error, trace_key=generation)
                         return False
-            return self.hooks.valid(generation)
+            return valid()
         except Exception as error:
             self.hooks.diagnostics().failure(
                 generation, self.hooks.diagnostics().current_stage(generation), error
             )
             with self.hooks.lock:
-                if self.hooks.valid(generation) and started:
+                if valid() and started:
                     self.hooks.cancel_session('audio_stream_error')
                     self.hooks.failure('这次播报没有完成', error, trace_key=generation)
             raise
         finally:
+            if live is not None:
+                live.subscribe(None)
+                with self.publication_lock:
+                    if self.live_output is live and not self.playing:
+                        self.live_output = None
             close = getattr(iterator, 'close', None)
             if close:
                 close()

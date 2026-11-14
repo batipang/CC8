@@ -31,6 +31,8 @@ class Field:
 
 
 FIELDS = {
+    'voice_mode': Field('choice', 'minimax', ('minimax', 'gpt-live-1')),
+    'gpt_live_voice': Field('identifier', 'marin'),
     'asr': Field('choice', 'minimax', ('minimax', 'sensevoice', 'whisper')),
     'brain': Field('choice', 'dot', ('dot', 'minimax', 'echo')),
     'capture_frontend': Field('choice', 'mono', ('mono', 'paired')),
@@ -60,6 +62,8 @@ FIELDS = {
     'signing_keystore': Field('path', None, max_length=4096, nullable=True),
 }
 ENV_FIELDS = {
+    'CC8_VOICE_MODE': 'voice_mode',
+    'CC8_GPT_LIVE_VOICE': 'gpt_live_voice',
     'CC8_ASR_ENGINE': 'asr',
     'CC8_BRAIN_PROVIDER': 'brain',
     'CC8_CAPTURE_FRONTEND': 'capture_frontend',

@@ -394,6 +394,15 @@ def doctor(profile, root=ROOT):
                         dot_ready,
                         'Install owner-configured Codex CLI and its required Node runtime',
                     )
+                    if config.voice_mode == 'gpt-live-1':
+                        from gpt_live_credentials import KEY_FILE, load_key
+
+                        check(
+                            'gpt_live_credential_format',
+                            lambda: load_key(root / KEY_FILE),
+                            'GPT-Live is unavailable without a Mac project key; see docs/GPT_LIVE_TRIAL.md',
+                            required=False,
+                        )
         if profile in ('voice', 'all'):
             check(
                 'runtime_ownership',

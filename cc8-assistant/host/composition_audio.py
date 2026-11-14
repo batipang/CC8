@@ -65,6 +65,9 @@ def build_audio_pipeline(
                 complete_chinese_ticket=lambda base, stamp: host.wake.complete_chinese_ticket(
                     base, stamp
                 ),
+                live_audio=lambda frame, voiced, credible: (
+                    host.live is not None and host.live.consume(frame, voiced, credible)
+                ),
                 playing=lambda: host.playback.playing,
                 natural_barge_enabled=lambda: host.session.voice_preferences.natural_barge,
                 last_audio_end=lambda: host.playback.last_audio_end,
@@ -142,6 +145,7 @@ def build_audio_pipeline(
                 host.capture.bind_response_probe(text, generation, input_end_ns)
             ),
             owner_access=lambda: host.owner_access(),
+            live_owns_capture=lambda audio: host.live is not None and host.live.handoff(audio),
         )
     )
     response = ResponseWorker(

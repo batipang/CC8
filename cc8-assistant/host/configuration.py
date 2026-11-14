@@ -53,11 +53,15 @@ class RuntimeConfig:
     legacy_profile: bool
     capture_frontend: str = 'mono'
     english_wake_verifier: str = 'off'
+    voice_mode: str = 'minimax'
+    gpt_live_voice: str = 'marin'
 
     def public_summary(self) -> dict[str, object]:
         return {
             'schema_version': 1,
             'asr': self.asr,
+            'voice_mode': self.voice_mode,
+            'gpt_live_voice': self.gpt_live_voice,
             'brain': self.brain,
             'capture_frontend': self.capture_frontend,
             'minimax_base': self.minimax_base,
@@ -181,6 +185,8 @@ def load_config(root: Path = ROOT, environ: Mapping[str, str] | None = None) -> 
     # environment overrides; these casts cross from the heterogeneous schema map.
     return RuntimeConfig(
         asr=cast(str, values['asr']),
+        voice_mode=cast(str, values['voice_mode']),
+        gpt_live_voice=cast(str, values['gpt_live_voice']),
         brain=cast(str, values['brain']),
         capture_frontend=cast(str, values['capture_frontend']),
         minimax_base=cast(str, values['minimax_base']),
@@ -235,6 +241,19 @@ def migrate(root: Path = ROOT, environ: Mapping[str, str] | None = None) -> Runt
     return load_config(root, environ)
 
 
+def select_voice_mode(
+    mode: str, root: Path = ROOT, environ: Mapping[str, str] | None = None
+) -> RuntimeConfig:
+    env = os.environ if environ is None else environ
+    path = profile_path(root, env)
+    current, _ = _read(path, private=True) if path.exists() or path.is_symlink() else ({}, False)
+    validate_value('voice_mode', mode)
+    if 'CC8_VOICE_MODE' in env and env['CC8_VOICE_MODE'] != mode:
+        raise ConfigError('voice_mode', 'conflicting_environment_override')
+    write_profile(path, {**current, 'schema_version': 1, 'voice_mode': mode})
+    return load_config(root, env)
+
+
 def reset(root: Path = ROOT, environ: Mapping[str, str] | None = None) -> Path | None:
     env = os.environ if environ is None else environ
     path = profile_path(root, env)
@@ -257,9 +276,21 @@ def reset(root: Path = ROOT, environ: Mapping[str, str] | None = None) -> Path |
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('check', 'show', 'migrate', 'reset', 'schema'))
+    parser.add_argument(
+        'action', choices=('check', 'show', 'migrate', 'reset', 'schema', 'voice-mode')
+    )
+    parser.add_argument('mode', nargs='?', choices=FIELDS['voice_mode'].choices)
     args = parser.parse_args()
+    if (args.action == 'voice-mode') != (args.mode is not None):
+        parser.error('voice-mode requires minimax or gpt-live-1')
     try:
+        if args.action == 'voice-mode':
+            print(
+                json.dumps(
+                    select_voice_mode(args.mode).public_summary(), ensure_ascii=False, indent=2
+                )
+            )
+            return
         if args.action == 'schema':
             print(json.dumps(schema(), ensure_ascii=False, indent=2))
             return

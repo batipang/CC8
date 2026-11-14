@@ -29,6 +29,7 @@ python3 cc8-assistant/host/configuration.py check
 | 字段 | 含义与约束 |
 | --- | --- |
 | schema_version | 当前为整数 1；未知版本失败 |
+| voice_mode / gpt_live_voice | 默认 `minimax`。可切换到 `gpt-live-1`，试用音色默认 `marin`。见 [切换和回退](GPT_LIVE_TRIAL.md)。 |
 | asr | minimax / sensevoice / whisper；失败不更换引擎，不扩大上传范围 |
 | brain | dot / minimax / echo；echo 使用本机识别与播报 |
 | capture_frontend | `mono` 默认；`paired` 为 0.15.45／APK 0.9.43 的成对参考候选，通过 `CC8_CAPTURE_FRONTEND` 或私有配置显式选择。仍需设备能力协商，格式不支持时在采样前回退单声道。参考 [协议](PROTOCOL_BOUNDARIES.md#成对参考输入候选)；候选尚需实时实机 A/B，不改变现用默认。 |
@@ -77,3 +78,5 @@ python3 cc8-assistant/host/configuration.py schema
 读取和检查不自动迁移；未知版本或坏文件的迁移失败后原字节不变。写入采用同目录临时文件、fsync 和原子替换，失败不留下半份配置。reset 保留旧字节备份，失败会回滚；不改密钥/签名/配对文件，不启动服务、界面、麦克风或相机。环境变量仍优先，reset 不会替你清除 shell 环境；若曾指定签名引用，构建前需继续明确选择原签名。
 
 验证覆盖来源优先级、真实最小 PATH 子进程、登录环境白名单、迁移/原子写/恢复回滚、文件权限与类型、真实 MiniMax 客户端编码（模拟 HTTP 响应，不调用云端）、签名引用缺失前置失败及 TLS 端口与签名发现一致性。均为软件验证，实际 CI 状态见 [VALIDATION.md](VALIDATION.md)，不代表模型额度、识别准确率、物理设备或长期可靠性已验收。
+
+可选语音模式与回退步骤见 [GPT-Live-1 试用](GPT_LIVE_TRIAL.md)。
