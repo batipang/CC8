@@ -18,6 +18,92 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class UpgradeTests(unittest.TestCase):
+    def test_report_collections_require_the_exact_declared_format_without_export(self):
+        with tempfile.TemporaryDirectory() as folder:
+            before, after = self.manifests(folder)
+            self.assertTrue(upgrade.plan(before, after)['report_collection_storage']['compatible'])
+            private = before / 'device-access/private/voice-runtime'
+            private.mkdir(parents=True, mode=0o700)
+            readers = after / 'cc8-assistant/host'
+            readers.mkdir(parents=True)
+            originals = {}
+            for name, (filename, module) in upgrade.REPORT_STORES.items():
+                path = private / filename
+                path.write_text(json.dumps(dict(schema=1, revision=1, items=['PRIVATE_FIXTURE'])))
+                path.chmod(0o600)
+                originals[path] = path.read_bytes()
+                (readers / module).write_text((ROOT / 'cc8-assistant/host' / module).read_text())
+                gate = upgrade.report_collection_storage_gate(before, ROOT)
+                self.assertTrue(gate['stores'][name]['compatible'])
+            gate = upgrade.plan(before, after)['report_collection_storage']
+            self.assertTrue(gate['compatible'])
+            self.assertNotIn('PRIVATE_FIXTURE', str(gate))
+            archive = readers / 'report_archive.py'
+            archive.write_text(
+                "def validate(value):\n    if value['schema'] != 2: raise ValueError()\n"
+            )
+            gate = upgrade.plan(before, after)['report_collection_storage']
+            self.assertEqual(gate['stores']['archive']['reader_version'], 2)
+            self.assertFalse(gate['compatible'])
+            self.assertEqual(
+                self.invoke(['plan', '--from-root', str(before), '--to-root', str(after)])[0], 2
+            )
+            archive.unlink()
+            self.assertIsNone(
+                upgrade.plan(before, after)['report_collection_storage']['stores']['archive'][
+                    'reader_version'
+                ]
+            )
+            self.assertTrue(all(path.read_bytes() == data for path, data in originals.items()))
+
+    def test_report_collection_preflight_rejects_unsafe_and_malformed_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            before, _ = self.manifests(folder)
+            path = before / 'device-access/private/voice-runtime/work-report-progress.json'
+            path.parent.mkdir(mode=0o700, parents=True)
+            path.write_text('{"schema":true,"revision":1,"items":[]}')
+            path.chmod(0o600)
+            with self.assertRaises(ValueError):
+                upgrade.report_collection_storage_gate(before, ROOT)
+            path.write_text('{"schema":1,"revision":1,"items":[]}')
+            path.chmod(0o644)
+            with self.assertRaises(ValueError):
+                upgrade.report_collection_storage_gate(before, ROOT)
+            path.unlink()
+            path.symlink_to(before / 'release.json')
+            with self.assertRaises(OSError):
+                upgrade.report_collection_storage_gate(before, ROOT)
+
+    def test_candidate_report_collections_are_rechecked_before_recovery(self):
+        with tempfile.TemporaryDirectory() as folder:
+            roots, apks, checked, _ = self.transition_fixture(folder)
+            base, candidate, recovery = roots
+            transition = Path(folder) / 'transition.json'
+            with patch('tools.release.check_apk', side_effect=checked):
+                report = upgrade.verify_assistant_transition(
+                    *roots, apks[0], hashlib.sha256(apks[0].read_bytes()).hexdigest()
+                )
+                self.assertTrue(report['report_collection_storage']['recovery']['compatible'])
+                upgrade.output(report, transition)
+                path = base / 'device-access/private/voice-runtime/work-report-sources.json'
+                path.parent.mkdir(mode=0o700, parents=True)
+                path.write_text('{"schema":1,"revision":1,"items":[]}')
+                path.chmod(0o600)
+                with self.assertRaisesRegex(ValueError, 'Saved work report collections'):
+                    upgrade.verify_assistant_transition(
+                        *roots, apks[0], hashlib.sha256(apks[0].read_bytes()).hexdigest()
+                    )
+            dest = candidate / path.relative_to(base)
+            dest.parent.mkdir(mode=0o700, parents=True)
+            dest.write_bytes(path.read_bytes())
+            dest.chmod(0o600)
+            receipt = upgrade.recheck_transition_storage(
+                transition, candidate, recovery, 'recovery'
+            )
+            self.assertFalse(receipt['compatible'])
+            self.assertTrue(receipt['report_collection_storage']['stores']['sources']['present'])
+            self.assertEqual(dest.read_bytes(), path.read_bytes())
+
     def test_window_receipt_archive_blocks_older_reader_and_reports_no_content(self):
         from saved_tasks import SavedTasks
         from test_saved_tasks import task
