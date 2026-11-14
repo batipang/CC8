@@ -593,6 +593,69 @@ class UpgradeTests(unittest.TestCase):
             with self.assertRaises(upgrade.ConfigError):
                 upgrade.backup(source, root)
 
+    def test_targeted_restore_omits_only_default_fields_missing_in_old_reader(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            profile = self.profile(folder)
+            original = profile.read_bytes()
+            schema = upgrade.config_schema()
+            del schema['properties']['voice_mode']
+            del schema['properties']['gpt_live_voice']
+            declaration = root / 'cc8-assistant/host/resources/runtime-config.schema.json'
+            declaration.parent.mkdir(parents=True)
+            declaration.write_text(json.dumps(schema))
+            saved, staged = root / 'backup.json', root / 'staged.json'
+            snapshot = upgrade.backup(profile, root)
+            upgrade.output(snapshot, saved)
+            args = ['stage-restore', str(saved), '--target-root', str(root), '--output']
+            code, _, error = self.invoke([*args, str(staged)])
+            self.assertEqual(code, 0, error)
+            expected = snapshot['settings'].copy()
+            del expected['voice_mode']
+            del expected['gpt_live_voice']
+            self.assertEqual(json.loads(staged.read_text()), expected)
+            self.assertEqual(profile.read_bytes(), original)
+            self.assertEqual(upgrade.verify_backup(saved), snapshot['settings'])
+
+    def test_targeted_restore_rejects_active_trial_and_different_field_contract(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            profile = self.profile(folder, {'schema_version': 1, 'voice_mode': 'gpt-live-1'})
+            schema = upgrade.config_schema()
+            declaration = root / 'cc8-assistant/host/resources/runtime-config.schema.json'
+            declaration.parent.mkdir(parents=True)
+            snapshot = upgrade.backup(profile, root)
+            saved, staged = root / 'backup.json', root / 'staged.json'
+            upgrade.output(snapshot, saved)
+            args = [
+                'stage-restore',
+                str(saved),
+                '--target-root',
+                str(root),
+                '--output',
+                str(staged),
+            ]
+            for properties in (
+                {k: v for k, v in schema['properties'].items() if k != 'voice_mode'},
+                {**schema['properties'], 'tts_speed': {'type': 'number', 'maximum': 1.0}},
+            ):
+                declaration.write_text(json.dumps({**schema, 'properties': properties}))
+                code, _, error = self.invoke(args)
+                self.assertEqual(code, 2)
+                self.assertIn('target configuration schema', error)
+                self.assertFalse(staged.exists())
+            declaration.write_text(json.dumps(schema))
+            code, _, error = self.invoke(args)
+            self.assertEqual(code, 0, error)
+            self.assertEqual(json.loads(staged.read_text()), snapshot['settings'])
+
+            staged.unlink()
+            declaration.write_text('{"properties":{},' + json.dumps(schema)[1:])
+            code, _, error = self.invoke(args)
+            self.assertEqual(code, 2)
+            self.assertIn('target configuration schema', error)
+            self.assertFalse(staged.exists())
+
     def test_backup_reads_no_credential_or_key_contents_and_ignores_environment_overrides(self):
         with tempfile.TemporaryDirectory() as folder:
             source = self.profile(folder)

@@ -16,7 +16,7 @@ import sys
 import uuid
 from zoneinfo import ZoneInfo
 from configuration import _read as read_profile, ConfigError
-from config_schema import FIELDS, validate_document
+from config_schema import FIELDS, schema as config_schema, validate_document
 from private_output import PrivateOutput, private_directory
 from release_info import ROOT, load_release
 from identity_compatibility import storage_gate as identity_storage_gate
@@ -401,6 +401,13 @@ def backup(profile, source_root=ROOT):
     }
 
 
+def unique_fields(items):
+    result = dict(items)
+    if len(result) != len(items):
+        raise ValueError('Duplicate JSON field')
+    return result
+
+
 def read_private_json(path):
     flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
     with os.fdopen(os.open(path, flags), 'rb') as source:
@@ -411,15 +418,7 @@ def read_private_json(path):
     if len(raw) > 32768:
         raise ValueError('Backup exceeds size limit')
 
-    def pairs(items):
-        result = {}
-        for key, value in items:
-            if key in result:
-                raise ValueError('Duplicate backup field')
-            result[key] = value
-        return result
-
-    return json.loads(raw.decode('utf-8'), object_pairs_hook=pairs)
+    return json.loads(raw.decode('utf-8'), object_pairs_hook=unique_fields)
 
 
 def verify_backup(path):
@@ -458,6 +457,48 @@ def verify_backup(path):
     if not hmac.compare_digest(value['settings_sha256'], fingerprint(settings)):
         raise ValueError('Backup settings checksum mismatch')
     return settings
+
+
+def settings_for_target(settings, target_root):
+    """Check the target checkout's declarative profile contract without running its code."""
+    path = Path(target_root) / 'cc8-assistant/host/resources/runtime-config.schema.json'
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as source:
+        if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+            raise ValueError('Target configuration schema must be a regular file')
+        raw = source.read(32769)
+    if len(raw) > 32768:
+        raise ValueError('Target configuration schema exceeds size limit')
+    target = json.loads(raw, object_pairs_hook=unique_fields)
+    current = config_schema()
+    if (
+        not isinstance(target, dict)
+        or not isinstance(target.get('properties'), dict)
+        or {k: v for k, v in target.items() if k not in ('title', 'properties')}
+        != {k: v for k, v in current.items() if k not in ('title', 'properties')}
+    ):
+        raise ValueError('Unsupported target configuration schema')
+
+    properties = target['properties']
+    trial_fields = {'voice_mode', 'gpt_live_voice'}
+    if trial_fields - properties.keys() and any(
+        settings.get(name, FIELDS[name].default) != FIELDS[name].default for name in trial_fields
+    ):
+        raise ValueError('GPT-Live settings require a target that supports the trial')
+    result = dict(settings)
+    for name in settings:
+        if name in trial_fields and name not in properties:
+            # These defaults reproduce the older MiniMax-only behavior.
+            del result[name]
+            continue
+        declared = properties.get(name)
+        if not isinstance(declared, dict):
+            raise ValueError('Settings contain fields unsupported by the target checkout')
+        expected = current['properties'][name]
+        if {k: v for k, v in declared.items() if k != 'default'} != {
+            k: v for k, v in expected.items() if k != 'default'
+        }:
+            raise ValueError('Target configuration field contract differs from this tool')
+    return result
 
 
 def output(value, path=None):
@@ -513,6 +554,7 @@ def main(argv=None):
     )
     staged.add_argument('backup', type=Path)
     staged.add_argument('--output', type=Path, required=True)
+    staged.add_argument('--target-root', type=Path, help='Check the intended recovery checkout')
     args = parser.parse_args(argv)
     try:
         if args.action == 'verify':
@@ -532,6 +574,15 @@ def main(argv=None):
             )
         elif args.action == 'stage-restore':
             value = verify_backup(args.backup)
+            if args.target_root is not None:
+                try:
+                    value = settings_for_target(value, args.target_root)
+                except (OSError, ValueError, RecursionError):
+                    print(
+                        'Recovery profile was not staged: target configuration schema is unavailable or incompatible.',
+                        file=sys.stderr,
+                    )
+                    return 2
         else:
             value = plan(args.from_root, args.to_root, args.assistant_apk)
         print(output(value, args.output))

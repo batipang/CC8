@@ -61,6 +61,8 @@
 ./cc8 upgrade stage-restore /absolute/private/backup.json --output /absolute/private/staged-settings.json
 ```
 
+为旧版恢复准备配置时，加 `--target-root /absolute/path/to/recovery-checkout`。工具会读取目标版本声明的配置 schema，检查现有字段是否兼容。旧版未声明 GPT-Live 字段时，仅在字段仍为默认 `minimax` 和 `marin` 时省略相应字段。显式启用试用、指定其他试用音色、目标缺少 schema 或其他字段契约改变时，命令会在写文件之前停止。原备份保留全部设置。此检查核对目标声明，服务环境和启动仍须单独验证。
+
 先校验 backup schema、规范化 settings 和 SHA-256，再创建**新** settings 文件。SHA-256 用于内容完整性检查，不是发布者签名。备份中的数据不决定恢复路径，输出只能来自命令明确指定；不允许覆盖原配置或已有文件。损坏、篡改、权限错误、未知 schema 和写失败不会改动原配置。
 
 本命令不应用 staged 文件。真正升级/恢复仍须先明确停止原服务，核对原签名/配对/资源和配置环境，将核对后的配置应用到目标，再按 SIGNING / RELEASES / TODO 做实机验收。没有自动回放工具任务、播报或开启采集。
