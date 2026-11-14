@@ -119,10 +119,11 @@ class WebEvidence:
         with self.page_lock:
             pages = tuple(self.pages)
         reads_by_url = {}
-        for row in pages:
-            reads_by_url[source_key(row['url'])] = row
+        for index, row in enumerate(pages):
+            reads_by_url[source_key(row['url'])] = index
             if row.get('final_url'):
-                reads_by_url[source_key(row['final_url'])] = row
+                reads_by_url[source_key(row['final_url'])] = index
+        shown_reads = set()
         actions_by_url = {source_key(row['url']): row for row in self.actions.values()}
         for link in links[:30]:
             if not isinstance(link, dict):
@@ -131,7 +132,8 @@ class WebEvidence:
             if url is None:
                 continue
             key = source_key(url)
-            if key in seen:
+            read_index = reads_by_url.get(key)
+            if key in seen or read_index in shown_reads:
                 continue
             title = link.get('title')
             if (
@@ -144,7 +146,6 @@ class WebEvidence:
             # A later failed access supersedes an earlier completed action for
             # this URL. Neither state establishes article or event dates.
             receipt = actions_by_url.get(key)
-            read = reads_by_url.get(key)
             result.append(
                 {
                     'title': title,
@@ -158,7 +159,11 @@ class WebEvidence:
                     'body_verified': False,
                 }
             )
-            if read is not None:
+            if read_index is not None:
+                # Two citations backed by the same attempt share a card.
+                # Separate attempts can still report different outcomes.
+                shown_reads.add(read_index)
+                read = pages[read_index]
                 result[-1].update(
                     access_evidence='page_body_received' if read['ok'] else 'page_fetch_failed',
                     observed_at=read['observed_at'],
