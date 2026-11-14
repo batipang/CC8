@@ -221,6 +221,23 @@ class MemoryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate(state)
 
+    def test_commit_order_survives_same_second_updates_and_clock_rollback(self):
+        self.memory.clock = lambda: datetime.fromisoformat('2026-11-09T12:00:00+08:00')
+        self.put(key='称呼', value='原称呼')
+        self.put(key='昵称', value='中间称呼')
+        self.put(key='称呼', value='同秒更新')
+
+        def provided_values():
+            context = PreferenceMemory(self.path).context().split('\n', 1)[1]
+            return [item['value'] for item in json.loads(context)['preferences']]
+
+        self.assertEqual(provided_values(), ['中间称呼', '同秒更新'])
+        self.memory.clock = lambda: datetime.fromisoformat('2026-11-09T11:00:00+08:00')
+        self.put(key='昵称', value='回拨后更新')
+        self.put(key='名字', value='回拨后新增')
+        self.assertEqual(provided_values(), ['同秒更新', '回拨后更新', '回拨后新增'])
+        self.assertEqual(PreferenceMemory(self.path).snapshot()['revision'], 5)
+
 
 class ControllerTests(unittest.TestCase):
     def setUp(self):
