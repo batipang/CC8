@@ -31,7 +31,7 @@ from report_progress import (
 from result_provenance import validate as validate_provenance
 from saved_tasks import HANDOFF_DRAFT_LABEL
 from report_sources import MAX_SOURCES, ReportScope
-from thread_queue import MAX_QUEUE_ITEMS
+from thread_queue import MAX_QUEUE_ITEMS, runtime_status_text
 
 PERIOD_NAMES = {
     '上次汇报后': 'since_last',
@@ -750,7 +750,7 @@ class ReportVoice:
         lines = (
             f'第{number}项原聊天「{member.title}」。',
             summary,
-            '队列条数只反映此次读取，任务执行状态需另行核对。',
+            runtime_status_text(result),
         )
         read_at = datetime.fromtimestamp(result['read_at'], BEIJING).strftime('%Y-%m-%d %H:%M:%S')
         return ReportReply(
