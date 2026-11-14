@@ -33,6 +33,8 @@ PUBLICATION_DATE = re.compile(
     r'(?:Z|[+-][0-9]{2}:[0-5][0-9])?)?'
 )
 DNS_SLOTS = threading.BoundedSemaphore(2)
+# Stable curl exit codes. Keep diagnostics independent of localized stderr.
+CURL_FAILURES = {28: 'timeout', 63: 'page_too_large'}
 FAILURE_CODES = frozenset(
     {
         'non_public_address',
@@ -180,8 +182,14 @@ def fetch(url, address, deadline, current, *, popen=subprocess.Popen):
                     limit = MAX_BYTES if key.data == 'body' else MAX_HEADERS
                     if len(chunks[key.data]) > limit:
                         raise PageError('page_too_large')
-        if process.wait(timeout=max(0.01, deadline - time.monotonic())) != 0:
-            raise PageError('network_failed')
+        try:
+            status = process.wait(timeout=max(0.01, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            raise PageError('timeout') from None
+        if not current() or time.monotonic() >= deadline:
+            raise PageError('cancelled' if not current() else 'timeout')
+        if status != 0:
+            raise PageError(CURL_FAILURES.get(status, 'network_failed'))
         return bytes(chunks['body']), bytes(chunks['headers'])
     finally:
         try:
