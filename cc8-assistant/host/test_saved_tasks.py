@@ -609,18 +609,19 @@ class ControllerTests(Fixture):
         self.assertEqual(self.path.read_text(), 'PRIVATE_CORRUPT_CONTENT')
         self.assertEqual(b.workspace.snapshot()['tasks'][0]['status'], 'completed')
 
-    def test_disconnect_discards_response_but_keeps_explicit_confirmed_write(self):
+    def test_disconnect_discards_response_but_keeps_committed_write(self):
         b = self.session()
         task_id = b.workspace.task_start(b.generation, '保存任务')
         b.workspace.task_finish(task_id, 'completed', '原结果')
         entered, release = threading.Event(), threading.Event()
         original = self.store.save
 
-        def save(value):
+        def save(value, **options):
+            saved = original(value, **options)
             entered.set()
             if not release.wait(2):
                 raise RuntimeError('Write barrier timed out')
-            return original(value)
+            return saved
 
         self.store.save = save
         b.on_event(
@@ -636,6 +637,60 @@ class ControllerTests(Fixture):
         self.assertEqual(len(self.store.snapshot()), 1)
         self.assertEqual(b.events, [])
         self.assertEqual(b.workspace.snapshot()['tasks'][0]['status'], 'completed')
+
+    def test_route_change_during_disk_sync_cannot_save_or_delete(self):
+        for action in ('save', 'delete'):
+            with self.subTest(action=action):
+                b = self.session()
+                task_id = b.workspace.task_start(b.generation, '保存任务')
+                b.workspace.task_finish(task_id, 'completed', '原结果')
+                if action == 'delete':
+                    self.request(b, 'save', task_id)
+                before = self.path.read_bytes() if self.path.exists() else None
+                b.events.clear()
+                sync = os.fsync
+                entered, release, switched = threading.Event(), threading.Event(), threading.Event()
+
+                def stall(fd):
+                    entered.set()
+                    if not release.wait(2):
+                        raise RuntimeError('Write barrier timed out')
+                    sync(fd)
+
+                def switch():
+                    with b.guard:
+                        b.session.bound_route_token = 'new-route'
+                    switched.set()
+
+                with patch('saved_tasks.os.fsync', side_effect=stall):
+                    b.on_event(
+                        dict(
+                            event='saved_task_request',
+                            request_id='b' * 32,
+                            action=action,
+                            id=task_id,
+                        )
+                    )
+                    change = threading.Thread(target=switch, daemon=True)
+                    try:
+                        self.assertTrue(entered.wait(1))
+                        change.start()
+                        self.assertTrue(switched.wait(1), 'disk fsync blocked the route handover')
+                    finally:
+                        release.set()
+                        b.saved_tasks.worker.join(2)
+                        if change.ident is not None:
+                            change.join(2)
+                self.assertFalse(b.saved_tasks.worker.is_alive())
+                self.assertFalse(b.saved_tasks.busy)
+                self.assertEqual(b.events, [])
+                self.assertEqual(self.path.read_bytes() if self.path.exists() else None, before)
+                self.assertEqual(list(self.root.glob('.saved-*.tmp')), [])
+                self.request(b, action, task_id)
+                self.assertTrue(b.events[-1][1]['ok'])
+                self.assertEqual(len(self.store.snapshot()), int(action == 'save'))
+                if action == 'save':
+                    self.assertTrue(self.store.delete(task_id))
 
     def test_protocol_rejects_bad_nonce_id_and_action(self):
         base = {
