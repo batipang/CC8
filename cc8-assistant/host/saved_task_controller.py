@@ -19,6 +19,14 @@ from desktop_handoff import can_open_chat, confirm_open, launch_chat
 
 REVEAL_ACTIONS = ('reveal_live', 'reveal_saved')
 OPEN_HANDOFF = 'open_handoff'
+OPEN_LIVE_HANDOFF = 'open_live_handoff'
+OPEN_HANDOFF_ACTIONS = (OPEN_HANDOFF, OPEN_LIVE_HANDOFF)
+DESKTOP_ACTIONS = (*REVEAL_ACTIONS, *OPEN_HANDOFF_ACTIONS)
+
+
+def handoff_can_open(item):
+    source = desktop_handoff_source(item)
+    return source is not None and can_open_chat(source['thread_id'])
 
 
 @dataclass(frozen=True)
@@ -53,7 +61,7 @@ class SavedTaskController:
         request_id, action = data.get('request_id'), data.get('action')
         if not isinstance(request_id, str) or not re.fullmatch('[a-f0-9]{32}', request_id):
             raise ValueError('Invalid saved result request ID')
-        if action not in ('list', 'get', 'save', 'delete', *REVEAL_ACTIONS, OPEN_HANDOFF):
+        if action not in ('list', 'get', 'save', 'delete', *DESKTOP_ACTIONS):
             raise ValueError('Invalid saved result action')
         task_id = ident(data.get('id')) if action != 'list' else None
         file_index = data.get('file_index')
@@ -80,7 +88,7 @@ class SavedTaskController:
                 if self.busy:
                     self.reply(request_id, ok=False, message='正在处理保存记录，请稍后再试')
                     return
-                if revealing or action == OPEN_HANDOFF:
+                if action in DESKTOP_ACTIONS:
                     if request_id in self.desktop_requests:
                         self.reply(
                             request_id,
@@ -110,22 +118,24 @@ class SavedTaskController:
 
         try:
             fields = {'ok': True, 'action': action}
-            if action in (*REVEAL_ACTIONS, OPEN_HANDOFF):
-                if action != 'reveal_live':
+            if action in DESKTOP_ACTIONS:
+                if action in ('reveal_saved', OPEN_HANDOFF):
                     task = next((t for t in self.store.snapshot() if t['id'] == task_id), None)
-                if task is None:
-                    raise ValueError('Result no longer exists')
                 with self.hooks.lock:
                     if not current():
                         return
-                    if action == OPEN_HANDOFF:
+                    if action == OPEN_LIVE_HANDOFF:
+                        task = next((t for t in self.hooks.tasks() if t['id'] == task_id), None)
+                    if task is None:
+                        raise ValueError('Result no longer exists')
+                    if action in OPEN_HANDOFF_ACTIONS:
                         source = desktop_handoff_source(task)
                         if source is None:
-                            raise ValueError('No matching saved handoff')
+                            raise ValueError('No matching desktop handoff')
                         # Commit the local launch against the authenticated owner.
                         # Waiting for LaunchServices must stay off the route lock.
                         process = self.hooks.launch_chat(source['thread_id'])
-                if action == OPEN_HANDOFF:
+                if action in OPEN_HANDOFF_ACTIONS:
                     confirm_open(process)
                     fields['open_requested'] = True
                 else:
@@ -149,12 +159,10 @@ class SavedTaskController:
                 item = next((t for t in self.store.snapshot() if t['id'] == task_id), None)
                 if item is None:
                     raise ValueError('Saved task no longer exists')
-                source = desktop_handoff_source(item)
                 fields['item'] = {
                     **item,
                     'desktop_handoff_pending': desktop_handoff_pending(item),
-                    'desktop_handoff_can_open': source is not None
-                    and can_open_chat(source['thread_id']),
+                    'desktop_handoff_can_open': handoff_can_open(item),
                     'execution_unconfirmed': execution_unconfirmed(item),
                 }
             with self.hooks.lock:
@@ -174,7 +182,7 @@ class SavedTaskController:
                             else '文件定位未确认：文件可能已移动、删除或不是可定位的普通文件。请在 Mac 核对；不会自动重试或打开文件内容。'
                             if action in REVEAL_ACTIONS
                             else '无法确认已请求打开原聊天，请在 Mac 打开 Codex 并核对。'
-                            if action == OPEN_HANDOFF
+                            if action in OPEN_HANDOFF_ACTIONS
                             else '保存记录状态未确认，请刷新查看；异常文件保留，原任务和已执行操作不会撤销',
                         )
                     except (OSError, EOFError, ValueError):

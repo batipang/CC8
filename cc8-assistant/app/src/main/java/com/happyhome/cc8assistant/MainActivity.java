@@ -932,6 +932,7 @@ public final class MainActivity extends Activity
     LinearLayout content = new LinearLayout(this);
     content.setOrientation(LinearLayout.VERTICAL);
     content.addView(detail);
+    savedTasks.addHandoffButton(content, task, false, route);
     if ("completed".equals(task.optString("status")) && session.supportsResultReading()) {
       for (boolean restart : new boolean[] {false, true}) {
         Button read = new Button(this);

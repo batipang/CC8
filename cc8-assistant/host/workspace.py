@@ -60,6 +60,7 @@ class TaskRecord(TypedDict):
     finished_at: NotRequired[str]
     provenance: NotRequired[Provenance]
     window_input: NotRequired[WindowReceipt]
+    desktop_handoff_can_open: NotRequired[bool]
 
 
 class ReminderRecord(TypedDict):

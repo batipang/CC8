@@ -430,6 +430,107 @@ class ControllerTests(Fixture):
         self.assertEqual(self.path.read_bytes(), before)
         self.assertTrue(b.response.queue.empty())
 
+    def test_live_handoff_opens_bound_chat_without_reading_or_saving_archive(self):
+        from dot_handoff import Handoff
+        from report_voice import report_source
+
+        b = self.session()
+        task_id = b.workspace.task_start(b.generation, '继续第二项')
+        b.workspace.task_provenance(
+            task_id, report_source(Handoff('original-chat', '原聊天', (), False), 'original-turn')
+        )
+        b.workspace.task_finish(task_id, 'completed', '私有草稿', desktop_handoff=True)
+        launch = Mock()
+        launch.return_value.wait.return_value = 0
+        b.saved_tasks.hooks = replace(b.saved_tasks.hooks, launch_chat=launch)
+        with patch.object(sys, 'platform', 'darwin'):
+            b.publish_workspace()
+        event, fields = b.events[-1]
+        self.assertEqual(event, 'workspace')
+        self.assertIs(fields['tasks'][0]['desktop_handoff_can_open'], True)
+        self.assertNotIn('desktop_handoff_can_open', b.workspace.snapshot()['tasks'][0])
+        with self.assertRaises(ValueError):
+            self.request(b, 'open_live_handoff', task_id, thread_id='injected')
+        with patch.object(self.store, 'snapshot') as archive:
+            self.request(b, 'open_live_handoff', task_id)
+            self.assertEqual(
+                b.events[-1][1],
+                {
+                    'request_id': 'a' * 32,
+                    'ok': True,
+                    'action': 'open_live_handoff',
+                    'open_requested': True,
+                },
+            )
+            self.request(b, 'open_live_handoff', task_id)
+            self.assertFalse(b.events[-1][1]['ok'])
+            archive.assert_not_called()
+        launch.assert_called_once_with('original-chat')
+        self.assertFalse(self.path.exists())
+        self.assertTrue(b.response.queue.empty())
+
+    def test_live_handoff_does_not_open_a_saved_only_or_ordinary_result(self):
+        from dot_handoff import Handoff
+        from report_voice import report_source
+
+        b = self.session()
+        saved = task(2)
+        self.store.save(
+            {
+                **saved,
+                'provenance': report_source(Handoff('chat-one', '原聊天', (), False), 'turn-two'),
+                'steps': [{'id': 'desktop_handoff', 'title': '待桌面接续', 'status': 'completed'}],
+            }
+        )
+        ordinary = b.workspace.task_start(b.generation, '仅生成普通答复')
+        b.workspace.task_provenance(
+            ordinary, report_source(Handoff('chat-one', '原聊天', (), False), 'turn-two')
+        )
+        b.workspace.task_finish(ordinary, 'completed', '普通答复')
+        launch = Mock()
+        b.saved_tasks.hooks = replace(b.saved_tasks.hooks, launch_chat=launch)
+        for i, task_id in enumerate((saved['id'], ordinary)):
+            b.on_event(
+                {
+                    'event': 'saved_task_request',
+                    'request_id': f'{i:032x}',
+                    'action': 'open_live_handoff',
+                    'id': task_id,
+                }
+            )
+            b.saved_tasks.worker.join(2)
+            self.assertFalse(b.events[-1][1]['ok'])
+        launch.assert_not_called()
+
+    def test_live_handoff_worker_rechecks_authenticated_route_before_launch(self):
+        from dot_handoff import Handoff
+        from report_voice import report_source
+
+        b = self.session()
+        task_id = b.workspace.task_start(b.generation, '继续第二项')
+        b.workspace.task_provenance(
+            task_id, report_source(Handoff('chat-one', '原聊天', (), False), 'turn-two')
+        )
+        b.workspace.task_finish(task_id, 'completed', '私有草稿', desktop_handoff=True)
+        launch = Mock()
+        b.saved_tasks.hooks = replace(b.saved_tasks.hooks, launch_chat=launch)
+        with patch.object(threading.Thread, 'start'):
+            b.on_event(
+                {
+                    'event': 'saved_task_request',
+                    'request_id': 'a' * 32,
+                    'action': 'open_live_handoff',
+                    'id': task_id,
+                }
+            )
+        b.session.bound_route_token = 'new-route'
+        b.saved_tasks.worker.start()
+        b.saved_tasks.worker.join(2)
+        self.assertFalse(b.saved_tasks.worker.is_alive())
+        self.assertFalse(b.saved_tasks.busy)
+        launch.assert_not_called()
+        self.assertEqual(b.events, [])
+
     def test_saved_handoff_cannot_launch_on_a_rebound_route(self):
         from dot_handoff import Handoff
         from report_voice import report_source
