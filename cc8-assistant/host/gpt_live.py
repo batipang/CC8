@@ -7,8 +7,6 @@ import base64
 from collections import deque
 from dataclasses import dataclass
 import json
-import os
-from pathlib import Path
 import queue
 import re
 import ssl
@@ -17,8 +15,6 @@ import time
 import uuid
 
 import numpy as np
-
-from runtime_guard import _private_file
 
 MODEL = 'gpt-live-1'
 ENDPOINT = 'wss://api.openai.com/v1/live/sessions'
@@ -31,15 +27,6 @@ INSTRUCTIONS = (
 MAX_SESSION_SECONDS = 180
 IDLE_SECONDS = 30
 OUTPUT_GAP = 0.45
-
-
-def load_key(path: Path) -> str:
-    value = os.environ.get('OPENAI_API_KEY')
-    if value is None:
-        value = _private_file(path, 1024).decode().strip()
-    if not re.fullmatch(r'[\x21-\x7e]{16,512}', value):
-        raise ValueError('Invalid OpenAI API credential')
-    return value
 
 
 def connect(key):

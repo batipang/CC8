@@ -6,7 +6,7 @@ MiniMax 仍是默认语音模式。切到 GPT-Live-1 后，主人在唤醒词模
 
 ## 切换
 
-1. 从同一试用分支构建 APK 并更新 Mac 的语音运行时。使用项目原有安装方式和签名。Mac 端使用具有 GPT-Live API 权限的 OpenAI 项目密钥。交互启动可通过 `OPENAI_API_KEY` 提供，登录服务从工作区 `.toolchains/cc8/openai-api-key` 读取，文件必须仅当前用户可读写（`0600`）。密钥仅保存在 Mac。缺少可读取的密钥时，后台继续使用现有语音并输出诊断提示。
+1. 从同一试用分支构建 APK 并更新 Mac 的语音运行时。使用项目原有安装方式和签名。Mac 端使用具有 GPT-Live API 权限的 OpenAI 项目密钥。交互启动可通过 `OPENAI_API_KEY` 提供，登录服务从工作区 `.toolchains/cc8/openai-api-key` 读取，文件必须仅当前用户可读写（`0600`）。密钥仅保存在 Mac。`./cc8 doctor --profile voice` 会报告试用密钥是否可读取，只检查格式和文件权限。缺少可读取的密钥时，后台继续使用现有语音并输出诊断提示。
 2. 在试用工作区运行 `.toolchains/cc8/voice-venv/bin/python cc8-assistant/host/configuration.py voice-mode gpt-live-1`。重启试用后台后生效。若已用 `CC8_VOICE_MODE` 配置服务，先按服务安装方式更新该覆盖。配对、MiniMax 密钥、原有设置按部署流程提供。
 3. 在 CC8 选择唤醒词模式，正常启动语音并等待校准。隐私说明会标示 GPT-Live 试用及 OpenAI 音频处理。音色默认 `marin`，可通过私有配置 `gpt_live_voice` 或 `CC8_GPT_LIVE_VOICE` 选择 GPT-Live 内置音色。
 4. 切回时运行同一个命令，将参数改为 `minimax`，再重启后台。

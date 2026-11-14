@@ -16,7 +16,8 @@ from brain_router import BrainRouter
 from bridge import Bridge
 from capture_evidence import FRAME_NS
 from configuration import ROOT, load_config, select_voice_mode
-from gpt_live import Fragment, LivePlayback, LiveSession, load_key
+from gpt_live import Fragment, LivePlayback, LiveSession
+from gpt_live_credentials import load_key
 from gpt_live_trial import LiveTrial
 from reply_types import LiveReply
 

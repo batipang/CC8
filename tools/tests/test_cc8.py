@@ -160,6 +160,41 @@ class CommandTests(unittest.TestCase):
             self.assertFalse(checks['local_voice_tools']['ok'])
             self.assertTrue(checks['local_voice_tools']['required'])
 
+    def test_voice_doctor_redacts_optional_live_key_and_keeps_minimax_ready(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            self.fixture(root)
+            with (
+                patch.dict('os.environ', {'CC8_VOICE_MODE': 'gpt-live-1'}, clear=True),
+                patch.object(cc8, 'credential_ready', return_value=True),
+                patch.object(cc8, 'dot_ready', return_value=True),
+                patch.object(cc8, 'verified_models', return_value=True),
+                patch.object(cc8, 'other_runtime', return_value=False),
+                patch.object(
+                    cc8,
+                    'python_info',
+                    return_value={
+                        'version': [3, 13],
+                        'system': 'Darwin',
+                        'machine': 'arm64',
+                        'missing_or_wrong': [],
+                    },
+                ),
+            ):
+                result = cc8.doctor('voice', root)
+                checks = {item['id']: item for item in result['checks']}
+                self.assertTrue(result['ok'])
+                self.assertFalse(checks['gpt_live_credential_format']['required'])
+                self.assertFalse(checks['gpt_live_credential_format']['ok'])
+                key = root / '.toolchains/cc8/openai-api-key'
+                key.parent.mkdir(parents=True)
+                key.write_text('private-test-fixture')
+                key.chmod(0o600)
+                result = cc8.doctor('voice', root)
+                checks = {item['id']: item for item in result['checks']}
+                self.assertTrue(checks['gpt_live_credential_format']['ok'])
+                self.assertNotIn('private-test-fixture', json.dumps(result))
+
     def test_voice_doctor_requires_optional_chinese_model_only_when_selected(self):
         for mode in ('off', 'sensevoice', 'sensevoice_complete'):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as folder:

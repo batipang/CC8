@@ -5,7 +5,8 @@ import threading
 import time
 
 from brain_router import BrainRouter
-from gpt_live import LiveSession, load_key, pcm16
+from gpt_live import LiveSession, pcm16
+from gpt_live_credentials import KEY_FILE, load_key
 from reply_types import LiveReply
 from assistant_identity import WAKE_PATTERN
 from recognition_commands import SLEEP_COMMAND, stop_command, wake_payload
@@ -320,4 +321,4 @@ class LiveTrial:
 def create_trial(host, config, root: Path):
     if config.brain != 'dot':
         raise ValueError('GPT-Live requires the Dot brain')
-    return LiveTrial(host, load_key(root / '.toolchains/cc8/openai-api-key'), config.gpt_live_voice)
+    return LiveTrial(host, load_key(root / KEY_FILE), config.gpt_live_voice)
