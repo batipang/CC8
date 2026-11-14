@@ -9,7 +9,8 @@ import numpy as np
 from brain_router import BrainRouter
 from gpt_live import LiveSession, pcm16
 from gpt_live_credentials import KEY_FILE, load_key
-from reply_types import LiveReply
+from reply_types import LiveReply, Reply
+from result_reading import reading_command
 from assistant_identity import WAKE_PATTERN
 from recognition_commands import SLEEP_COMMAND, stop_command, wake_payload
 from vision import visual_request
@@ -84,6 +85,7 @@ class LiveTrial:
         return (
             self.host.playback.playing
             or self.host.response.busy
+            or not self.host.response.queue.empty()
             or self.host.capture.live_response_probe() is not None
         )
 
@@ -251,6 +253,19 @@ class LiveTrial:
                 # session. A local rejection can acknowledge without photo data.
                 if self.current(owner):
                     owner.result(ident, '请查看设备上的照片追问提示。')
+                return True
+            if reading_command(text) is not None:
+                # The existing exact narration path needs device playback
+                # receipts. End Live so it cannot compete for that output.
+                capture_owner = host.session.capture_owner()
+                generation = host.cancel('live_result_read')
+                if (
+                    host.generation == generation
+                    and host.session.capture_owner() == capture_owner
+                    and host.owner_access()
+                    and not host.session.capture_route_pending
+                ):
+                    host.enqueue_response(Reply(generation, text))
                 return True
             if visual_request(text):
                 self.cancel()

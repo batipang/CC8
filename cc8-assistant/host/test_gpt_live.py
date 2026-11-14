@@ -439,6 +439,19 @@ class LiveAdmissionTests(unittest.TestCase):
         host.begin_visual.assert_not_called()
         owner.result.assert_called_once_with('photo', '请查看设备上的照片追问提示。')
 
+    def test_live_result_read_cannot_cross_a_capture_route_change_during_cancel(self):
+        trial, host, owner = self.make_trial()
+        self.assertTrue(trial.handoff(np.full(FRAME, 0.1)))
+
+        def cancel(reason):
+            host.generation += 1
+            host.session.capture_owner.return_value = ('wifi', 'route2', 2, 'mic')
+            return host.generation
+
+        host.cancel = cancel
+        self.assertTrue(trial.delegate(owner, 'read', '继续朗读'))
+        host.enqueue_response.assert_not_called()
+
     def test_stale_or_echo_delegation_leaves_photo_state_untouched(self):
         trial, host, owner = self.make_trial()
         self.assertTrue(trial.handoff(np.full(FRAME, 0.1)))

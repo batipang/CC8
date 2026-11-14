@@ -2,7 +2,12 @@
 
 from copy import deepcopy
 import json
+import threading
+import time
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
+from gpt_live_trial import LiveTrial
 from protocol import validate_device_event
 from reply_types import Reply, ResultRead
 from result_reading import ResultReading, ReadingUnavailable, reading_command
@@ -301,6 +306,38 @@ class ReadingTests(unittest.TestCase):
         self.assertEqual(len(bridge.workspace.tasks), 1)
         self.assertEqual(list(bridge.response.history), [])
         self.assertNotIn(ident, json.dumps(bridge.diagnostics_report()))
+
+    def test_live_voice_narration_resumes_and_restarts_only_the_stored_result(self):
+        for command, expected in (
+            ('继续朗读', ['第二句。']),
+            ('从头朗读结果', ['第一句。第二句。']),
+        ):
+            with self.subTest(command=command):
+                bridge = self.session()
+                ident = self.seed(bridge)
+                bridge.response.reading.original_ack(ident, bridge.generation, '第一句。')
+                owner = SimpleNamespace(stop=threading.Event())
+                trial = bridge.live = LiveTrial(bridge, 'fixture-only', 'marin')
+                trial.session = owner
+                trial.scope = bridge.session.capture_owner(), bridge.generation
+                trial.near_at = time.monotonic()
+                spoken = []
+
+                def speak(text, generation):
+                    spoken.append(text)
+                    bridge.diagnostics.playback_done(generation, confirmed_ack_ms=0)
+                    return True
+
+                bridge.speak = speak
+                with patch.object(trial, 'eligible', return_value=True):
+                    self.assertTrue(trial.delegate(owner, 'read', command))
+                    self.assertFalse(trial.delegate(owner, 'repeat', command))
+                self.assertTrue(owner.stop.is_set())
+                self.work(bridge)
+                self.assertEqual(spoken, expected)
+                self.assertEqual(bridge.brain.calls, 0)
+                self.assertEqual(len(bridge.workspace.tasks), 1)
+                self.assertEqual(bridge.response.reading.coverage(ident), 'complete')
 
     def test_voice_does_not_substitute_an_older_result_for_unknown_latest_task(self):
         bridge = self.session()
