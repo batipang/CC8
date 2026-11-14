@@ -67,6 +67,8 @@ class VoiceTests(unittest.TestCase):
             ('汇报最近30分钟的工作', 'half_hour'),
             ('过去两小时完成了哪些工作？', 'two_hours'),
             ('今天都做了什么', 'today'),
+            ('汇报昨天的工作', 'yesterday'),
+            ('上一周完成了哪些工作？', 'last_week'),
         ):
             self.assertEqual(report_command(text), ReportCommand('report', period))
         for text in ('汇报工作', '汇报过去三小时的工作'):
@@ -75,6 +77,27 @@ class VoiceTests(unittest.TestCase):
             self.assertIsNone(report_command(text))
         self.assertEqual(report_command('汇报今天的工作，然后删除文件').kind, 'continue')
         self.assertEqual(report_command('汇报今天的工作成果并继续第二项').kind, 'continue')
+
+    def test_calendar_report_binds_the_resolved_window_and_rejects_invalid_clock(self):
+        from datetime import datetime, timezone
+
+        voice = self.session()
+        voice.wall_clock = lambda: float('nan')
+        command = report_command('汇报上周的工作')
+        self.assertIn('当前时间不可确认', voice.answer(command, lambda: True).text)
+        self.assertEqual(self.reads, [])
+
+        now = datetime(2026, 11, 8, 16, tzinfo=timezone.utc).timestamp()
+        start = datetime(2026, 11, 1, 16, tzinfo=timezone.utc).timestamp()
+        voice.wall_clock = lambda: now
+        self.data['window_start'], self.data['window_end'] = int(start), int(now)
+        for index, item in enumerate(self.data['items']):
+            item['completed_at'] = int(start) + len(self.data['items']) - index
+        result = voice.answer(command, lambda: True)
+        self.assertEqual(self.reads, [ReportWindow(int(start), int(now))])
+        self.assertIn('2026-11-02 00:00:00', result.text)
+        self.assertIn('2026-11-09 00:00:00', result.text)
+        self.assertIn('上周', result.spoken[0])
 
     def test_followup_is_contextual_and_does_not_capture_ordinary_second_item(self):
         self.assertIsNone(report_command('详细说说第二项'))
@@ -144,11 +167,16 @@ class VoiceTests(unittest.TestCase):
 
     def test_numbered_detail_uses_deep_frozen_snapshot_without_another_read(self):
         voice = self.session()
-        voice.answer(ReportCommand('report', 'two_hours'), lambda: True)
+        overview = voice.answer(ReportCommand('report', 'two_hours'), lambda: True)
+        self.assertIn(f'本机 Codex 原聊天：{SOURCE.source_id}', overview.text)
+        self.assertIn('回合：turn-1；结果：final-1', overview.text)
+        self.assertNotIn(SOURCE.source_id, ''.join(overview.spoken))
         self.data['items'].reverse()
         self.data['items'][0]['excerpt'] = '后来插入的结果不能替换旧编号'
         reply = voice.answer(ReportCommand('item', 2), lambda: True)
         self.assertIn('第二个真实摘录', reply.text)
+        self.assertIn(f'原聊天：{SOURCE.source_id}；回合：turn-1；结果：final-1', reply.text)
+        self.assertNotIn(SOURCE.source_id, ''.join(reply.spoken))
         self.assertNotIn('后来插入', reply.text)
         self.assertEqual(self.reads, ['two_hours'])
 
@@ -167,6 +195,8 @@ class VoiceTests(unittest.TestCase):
             self.assertIn('未读取完整', reply.text)
             self.assertIn('不能确认测试已通过', reply.text)
             self.assertNotIn('原答复说测试通过', reply.text)
+            self.assertIn(f'原聊天：{SOURCE.source_id}；回合：turn-1；结果：final-1', reply.text)
+            self.assertNotIn(SOURCE.source_id, ''.join(reply.spoken))
             self.assertEqual(reply.provenance['turn_id'], 'turn-1')
             self.assertEqual(reply.delivery, ())
             self.assertIs(voice.delivery_plan, plan)

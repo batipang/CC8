@@ -7,7 +7,7 @@ import re
 import time
 from typing import Callable, ContextManager
 from dot_client import Cancelled, DotError
-from work_reports import BEIJING, MAX_CARDS, ReportWindow
+from work_reports import BEIJING, CALENDAR_PERIODS, MAX_CARDS, ReportWindow
 from report_time import ReportRange, ReportTimeError, parse_range, range_compound, window_label
 from report_progress import (
     DeliveryPlan,
@@ -35,6 +35,9 @@ PERIOD_NAMES = {
     '过去两个小时': 'two_hours',
     '最近两个小时': 'two_hours',
     '今天': 'today',
+    '昨天': 'yesterday',
+    '上周': 'last_week',
+    '上一周': 'last_week',
     '过去2小时': 'two_hours',
     '最近2小时': 'two_hours',
     '近2小时': 'two_hours',
@@ -49,6 +52,8 @@ PERIOD_LABELS = {
     'half_hour': '过去半小时',
     'two_hours': '过去两小时',
     'today': '今天',
+    'yesterday': '昨天',
+    'last_week': '上周',
     'since_last': '上次汇报后的新增及待补播结果',
 }
 PERIOD_PATTERN = '|'.join(PERIOD_NAMES)
@@ -224,7 +229,12 @@ def report_source(source, turn_id: str | None = None, item=None):
     )
 
 
-def item_text(item, number):
+def result_identity(item, thread_id=None):
+    result = f'回合：{item["turn_id"]}；结果：{item["item_id"]}'
+    return f'原聊天：{thread_id}；{result}' if thread_id is not None else result
+
+
+def item_text(item, number, *, thread_id=None, include_identity=False):
     evidence = item['evidence']
     completed = datetime.fromtimestamp(item['completed_at'], BEIJING).strftime('%m-%d %H:%M:%S')
     lines = [
@@ -234,9 +244,8 @@ def item_text(item, number):
     ]
     if 'source_thread_id' in item:
         lines.insert(1, f'来源：{item["source_title"]} · {item["source_project"]} · 本机 Codex')
-        lines.append(
-            f'原聊天：{item["source_thread_id"]}；回合：{item["turn_id"]}；结果：{item["item_id"]}'
-        )
+    if include_identity or 'source_thread_id' in item:
+        lines.append(result_identity(item, item.get('source_thread_id', thread_id)))
     if item.get('since_status') in SINCE_NOTES:
         lines.insert(1, SINCE_NOTES[item['since_status']])
     if item['excerpt_truncated']:
@@ -270,7 +279,7 @@ def spoken_evidence(item):
     )
 
 
-def report_text(report):
+def report_text(report, *, include_identity=False):
     def date(value):
         return datetime.fromtimestamp(value, BEIJING).strftime('%Y-%m-%d %H:%M:%S')
 
@@ -294,6 +303,8 @@ def report_text(report):
                 for row in report['sources']
             )
         )
+    elif include_identity:
+        lines.insert(2, f'本机 Codex 原聊天：{report["source_id"]}')
     since = report.get('view') == 'since_last_unheard'
     if report.get('items_truncated'):
         lines.append(f'本页结果卡达到{MAX_CARDS}项上限，仍有未展示结果。')
@@ -314,7 +325,10 @@ def report_text(report):
         lines.append(
             '本次没有新增或待补播结果。' if since else '已读取范围内没有本窗口的已完成答复。'
         )
-    lines.extend(item_text(item, n + 1) for n, item in enumerate(report['items']))
+    lines.extend(
+        item_text(item, n + 1, include_identity=include_identity)
+        for n, item in enumerate(report['items'])
+    )
     return '\n\n'.join(lines)
 
 
@@ -546,6 +560,11 @@ class ReportVoice:
             if not isinstance(command.value, ReportRange):
                 raise ValueError('Invalid report range')
             return command.value.resolve(self.wall_clock())
+        if command.value in CALENDAR_PERIODS:
+            try:
+                return ReportWindow.period(command.value, self.wall_clock())
+            except (ValueError, OverflowError, OSError):
+                raise ReportTimeError('当前时间不可确认，请先检查Mac系统时间。') from None
         if command.value != 'since_last':
             return command.value
         if self.progress is None:
@@ -634,14 +653,18 @@ class ReportVoice:
                     else:
                         lines.append('现有回执不能确定哪些命令是测试，也不能确认测试已通过。')
                     return ReportReply(
-                        '\n'.join(lines),
+                        '\n'.join(
+                            (lines[0], result_identity(item, provenance['thread_id']), *lines[1:])
+                        ),
                         tuple(lines),
                         item.get('source_title', report['source_title']),
                         'item_evidence',
                         1,
                         provenance=provenance,
                     )
-                text = item_text(item, number)
+                text = item_text(
+                    item, number, thread_id=provenance['thread_id'], include_identity=True
+                )
                 messages = [f'第{number}项原答复摘录。', item['excerpt']]
                 if item.get('since_status') in SINCE_NOTES:
                     messages.insert(1, SINCE_NOTES[item['since_status']])
@@ -704,11 +727,9 @@ class ReportVoice:
                     )
             if not self.remember(source, report, revision, progress):
                 raise DotError('Work report result is unconfirmed')
-            text = report_text(report)
+            text = report_text(report, include_identity=True)
             label = (
-                window_label(window)
-                if isinstance(window, ReportWindow) and not since
-                else PERIOD_LABELS[command.value]
+                window_label(window) if command.kind == 'custom' else PERIOD_LABELS[command.value]
             )
             messages = [f'这是{label}所选聊天的只读汇报。原答复尚未独立核验。']
             if since:

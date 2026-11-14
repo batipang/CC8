@@ -560,7 +560,7 @@ class ChatController:
                     result['report_snapshot_adopted'] = self.voice.remember(
                         report_owner, result['report'], report_revision
                     )
-                    result['report_text'] = report_text(result['report'])
+                    result['report_text'] = report_text(result['report'], include_identity=True)
                     self.display_snapshot.remember(result['report'])
                     # A broken archive must not prevent an otherwise valid live
                     # read. It only removes the save affordance until repaired.
@@ -578,7 +578,9 @@ class ChatController:
                             pass
                 if action == 'report_page':
                     value = self.display_snapshot.read(data['snapshot_id'])
-                    result = dict(report=value, report_text=report_text(value))
+                    result = dict(
+                        report=value, report_text=report_text(value, include_identity=True)
+                    )
                     if self.archive is not None and self.archive_offer_current(data['snapshot_id']):
                         try:
                             self.voice.snapshot_for_save(data['snapshot_id'])

@@ -10,6 +10,7 @@ from dot_handoff import Handoff, identifier
 from dot_client import Cancelled, DotError
 
 PERIODS = ('half_hour', 'two_hours', 'today')
+CALENDAR_PERIODS = ('yesterday', 'last_week')
 BEIJING = timezone(timedelta(hours=8))
 MAX_TURN_PAGES, MAX_ITEM_PAGES, PAGE_SIZE, MAX_CARDS = 4, 2, 25, 20
 
@@ -22,6 +23,7 @@ TEST_TARGET = re.compile(r'[A-Za-z0-9_./:]+')
 TEST_FLAGS = frozenset(
     ('-q', '-v', '-vv', '-x', '--quiet', '--verbose', '--fail-fast', '--exitfirst')
 )
+CC8_TEST_SUITES = frozenset(('installer', 'host', 'tooling', 'java'))
 
 
 def direct_test_command(value):
@@ -31,9 +33,20 @@ def direct_test_command(value):
     if not args:
         return False
     runner = args.pop(0).rsplit('/', 1)[-1]
-    python_module = TEST_PYTHON.fullmatch(runner) and len(args) >= 2 and args[0] == '-m'
+    python_runner = TEST_PYTHON.fullmatch(runner) is not None
+    python_module = python_runner and len(args) >= 2 and args[0] == '-m'
+    cc8_script = python_runner and args[:1] in (['tools/test_all.py'], ['./tools/test_all.py'])
     if python_module:
         runner, args = args[1], args[2:]
+    elif cc8_script:
+        args = args[1:]
+    if cc8_script or (python_module and runner == 'tools.test_all'):
+        # The repository's test entry point returns a failure if any selected
+        # suite fails. Recognize only the invocation forms that actually run it.
+        return len(args) % 2 == 0 and all(
+            flag == '--suite' and suite in CC8_TEST_SUITES
+            for flag, suite in zip(args[::2], args[1::2])
+        )
     if runner == 'unittest' and python_module:
         if args[:1] == ['discover']:
             args = args[1:]
@@ -59,13 +72,22 @@ class ReportWindow:
 
     @classmethod
     def period(cls, period, now):
-        if period not in PERIODS or type(now) not in (int, float) or not 0 < now < 253402300799:
+        if (
+            period not in (*PERIODS, *CALENDAR_PERIODS)
+            or type(now) not in (int, float)
+            or not 0 < now < 253402300799
+        ):
             raise ValueError('Invalid report period')
         end = int(now)
-        start = (
-            int(
-                datetime.fromtimestamp(end, BEIJING).replace(hour=0, minute=0, second=0).timestamp()
+        midnight = datetime.fromtimestamp(end, BEIJING).replace(hour=0, minute=0, second=0)
+        if period in CALENDAR_PERIODS:
+            stop = (
+                midnight if period == 'yesterday' else midnight - timedelta(days=midnight.weekday())
             )
+            start = stop - timedelta(days=1 if period == 'yesterday' else 7)
+            return cls(int(start.timestamp()), int(stop.timestamp()))
+        start = (
+            int(midnight.timestamp())
             if period == 'today'
             else end - (1800 if period == 'half_hour' else 7200)
         )
