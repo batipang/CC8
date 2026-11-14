@@ -14,6 +14,19 @@ import re
 MAX_ACTIONS = 64
 
 
+def publication_labels(values):
+    if not isinstance(values, list) or len(values) > 8:
+        return ''
+    valid = (
+        visible_text(value)
+        for value in values
+        if isinstance(value, str)
+        and 1 <= len(value) <= 64
+        and not re.search(r'[\ud800-\udfff]', value)
+    )
+    return '；'.join(dict.fromkeys(label for label in valid if label))
+
+
 class WebEvidence:
     def __init__(self, clock=now):
         self.clock = clock
@@ -28,9 +41,19 @@ class WebEvidence:
         with self.page_lock:
             if len(self.pages) >= 4:
                 return
-            row = {'url': url, 'observed_at': self.clock(), 'ok': False}
+            observed = receipt.get('observed_at')
+            observed = (
+                observed
+                if isinstance(observed, str)
+                and re.fullmatch(
+                    r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\+08:00', observed
+                )
+                and iso_date_label(observed)
+                else ''
+            )
+            row = {'url': url, 'observed_at': observed, 'ok': False}
             if receipt.get('ok') is True:
-                text, dates = receipt.get('text'), receipt.get('publication_labels')
+                text = receipt.get('text')
                 size = receipt.get('received_bytes')
                 final = public_url(receipt.get('final_url'))
                 if (
@@ -44,12 +67,6 @@ class WebEvidence:
                     or receipt.get('http_status') != 200
                     or receipt.get('facts_verified') is not False
                     or receipt.get('untrusted_page') is not True
-                    or not isinstance(dates, list)
-                    or len(dates) > 8
-                    or any(
-                        not isinstance(v, str) or len(v) > 64 or re.search(r'[\ud800-\udfff]', v)
-                        for v in dates
-                    )
                 ):
                     return
                 normalized = visible_text(text)
@@ -67,7 +84,7 @@ class WebEvidence:
                     excerpt=normalized[:2000],
                     text_chars=len(text),
                     text_truncated=truncated,
-                    dates='；'.join(visible_text(v) for v in dates),
+                    dates=publication_labels(receipt.get('publication_labels')),
                     updated_dates='；'.join(dict.fromkeys(v for v in updated if iso_date_label(v))),
                     size=size,
                 )

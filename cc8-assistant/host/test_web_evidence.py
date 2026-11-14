@@ -67,11 +67,33 @@ class WebEvidenceTests(unittest.TestCase):
                 self.assertEqual(
                     self.evidence.sources([dict(title='来源', url=self.url + bad)]), []
                 )
-        for field, value in (('text', 'bad\ud800'), ('publication_labels', ['bad\udfff'])):
-            receipt = self.page()
-            receipt[field] = value
-            self.evidence.page(receipt)
+        self.evidence.page(dict(self.page(), text='bad\ud800'))
         self.assertEqual(self.sources()[0]['access_evidence'], 'answer_link_only')
+
+    def test_missing_or_invalid_publication_labels_do_not_erase_a_real_read(self):
+        for labels, expected in (
+            (None, ''),
+            ([5, 'bad\udfff', ' ', '2026-11-10', '2026-11-10'], '2026-11-10'),
+        ):
+            with self.subTest(expected=expected):
+                evidence = WebEvidence()
+                evidence.page(dict(self.page(), publication_labels=labels))
+                row = evidence.sources([dict(title='来源', url=self.url)])[0]
+                self.assertEqual(row['access_evidence'], 'page_body_received')
+                self.assertEqual(row['page_excerpt'], 'Actual source text')
+                self.assertEqual(row['page_dates'], expected)
+                self.assertFalse(row['body_verified'])
+
+    def test_page_evidence_preserves_reader_time_and_leaves_invalid_time_unknown(self):
+        finished = '2026-11-08T23:59:59+08:00'
+        self.evidence.page(self.page(observed_at=finished))
+        self.assertEqual(self.sources()[0]['observed_at'], finished)
+        for observed in ('2026-02-30T00:00:00+08:00', '2026-11-09T00:00:00+00:00', None):
+            self.evidence.page(dict(ok=False, url=self.url, error='timeout', observed_at=observed))
+            row = self.sources()[0]
+            self.assertEqual(row['access_evidence'], 'page_fetch_failed')
+            self.assertEqual(row['observed_at'], '')
+            self.assertEqual(row['page_error_code'], 'timeout')
 
     def test_actual_reader_receipt_exposes_text_and_labels_without_verifying_facts(self):
         receipt = self.page(modification_labels=['2026-11-11', '2026-11-11', 'bad\udfff', 5])
@@ -188,7 +210,6 @@ class WebEvidenceTests(unittest.TestCase):
             ('http_status', 200.0),
             ('final_url', 'http://127.0.0.1'),
             ('text', ''),
-            ('publication_labels', [5]),
         ]:
             receipt = self.page()
             receipt[field] = value

@@ -27,7 +27,7 @@ final class SourcesPresentation {
       String target = text(row.opt("final_url"), 2048);
       finalUrl = safeUrl(target) ? target : "";
       int bytes = integer(row.opt("page_bytes"), 1048576);
-      pageRead = "page_body_received".equals(evidence) && !observedAt.isEmpty() && bytes > 0;
+      pageRead = "page_body_received".equals(evidence) && bytes > 0;
       pageBytes = pageRead ? bytes : 0;
       textChars = integer(row.opt("page_text_chars"), 20000);
       shownChars = pageExcerpt.codePointCount(0, pageExcerpt.length());
@@ -41,6 +41,14 @@ final class SourcesPresentation {
       errorCode = text(row.opt("page_error_code"), 40);
       detailLimited = Boolean.TRUE.equals(row.opt("page_details_limited"));
       listLimited = Boolean.TRUE.equals(row.opt("list_limited"));
+    }
+
+    private String observationDetails() {
+      if (pageRead || "page_fetch_failed".equals(evidence)) {
+        String time = beijingTime(observedAt);
+        return "\n页面读取结束的北京时间 " + (time.isEmpty() ? "未知" : time);
+      }
+      return observedAt.isEmpty() ? "" : "\n操作记录：" + observedAt.replace('T', ' ');
     }
 
     private String access() {
@@ -91,7 +99,7 @@ final class SourcesPresentation {
           + URI.create(url).getHost()
           + " · "
           + access()
-          + (observedAt.isEmpty() ? "" : "\n操作记录：" + observedAt.replace('T', ' '))
+          + observationDetails()
           + failureDetails()
           + "\n来源标注日期："
           + (publishedAt.isEmpty() ? "未知" : publishedAt)
