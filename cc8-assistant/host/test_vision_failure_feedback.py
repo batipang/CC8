@@ -154,7 +154,7 @@ class VisionFailureTests(unittest.TestCase):
         b = self.bridge()
         self.capture_events(b, 'permission_required')
         b.visual.challenge = 'c' * 32
-        b.transport_hub = SimpleNamespace(pairing=SimpleNamespace(token='a' * 64))
+        b.transport_hub = SimpleNamespace(pairing=SimpleNamespace(token='a' * 64), diagnostics=dict)
         with patch('threading.Thread.start'):
             job = b.request_snapshot()
         capture = b.visual.inbox.pending

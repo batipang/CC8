@@ -325,6 +325,14 @@ class TransportHub:
             now = time.monotonic()
             return {
                 'transport': self.active.kind if self.active and not self.active.closed else 'none',
+                'selected_application_route': (
+                    self.active.kind
+                    if self.active
+                    and self.active.application_ready
+                    and not self.active.closed
+                    and not self.role_uncertain
+                    else 'none'
+                ),
                 'route_envelope_version': int(
                     bool(
                         self.active

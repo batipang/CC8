@@ -95,6 +95,10 @@ class StatusReporter:
         metrics = self.hooks.metrics()
         meeting = self.meeting_diagnostics()
         heartbeat = metrics.get('last_heartbeat_monotonic')
+        routes = self.hooks.transport_diagnostics()
+        selected = routes.get('selected_application_route')
+        if selected != state.transport_kind or not state.connected:
+            selected = 'none'
         # 白名单输出就绪位，不导出用户内容。
         return {
             'ok': True,
@@ -159,6 +163,11 @@ class StatusReporter:
             'response_worker': self.hooks.response_alive(),
             'connected': state.connected,
             'transport': state.transport_kind,
+            'transport_routes': {
+                'usb_ready': routes.get('usb_ready') is True,
+                'wifi_ready': routes.get('wifi_ready') is True,
+                'selected': selected if selected in ('usb', 'wifi') else 'none',
+            },
             # Capture leases, as with ordinary voice. The separate native
             # device status reports actual AudioRecord start/release state.
             'microphone_active': state.active or meeting['meeting_capture_requested'],
