@@ -98,14 +98,12 @@ class AnnouncementTests(unittest.TestCase):
                                         'play_done', packet.generation, ident - 1, played_frames=320
                                     )
                                 inject('play_done', packet.generation, ident, played_frames=319)
-                                fields = (
-                                    {}
-                                    if (len(begins), missing)
-                                    in ((1, 'first_frames'), (2, 'frames'))
-                                    else {'played_frames': 320}
-                                )
-                                inject('play_done', packet.generation, ident, **fields)
-                                inject('play_done', packet.generation, ident, **fields)
+                                if (len(begins), missing) in ((1, 'first_frames'), (2, 'frames')):
+                                    inject('play_done', packet.generation, ident)
+                                    if not b.playback.playing:
+                                        raise AssertionError('Missing frame count ended playback')
+                                inject('play_done', packet.generation, ident, played_frames=320)
+                                inject('play_done', packet.generation, ident, played_frames=320)
 
                     def progress(self, begin, packet):
                         inject(
@@ -128,11 +126,14 @@ class AnnouncementTests(unittest.TestCase):
                 self.assertEqual(len({row['playback_id'] for row in begins}), 2)
                 rows = b.diagnostics_report()['requests']
                 self.assertEqual(len(rows), 1)
-                self.assertEqual(rows[0]['confirmed_playback_clauses'], 2 if missing is None else 1)
+                self.assertEqual(
+                    rows[0]['confirmed_playback_clauses'],
+                    2 if missing in (None, 'frames', 'first_frames') else 1,
+                )
                 stages = rows[0]['stages']
                 self.assertEqual(stages['playout_ack'], 500 if missing == 'first_start' else 250)
                 self.assertEqual(stages['playback_done'], 375)
-                first_confirmed_is_second = missing in ('first_frames', 'first_start')
+                first_confirmed_is_second = missing == 'first_start'
                 self.assertEqual(
                     stages['confirmed_playout_ack'], 500 if first_confirmed_is_second else 250
                 )

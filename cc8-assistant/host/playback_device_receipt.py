@@ -44,6 +44,7 @@ def accept_device_receipt(playback: PlaybackController, event):
                 generation != playback.hooks.generation()
                 or playback.end_frames is None
                 or not playback.matches_completion(event)
+                or (playback.device_can_report_completion and played is None)
                 or (played is not None and played < playback.end_frames)
             ):
                 return
