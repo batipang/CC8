@@ -29,7 +29,7 @@ Mac 上运行 `python3 cc8-assistant/host/diagnose.py --health` 可以查看后�
 python cc8-assistant/host/gpt_live_probe.py --runtime-root /absolute/path/to/active/cc8
 ```
 
-默认仅展示计划。加 `--execute` 后，Mac 合成三句固定语料，将同一份 PCM 分别送给 GPT-Live 和配置的 MiniMax ASR，报告中文字符、英文词的差异以及 GPT-Live 的语音和字幕片段。可再加 `--save-voice` 请求两段对照试听，WAV 只保存到运行工作区忽略的 `device-access/private/gpt-live-probes/`。GPT-Live 可以改述固定文本，结果会标记其字幕是否与目标一致。整个检查不启动 CC8、麦克风或 Dot。它可验证云端语音和字幕事件，实机打断延迟与屏幕同步仍需通过 CC8 播放确认。
+默认仅展示计划。加 `--execute` 后，Mac 合成三句固定语料，将同一份 PCM 分别送给 GPT-Live 和配置的 MiniMax ASR，报告中文字符和英文词的差异。语料送完后最多等 12 秒收集 GPT-Live 的回复，根据收到的音频、转写和空闲间隔判断收尾。超时会标记回复尚未收尾。结果附有音频段数、无字幕段数和字幕尾超出该段 PCM 的最大毫秒数。无字幕时超出量为 `null`。该量反映本地推定的分段内时间覆盖，设备屏幕与出声的延迟需另测。可再加 `--save-voice` 请求两段对照试听，WAV 只保存到运行工作区忽略的 `device-access/private/gpt-live-probes/`。GPT-Live 可以改述固定文本，结果会标记其字幕是否与目标一致。整个检查不启动 CC8、麦克风或 Dot。实机打断延迟、音色偏好与屏幕同步仍需通过 CC8 播放确认。
 
 | 项目 | 自动化检查 | 真机或云端检查 |
 | --- | --- | --- |

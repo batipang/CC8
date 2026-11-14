@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+from dataclasses import dataclass
 import io
 import json
 import os
@@ -31,7 +32,21 @@ SAMPLE_IDS = ('qa-01', 'names_places-05', 'mixed-04')
 VOICE_LINE = '你好，我是大黄蜂。汽车人，准备出发！'
 VOICE_REQUEST = '请朗读这句：' + VOICE_LINE
 FRAME_SECONDS = FRAME / RATE
-SILENCE_SECONDS = 6
+REPLY_TIMEOUT_SECONDS = 12
+MIN_REPLY_WINDOW_SECONDS = 3
+REPLY_QUIET_SECONDS = 1.2
+
+
+@dataclass(frozen=True)
+class ProbeResult:
+    settled: bool
+    transcript: str
+    pcm: bytes
+    caption: str
+    caption_fragments: int
+    audio_segments: int
+    uncaptained_segments: int
+    caption_overrun_frames: int | None
 
 
 class Probe:
@@ -42,7 +57,7 @@ class Probe:
         self.spoken = ''
         self.output = []
         self.pcm = bytearray()
-        self.caption_fragments = []
+        self.segments = []
         self.active = True
 
     def current(self, owner):
@@ -77,8 +92,27 @@ class Probe:
                     raise ValueError('Probe audio exceeded its bound')
                 self.pcm.extend(chunk.tobytes())
             if output.closed.is_set():
-                self.caption_fragments.append(output.caption())
+                self.segments.append(output)
         self.output[:] = [output for output in self.output if not output.closed.is_set()]
+
+    def result(self, *, settled):
+        segments = self.segments + self.output
+        captions = [segment.caption() for segment in segments]
+        overruns = [
+            max(0, timings[-1][3] - segment.samples)
+            for segment, (_, timings) in zip(segments, captions, strict=True)
+            if timings
+        ]
+        return ProbeResult(
+            settled,
+            self.spoken,
+            bytes(self.pcm),
+            ''.join(text for text, _ in captions),
+            sum(len(timings) for _, timings in captions),
+            len(segments),
+            sum(not timings for _, timings in captions),
+            max(overruns, default=None),
+        )
 
 
 async def run_live(key, voice, pcm, *, factory=LiveSession):
@@ -96,7 +130,10 @@ async def run_live(key, voice, pcm, *, factory=LiveSession):
         silence = bytes(frame_bytes)
         frames = (len(pcm) + frame_bytes - 1) // frame_bytes
         started = time.monotonic()
-        for index in range(frames + round(SILENCE_SECONDS / FRAME_SECONDS)):
+        last_caption_end = 0
+        last_caption_at = started
+        settled = False
+        for index in range(frames + round(REPLY_TIMEOUT_SECONDS / FRAME_SECONDS)):
             target = started + FRAME_SECONDS * index
             await asyncio.sleep(max(0, target - time.monotonic()))
             if task.done() or time.monotonic() - target > 0.25:
@@ -106,18 +143,28 @@ async def run_live(key, voice, pcm, *, factory=LiveSession):
                 voice_frame.ljust(frame_bytes, b'\0') if voice_frame else silence, bool(voice_frame)
             )
             probe.drain()
+            if session.last_output_caption_end != last_caption_end:
+                last_caption_end = session.last_output_caption_end
+                last_caption_at = time.monotonic()
+            # Continue sending silence while the provider decides when to speak.
+            # Allow a quiet tail after the last PCM or caption to collect late fragments.
+            if (
+                index >= frames + round(MIN_REPLY_WINDOW_SECONDS / FRAME_SECONDS)
+                and probe.segments
+                and not probe.output
+                and probe.spoken
+                and not session.pending
+                and time.monotonic() - max(session.last_output, last_caption_at)
+                >= REPLY_QUIET_SECONDS
+            ):
+                settled = True
+                break
         probe.active = False
         await asyncio.wait_for(task, timeout=3)
         probe.drain()
         if probe.failed:
             raise ValueError('Probe session failed')
-        captions = probe.caption_fragments + [output.caption() for output in probe.output]
-        return (
-            probe.spoken,
-            bytes(probe.pcm),
-            ''.join(text for text, _ in captions),
-            sum(len(timings) for _, timings in captions),
-        )
+        return probe.result(settled=settled)
     finally:
         if not task.done():
             task.cancel()
@@ -125,7 +172,7 @@ async def run_live(key, voice, pcm, *, factory=LiveSession):
 
 
 def score(reference, transcript):
-    if not transcript.strip():
+    if not any(char.isalnum() for char in transcript):
         return {'outcome': 'missing_transcript'}
     return {
         'outcome': 'recognized',
@@ -162,17 +209,25 @@ def run(root, *, save_samples):
                 reference = corpus[ident]['reference']
                 pcm = synthesize(Path(temporary), 'Tingting', 185, reference)
                 digest = fixture_digest(pcm)
-                heard, output, _, captions = asyncio.run(run_live(key, config.gpt_live_voice, pcm))
+                live = asyncio.run(run_live(key, config.gpt_live_voice, pcm))
                 baseline = recognizer.recognize(np.frombuffer(pcm, dtype='<i2') / 32768)
                 rows.append(
                     {
                         'id': ident,
                         'pcm_sha256': digest,
-                        'gpt_live': score(reference, heard),
+                        'gpt_live': score(reference, live.transcript),
                         'minimax': score(reference, baseline),
-                        'gpt_live_output_frames': len(output) // 2,
-                        'gpt_live_output_caption_fragments': captions,
-                        'gpt_live_has_nonzero_pcm': any(output),
+                        'gpt_live_reply_settled': live.settled,
+                        'gpt_live_output_frames': len(live.pcm) // 2,
+                        'gpt_live_output_caption_fragments': live.caption_fragments,
+                        'gpt_live_output_segments': live.audio_segments,
+                        'gpt_live_uncaptained_segments': live.uncaptained_segments,
+                        'gpt_live_max_caption_overrun_ms': (
+                            round(live.caption_overrun_frames * 1000 / RATE, 1)
+                            if live.caption_overrun_frames is not None
+                            else None
+                        ),
+                        'gpt_live_has_nonzero_pcm': any(live.pcm),
                     }
                 )
             voice_pair = voice_samples(root, config, key, Path(temporary)) if save_samples else None
@@ -183,8 +238,10 @@ def run(root, *, save_samples):
 
 def voice_samples(root, config, key, folder):
     fixture = synthesize(folder, 'Tingting', 185, VOICE_REQUEST)
-    _, sample, caption, _ = asyncio.run(run_live(key, config.gpt_live_voice, fixture))
-    if not any(sample):
+    live = asyncio.run(run_live(key, config.gpt_live_voice, fixture))
+    if not live.settled:
+        return {'state': 'incomplete_live_reply'}
+    if not any(live.pcm):
         return {'state': 'missing_audio'}
     speech = DirectSpeech(config=config)
     try:
@@ -198,12 +255,13 @@ def voice_samples(root, config, key, folder):
     with TemporaryDirectory(dir=parent) as temporary:
         scratch = Path(temporary) / 'voices'
         scratch.mkdir(mode=0o700)
-        names = (save_voice(scratch, 'gpt-live', sample), save_voice(scratch, 'minimax', minimax))
+        names = (save_voice(scratch, 'gpt-live', live.pcm), save_voice(scratch, 'minimax', minimax))
         destination = parent / uuid.uuid4().hex
         scratch.rename(destination)
     return {
         'state': 'saved',
-        'gpt_live_caption_matches_requested_text': normalized(caption) == normalized(VOICE_LINE),
+        'gpt_live_caption_matches_requested_text': normalized(live.caption)
+        == normalized(VOICE_LINE),
         'gpt_live': str(destination / names[0]),
         'minimax': str(destination / names[1]),
     }
@@ -233,8 +291,10 @@ def main(argv=None):
     print(json.dumps(result, ensure_ascii=False, indent=2))
     passed = all(
         row['gpt_live']['outcome'] == row['minimax']['outcome'] == 'recognized'
+        and row['gpt_live_reply_settled']
         and row['gpt_live_has_nonzero_pcm']
         and row['gpt_live_output_caption_fragments'] > 0
+        and row['gpt_live_uncaptained_segments'] == 0
         for row in result['cases']
     )
     return 0 if passed and (not args.save_voice or result['voice_pair']['state'] == 'saved') else 2
