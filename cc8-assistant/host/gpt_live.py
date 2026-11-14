@@ -61,10 +61,25 @@ def start_message(voice):
             'model': MODEL,
             'store': False,
             'instructions': INSTRUCTIONS,
-            'audio': {'format': {'type': 'audio/pcm', 'rate': 16000}, 'output': {'voice': voice}},
+            'audio': {'format': {'type': 'audio/pcm', 'rate': RATE}, 'output': {'voice': voice}},
             'delegation': {'type': 'client'},
         },
     }
+
+
+def confirms_start(event, request):
+    if event.get('type') != 'session.started':
+        return False
+    session = event.get('session', {})
+    audio = session.get('audio', {})
+    expected = request['session']
+    return (
+        session.get('model') == expected['model']
+        and session.get('status') == 'active'
+        and session.get('delegation', {}).get('type') == 'client'
+        and audio.get('format') == expected['audio']['format']
+        and audio.get('output', {}).get('voice') == expected['audio']['output']['voice']
+    )
 
 
 def pcm16(samples):
@@ -233,7 +248,8 @@ class LiveSession:
             async with self.connector(self.key) as socket:
                 if not self.callbacks.current(self):
                     return
-                await self.send(socket, start_message(self.voice))
+                request = start_message(self.voice)
+                await self.send(socket, request)
                 deadline = self.clock() + START_TIMEOUT_SECONDS
                 while not self.stop.is_set() and not self.started.is_set():
                     try:
@@ -244,10 +260,7 @@ class LiveSession:
                         if self.clock() >= deadline:
                             raise
                         continue
-                    if (
-                        event.get('type') != 'session.started'
-                        or event.get('session', {}).get('model') != MODEL
-                    ):
+                    if not confirms_start(event, request):
                         raise ValueError('Live startup was not confirmed')
                     self.started.set()
                 while (
@@ -305,7 +318,12 @@ class LiveSession:
                         event = await self.receive(socket, 0.015)
                     except TimeoutError:
                         continue
-                    if self.callbacks.current(self) and self.event(event):
+                    if not self.callbacks.current(self):
+                        break
+                    # Local barge-in can arrive while recv is suspended. Retire
+                    # the previous output before accepting any queued cloud PCM.
+                    self.apply_interrupt()
+                    if self.event(event):
                         return
                 if self.started.is_set():
                     await self.command(socket, 'session.close')
@@ -326,8 +344,7 @@ class LiveSession:
             finally:
                 self.finished.set()
 
-    def tick(self):
-        now = self.clock()
+    def apply_interrupt(self):
         if self.interrupt.is_set():
             self.interrupt.clear()
             self.interrupt_instruction = True
@@ -344,7 +361,11 @@ class LiveSession:
             self.input_offset = max(self.input_offset, self.last_input_end)
             self.drop_output = True
             self.waiting_for_input = True
-            self.last_output = now
+            self.last_output = self.clock()
+
+    def tick(self):
+        self.apply_interrupt()
+        now = self.clock()
         if self.playback is not None and now - self.playback.last_audio >= OUTPUT_GAP:
             self.playback.closed.set()
             self.playback = None

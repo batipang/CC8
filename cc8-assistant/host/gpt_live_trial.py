@@ -262,7 +262,7 @@ class LiveTrial:
 
     def play(self, owner, output):
         with self.host.guard:
-            if not self.current(owner) or not self.engaged:
+            if not self.current(owner) or owner.interrupt.is_set() or not self.engaged:
                 return False
             if self.output is not None and self.pending_output is None:
                 self.pending_output = output
