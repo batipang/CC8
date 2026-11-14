@@ -6,7 +6,14 @@ import unittest
 from unittest.mock import patch
 from dot_client import Cancelled, DotError
 from dot_handoff import Handoff
-from report_voice import ReportCommand, ReportVoice, ReportVoiceHooks, ordinal, report_command
+from report_voice import (
+    HandoffDraft,
+    ReportCommand,
+    ReportVoice,
+    ReportVoiceHooks,
+    ordinal,
+    report_command,
+)
 from reply_types import Reply
 from test_work_reports import Fixture, turn, final
 from work_reports import WorkReportReader, ReportWindow
@@ -105,6 +112,23 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual(report_command('刚才那个项目的结果', followup=True).kind, 'item_choice')
         self.assertEqual(
             report_command('把第二项的结果读给我听', followup=True), ReportCommand('item', 2)
+        )
+
+    def test_explicit_handoff_draft_preserves_wording_and_rejects_multiple_targets(self):
+        self.assertEqual(
+            report_command('大黄蜂，继续汇报的第二项，下一步：检查 Android CI 的退出码。'),
+            ReportCommand('continue', HandoffDraft(2, '检查 Android CI 的退出码。')),
+        )
+        self.assertIsNone(report_command('继续第二项，检查 Android CI 的退出码。'))
+        self.assertIsNone(report_command('继续第二项，改一下汇报'))
+        self.assertEqual(report_command('继续汇报的第二项'), ReportCommand('continue', 2))
+        self.assertEqual(
+            report_command('继续第二项检查 Android CI', followup=True),
+            ReportCommand('continue', HandoffDraft(2, '检查 Android CI')),
+        )
+        self.assertEqual(
+            report_command('继续第二项，然后继续第三项。', followup=True),
+            ReportCommand('item_choice'),
         )
 
     def test_report_reads_once_short_speech_full_cards_and_no_verification_claim(self):
@@ -455,6 +479,37 @@ class IntegrationTests(unittest.TestCase):
             )
         voice.forget()
         self.assertIsNone(voice.answer(ReportCommand('continue', 2), lambda: True).provenance)
+
+    def test_handoff_draft_stays_on_screen_and_never_dispatches_or_rereads(self):
+        from test_failure_feedback import FailureFeedbackTests
+
+        _, bridge = self.session()
+        list(bridge.brain.clauses('汇报今天的工作', []))
+        spoken = []
+
+        def speak(text, generation):
+            spoken.append(text)
+            return True
+
+        bridge.speak = speak
+        draft = '检查 Android CI 的退出码。'
+        with (
+            patch.object(bridge.brain.dot, 'clauses') as dot,
+            patch.object(bridge.chats.catalog, 'report') as read,
+        ):
+            FailureFeedbackTests().run_one(
+                bridge.response, Reply(bridge.generation, '继续第二项，下一步：' + draft)
+            )
+        dot.assert_not_called()
+        read.assert_not_called()
+        task = bridge.workspace.snapshot()['tasks'][0]
+        self.assertEqual(task['stage'], '待桌面接续')
+        self.assertEqual(task['provenance']['turn_id'], 'turn-1')
+        self.assertIn(draft, task['result'])
+        self.assertTrue(spoken)
+        self.assertNotIn(draft, ''.join(spoken))
+        self.assertNotIn(draft, str(bridge.response.history))
+        self.assertNotIn(draft, str(bridge.logs))
 
     def test_disconnect_during_real_catalog_dispatch_drops_late_report_and_unlocks(self):
         _, bridge = self.session()

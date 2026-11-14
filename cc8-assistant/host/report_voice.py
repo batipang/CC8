@@ -87,20 +87,33 @@ CONTEXT_ITEM = re.compile(
 SOURCE_ACTION = re.compile(
     r'继续|推进|接着做|执行|做完|重做|修改|修复|修一下|删除|取消|发送|发给|追加|提交|运行'
 )
+CONTINUE_PREFIX = r'(?:继续|推进|继续推进|继续做|接着做)'
 CONTINUE = re.compile(
     PREFIX
-    + r'(?:(?:继续|推进|继续推进|继续做|接着做)(?:第'
+    + r'(?:'
+    + CONTINUE_PREFIX
+    + r'(?:第'
     + INDEX
     + r'项)?|第'
     + INDEX
     + r'项(?:继续|继续做|继续推进)|下一步)'
 )
+HANDOFF_TARGET = re.compile(
+    PREFIX + CONTINUE_PREFIX + r'(本次汇报的|这次汇报的|汇报的)?第' + INDEX + r'项'
+)
+HANDOFF_SEPARATOR = re.compile(r'^[，,。；;\s]*(?:下一步[：:]\s*)?')
+
+
+@dataclass(frozen=True)
+class HandoffDraft:
+    number: int
+    text: str
 
 
 @dataclass(frozen=True)
 class ReportCommand:
     kind: str
-    value: str | int | ReportRange = ''
+    value: str | int | ReportRange | HandoffDraft = ''
 
 
 def ordinal(text):
@@ -118,8 +131,8 @@ def ordinal(text):
 def report_command(text, *, followup=False):
     if not isinstance(text, str) or len(text) > 500:
         return None
-    text = re.sub(r'^(?:大黄蜂|bumblebee)[，,：:\s]*', '', text.strip(), flags=re.I)
-    text = ''.join(text.split()).rstrip('。.!！?？')
+    original = re.sub(r'^(?:大黄蜂|bumblebee)[，,：:\s]*', '', text.strip(), flags=re.I)
+    text = ''.join(original.split()).rstrip('。.!！?？')
     if match := REPORT.fullmatch(text) or QUERY.fullmatch(text):
         return ReportCommand('report', PERIOD_NAMES[match[1]])
     if COMPOUND.fullmatch(text) or range_compound(text):
@@ -131,6 +144,15 @@ def report_command(text, *, followup=False):
     if match := DETAIL.fullmatch(text):
         if followup or '汇报' in text:
             return ReportCommand('item', ordinal(match[1]))
+    if (match := HANDOFF_TARGET.match(original)) and (followup or match[1]):
+        tail = original[match.end() :]
+        if re.search('第' + INDEX + '项', ''.join(tail.split())):
+            return ReportCommand('item_choice')
+        number = ordinal(match[2])
+        draft = HANDOFF_SEPARATOR.sub('', tail, count=1).strip()
+        if any(ch.isalnum() for ch in draft):
+            return ReportCommand('continue', HandoffDraft(number, draft))
+        return ReportCommand('continue', number)
     if followup and (match := CONTINUE.fullmatch(text)):
         index = next((value for value in match.groups() if value is not None), None)
         return ReportCommand('continue', ordinal(index) if index is not None else '')
@@ -576,7 +598,8 @@ class ReportVoice:
                     self.snapshot = None
                     return self.notice('本次汇报尚未取得或已失效，请重新请求工作汇报。')
                 report = self.snapshot[2]
-                number = command.value
+                draft = command.value if isinstance(command.value, HandoffDraft) else None
+                number = draft.number if draft else command.value
                 if type(number) is not int or not 1 <= number <= len(report['items']):
                     return self.notice('这份汇报没有该编号，请按屏幕上本次汇报的编号查询。')
                 item = report['items'][number - 1]
@@ -592,6 +615,8 @@ class ReportVoice:
                         f'原聊天：{provenance["thread_id"]}；回合：{item["turn_id"]}。\n'
                         '请在该桌面聊天中提交下一步。没有向原聊天追加请求。'
                     )
+                    if draft:
+                        text += '\n\n本次识别到的下一步，请核对后复制：\n' + draft.text
                     return ReportReply(
                         text, (spoken,), source_title, 'desktop_handoff', provenance=provenance
                     )
