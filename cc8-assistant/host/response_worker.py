@@ -625,6 +625,7 @@ class ResponseWorker:
                     'web_sources',
                     generation=generation,
                     items=payload.get('items', []),
+                    requested_at=payload.get('requested_at', ''),
                     retrieved_at=payload.get('retrieved_at', ''),
                     time_basis=payload.get('time_basis', ''),
                 )

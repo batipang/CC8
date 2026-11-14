@@ -252,6 +252,7 @@ class DotBrain:
         # 流式内容与权威最终文本一致后，才发布成功回执和来源。
         if not is_current():
             raise Cancelled('Turn cancelled')
+        requested_at = now()
         turn = Turn()
         handoff = self.handoff
         self.current = turn
@@ -361,7 +362,9 @@ class DotBrain:
                 return self.call_tool(turn, params, is_current, inspect_source)
 
             self.rpc.tool_handler = tool_handler
-            inputs = [{'type': 'text', 'text': '[当前北京时间 ' + now() + ']\n' + text[:6000]}]
+            inputs = [
+                {'type': 'text', 'text': '[提问时北京时间 ' + requested_at + ']\n' + text[:6000]}
+            ]
             if self.preference_context:
                 inputs.insert(0, {'type': 'text', 'text': self.preference_context})
             if handoff is not None and not self.handoff_injected:
@@ -575,7 +578,12 @@ class DotBrain:
                 if sources:
                     on_web(
                         'sources',
-                        {'items': sources, 'retrieved_at': now(), 'time_basis': 'answer_completed'},
+                        {
+                            'items': sources,
+                            'requested_at': requested_at,
+                            'retrieved_at': now(),
+                            'time_basis': 'answer_completed',
+                        },
                     )
             for piece in speakable(pieces):
                 if not is_current() or turn.stopped.is_set():

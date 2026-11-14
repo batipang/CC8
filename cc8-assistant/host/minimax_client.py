@@ -585,6 +585,7 @@ class MiniMaxBrain:
                                 }
                                 for row in items
                             ],
+                            'requested_at': pending[1] if pending is not None else requested_at,
                             'retrieved_at': retrieved,
                             'time_basis': 'search_response',
                         },

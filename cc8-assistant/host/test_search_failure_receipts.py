@@ -84,8 +84,13 @@ class SearchFailureReceipts(unittest.TestCase):
         router = BrainRouter(
             MiniMaxBrain(transport), dot=StubBrain('unused-dot'), selected='minimax'
         )
-        bridge, events, _, spoken = self.execute(router)
+        before = '2026-10-30T23:59:59+08:00'
+        after = '2026-10-31T00:00:03+08:00'
+        with patch('minimax_client.now', side_effect=[before, after]):
+            bridge, events, _, spoken = self.execute(router)
         sources = next(value for name, value in events if name == 'web_sources' and value['items'])
+        self.assertEqual(sources['requested_at'], before)
+        self.assertEqual(sources['retrieved_at'], after)
         self.assertEqual(sources['time_basis'], 'search_response')
         self.assertEqual(sources['items'][0]['observed_at'], sources['retrieved_at'])
         self.assertIs(sources['items'][0]['body_verified'], False)

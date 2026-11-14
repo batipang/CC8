@@ -111,13 +111,16 @@ final class SourcesPresentation {
   final long route;
   final int generation;
   final String recordedAt, timeBasis;
+  private final String questionTime;
   private final Source[] sources;
 
-  SourcesPresentation(JSONArray rows, String at, String basis, long route, int generation) {
+  SourcesPresentation(
+      JSONArray rows, String at, String basis, Object requestedAt, long route, int generation) {
     this.route = route;
     this.generation = generation;
     recordedAt = text(at, 64);
     timeBasis = text(basis, 32);
+    questionTime = beijingTime(requestedAt);
     ArrayList<Source> accepted = new ArrayList<>();
     if (rows != null)
       for (int i = 0; i < Math.min(6, rows.length()); i++) {
@@ -143,6 +146,23 @@ final class SourcesPresentation {
             ? "检索返回时间"
             : "answer_completed".equals(timeBasis) ? "回答来源汇总时间" : "来源记录时间（依据未提供）";
     return label + "：" + (recordedAt.isEmpty() ? "未知" : recordedAt.replace('T', ' '));
+  }
+
+  String details(int index) {
+    String label = at(index).label();
+    if (questionTime.isEmpty()) return label;
+    return "查询参考的北京时间 " + questionTime + "\n\n" + label;
+  }
+
+  private static String beijingTime(Object raw) {
+    String value = text(raw, 25);
+    if (!value.matches("[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\+08:00")) return "";
+    java.text.SimpleDateFormat format =
+        new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'+08:00'", java.util.Locale.US);
+    format.setLenient(false);
+    format.setTimeZone(java.util.TimeZone.getTimeZone("GMT+08:00"));
+    if (format.parse(value, new java.text.ParsePosition(0)) == null) return "";
+    return value.substring(0, 19).replace('T', ' ');
   }
 
   private static String text(Object value, int max) {
