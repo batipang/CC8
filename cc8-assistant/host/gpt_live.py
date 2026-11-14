@@ -79,9 +79,12 @@ class Fragment:
             or any(0xD800 <= ord(ch) <= 0xDFFF for ch in text)
             or type(start) is not int
             or type(end) is not int
-            or not 0 <= start < end <= (MAX_SESSION_SECONDS + 10) * 1000
+            or not 0 <= start <= end <= (MAX_SESSION_SECONDS + 10) * 1000
         ):
             raise ValueError('Invalid Live transcript interval')
+        if start == end:
+            # Appended context has no corresponding microphone or playback audio.
+            return None
         return cls(text, start, end)
 
 
@@ -392,7 +395,7 @@ class LiveSession:
             raise ValueError('GPT-Live reported a session error')
         if kind == 'session.input_transcript.delta':
             part = Fragment.parse(event)
-            if part.start < self.last_input_end:
+            if part is None or part.start < self.last_input_end:
                 return False
             self.last_input_end = part.end
             self.transcripts.append(part)
@@ -431,7 +434,7 @@ class LiveSession:
                 self.playback.add_audio(data)
         elif kind == 'session.output_transcript.delta':
             part = Fragment.parse(event)
-            if part.start >= self.last_output_caption_end:
+            if part is not None and part.start >= self.last_output_caption_end:
                 self.last_output_caption_end = part.end
                 if not self.drop_output:
                     if self.playback is None:

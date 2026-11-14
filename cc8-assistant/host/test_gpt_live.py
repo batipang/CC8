@@ -72,6 +72,9 @@ class LiveSocketTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(start['type'], 'session.start')
             self.assertEqual(start['session']['model'], 'gpt-live-1')
             self.assertEqual(start['session']['delegation'], {'type': 'client'})
+            self.assertEqual(
+                start['session']['audio']['format'], {'type': 'audio/pcm', 'rate': 16000}
+            )
             self.assertEqual(start['session']['audio']['output']['voice'], 'marin')
             self.assertFalse(start['session']['store'])
             with self.assertRaises(TimeoutError):
@@ -80,6 +83,7 @@ class LiveSocketTests(unittest.IsolatedAsyncioTestCase):
             audio = await get()
             self.assertEqual(audio['type'], 'session.input_audio.append')
             self.assertEqual(base64.b64decode(audio['audio']), bytes(320))
+            incoming.put_nowait(transcript('追加的用户上下文', 100, 100))
             incoming.put_nowait(transcript('请查', 100, 220))
             incoming.put_nowait(delegation('item_example', 800))
             incoming.put_nowait(transcript('常州天气', 220, 760))
@@ -89,6 +93,7 @@ class LiveSocketTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(reply['type'], 'session.commentary.append')
             self.assertEqual(reply['delegation_id'], 'item_example')
             self.assertEqual(reply['content'], '查到了。')
+            incoming.put_nowait(transcript('追加的助手上下文', 800, 800, output=True))
             incoming.put_nowait(transcript('常州', 1000, 1200, output=True))
             incoming.put_nowait(
                 {
