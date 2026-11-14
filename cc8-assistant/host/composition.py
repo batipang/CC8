@@ -252,7 +252,7 @@ def build_components(
                 and host.response.corrections.draft is None
             ),
             touch=lambda: host.touch_activity(),
-            announce=lambda text: host.announce(text),
+            announce_segments=announcements.announce_segments,
             desktop_notify=lambda ident, text, current: DesktopDelivery(
                 DesktopNotifier(), ident, text, current
             ),

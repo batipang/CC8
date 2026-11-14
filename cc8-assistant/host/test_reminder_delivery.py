@@ -34,8 +34,14 @@ class DeliveryTests(unittest.TestCase):
         self.owner = 0
         self.can_deliver = True
 
-        def announce(text):
-            job = Announcement(10 + len(self.jobs), text)
+        def announce(segments, *, on_segment, before_playback):
+            job = Announcement(
+                10 + len(self.jobs),
+                ''.join(segments),
+                segments=segments,
+                on_segment=on_segment,
+                before_playback=before_playback,
+            )
             self.jobs.append(job)
             return job
 
@@ -46,7 +52,7 @@ class DeliveryTests(unittest.TestCase):
                 publish_workspace=lambda: None,
                 can_deliver=lambda: self.can_deliver,
                 touch=lambda: None,
-                announce=announce,
+                announce_segments=announce,
                 delivery_owner=lambda: self.owner,
             )
         )
@@ -65,6 +71,11 @@ class DeliveryTests(unittest.TestCase):
         self.scheduler.poll = 0
         self.scheduler.tick()
 
+    def confirm(self, job):
+        for index in range(len(job.segments)):
+            job.on_segment(index)
+        job.result = 'completed'
+
     def policy(self, **changes):
         p = self.board.reminder({'action': 'policy'})['policy']
         return self.board.reminder({'action': 'set_policy', 'policy': {**p, **changes}})['policy']
@@ -73,15 +84,15 @@ class DeliveryTests(unittest.TestCase):
         self.create()
         self.now += timedelta(minutes=2)
         seen = []
-        announce = self.scheduler.hooks.announce
+        announce = self.scheduler.hooks.announce_segments
 
-        def checked(text):
+        def checked(segments, **checks):
             saved = json.loads(self.path.read_text())
             self.assertEqual(saved['reminders'][0]['status'], 'delivering')
             seen.append(saved['reminders'][0]['delivery_attempt']['id'])
-            return announce(text)
+            return announce(segments, **checks)
 
-        self.scheduler.hooks = replace(self.scheduler.hooks, announce=checked)
+        self.scheduler.hooks = replace(self.scheduler.hooks, announce_segments=checked)
         self.tick()
         self.assertEqual(len(seen), 1)
         restarted = Workspace(self.path, now=lambda: self.now)
@@ -128,7 +139,7 @@ os._exit(23)
         self.tick()
         self.assertEqual(self.board.snapshot()['reminders'][0]['status'], 'delivering')
         claims = deepcopy(self.scheduler.claims)
-        self.jobs[0].result = 'completed'
+        self.confirm(self.jobs[0])
         self.jobs[0].done.set()
         self.tick()
         self.assertEqual(self.board.snapshot()['reminders'], [])
@@ -164,7 +175,7 @@ os._exit(23)
                 'due': (self.now + timedelta(minutes=10)).isoformat(),
             }
         )
-        self.jobs[0].result = 'completed'
+        self.confirm(self.jobs[0])
         self.jobs[0].done.set()
         self.tick()
         self.assertEqual(self.board.snapshot()['reminders'][0]['status'], 'pending')
@@ -323,7 +334,7 @@ os._exit(23)
         self.now += timedelta(minutes=2)
         self.tick()
         self.board.reminder({'action': 'cancel', 'id': item['id']})
-        self.jobs[0].result = 'completed'
+        self.confirm(self.jobs[0])
         self.jobs[0].done.set()
         self.tick()
         self.assertEqual(self.board.snapshot()['reminders'], [])
@@ -341,7 +352,7 @@ os._exit(23)
         self.assertEqual(len({claim['attempt_id'] for claim in first}), 1)
         self.assertEqual(len(self.jobs), 1)
         self.assertTrue(all(('事项' + str(n)) in self.jobs[0].text for n in range(3)))
-        self.jobs[0].result = 'completed'
+        self.confirm(self.jobs[0])
         self.jobs[0].done.set()
         self.tick()
         self.assertEqual(len(self.jobs), 2)
@@ -356,7 +367,7 @@ os._exit(23)
         self.now += timedelta(days=5)
         self.tick()
         old = deepcopy(self.scheduler.claims)
-        self.jobs[0].result = 'completed'
+        self.confirm(self.jobs[0])
         self.jobs[0].done.set()
         self.tick()
         self.assertEqual(self.board.snapshot()['reminders'][0]['due'], '2026-11-16T12:01:00+08:00')
@@ -367,11 +378,11 @@ os._exit(23)
         self.now += timedelta(minutes=2)
         calls = []
 
-        def fail(text):
-            calls.append(text)
+        def fail(segments, **checks):
+            calls.append(segments)
             raise OSError('fixed public send fault')
 
-        self.scheduler.hooks = replace(self.scheduler.hooks, announce=fail)
+        self.scheduler.hooks = replace(self.scheduler.hooks, announce_segments=fail)
         with self.assertRaises(OSError):
             self.tick()
         self.now += timedelta(minutes=30)
@@ -393,9 +404,10 @@ os._exit(23)
         self.create()
         self.now += timedelta(minutes=2)
         self.tick()
-        self.jobs[0].result = 'completed'
-        self.jobs[0].done.set()
         with patch.object(self.board, '_save', side_effect=OSError('disk full')):
+            with self.assertRaises(OSError):
+                self.jobs[0].on_segment(0)
+            self.jobs[0].done.set()
             with self.assertRaises(OSError):
                 self.tick()
         self.assertIsNotNone(self.scheduler.job)
@@ -407,18 +419,18 @@ os._exit(23)
         self.create()
         self.now += timedelta(minutes=2)
         trace = []
-        original = self.scheduler.hooks.announce
+        original = self.scheduler.hooks.announce_segments
 
-        def announce(text):
+        def announce(segments, **checks):
             trace.append('admitted')
-            return original(text)
+            return original(segments, **checks)
 
         def publish():
             trace.append('new user request')
             self.owner += 1
 
         self.scheduler.hooks = replace(
-            self.scheduler.hooks, announce=announce, publish_workspace=publish
+            self.scheduler.hooks, announce_segments=announce, publish_workspace=publish
         )
         self.tick()
         self.assertEqual(trace, ['admitted', 'new user request'])
@@ -524,6 +536,101 @@ os._exit(23)
         self.assertTrue(job.done.is_set())
         self.assertEqual(job.result, 'interrupted')
 
+    def test_interrupted_batch_keeps_the_first_confirmed_item_without_replaying_the_rest(self):
+        from test_playback_stream import StreamPlaybackTests
+
+        first = self.create(repeat='daily')
+        second = self.create(title='第二条')
+        third = self.create(title='第三条')
+        b = StreamPlaybackTests().bridge()
+        b.workspace = self.board
+        self.now += timedelta(minutes=1)
+        started = []
+
+        class Speech:
+            def synthesize(self, text):
+                started.append(text)
+                if '第二条' in text:
+                    b.cancel('transport_switch')
+                return np.ones(320, dtype=np.int16)
+
+        b.speech = Speech()
+        b.reminders.tick()
+        job = b.response.queue.get_nowait()
+        b.respond_job(job)
+        self.assertEqual(started, ['提醒你：1，公开固定提醒；', '2，第二条；'])
+        self.assertEqual(job.result, 'interrupted')
+        b.reminders.tick()
+        reopened = Workspace(self.path, now=lambda: self.now)
+        rows = {row['id']: row for row in reopened.reminders}
+        self.assertEqual(rows[first['id']]['status'], 'pending')
+        self.assertEqual(rows[first['id']]['due'], '2026-11-10T12:01:00+08:00')
+        self.assertEqual(rows[first['id']]['delivery_attempt']['result'], 'played')
+        for item in (second, third):
+            self.assertEqual(rows[item['id']]['status'], 'unconfirmed')
+            self.assertEqual(rows[item['id']]['delivery_attempt']['result'], 'unconfirmed')
+        self.assertEqual(reopened.claim_reminders(), [])
+
+    def test_playback_receipt_keeps_item_if_home_follows_ack_before_worker_returns(self):
+        from test_playback_stream import StreamPlaybackTests
+
+        first = self.create()
+        second = self.create(title='第二条')
+        b = StreamPlaybackTests().bridge()
+        b.workspace = self.board
+        b.playback.set_completion_capability(True)
+        self.now += timedelta(minutes=1)
+        b.speech = type('Speech', (), {'synthesize': lambda *_: np.ones(320, dtype=np.int16)})()
+        b.reminders.tick()
+        job = b.response.queue.get_nowait()
+        original = b.playback.output_event
+
+        def output(name, **fields):
+            original(name, **fields)
+            if name == 'play_end':
+                b.on_event(
+                    {
+                        'event': 'play_done',
+                        'generation': fields['generation'],
+                        'played_frames': fields['frames'],
+                        'playback_id': b.playback.playback_serial,
+                    }
+                )
+                b.cancel('test_home_after_receipt')
+
+        with patch.object(b.playback, 'output_event', side_effect=output):
+            b.respond_job(job)
+        self.assertEqual(job.result, 'interrupted')
+        b.reminders.tick()
+        stored = {row['id']: row for row in self.board.reminders}
+        self.assertEqual(stored[first['id']]['delivery_attempt']['result'], 'played')
+        self.assertEqual(stored[second['id']]['delivery_attempt']['result'], 'unconfirmed')
+
+    def test_last_chunk_is_required_before_a_long_reminder_can_be_marked_played(self):
+        from test_playback_stream import StreamPlaybackTests
+
+        item = self.create(title='长' * 120)
+        b = StreamPlaybackTests().bridge()
+        b.workspace = self.board
+        self.now += timedelta(minutes=1)
+        b.speech = type('Speech', (), {'synthesize': lambda *_: np.ones(320, dtype=np.int16)})()
+        b.reminders.tick()
+        job = b.response.queue.get_nowait()
+        original = b.playback.output_event
+
+        def output(name, **fields):
+            original(name, **fields)
+            if name == 'play_end':
+                b.cancel('test_stop_after_first_chunk')
+
+        with patch.object(b.playback, 'output_event', side_effect=output):
+            b.respond_job(job)
+        self.assertEqual(job.result, 'interrupted')
+        b.reminders.tick()
+        stored = Workspace(self.path, now=lambda: self.now).reminders[0]
+        self.assertEqual(stored['id'], item['id'])
+        self.assertEqual(stored['delivery_attempt']['result'], 'unconfirmed')
+
     def test_current_reminder_reaches_speaker_and_records_device_completion(self):
         from test_playback_stream import StreamPlaybackTests
 
@@ -610,7 +717,7 @@ os._exit(23)
                 self.assertEqual(claimed[0]['id'], reminder['id'])
                 current = self.board.snapshot()['reminders'][0]['delivery_attempt']
                 self.assertEqual(current['due'], occurrence.isoformat(timespec='seconds'))
-                job.result = 'completed'
+                self.confirm(job)
                 job.done.set()
                 self.tick()
                 self.assertIsNone(self.scheduler.job)

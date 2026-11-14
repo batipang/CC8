@@ -16,7 +16,7 @@ class ReminderHooks:
     publish_workspace: Callable[[], None]
     can_deliver: Callable[[], bool]
     touch: Callable[[], None]
-    announce: Callable[[str], Announcement]
+    announce_segments: Callable[..., Announcement]
     delivery_owner: Callable[[], object] = lambda: None
     desktop_notify: Callable[[str, str, Callable[[], bool]], DesktopDelivery] | None = None
     owner_access: Callable[[], bool] = lambda: True
@@ -27,6 +27,7 @@ class ReminderScheduler:
         self.hooks = hooks
         self.job = None
         self.claims = []
+        self.played_count = 0
         self.pending_finish = None
         self.poll = 0
         self.channel = 'cc8'
@@ -50,15 +51,21 @@ class ReminderScheduler:
                 if not job.done.is_set():
                     return
                 # A failed disk commit retries only the same receipt, never TTS.
-                self.hooks.workspace().finish_reminders(
-                    self.claims,
-                    job.result
-                    == ('notification_center' if self.channel == 'desktop' else 'completed'),
-                    channel=self.channel,
-                    detail=getattr(job, 'detail', 'unconfirmed'),
-                )
+                workspace = self.hooks.workspace()
+                if self.channel == 'desktop':
+                    workspace.finish_reminders(
+                        self.claims,
+                        job.result == 'notification_center',
+                        channel=self.channel,
+                        detail=getattr(job, 'detail', 'unconfirmed'),
+                    )
+                else:
+                    if self.played_count:
+                        workspace.finish_reminders(self.claims[: self.played_count], True)
+                    workspace.finish_reminders(self.claims[self.played_count :], False)
                 self.job = None
                 self.claims = []
+                self.played_count = 0
                 self.hooks.publish_workspace()
             if self.pending_finish is not None:
                 self.hooks.workspace().finish_reminders(
@@ -88,7 +95,7 @@ class ReminderScheduler:
                 return (
                     self.hooks.owner_access()
                     and self.hooks.workspace() is workspace
-                    and workspace.reminder_claims_current(claims)
+                    and workspace.reminder_claims_current(claims[self.played_count :])
                 )
 
             try:
@@ -102,10 +109,15 @@ class ReminderScheduler:
                     self.pending_finish = None
                     self.hooks.publish_workspace()
                     return
-                text = '提醒你：' + (
-                    claims[0]['title']
+                segments = (
+                    ('提醒你：' + claims[0]['title'],)
                     if len(claims) == 1
-                    else '；'.join(f'{i + 1}，{item["title"]}' for i, item in enumerate(claims))
+                    else tuple(
+                        ('提醒你：' if i == 0 else '')
+                        + f'{i + 1}，{item["title"]}'
+                        + ('；' if i + 1 < len(claims) else '')
+                        for i, item in enumerate(claims)
+                    )
                 )
                 if self.channel == 'desktop':
                     if self.hooks.desktop_notify is None:
@@ -119,13 +131,20 @@ class ReminderScheduler:
                                 and claims_current()
                             )
 
-                    job = self.hooks.desktop_notify(claims[0]['attempt_id'], text, current)
+                    job = self.hooks.desktop_notify(
+                        claims[0]['attempt_id'], ''.join(segments), current
+                    )
                 else:
-                    job = self.hooks.announce(text)
-                    # The response worker must take this same session lock
-                    # before it can start playing the queued announcement.
-                    if not job.done.is_set():
-                        job.before_playback = claims_current
+
+                    def played(index):
+                        # Keep receipt evidence before attempting storage. If the write
+                        # fails, stop sending and retry just the state update in tick.
+                        self.played_count = index + 1
+                        workspace.finish_reminders(claims[index : index + 1], True)
+
+                    job = self.hooks.announce_segments(
+                        segments, on_segment=played, before_playback=claims_current
+                    )
             except Exception:
                 self.hooks.workspace().finish_reminders(claims, False, channel=self.channel)
                 self.pending_finish = None
