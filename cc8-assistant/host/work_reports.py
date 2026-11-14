@@ -12,6 +12,7 @@ from report_display_protocol import PERIODS, CALENDAR_PERIODS
 
 BEIJING = timezone(timedelta(hours=8))
 MAX_TURN_PAGES, MAX_ITEM_PAGES, PAGE_SIZE, MAX_CARDS = 4, 2, 25, 20
+PARTIAL_READ_ERRORS = frozenset(('timeout', 'transport_or_io'))
 
 
 # Accept only direct test runners with simple arguments. Shell composition,
@@ -162,7 +163,7 @@ class WorkReportReader:
             rpc.start()
             current()
             turns, page_cursor, seen_cursors = {}, None, set()
-            for _ in range(MAX_TURN_PAGES):
+            for page_index in range(MAX_TURN_PAGES):
                 params = dict(
                     threadId=source.source_id,
                     limit=PAGE_SIZE,
@@ -171,7 +172,12 @@ class WorkReportReader:
                 )
                 if page_cursor is not None:
                     params['cursor'] = page_cursor
-                page = request('thread/turns/list', params)
+                try:
+                    page = request('thread/turns/list', params)
+                except DotError as error:
+                    if not page_index or error.kind not in PARTIAL_READ_ERRORS:
+                        raise
+                    break
                 rows = page.get('data')
                 if not isinstance(rows, list) or len(rows) > PAGE_SIZE:
                     raise DotError('Invalid work report turns')
@@ -213,7 +219,13 @@ class WorkReportReader:
             if len(candidates) > MAX_CARDS:
                 report['coverage_complete'] = False
             for completed, ident in candidates[:MAX_CARDS]:
-                card = self.items(request, source.source_id, ident)
+                try:
+                    card = self.items(request, source.source_id, ident)
+                except DotError as error:
+                    if not report['items'] or error.kind not in PARTIAL_READ_ERRORS:
+                        raise
+                    report['coverage_complete'] = False
+                    break
                 if card is None:
                     report['missing_final_answer'] += 1
                 else:
@@ -245,7 +257,12 @@ class WorkReportReader:
             params = dict(threadId=source_id, turnId=turn_id, limit=50, sortDirection='desc')
             if page_cursor is not None:
                 params['cursor'] = page_cursor
-            page = request('thread/items/list', params)
+            try:
+                page = request('thread/items/list', params)
+            except DotError as error:
+                if last_final is None or error.kind not in PARTIAL_READ_ERRORS:
+                    raise
+                break
             rows = page.get('data')
             if not isinstance(rows, list) or len(rows) > 50:
                 raise DotError('Invalid work report items')
