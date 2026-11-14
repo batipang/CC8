@@ -25,6 +25,7 @@ from report_checkpoint_protocol import (
 from report_checkpoint_controller import CheckpointController
 from report_display import display_fields, paged_text
 from report_display_protocol import CALENDAR_PERIODS, PERIODS, validate_request as validate_page
+from report_display_protocol import validate_report_scope
 from report_display_snapshot import DisplaySnapshot
 from report_watch_controller import WatchController
 from report_watch_protocol import (
@@ -247,6 +248,7 @@ class ChatController:
             'history_persisted': False,
             'work_reports_supported': True,
             'work_report_calendar_supported': True,
+            'work_report_selected_scope_supported': True,
             'registered_sources_supported': self.sources is not None,
             'report_watch_supported': self.watch_ui.scheduler is not None,
             'report_source_available': self.report_source() is not None,
@@ -288,8 +290,12 @@ class ChatController:
             validate_page(data)
         if action in WATCH_ACTIONS:
             validate_watch(data)
-        if action == 'report' and data.get('period') not in (*PERIODS, *CALENDAR_PERIODS):
-            raise ValueError('Invalid report period')
+        if action == 'report':
+            if data.get('period') not in (*PERIODS, *CALENDAR_PERIODS):
+                raise ValueError('Invalid report period')
+            validate_report_scope(data)
+        selected_only = action == 'report' and data.get('report_scope') == 'selected_chat'
+        report_source = (lambda: self.selection) if selected_only else self.report_source
         with self.hooks.lock:
             if not self.hooks.available() or self.hooks.connection() is None:
                 self.publish(request_id, ok=False, message='Dot 聊天入口不可用')
@@ -309,7 +315,8 @@ class ChatController:
             if action in WATCH_ACTIONS and self.watch_ui.scheduler is None:
                 self.publish(request_id, ok=False, message='当前后台不支持定时工作提示')
                 return
-            if action == 'report' and self.report_source() is None:
+            report_owner = report_source() if action == 'report' else None
+            if action == 'report' and report_owner is None:
                 self.publish(request_id, ok=False, message='请先选择一个 Dot 聊天作为汇报来源')
                 return
             if not self.hooks.idle():
@@ -356,12 +363,25 @@ class ChatController:
                     self.source_requests.append(request_id)
                 self.busy = True
                 self.active_request = request_id
-            report_revision = self.voice.begin() if action == 'report' else None
+            report_revision = (
+                self.voice.begin()
+                if report_owner is not None and report_owner is self.report_source()
+                else None
+            )
             generation, connection = self.hooks.generation(), self.hooks.connection()
         # RPC may take seconds. Never block the packet/capture reader on it.
         worker = threading.Thread(
             target=self.run,
-            args=(request_id, action, data, generation, connection, report_revision),
+            args=(
+                request_id,
+                action,
+                data,
+                generation,
+                connection,
+                report_source,
+                report_owner,
+                report_revision,
+            ),
             daemon=True,
             name='cc8-chat-catalog',
         )
@@ -374,8 +394,17 @@ class ChatController:
                 self.active_request = None
             raise
 
-    def run(self, request_id, action, data, generation, connection, report_revision=None):
-        report_owner = self.report_source() if action == 'report' else None
+    def run(
+        self,
+        request_id,
+        action,
+        data,
+        generation,
+        connection,
+        report_source,
+        report_owner,
+        report_revision,
+    ):
         queue_owner = None
 
         def current():
@@ -398,7 +427,7 @@ class ChatController:
                         and connection is self.hooks.connection()
                         and (
                             action != 'report'
-                            or self.report_source() is report_owner
+                            or report_source() is report_owner
                             and self.scope_current(report_owner)
                         )
                     )
@@ -558,11 +587,13 @@ class ChatController:
                         raise DotError('Unconfirmed work report')
                     # A valid UI read may finish after ordinary conversation revoked
                     # numbered voice follow-up. Do not restore that older context.
-                    result['report_snapshot_adopted'] = self.voice.remember(
-                        report_owner, result['report'], report_revision
+                    result['report_snapshot_adopted'] = (
+                        report_revision is not None
+                        and self.voice.remember(report_owner, result['report'], report_revision)
                     )
                     result['report_text'] = report_text(result['report'], include_identity=True)
-                    self.display_snapshot.remember(result['report'])
+                    if report_revision is not None:
+                        self.display_snapshot.remember(result['report'])
                     # A broken archive must not prevent an otherwise valid live
                     # read. It only removes the save affordance until repaired.
                     if result['report_snapshot_adopted'] and self.archive is not None:

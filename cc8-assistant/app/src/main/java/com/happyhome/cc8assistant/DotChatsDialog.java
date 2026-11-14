@@ -83,7 +83,10 @@ final class DotChatsDialog {
           toast("未确认聊天状态，请连接后刷新查看");
         };
     handler.postDelayed(timeout, 50000);
-    if (!session.dotChatRequest(ident, nextAction, source, cursor, period, route)) {
+    boolean selectedReport =
+        "report".equals(nextAction)
+            && Boolean.TRUE.equals(state.opt("work_report_selected_scope_supported"));
+    if (!session.dotChatRequest(ident, nextAction, source, cursor, period, selectedReport, route)) {
       close();
       toast("连接已变化，请重新打开聊天接续。");
     }
@@ -116,7 +119,11 @@ final class DotChatsDialog {
 
   private void showMode() {
     boolean selected = "summary_handoff".equals(state.optString("mode"));
-    boolean reports = selected && state.optBoolean("work_reports_supported");
+    boolean reports =
+        selected
+            && state.optBoolean("work_reports_supported")
+            && (!"registered".equals(state.optString("report_scope"))
+                || Boolean.TRUE.equals(state.opt("work_report_selected_scope_supported")));
     AlertDialog.Builder builder =
         new LargeDialogBuilder(activity)
             .setTitle("Dot 聊天接续")
