@@ -421,6 +421,26 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(bridge.brain.last_metrics['operation'], 'desktop_handoff')
         self.assertFalse(dot.called or read.called)
 
+    def test_desktop_handoff_receipt_does_not_claim_original_work_completed(self):
+        from test_failure_feedback import FailureFeedbackTests
+
+        _, bridge = self.session()
+        list(bridge.brain.clauses('汇报今天的工作', []))
+
+        def interrupt_spoken_notice(*args):
+            bridge.session.generation += 1
+            return False
+
+        bridge.speak = interrupt_spoken_notice
+        with patch.object(bridge.brain.dot, 'clauses') as dot:
+            FailureFeedbackTests().run_one(bridge.response, Reply(bridge.generation, '继续第二项'))
+        dot.assert_not_called()
+        task = bridge.workspace.snapshot()['tasks'][0]
+        self.assertEqual(task['status'], 'completed')
+        self.assertEqual(task['stage'], '待桌面接续')
+        self.assertEqual(task['provenance']['turn_id'], 'turn-1')
+        self.assertIn('没有向原聊天追加请求', task['result'])
+
     def test_numbered_desktop_handoff_is_bound_to_the_current_snapshot(self):
         voice = VoiceTests().session()
         voice.answer(ReportCommand('report', 'today'), lambda: True)

@@ -878,7 +878,12 @@ public final class MainActivity extends Activity
     names[0] = "已保存结果 · 重启后可查";
     for (int i = 0; i < tasks.length(); i++) {
       JSONObject t = tasks.optJSONObject(i);
-      names[i + 1] = taskStatus(t.optString("status")) + " · " + t.optString("title");
+      String status = t.optString("status");
+      String label =
+          "completed".equals(status) && "待桌面接续".equals(t.optString("stage"))
+              ? "待桌面接续"
+              : taskStatus(status);
+      names[i + 1] = label + " · " + t.optString("title");
     }
     new LargeDialogBuilder(this)
         .setTitle("最近任务 · 本次服务")
