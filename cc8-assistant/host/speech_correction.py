@@ -4,10 +4,28 @@ from dataclasses import dataclass
 import re
 import time
 import uuid
+import unicodedata
 from request_text import validate_request_text
 
 LIMIT = 512
 EXPIRES = 120
+
+# Keep punctuation used inside amounts, along with Chinese numerals. Unicode
+# decimal digits cover other scripts without normalizing the transcript itself.
+NUMERALS = '零〇一二三四五六七八九十百千万亿两点负正+-−.．%％'
+
+
+def number_character(char):
+    return bool(char) and (char.isdecimal() or char in NUMERALS)
+
+
+def name_character(char):
+    return bool(char) and (
+        char == '_'
+        or char.isdecimal()
+        or unicodedata.category(char).startswith('M')
+        or unicodedata.name(char, '').startswith('LATIN ')
+    )
 
 
 def command(text):
@@ -105,27 +123,25 @@ class SpeechCorrection:
         pair = re.fullmatch(r'(.{1,64}?)(?:[，,]\s*|而)?不是[：: ]*(.{1,64})', body)
         if pair and (explicit_pair or pair.group(2).strip() in original):
             new, old = (part.strip() for part in pair.groups())
-            if not old or original.count(old) != 1 or not new:
+            index = original.find(old) if old else -1
+            if not new or index < 0 or original.find(old, index + 1) >= 0:
                 raise CorrectionUnavailable('旧词不能唯一定位，请重说完整的新问题；没有猜测替换。')
-            index = original.index(old)
             before = original[index - 1 : index] if index else ''
             after = original[index + len(old) : index + len(old) + 1]
-            numerals = (
-                '0123456789０１２３４５６７８９零〇一二三四五六七八九十百千万亿两点负正+-−.．%％'
-            )
             partial_number = (
-                old[0] in numerals
-                and before
-                and before in numerals
-                or old[-1] in numerals
-                and after
-                and after in numerals
+                number_character(old[0])
+                and number_character(before)
+                or number_character(old[-1])
+                and number_character(after)
             )
             partial_word = (
-                re.match(r'[A-Za-z0-9_]', old)
-                and re.fullmatch(r'[A-Za-z0-9_]', before)
-                or re.search(r'[A-Za-z0-9_]$', old)
-                and re.fullmatch(r'[A-Za-z0-9_]', after)
+                name_character(old[0])
+                and name_character(before)
+                or name_character(old[-1])
+                and name_character(after)
+                or unicodedata.category(old[0]).startswith('M')
+                or bool(after)
+                and unicodedata.category(after).startswith('M')
             )
             if partial_number or partial_word:
                 raise CorrectionUnavailable('旧词只匹配到数字或名称的一部分，请重说完整的新问题。')

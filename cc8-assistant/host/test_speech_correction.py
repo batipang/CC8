@@ -43,12 +43,28 @@ class DraftTests(unittest.TestCase):
             ('读出-3.5度', '7，不是3.5'),
             ('读出负三点五度', '七，不是三点五'),
             ('查询Dotty', 'Codex，不是Dot'),
+            ('查询哈哈哈', '呵呵，不是哈哈'),
+            ('查询ＣＣ８Plus', '大黄蜂，不是ＣＣ８'),
+            ('查询décafé', '茶，不是café'),
+            ('查询Cafe\u0301', '茶，不是Cafe'),
+            ('查询编号١٢٣', '四，不是٢٣'),
         ):
             journal, owner, _ = self.journal(source)
             with self.assertRaises(CorrectionUnavailable):
                 journal.prepare(body, owner)
             self.assertEqual(journal.source[0], source)
             self.assertIsNone(journal.draft)
+
+    def test_whole_multilingual_names_and_numbers_remain_literal(self):
+        for original, body, expected in (
+            ('查询ＣＣ８的规格', '大黄蜂，不是ＣＣ８', '查询大黄蜂的规格'),
+            ('查询Café的营业时间', '茶馆，不是Café', '查询茶馆的营业时间'),
+            ('查询编号١٢٣元记录', '四，不是١٢٣', '查询编号四元记录'),
+        ):
+            with self.subTest(original=original):
+                journal, owner, _ = self.journal(original)
+                self.assertEqual(journal.prepare(body, owner).proposed, expected)
+                self.assertEqual(journal.source[0], original)
 
     def test_full_replacement_preserves_numbers_and_negative_signs(self):
         journal, owner, _ = self.journal()

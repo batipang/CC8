@@ -102,7 +102,11 @@ class ResponseWorker:
             owner = self.hooks.correction_owner()
             if not source_id or self.corrections.source_token(owner) != source_id:
                 raise CorrectionUnavailable('Original recognition changed')
-            draft = self.corrections.prepare(term + '，不是' + alias, owner)
+            try:
+                draft = self.corrections.prepare(term + '，不是' + alias, owner)
+            except CorrectionUnavailable:
+                self.publish_corrections()
+                raise
             self.publish_corrections()
             if not same_owner(owner, self.hooks.correction_owner()):
                 raise CorrectionUnavailable('Correction owner changed')

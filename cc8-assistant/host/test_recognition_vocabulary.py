@@ -234,6 +234,21 @@ class VocabularyCorrectionTests(unittest.TestCase):
             self.assertIsNone(bridge.response.corrections.draft)
             self.assertEqual(bridge.brain.inputs, before)
 
+    def test_wordlist_rejects_overlapping_occurrences_of_the_selected_alias(self):
+        bridge = self.session()
+        bridge.vocabulary.store.apply(request('put', 1, term='测试', aliases=['哈哈']))
+        self.voice(bridge, '查询哈哈哈')
+        self.voice(bridge, '我说的是查询叠词用法')
+        self.assertIsNotNone(bridge.response.corrections.draft)
+        owner = bridge.response.hooks.correction_owner()
+        token = bridge.response.corrections.source_token(owner)
+        bridge.on_event(request('prepare', 2, term='测试', alias='哈哈', source_id=token))
+        self.assertFalse(bridge.events[-1][1]['ok'])
+        self.assertIsNone(bridge.response.corrections.draft)
+        self.assertEqual(bridge.events[-2][0], 'speech_correction')
+        self.assertIs(bridge.events[-2][1]['pending'], False)
+        self.assertEqual(bridge.brain.inputs, ['查询哈哈哈'])
+
     def test_old_wordlist_cannot_retarget_a_newer_recognition_with_the_same_alias(self):
         bridge = self.session()
         self.voice(bridge, '只读查询沧州甲的天气')
