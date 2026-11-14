@@ -138,6 +138,8 @@ class DesktopReminderTests(unittest.TestCase):
         self.assertEqual(len(self.scheduler.claims), 2)
         self.assertEqual(len(self.jobs), 1)
         self.assertEqual(self.audio, [])
+        notice_id = self.jobs[0][0]
+        self.assertEqual({row['attempt_id'] for row in self.scheduler.claims}, {notice_id})
         job = self.jobs[0][3]
         job.result = 'notification_center'
         job.done.set()
@@ -151,6 +153,27 @@ class DesktopReminderTests(unittest.TestCase):
             [r['delivery_attempt']['result'] for r in self.board.reminders],
             ['notified', 'played', 'notified'],
         )
+        reopened = Workspace(self.path, now=lambda: self.now)
+        self.assertEqual(
+            [r['delivery_attempt']['id'] == notice_id for r in reopened.reminders],
+            [True, False, True],
+        )
+
+    def test_shared_notification_receipt_cannot_revive_a_cancelled_member(self):
+        first, second = self.create(), self.create()
+        self.now += timedelta(minutes=2)
+        self.tick()
+        attempt_id, _, _, job = self.jobs[0]
+        self.board.reminder({'action': 'cancel', 'id': first['id']})
+        job.result = 'notification_center'
+        job.done.set()
+        self.tick()
+        by_id = {r['id']: r for r in Workspace(self.path, now=lambda: self.now).reminders}
+        self.assertEqual(by_id[first['id']]['status'], 'cancelled')
+        self.assertEqual(by_id[first['id']]['delivery_attempt']['result'], 'unconfirmed')
+        self.assertEqual(by_id[second['id']]['delivery_attempt']['result'], 'notified')
+        self.assertEqual({r['delivery_attempt']['id'] for r in by_id.values()}, {attempt_id})
+        self.assertEqual(len(self.jobs), 1)
 
     def test_new_user_or_policy_cancel_before_wire_invalidates_original_claim_callback(self):
         item = self.create()

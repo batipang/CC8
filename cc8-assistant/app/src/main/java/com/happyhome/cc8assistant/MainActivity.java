@@ -1053,6 +1053,7 @@ public final class MainActivity extends Activity
         }
         JSONObject attempt = item.optJSONObject("delivery_attempt");
         String due = attempt == null ? item.optString("due") : attempt.optString("due");
+        String receiptId = attempt == null ? "" : attempt.optString("id");
         rows[i] =
             "当前事项："
                 + item.optString("title")
@@ -1065,7 +1066,8 @@ public final class MainActivity extends Activity
                         + dateLabel(item.optString("due"))
                         + " · "
                         + reminderDeliveryLabel(item)
-                    : "cancelled".equals(item.optString("status")) ? " · 后续已取消" : "");
+                    : "cancelled".equals(item.optString("status")) ? " · 后续已取消" : "")
+                + (receiptId.matches("[a-f0-9]{32}") ? "\n送达尝试编号：" + receiptId : "");
       }
       builder.setItems(rows, null);
     }
