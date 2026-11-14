@@ -68,6 +68,27 @@ def public_url(value):
         return None
 
 
+def source_key(url):
+    # Compare public URLs already accepted by public_url. Limit equivalence to
+    # DNS host case, an explicit default port, and the empty root path.
+    parts = urlsplit(url)
+    host = parts.hostname
+    if not host or not re.fullmatch(r'[a-z0-9.-]+', host):
+        return url
+    authority = parts.netloc.lower()
+    port = parts.port
+    if authority not in (host, f'{host}:{port}'):
+        return url
+    default_port = 443 if parts.scheme == 'https' else 80
+    return (
+        parts.scheme,
+        host,
+        default_port if port is None else port,
+        parts.path or '/',
+        parts.query,
+    )
+
+
 def _source_text(value, limit):
     if not isinstance(value, str) or re.search(r'[\ud800-\udfff]', value):
         return ''

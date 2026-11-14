@@ -161,6 +161,49 @@ class PageReaderTests(unittest.TestCase):
                 ]
                 self.assertEqual(self.read()['publication_labels'], [])
 
+    def test_publication_uses_only_the_article_identifying_the_final_page(self):
+        original = 'https://example.com/page'
+        destination = 'https://other.example/story?edition=local'
+        latest = '2026-11-14T10:30:00+08:00'
+        base = {'@context': 'https://schema.org', '@type': 'NewsArticle'}
+
+        def block(**values):
+            return (
+                '<script type="application/ld+json">' + json.dumps({**base, **values}) + '</script>'
+            ).encode()
+
+        related = block(url=original, datePublished='2026-11-01')
+        unbound = block(datePublished='2026-11-02')
+        current = block(
+            mainEntityOfPage={'@id': 'https://OTHER.example:443/story?edition=local#article'},
+            datePublished=latest,
+        )
+        self.rows = [
+            response(status=302, Location=destination),
+            response(related + unbound + current + b'<p>Story</p>'),
+        ]
+        result = self.read(original)
+        self.assertEqual(result['publication_labels'], [latest])
+        self.assertEqual(len(self.requests), 2)
+        evidence = WebEvidence(clock=lambda: 'now')
+        evidence.page(result)
+        for url in (original, destination):
+            row = evidence.sources([{'url': url, 'title': 'Story'}])[0]
+            self.assertEqual(row['page_dates'], latest)
+            self.assertEqual(row['event_at'], '')
+
+        for metadata, expected in (
+            (block(url=destination, datePublished=latest) + related, [latest]),
+            (current + block(url=destination, datePublished='2026-11-13'), []),
+            (related, []),
+            (unbound + related, []),
+            (block(url=destination.replace('local', 'global'), datePublished=latest), []),
+        ):
+            with self.subTest(metadata=metadata):
+                self.rows = [response(metadata + b'<p>Story</p>')]
+                result = self.read(destination)
+                self.assertEqual(result['publication_labels'], expected)
+
     def test_json_ld_processing_is_bounded_and_does_not_hide_page_text(self):
         block = b'<script type="application/ld+json">%s</script>'
         valid = b'{"@context":"https://schema.org","@type":"Article","datePublished":"2026-11-10"}'

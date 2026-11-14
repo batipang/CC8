@@ -18,7 +18,7 @@ import threading
 import time
 from urllib.parse import urljoin, urlsplit
 
-from web_search import now, public_url
+from web_search import now, public_url, source_key
 
 MAX_BYTES = 1024 * 1024
 MAX_HEADERS = 32 * 1024
@@ -254,6 +254,7 @@ class PageText(HTMLParser):
         self.dates = []
         self.metadata = None
         self.metadata_blocks = 0
+        self.articles = []
 
     def add_date(self, value):
         value = visible_text(value)
@@ -285,10 +286,8 @@ class PageText(HTMLParser):
 
     def handle_endtag(self, tag):
         if tag == 'script' and self.metadata is not None:
-            value = article_publication_date(self.metadata)
+            self.articles.extend(article_nodes(self.metadata))
             self.metadata = None
-            if value is not None:
-                self.add_date(value)
         if tag in ('script', 'style', 'noscript', 'template'):
             self.hidden = max(0, self.hidden - 1)
         if tag == 'title':
@@ -315,14 +314,14 @@ def unique_json_fields(pairs):
     return result
 
 
-def article_publication_date(raw):
+def article_nodes(raw):
     try:
         root = json.loads(raw, object_pairs_hook=unique_json_fields)
         if not isinstance(root, dict) or root.get('@context') not in SCHEMA_CONTEXTS:
-            return None
+            return []
         nodes = root.get('@graph', [root])
         if not isinstance(nodes, list) or len(nodes) > 32:
-            return None
+            return []
         articles = []
         for node in nodes:
             if not isinstance(node, dict) or '@context' in node and node is not root:
@@ -334,14 +333,31 @@ def article_publication_date(raw):
                 isinstance(kind, str) and kind in ARTICLE_TYPES for kind in types
             ):
                 articles.append(node)
-        if len(articles) != 1:
-            return None
-        return iso_publication_label(articles[0].get('datePublished'))
+        return articles
     except (ValueError, RecursionError):
-        return None
+        return []
 
 
-def extract(body, content_type):
+def article_publication_date(articles, page_url):
+    matching = []
+    target = source_key(page_url)
+    for article in articles:
+        # Prefer the explicit relationship to this page. An article's URL
+        # also identifies it when mainEntityOfPage was omitted.
+        ref = article.get('mainEntityOfPage', article.get('url'))
+        if isinstance(ref, dict):
+            ref = ref.get('@id')
+        declared = public_url(ref)
+        if declared and source_key(declared) == target:
+            matching.append(article)
+    if len(matching) == 1:
+        return iso_publication_label(matching[0].get('datePublished'))
+    if len(articles) == 1 and 'url' not in articles[0] and 'mainEntityOfPage' not in articles[0]:
+        return iso_publication_label(articles[0].get('datePublished'))
+    return None
+
+
+def extract(body, content_type, page_url):
     media = content_type.split(';', 1)[0].strip().lower()
     if media not in ('text/html', 'application/xhtml+xml', 'text/plain'):
         raise PageError('unsupported_content_type')
@@ -356,6 +372,8 @@ def extract(body, content_type):
     parser = PageText()
     parser.feed(text)
     parser.close()
+    if date := article_publication_date(parser.articles, page_url):
+        parser.add_date(date)
     return (
         visible_text(' '.join(parser.title))[:160],
         visible_text(' '.join(parser.parts)),
@@ -410,7 +428,7 @@ def read_page(url, current=lambda: True, *, resolve=addresses, request=fetch, cl
             result['http_status'] = code
             if fields.get('content-encoding', 'identity').lower() != 'identity':
                 raise PageError('unsupported_content_encoding')
-            title, text, dates = extract(body, fields.get('content-type', ''))
+            title, text, dates = extract(body, fields.get('content-type', ''), target)
             if not current() or time.monotonic() >= deadline:
                 raise PageError('cancelled' if not current() else 'timeout')
             if not text:
