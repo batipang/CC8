@@ -29,6 +29,9 @@ class KeywordStream:
 class KeywordBackend:
     """A deterministic partial-word decoder behind the actual streaming adapter."""
 
+    def __init__(self, keyword='停一下'):
+        self.keyword = keyword
+
     def create_stream(self):
         return KeywordStream()
 
@@ -37,7 +40,7 @@ class KeywordBackend:
 
     def decode_stream(self, stream):
         value, stream.pending = stream.pending, None
-        stream.result = '停一下' if value == 0.25 and stream.prefix else ''
+        stream.result = self.keyword if value == 0.25 and stream.prefix else ''
         stream.prefix = value == 0.125
 
     def get_result(self, stream):
@@ -55,8 +58,8 @@ class Channel(Sink):
 
 
 class FastStopRouteTests(unittest.TestCase):
-    def bridge(self, kind):
-        with patch('fast_stop.keyword_spotter', return_value=KeywordBackend()):
+    def bridge(self, kind, keyword='停一下'):
+        with patch('fast_stop.keyword_spotter', return_value=KeywordBackend(keyword)):
             stop = FastStopDetector(gain=1)
         with patch('threading.Thread.start'):
             b = Bridge(None, None, fast_stop=stop)
@@ -129,6 +132,22 @@ class FastStopRouteTests(unittest.TestCase):
         self.assertFalse(b.playback.playing)
         self.assertEqual(b.session.generation, generation + 1)
         self.assertEqual(self.transcripts(b), ['停一下'])
+
+    def test_report_waits_for_full_stop_utterance_but_keeps_unambiguous_fast_stop(self):
+        for keyword, report_current, expected in (
+            ('停止', True, []),
+            ('停止', False, ['停止']),
+            ('停一下', True, ['停一下']),
+        ):
+            with self.subTest(keyword=keyword, report_current=report_current):
+                b = self.bridge('usb', keyword)
+                with patch.object(
+                    b.chats.voice, 'has_current_snapshot', return_value=report_current
+                ):
+                    self.feed(b, 0.125, 2_000_000_000)
+                    self.feed(b, 0.25, 2_010_000_000)
+                self.assertEqual(self.transcripts(b), expected)
+                self.assertEqual(b.playback.playing, not expected)
 
 
 if __name__ == '__main__':

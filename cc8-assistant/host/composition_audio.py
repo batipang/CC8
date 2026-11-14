@@ -71,6 +71,9 @@ def build_audio_pipeline(
                 ),
                 playing=lambda: host.playback.playing,
                 natural_barge_enabled=lambda: host.session.voice_preferences.natural_barge,
+                report_stop_target_possible=lambda: (
+                    host.owner_access() and host.chats.voice.has_current_snapshot()
+                ),
                 last_audio_end=lambda: host.playback.last_audio_end,
                 last_spoken=lambda: host.playback.last_spoken,
                 previous_spoken=lambda: host.playback.previous_spoken,

@@ -83,6 +83,7 @@ class EndpointHooks:
     complete_chinese_pending: Callable[[WaitingUtterance | None], bool] = lambda _: False
     complete_chinese_guard: Callable[[], ContextManager[object]] = nullcontext
     natural_barge_enabled: Callable[[], bool] = lambda: True
+    report_stop_target_possible: Callable[[], bool] = lambda: False
     live_audio: Callable[[object, bool, bool, list[np.ndarray]], bool] = lambda *_: False
     complete_chinese_ticket: Callable[[WaitingUtterance, int], WaitingUtterance | None] = (
         lambda *_: None
@@ -211,6 +212,9 @@ class EndpointPipeline:
         if self.fast_stop and (self.hooks.awake() or echo_risk):
             self.hooks.metric('stop_input_dbfs', round(level(stop_cleaned), 1))
             keyword = self.fast_stop.feed(stop_cleaned)
+            if keyword == '停止' and self.hooks.report_stop_target_possible():
+                # The stream may have heard only the prefix of “停止第二个任务”.
+                keyword = None
             if keyword and stamp - self.last_fast_stop_ns > 1_200_000_000:
                 recent = self.hooks.playing() or time.monotonic() - self.hooks.last_audio_end() < 1
                 render_text = self.hooks.last_spoken() if recent else ''

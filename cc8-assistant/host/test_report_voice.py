@@ -6,6 +6,8 @@ import unittest
 from unittest.mock import patch
 from dot_client import Cancelled, DotError
 from dot_handoff import Handoff
+from assistant_identity import WAKE_PATTERN
+from recognition_commands import stop_command
 from report_voice import (
     HandoffDraft,
     ReportCommand,
@@ -157,6 +159,19 @@ class VoiceTests(unittest.TestCase):
         for ambiguous in ('继续刚才那个项目，下一步：执行第二项', '继续第二项和刚才那个项目'):
             self.assertEqual(voice.command(ambiguous), ReportCommand('item_choice'))
         self.assertEqual(self.reads, ['today'])
+
+    def test_report_task_stop_stays_separate_from_stopping_narration(self):
+        self.assertEqual(stop_command('大黄蜂，别念了！', WAKE_PATTERN), '别念了')
+        self.assertFalse(stop_command('大黄蜂，停止第二个任务', WAKE_PATTERN))
+        self.assertIsNone(report_command('停止第二个任务'))
+        self.assertIsNone(report_command('别念了', followup=True))
+        for text in ('停止第二个任务', '大黄蜂，取消本次汇报的第2项任务。'):
+            self.assertEqual(report_command(text, followup=True), ReportCommand('item_stop', 2))
+        self.assertEqual(report_command('取消本次汇报的第二项'), ReportCommand('item_stop', 2))
+        self.assertEqual(
+            report_command('停止第二个任务和第三个任务', followup=True),
+            ReportCommand('item_choice'),
+        )
 
     def test_recent_project_expires_with_its_snapshot_and_cannot_cross_sources(self):
         for change in ('replace', 'route', 'expire', 'ordinary'):
@@ -586,6 +601,7 @@ class IntegrationTests(unittest.TestCase):
 
         cases = (
             (Reply, '继续第二项，下一步：检查旧结果'),
+            (Reply, '停止第二个任务'),
             (Reply, '继续刚才那个项目，下一步：检查旧结果'),
             (TextReply, '查看这次汇报的第二项待办队列'),
             (Reply, '第二项是否通过了测试'),
@@ -610,6 +626,27 @@ class IntegrationTests(unittest.TestCase):
                 self.assertNotIn('provenance', task)
                 self.assertNotIn('检查旧结果', task['result'])
                 self.assertIsNotNone(voice.snapshot)
+
+    def test_report_stop_produces_truthful_source_receipt_without_dispatch(self):
+        from test_failure_feedback import FailureFeedbackTests
+
+        _, bridge = self.session()
+        list(bridge.brain.clauses('汇报今天的工作', []))
+        voice = bridge.chats.voice
+        before = voice.progress.status()
+        with (
+            patch.object(bridge.brain.dot, 'clauses') as dot,
+            patch.object(bridge.chats.catalog, 'report') as read,
+        ):
+            FailureFeedbackTests().run_one(
+                bridge.response, Reply(bridge.generation, '停止第二个任务')
+            )
+        dot.assert_not_called()
+        read.assert_not_called()
+        task = bridge.workspace.snapshot()['tasks'][0]
+        self.assertEqual(task['provenance']['turn_id'], 'turn-1')
+        self.assertIn('未向原聊天发送停止请求', task['result'])
+        self.assertEqual(voice.progress.status(), before)
 
     def test_queued_ordinary_question_does_not_become_a_numbered_report_followup(self):
         from test_failure_feedback import FailureFeedbackTests
