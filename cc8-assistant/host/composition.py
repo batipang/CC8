@@ -578,6 +578,7 @@ def build_components(
             log=lambda name, **fields: host.log(name, **fields),
             status=lambda phase, message: host.status(phase, message),
             meeting_state=lambda: host.meetings.view(),
+            live_voice_state=host.live_voice_state,
         ),
         started_at=started_at,
     )
