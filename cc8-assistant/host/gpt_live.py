@@ -359,6 +359,9 @@ class LiveSession:
             )
             self.pending.clear()
             self.input_offset = max(self.input_offset, self.last_input_end)
+            # The new utterance must not reuse the interrupted turn's captions,
+            # even if the first new fragment follows it without a long gap.
+            self.transcripts.clear()
             self.drop_output = True
             self.waiting_for_input = True
             self.last_output = self.clock()
