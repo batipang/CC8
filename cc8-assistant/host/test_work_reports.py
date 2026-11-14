@@ -262,6 +262,10 @@ class ReportTests(unittest.TestCase):
         )
         item = self.report(f)['items'][0]
         self.assertEqual(item['test_processes'], dict(exit_zero=3, exit_nonzero=3, unconfirmed=4))
+        self.assertEqual(
+            [row['item_id'] for row in item['test_receipts']],
+            [f'command-{i}' for i in (1, 2, 13, 3, 4, 5, 15, 0)],
+        )
         self.assertNotIn('PRIVATE_OUTPUT', str(item))
         self.assertNotIn('test_suite.py', str(item))
         self.assertNotIn('tools/test_all.py', str(item))
