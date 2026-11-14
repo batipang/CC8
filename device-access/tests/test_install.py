@@ -266,7 +266,11 @@ class InstallerTests(unittest.TestCase):
 
     def test_failure_receipt_distinguishes_staging_refusal_from_dispatched_install(self):
         args = SimpleNamespace(
-            verify_apk=None, install=Path('candidate.apk'), launch=False, shared_staging=False
+            verify_apk=None,
+            install=Path('candidate.apk'),
+            launch=False,
+            shared_staging=False,
+            expect_installed_sha256=None,
         )
         for dispatched in (False, True):
             with (

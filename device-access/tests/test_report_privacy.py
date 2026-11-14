@@ -154,6 +154,25 @@ class ReportPrivacyTests(unittest.TestCase):
             self.assertEqual(data['report_state'], 'prepared')
             self.assertEqual(data['installation_result'], 'not_started')
 
+    def test_install_cli_passes_baseline_pin_and_rejects_invalid_pins_before_probe(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'device-access').mkdir()
+            candidate = str(root / 'candidate.apk')
+            pin = 'a' * 64
+            stack, target, install = self.scope(root)
+            with stack:
+                for args in (
+                    ['--probe', '--expect-installed-sha256', pin],
+                    ['--install', candidate, '--expect-installed-sha256', 'invalid'],
+                ):
+                    with self.assertRaises(SystemExit):
+                        access.main(args)
+                target.assert_not_called()
+                install.assert_not_called()
+                access.main(['--install', candidate, '--expect-installed-sha256', pin])
+                self.assertEqual(install.call_args.kwargs['expected_installed_sha256'], pin)
+
     def test_report_save_failure_after_install_does_not_retry_or_claim_no_install(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
