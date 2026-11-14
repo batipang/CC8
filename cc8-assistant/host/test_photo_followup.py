@@ -476,7 +476,16 @@ class PhotoControllerTests(unittest.TestCase):
             self.assertIsNone(spoken_photo_question(text))
         self.assertEqual(spoken_photo_question('追问这张照片'), '')
 
-    def recognize_photo(self, *, risky=False, credible=30, echo=False, wake=True, tool=False):
+    def recognize_photo(
+        self,
+        *,
+        risky=False,
+        credible=30,
+        echo=False,
+        wake=True,
+        tool=False,
+        text='追问这张照片，上面写了什么？',
+    ):
         from test_weak_near import captured
 
         bridge = self.bridge()
@@ -485,7 +494,6 @@ class PhotoControllerTests(unittest.TestCase):
         original = self.capture(bridge)
         expires = bridge.visual.followup._photo.expires
         generation = bridge.cancel('voice')
-        text = '追问这张照片，上面写了什么？'
         calls = []
         bridge.speech = SimpleNamespace(recognize=lambda pcm: calls.append('asr') or text)
         bridge.recognition.hooks = replace(
@@ -526,6 +534,33 @@ class PhotoControllerTests(unittest.TestCase):
                 bridge.answer_visual(bridge.job)
                 self.assertEqual(bridge.received_photos[-1], ('上面写了什么？', fixtures.jpeg()))
                 self.assertEqual(sum(name == 'camera_capture' for name, _ in bridge.events), 1)
+
+    def test_real_recognition_routes_new_ocr_capture_and_rejects_closed_wake(self):
+        from vision import OCR_PROMPT
+
+        text = '读一下这张纸上的字'
+        bridge, row, _, _, calls = self.recognize_photo(text=text)
+        self.assertEqual(row['gate'], 'accepted')
+        self.assertEqual(calls, ['asr'])
+        self.assertEqual(bridge.job.origin, 'voice')
+        self.assertEqual(bridge.job.text, OCR_PROMPT)
+        original_event = bridge.event
+
+        def send_current_frame(name, **fields):
+            original_event(name, **fields)
+            if name == 'camera_capture':
+                for event in fixtures.events(bridge.visual.inbox.pending):
+                    bridge.on_event(event)
+
+        with patch.object(bridge, 'event', send_current_frame):
+            bridge.answer_visual(bridge.job)
+        self.assertEqual(bridge.received_photos[-1], (OCR_PROMPT, fixtures.jpeg()))
+        self.assertEqual(sum(name == 'camera_capture' for name, _ in bridge.events), 2)
+
+        bridge, row, _, _, calls = self.recognize_photo(text=text, wake=False)
+        self.assertEqual(row['gate'], 'wake_closed')
+        self.assertEqual(calls, [])
+        self.assertEqual(sum(name == 'camera_capture' for name, _ in bridge.events), 1)
 
     def test_rejected_real_recognition_cannot_consume_photo_or_start_followup(self):
         for options, gate, attempts in (

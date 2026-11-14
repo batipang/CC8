@@ -13,7 +13,15 @@ import secrets
 from typing import Callable, ContextManager
 from reply_types import VisualReply, PhotoReply
 from photo_followup import PhotoFollowup, spoken_photo_question
-from vision import CameraInbox, DesktopSnapshot, VisionError, HD_IMAGE, LEGACY_IMAGE
+from vision import (
+    CameraInbox,
+    DesktopSnapshot,
+    VisionError,
+    HD_IMAGE,
+    LEGACY_IMAGE,
+    OCR_PROMPT,
+    ocr_voice_request,
+)
 from session_ports import EventSink, AnswerSink, MetricSink
 from diagnostics import TraceBook, error_kind
 from failure_feedback import FailureSink
@@ -403,6 +411,8 @@ class VisionController:
 
     def begin_visual(self, text, origin, nonce=''):
         # The caller already accepted an explicit foreground button/voice intent.
+        if origin == 'voice' and ocr_voice_request(text):
+            text = OCR_PROMPT
         if not self.hooks.connected() or self.hooks.calibrating() or not self.hooks.brain_ready():
             self.hooks.event(
                 'vision_unavailable',

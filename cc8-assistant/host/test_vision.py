@@ -5,7 +5,15 @@ import time
 import unittest
 from unittest.mock import patch
 
-from vision import CameraInbox, VisionError, jpeg_dimensions, visual_request, MAX_IMAGE, CHUNK
+from vision import (
+    CameraInbox,
+    VisionError,
+    jpeg_dimensions,
+    ocr_voice_request,
+    visual_request,
+    MAX_IMAGE,
+    CHUNK,
+)
 from dot_client import DotBrain
 from brain_router import BrainRouter
 from bridge import Bridge, VisualReply
@@ -132,6 +140,25 @@ class InboxTests(unittest.TestCase):
 
 
 class IntentTests(unittest.TestCase):
+    def test_explicit_camera_ocr_voice_intents_are_exact(self):
+        for text in (
+            '大黄蜂，读一下这上面的字。',
+            '请你转录我面前这张纸上的文字',
+            'Bumblebee，识别镜头里的字',
+        ):
+            self.assertTrue(ocr_voice_request(text), text)
+            self.assertTrue(visual_request(text), text)
+        for text in (
+            '不要读一下这上面的字',
+            '“识别镜头里的字”',
+            '转录网页上的字',
+            '如果要识别镜头里的字怎么办',
+            '识别镜头里的字再发给别人',
+            '帮我看看镜头前的东西',
+        ):
+            self.assertFalse(ocr_voice_request(text), text)
+        self.assertFalse(visual_request('识别镜头里的字，再发给别人'))
+
     def test_specific_camera_language(self):
         for text in [
             '大黄蜂，看看我手里是什么',
