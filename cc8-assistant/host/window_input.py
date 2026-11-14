@@ -16,6 +16,7 @@ import time
 
 from request_text import validate_request_text
 from vision import ImagePolicy, jpeg_dimensions
+from window_receipt import WindowReceipt, validate_window_receipt
 
 POLICY = ImagePolicy(2, 1280, 1280 * 960, 768 * 1024)
 MAX_RESPONSE = 768 * 1024 * 4 // 3 + 8192
@@ -90,19 +91,22 @@ class SelectedWindow:
     height: int
     question: str
 
+    def receipt(self) -> WindowReceipt:
+        return validate_window_receipt(
+            {
+                'window_id': self.window_id,
+                'application': self.application,
+                'title': self.title,
+                'width': self.width,
+                'height': self.height,
+            }
+        )
+
     def prompt(self):
         # This header also remains in the RAM-only task title/result context,
         # allowing the owner to distinguish a Mac window from the CC8 camera.
         scope = json.dumps(
-            dict(
-                source='mac_window',
-                window_id=self.window_id,
-                process_id=self.process_id,
-                application=self.application,
-                title=self.title,
-                width=self.width,
-                height=self.height,
-            ),
+            {'source': 'mac_window', **self.receipt()},
             ensure_ascii=False,
             separators=(',', ':'),
         )
@@ -140,21 +144,9 @@ def decode_result(data, ident):
         raise ValueError('Invalid selected window fields')
     if value['source_type'] != 'mac_window':
         raise ValueError('Unexpected capture scope')
-    for key, maximum in (
-        ('window_id', 2**32 - 1),
-        ('process_id', 2**31 - 1),
-        ('width', 1280),
-        ('height', 1280),
-    ):
-        if type(value[key]) is not int or not 0 < value[key] <= maximum:
-            raise ValueError('Invalid window identity or geometry')
-    for key, maximum in (('application', 100), ('title', 240)):
-        if (
-            not isinstance(value[key], str)
-            or len(value[key]) > maximum
-            or any(ord(c) < 32 for c in value[key])
-        ):
-            raise ValueError('Invalid window label')
+    receipt = validate_window_receipt({key: value[key] for key in WindowReceipt.__annotations__})
+    if type(value['process_id']) is not int or not 0 < value['process_id'] < 2**31:
+        raise ValueError('Invalid process identity')
     encoded = value['image_base64']
     if not isinstance(encoded, str) or len(encoded) > POLICY.max_bytes * 4 // 3:
         raise ValueError('Window image exceeds limit')
@@ -163,12 +155,12 @@ def decode_result(data, ident):
         raise ValueError('Window image geometry mismatch')
     return SelectedWindow(
         image,
-        value['window_id'],
+        receipt['window_id'],
         value['process_id'],
-        value['application'],
-        value['title'],
-        value['width'],
-        value['height'],
+        receipt['application'],
+        receipt['title'],
+        receipt['width'],
+        receipt['height'],
         validate_request_text(value['question'], 1000),
     )
 

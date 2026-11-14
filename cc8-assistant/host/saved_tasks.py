@@ -15,8 +15,10 @@ import uuid
 from zoneinfo import ZoneInfo
 from result_provenance import validate as validate_provenance
 from workspace import EXECUTION_UNCONFIRMED_STEP
+from window_receipt import validate_window_receipt
 
 LIMIT = 32
+READER_VERSION = 3
 MAX_BYTES = 512 * 1024
 LOCK_WAIT_SECONDS = 2
 TERMINAL = ('completed', 'failed', 'cancelled')
@@ -102,7 +104,7 @@ def validate(item):
     if (
         not isinstance(item, dict)
         or not required <= set(item)
-        or set(item) - required - {'provenance', 'finished_at'}
+        or set(item) - required - {'provenance', 'finished_at', 'window_input'}
     ):
         raise ValueError('Invalid saved task fields')
     ident(item['id'])
@@ -118,6 +120,8 @@ def validate(item):
         date(item['finished_at'])
     if 'provenance' in item:
         validate_provenance(item['provenance'])
+    if 'window_input' in item:
+        validate_window_receipt(item['window_input'])
     steps = item['steps']
     if not isinstance(steps, list) or len(steps) > 5:
         raise ValueError('Invalid saved task steps')
@@ -222,7 +226,7 @@ class SavedTasks:
             not isinstance(value, dict)
             or set(value) != {'schema_version', 'items'}
             or type(value['schema_version']) is not int
-            or value['schema_version'] not in (1, 2)
+            or not 1 <= value['schema_version'] <= READER_VERSION
         ):
             raise ValueError('Invalid saved task store')
         items = value['items']
@@ -230,6 +234,8 @@ class SavedTasks:
             raise ValueError('Invalid saved task capacity')
         for item in items:
             validate(item)
+            if 'window_input' in item and value['schema_version'] < 3:
+                raise ValueError('Window receipt requires archive format 3')
         if len({item['id'] for item in items}) != len(items):
             raise ValueError('Duplicate saved task ID')
         return items, (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_size)
@@ -242,8 +248,11 @@ class SavedTasks:
             actual = None
         if actual != expected:
             raise OSError('Saved task store changed externally')
+        version = 3 if any('window_input' in item for item in items) else 2
         raw = (
-            json.dumps({'schema_version': 2, 'items': items}, ensure_ascii=False, allow_nan=False)
+            json.dumps(
+                {'schema_version': version, 'items': items}, ensure_ascii=False, allow_nan=False
+            )
             + '\n'
         ).encode('utf-8')
         if len(raw) > MAX_BYTES:
@@ -284,7 +293,7 @@ class SavedTasks:
             for key in ('id', 'title', 'status', 'result', 'steps', 'started_at')
         }
         item['saved_at'] = datetime.now(ZoneInfo('Asia/Shanghai')).isoformat(timespec='seconds')
-        for key in ('provenance', 'finished_at'):
+        for key in ('provenance', 'finished_at', 'window_input'):
             if key in task:
                 item[key] = deepcopy(task[key])
         validate(item)
@@ -292,7 +301,7 @@ class SavedTasks:
             items, identity = self.read(directory)
             existing = next((entry for entry in items if entry['id'] == item['id']), None)
             if existing:
-                if any(existing[key] != item[key] for key in item if key != 'saved_at'):
+                if existing != {**item, 'saved_at': existing['saved_at']}:
                     raise ValueError('Saved receipt differs from original')
                 return deepcopy(existing)
             if len(items) >= LIMIT:

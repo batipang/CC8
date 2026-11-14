@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from reply_types import Reply, TextReply
     from vision_controller import VisionController
     from workspace import Workspace
+    from window_receipt import WindowReceipt
 
 
 class EventSink(Protocol):
@@ -23,7 +24,9 @@ class EventSink(Protocol):
 
 
 class AnswerSink(Protocol):
-    def __call__(self, text: str, generation: int, *, image: bytes) -> None: ...
+    def __call__(
+        self, text: str, generation: int, *, image: bytes, window_input: WindowReceipt | None = None
+    ) -> None: ...
 
 
 class MetricSink(Protocol):

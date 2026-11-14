@@ -15,6 +15,7 @@ import uuid
 from zoneinfo import ZoneInfo
 from typing import Callable, Literal, NotRequired, TypeAlias, TypedDict, cast
 from result_provenance import Provenance, validate as validate_provenance
+from window_receipt import WindowReceipt, validate_window_receipt
 from reminder_policy import (
     ReminderPolicy,
     defaults as default_policy,
@@ -58,6 +59,7 @@ class TaskRecord(TypedDict):
     started_at: str
     finished_at: NotRequired[str]
     provenance: NotRequired[Provenance]
+    window_input: NotRequired[WindowReceipt]
 
 
 class ReminderRecord(TypedDict):
@@ -359,7 +361,9 @@ class Workspace:
                 data['tasks'].pop()
             return data
 
-    def task_start(self, generation: int, title: str) -> str:
+    def task_start(
+        self, generation: int, title: str, *, window_input: WindowReceipt | None = None
+    ) -> str:
         with self.lock:
             task: TaskRecord = {
                 'id': uuid.uuid4().hex[:16],
@@ -371,6 +375,8 @@ class Workspace:
                 'result': '',
                 'started_at': self.now().isoformat(timespec='seconds'),
             }
+            if window_input is not None:
+                task['window_input'] = validate_window_receipt(window_input)
             self.tasks.append(task)
             self.tasks = self.tasks[-12:]
             self.revision += 1

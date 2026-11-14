@@ -3,17 +3,17 @@ package com.happyhome.cc8assistant;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.content.Intent;
 import android.content.ActivityNotFoundException;
-import android.net.Uri;
+import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.StateListDrawable;
-import android.content.res.ColorStateList;
-import android.text.TextUtils;
+import android.net.Uri;
 import android.os.*;
+import android.text.TextUtils;
 import android.view.*;
 import android.widget.*;
 import java.io.*;
@@ -960,7 +960,8 @@ public final class MainActivity extends Activity
           });
     else if (linked)
       dialog.setPositiveButton("保存结果", (d, n) -> savedTasks.save(task.optString("id"), route));
-    if (!"running".equals(task.optString("status")) && task.optJSONObject("provenance") != null)
+    if (!"running".equals(task.optString("status"))
+        && (task.optJSONObject("provenance") != null || task.optJSONObject("window_input") != null))
       dialog.setNeutralButton("来源与文件", (d, n) -> resultDetails.open(task, false, route));
     dialog.show();
   }

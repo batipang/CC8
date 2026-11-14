@@ -42,7 +42,7 @@ final class SavedTasksDialog {
         .setTitle("保存这条任务结果？")
         .setMessage(
             "在这台 Mac 保存任务标题、结束状态与时间、最近五个步骤、最多 1600 字结果摘录，以及可用的会话来源和最多 8"
-                + " 条文件变更回执（含本机路径）。重启后可查看、复制、定位文件或删除记录；不保存录音或全部聊天。")
+                + " 条文件变更回执（含本机路径）。分析 Mac 窗口时也保存应用名、窗口标题、编号和截图尺寸。重启后可查看或删除记录；不保存截图、录音或全部聊天。")
         .setPositiveButton("保存", (d, n) -> request("save", id, route))
         .setNegativeButton("取消", null)
         .show();
@@ -194,7 +194,7 @@ final class SavedTasksDialog {
           });
       content.addView(openChat);
     }
-    if (item.optJSONObject("provenance") != null) {
+    if (item.optJSONObject("provenance") != null || item.optJSONObject("window_input") != null) {
       Button source = new Button(activity);
       source.setText("来源与文件");
       source.setTextSize(28);
