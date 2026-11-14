@@ -123,6 +123,26 @@ private final class SelectionChecks {
         expectEqual(value.deadline, 190)
     }
 
+    func testOnlyCurrentCaptureCanReportAnOutcomeBeforeDeadline() throws {
+        let value = try lease()
+        let first = try require(value.beginSelection())
+        expectTrue(value.isSelecting(ticket: first))
+        expectTrue(value.revoke(ticket: first))
+        let second = try require(value.beginSelection())
+        expectFalse(value.isSelecting(ticket: first))
+        expectTrue(value.isSelecting(ticket: second))
+        expectTrue(value.accept(frame(), ticket: second, isSingleWindow: true))
+        expectFalse(value.isSelecting(ticket: second))
+        expectNotNil(value.preview)
+
+        let third = try require(value.beginSelection())
+        now = value.deadline
+        expectFalse(value.isSelecting(ticket: third))
+        expectEqual(value.phase, .expired)
+        expectNil(value.preview)
+        expectNil(value.take(ticket: third))
+    }
+
     func testConcurrentSendConsumesThePreviewExactlyOnce() throws {
         let value = try lease()
         let ticket = try require(value.beginSelection())
@@ -157,6 +177,14 @@ public enum WindowCoreChecks {
             throw CheckFailure(message: "ScreenCaptureKit permission outcome was misclassified")
         }
         report("PASS testOnlyScreenCaptureKitDenialIndicatesMissingPermission")
+        do {
+            let checks = SelectionChecks()
+            try checks.testOnlyCurrentCaptureCanReportAnOutcomeBeforeDeadline()
+            if !checks.failures.isEmpty {
+                throw CheckFailure(message: "capture outcome: " + checks.failures.joined(separator: ", "))
+            }
+            report("PASS testOnlyCurrentCaptureCanReportAnOutcomeBeforeDeadline")
+        }
         do {
             let checks = SelectionChecks()
             try checks.testRevokedSourceClearsPreviewAndRejectsLateCapture()

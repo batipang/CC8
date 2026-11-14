@@ -229,8 +229,13 @@ class WindowPicker:
             child.stdin.write((json.dumps(request, ensure_ascii=False) + '\n').encode())
             child.stdin.flush()  # Keep open until success/cancel; EOF revokes the native preview.
             deadline = time.monotonic() + 90
-            while not self.cancelled.is_set() and current() and time.monotonic() < deadline:
-                if select.select([child.stdout], [], [], 0.05)[0]:
+            while not self.cancelled.is_set() and current():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                if select.select([child.stdout], [], [], min(0.05, remaining))[0]:
+                    if time.monotonic() >= deadline:
+                        break
                     chunk = os.read(child.stdout.fileno(), min(65536, MAX_RESPONSE + 1 - len(data)))
                     if not chunk:
                         break
@@ -238,9 +243,12 @@ class WindowPicker:
                     if len(data) > MAX_RESPONSE:
                         raise ValueError('Window response exceeds limit')
                     if b'\n' in chunk:
-                        if self.cancelled.is_set() or not current():
+                        if self.cancelled.is_set() or not current() or time.monotonic() >= deadline:
                             break
-                        return decode_result(data, ident)
+                        result = decode_result(data, ident)
+                        if self.cancelled.is_set() or not current() or time.monotonic() >= deadline:
+                            break
+                        return result
             raise WindowSelectionEnded(
                 'cancelled'
                 if self.cancelled.is_set() or not current()
