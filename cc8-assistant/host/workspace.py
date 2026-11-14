@@ -25,6 +25,7 @@ from reminder_store import ReminderStore, ReminderCommitUncertain
 
 ZONE = ZoneInfo('Asia/Shanghai')
 REMINDER_STORE_VERSION = 3
+EXECUTION_UNCONFIRMED_STEP = 'execution_unconfirmed'
 
 
 class TaskStep(TypedDict):
@@ -407,6 +408,11 @@ class Workspace:
                 task['steps'] = [
                     *task['steps'][-4:],
                     {'id': 'desktop_handoff', 'title': '接续指引已生成', 'status': 'completed'},
+                ]
+            if unconfirmed and status in ('failed', 'cancelled'):
+                task['steps'] = [
+                    *task['steps'][-4:],
+                    {'id': EXECUTION_UNCONFIRMED_STEP, 'title': '执行结果待核对', 'status': status},
                 ]
             for step in task['steps']:
                 if step['status'] == 'running':

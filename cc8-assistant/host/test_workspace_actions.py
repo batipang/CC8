@@ -445,14 +445,23 @@ class ActionCheck extends Activity {
    case "saved_handoff":{
     JSONObject pending=task("completed");pending.values.put("desktop_handoff_pending",true);
     JSONObject malformed=task("completed");malformed.values.put("desktop_handoff_pending","true");
-    c.savedTasks.open();c.answer("items",new JSONArray(pending,task("completed"),malformed));
+    JSONObject uncertain=task("cancelled");uncertain.values.put("execution_unconfirmed",true);
+    JSONObject malformedUncertain=task("failed");malformedUncertain.values.put("execution_unconfirmed","true");
+    c.savedTasks.open();c.answer("items",new JSONArray(pending,task("completed"),malformed,uncertain,malformedUncertain));
     AlertDialog list=AlertDialog.last;
     yes(list.builder.labels[0].startsWith("待桌面接续 · "),"Handoff list must identify pending desktop work");
     for(int i=1;i<3;i++)yes(list.builder.labels[i].startsWith("已完成 · "),"Normal or malformed metadata must use the ordinary receipt label");
+    yes(list.builder.labels[3].startsWith("执行结果待核对 · "),"Unconfirmed execution must survive the saved list");
+    yes(list.builder.labels[4].startsWith("未完成 · "),"String flags cannot become execution evidence");
     list.item(0);c.answer("item",pending);
+    ScrollView pendingScroll=(ScrollView)AlertDialog.last.builder.view;
+    LinearLayout pendingBody=(LinearLayout)pendingScroll.child;
+    yes(((TextView)pendingBody.children.get(0)).getText().toString().contains("状态：待桌面接续"),"Saved detail must keep the pending desktop status");
+    c.savedTasks.open();c.answer("items",new JSONArray(uncertain));AlertDialog.last.item(0);c.answer("item",uncertain);
     ScrollView scroll=(ScrollView)AlertDialog.last.builder.view;
     LinearLayout body=(LinearLayout)scroll.child;
-    yes(((TextView)body.children.get(0)).getText().toString().contains("状态：待桌面接续"),"Saved detail must keep the pending desktop status");break;
+    String detail=((TextView)body.children.get(0)).getText().toString();
+    yes(detail.contains("状态：执行结果待核对")&&detail.contains("请先在 Mac 核对原任务"),"Saved detail must tell the user to verify execution");break;
    }
    case "saved_response":{
     c.savedTasks.open();AlertDialog waiting=AlertDialog.last;s.change();c.answer("items",new JSONArray(task("completed")));

@@ -160,6 +160,7 @@ final class SavedTasksDialog {
               .append(label(step.optString("status")));
       }
     body.append("\n\n结果摘录：\n").append(item.optString("result"));
+    if (needsExecutionCheck(item)) body.append("\n\n请先在 Mac 核对原任务是否执行，再决定是否重新交办。");
     TextView detail = new TextView(activity);
     detail.setText(body.toString());
     detail.setTextSize(30);
@@ -207,7 +208,14 @@ final class SavedTasksDialog {
     String status = item.optString("status");
     if ("completed".equals(status) && Boolean.TRUE.equals(item.opt("desktop_handoff_pending")))
       return "待桌面接续";
+    if (needsExecutionCheck(item)) return "执行结果待核对";
     return label(status);
+  }
+
+  private boolean needsExecutionCheck(JSONObject item) {
+    String status = item.optString("status");
+    return ("failed".equals(status) || "cancelled".equals(status))
+        && Boolean.TRUE.equals(item.opt("execution_unconfirmed"));
   }
 
   private String label(String status) {

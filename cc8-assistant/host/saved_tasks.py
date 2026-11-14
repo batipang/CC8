@@ -14,6 +14,7 @@ import time
 import uuid
 from zoneinfo import ZoneInfo
 from result_provenance import validate as validate_provenance
+from workspace import EXECUTION_UNCONFIRMED_STEP
 
 LIMIT = 32
 MAX_BYTES = 512 * 1024
@@ -34,6 +35,13 @@ def desktop_handoff_pending(item):
             step['id'] == 'desktop_handoff' and step['status'] == 'completed'
             for step in item['steps']
         )
+    )
+
+
+def execution_unconfirmed(item):
+    return item['status'] in ('failed', 'cancelled') and any(
+        step['id'] == EXECUTION_UNCONFIRMED_STEP and step['status'] == item['status']
+        for step in item['steps']
     )
 
 

@@ -6,7 +6,12 @@ from dataclasses import dataclass
 import re
 import threading
 from typing import Callable, ContextManager
-from saved_tasks import desktop_handoff_pending, ident, SavedTaskCapacityError
+from saved_tasks import (
+    desktop_handoff_pending,
+    execution_unconfirmed,
+    ident,
+    SavedTaskCapacityError,
+)
 from result_files import reveal_file
 
 
@@ -113,6 +118,7 @@ class SavedTaskController:
                     {
                         **{key: item[key] for key in ('id', 'title', 'status', 'saved_at')},
                         'desktop_handoff_pending': desktop_handoff_pending(item),
+                        'execution_unconfirmed': execution_unconfirmed(item),
                     }
                     for item in reversed(self.store.snapshot())
                 ]
@@ -120,7 +126,11 @@ class SavedTaskController:
                 item = next((t for t in self.store.snapshot() if t['id'] == task_id), None)
                 if item is None:
                     raise ValueError('Saved task no longer exists')
-                fields['item'] = {**item, 'desktop_handoff_pending': desktop_handoff_pending(item)}
+                fields['item'] = {
+                    **item,
+                    'desktop_handoff_pending': desktop_handoff_pending(item),
+                    'execution_unconfirmed': execution_unconfirmed(item),
+                }
             with self.hooks.lock:
                 self.finish_slot()
                 if connection is self.hooks.connection():
