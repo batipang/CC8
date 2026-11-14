@@ -353,6 +353,8 @@ class Bridge:
                 return 'configuration_unavailable'
             if self.session.connection is None:
                 return 'device_disconnected'
+            if self.session.capture_route_pending:
+                return 'capture_route_pending'
             if not self.owner_access():
                 return 'owner_required'
             if not self.session.live_caption_supported:
@@ -365,9 +367,15 @@ class Bridge:
                 return 'capture_paused'
             if self.calibration.active or self.calibration.running or self.calibration.failed:
                 return 'calibration_required'
-            owner = trial.session
-            if owner is None or not trial.current(owner):
+            if not self.wake.allowed():
                 return 'waiting_for_local_wake'
+            if not trial.eligible():
+                return 'capture_busy'
+            owner = trial.session
+            if owner is None:
+                return 'capture_busy' if trial.admission_busy() else 'ready_for_speech'
+            if not trial.current(owner):
+                return 'session_ending'
             return 'active' if owner.started.is_set() else 'connecting'
 
     def diagnostics_report(self):

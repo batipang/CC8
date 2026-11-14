@@ -196,6 +196,9 @@ class LiveAdmissionTests(unittest.TestCase):
         bridge.live = LiveTrial(bridge, 'fixture-private-key', 'marin')
         state('device_disconnected')
         bridge.session.connection = object()
+        bridge.session.capture_route_pending = True
+        state('capture_route_pending')
+        bridge.session.capture_route_pending = False
         with patch.object(bridge, 'owner_access', return_value=False):
             state('owner_required')
         state('device_incompatible')
@@ -207,9 +210,17 @@ class LiveAdmissionTests(unittest.TestCase):
         bridge.wake.detector = NS()
         state('capture_paused')
         bridge.session.active = True
+        bridge.session.awake = False
         with patch.object(bridge.calibration, 'failed', True):
             state('calibration_required')
         state('waiting_for_local_wake')
+        bridge.session.awake = True
+        state('ready_for_speech')
+        with patch.object(bridge.response, 'busy', True):
+            state('capture_busy')
+        bridge.session.text_generation = bridge.generation
+        state('capture_busy')
+        bridge.session.text_generation = None
         owner = LiveSession('fixture-private-key', 'marin', bridge.live, connector=Mock())
         bridge.live.session = owner
         with patch.object(bridge.live, 'current', return_value=True):
@@ -217,7 +228,7 @@ class LiveAdmissionTests(unittest.TestCase):
             owner.started.set()
             state('active')
         with patch.object(bridge.live, 'current', return_value=False):
-            state('waiting_for_local_wake')
+            state('session_ending')
         bridge.session.active = False
         bridge.add_capture_metric('live_sessions', 1)
         health = bridge.health()

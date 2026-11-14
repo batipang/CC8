@@ -74,14 +74,17 @@ class LiveTrial:
             if stop_device:
                 self.stop_playback()
 
-    def admit(self, initial=None):
-        if self.session is not None:
-            return self.active
-        if (
+    def admission_busy(self):
+        return (
             self.host.playback.playing
             or self.host.response.busy
             or self.host.capture.live_response_probe() is not None
-        ):
+        )
+
+    def admit(self, initial=None):
+        if self.session is not None:
+            return self.active
+        if self.admission_busy():
             return False
         self.scope = self.host.session.capture_owner(), self.host.generation
         self.near_frames = 0
