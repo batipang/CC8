@@ -199,6 +199,7 @@ class GroupFixture:
         self.clients = []
         self.failed = set()
         self.partial = set()
+        self.other_turns = {}
         self.count = 1
         self.now = 0
         self.advance = 0
@@ -230,7 +231,8 @@ class GroupFixture:
                         data=[
                             turn(f'turn-{i + 1}', completed=fixture.completed)
                             for i in range(fixture.count)
-                        ],
+                        ]
+                        + fixture.other_turns.get(self.thread, []),
                         nextCursor=str(int(params.get('cursor', '0')) + 1)
                         if self.thread in fixture.partial
                         else None,
@@ -284,6 +286,61 @@ class GroupTests(unittest.TestCase):
         report = self.read(f, selected)
         self.assertEqual(report['items'], [])
         self.assertFalse(report['empty_confirmed'])
+
+    def test_source_status_counts_distinguish_observed_turns_from_unread_sources(self):
+        f = GroupFixture()
+        f.count = 0
+        f.other_turns = {
+            'chat-a': [
+                turn('active', completed=None, status='inProgress'),
+                turn('failed', status='failed'),
+                turn('older-failure', completed=99, status='failed'),
+            ],
+            'partial': [turn('interrupted', status='interrupted')],
+        }
+        f.partial.add('partial')
+        f.failed.add('unread')
+        selected = scope('chat-a', 'partial', 'unread', 'empty')
+        report = self.read(f, selected)
+        first, partial, unread, empty = report['sources']
+        self.assertEqual((first['active_turns_seen'], first['failed_turns']), (1, 1))
+        self.assertFalse(partial['coverage_complete'])
+        self.assertEqual(partial['interrupted_turns'], 1)
+        self.assertNotIn('active_turns_seen', unread)
+        self.assertEqual(empty['active_turns_seen'], 0)
+        self.assertEqual(
+            (report['active_turns_seen'], report['failed_turns'], report['interrupted_turns']),
+            (1, 1, 1),
+        )
+        self.assertEqual(report['items'], [])
+        self.assertFalse(report['empty_confirmed'])
+        self.assertTrue(ReportVoice.valid_report(selected, report))
+        rendered = report_text(report)
+        self.assertIn('已读取，读到仍进行中 1 个回合，窗口内失败 1 个、中断 0 个', rendered)
+        self.assertIn(
+            '已读取（覆盖不完整），读到仍进行中 0 个回合，窗口内失败 0 个、中断 1 个', rendered
+        )
+        self.assertIn('不可读取，不能视为零成果', rendered)
+        context = (selected, object(), 0)
+        voice = ReportVoice(
+            ReportVoiceHooks(
+                threading.RLock(), lambda: context, lambda *a: self.fail('Status re-read sources')
+            ),
+            clock=lambda: 0,
+        )
+        self.assertTrue(voice.remember(selected, report))
+        command = voice.command('大黄蜂，这次汇报里还有哪些项目在进行中？')
+        status = voice.answer(command, lambda: True)
+        self.assertIn(f'「{first["title"]}」当时读到1个', status.text)
+        self.assertIn('未取得的状态无法确认', status.text)
+        self.assertFalse(status.delivery)
+        context = (selected, object(), 1)
+        self.assertIn('已失效', voice.answer(command, lambda: True).text)
+        unknown = deepcopy(report)
+        unknown['sources'][2]['active_turns_seen'] = 0
+        self.assertFalse(ReportVoice.valid_report(selected, unknown))
+        report['active_turns_seen'] = 0
+        self.assertFalse(ReportVoice.valid_report(selected, report))
 
     def test_global_deadline_marks_unread_sources_without_starting_another_client(self):
         f = GroupFixture()

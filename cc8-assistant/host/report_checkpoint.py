@@ -173,6 +173,9 @@ def validate_record(item):
                         project=m.project,
                         status='read',
                         coverage_complete=False,
+                        active_turns_seen=0,
+                        failed_turns=0,
+                        interrupted_turns=0,
                     )
                     for m in source.members
                 ],
