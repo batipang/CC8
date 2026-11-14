@@ -335,6 +335,10 @@ class ActionCheck extends Activity {
     yes(c.reminderDeliveryLabel(item).contains("已进入通知中心，未确认阅读"),"Delivery does not prove read");
     c.reminderHistoryData=new JSONArray(item);c.showReminderHistory();
     yes(AlertDialog.last.builder.labels.length==1&&AlertDialog.last.builder.labels[0].contains("未确认阅读")&&s.sent.isEmpty(),"History is actual and read-only");
+    String receiptId="a".repeat(32);
+    item.optJSONObject("delivery_attempt").values.put("id",receiptId);
+    c.showReminderHistory();
+    yes(AlertDialog.last.builder.labels[0].contains("送达尝试编号："+receiptId),"History must show the matched receipt ID");
     item.values.put("status","pending");item.values.put("channel","cc8");
     yes(c.reminderDeliveryLabel(item).equals("CC8 · 等待到期"),"Future occurrence must use its chosen channel");
     yes(c.reminderHistoryLabel(item).contains("Mac 桌面")&&c.reminderHistoryLabel(item).contains("通知中心"),"Editing channel must not rewrite the prior notification receipt");

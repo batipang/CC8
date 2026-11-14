@@ -692,6 +692,9 @@ class Workspace:
             working = deepcopy(self.reminders)
             claims: list[ReminderClaim] = []
             channel = None
+            # One combined output has one receipt identity. Each occurrence
+            # still owns its own reminder ID and revision.
+            attempt_id = uuid.uuid4().hex
             for item in sorted(working, key=lambda r: r['due']):
                 if item['status'] != 'pending' or self._date(item['due']) > self.now():
                     continue
@@ -701,12 +704,11 @@ class Workspace:
                     channel = item.get('channel', 'cc8')
                 if item.get('channel', 'cc8') != channel:
                     continue
-                ident = uuid.uuid4().hex
                 item['status'] = 'delivering'
                 item['revision'] += 1
                 item['updated_at'] = self.now().isoformat(timespec='seconds')
                 item['delivery_attempt'] = {
-                    'id': ident,
+                    'id': attempt_id,
                     'due': item['due'],
                     'started_at': self.now().isoformat(timespec='seconds'),
                     'result': 'pending_ack',
@@ -716,7 +718,7 @@ class Workspace:
                     {
                         'id': item['id'],
                         'revision': item['revision'],
-                        'attempt_id': ident,
+                        'attempt_id': attempt_id,
                         'title': item['title'],
                         'channel': channel,
                     }

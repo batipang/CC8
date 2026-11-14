@@ -236,6 +236,8 @@ os._exit(23)
         self.now += timedelta(minutes=2)
         self.tick()
         self.assertEqual(len(self.scheduler.claims), 3)
+        first = deepcopy(self.scheduler.claims)
+        self.assertEqual(len({claim['attempt_id'] for claim in first}), 1)
         self.assertEqual(len(self.jobs), 1)
         self.assertTrue(all(('事项' + str(n)) in self.jobs[0].text for n in range(3)))
         self.jobs[0].result = 'completed'
@@ -243,6 +245,8 @@ os._exit(23)
         self.tick()
         self.assertEqual(len(self.jobs), 2)
         self.assertEqual(self.jobs[1].text, '提醒你：事项3')
+        self.assertNotEqual(first[0]['attempt_id'], self.scheduler.claims[0]['attempt_id'])
+        self.assertFalse(self.board.finish_reminders(first, True))
         played = [r for r in self.board.reminders if r['status'] == 'delivered']
         self.assertEqual(len(played), 3)
 
