@@ -184,8 +184,10 @@ final class DotChatsDialog {
     text.append("缺完成时间：")
         .append(report.optInt("unknown_completion_time"))
         .append("；缺最终答复：")
-        .append(report.optInt("missing_final_answer"))
-        .append("\n窗口内失败：")
+        .append(report.optInt("missing_final_answer"));
+    int unconfirmedAnswers = report.optInt("unconfirmed_final_answer");
+    if (unconfirmedAnswers > 0) text.append("；最终答复未核实：").append(unconfirmedAnswers);
+    text.append("\n窗口内失败：")
         .append(report.optInt("failed_turns"))
         .append("；中断：")
         .append(report.optInt("interrupted_turns"))

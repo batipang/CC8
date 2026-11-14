@@ -199,6 +199,7 @@ class GroupFixture:
         self.clients = []
         self.failed = set()
         self.partial = set()
+        self.answer_timeout = set()
         self.other_turns = {}
         self.count = 1
         self.now = 0
@@ -238,6 +239,8 @@ class GroupFixture:
                         else None,
                     )
                 elif method == 'thread/items/list':
+                    if self.thread in fixture.answer_timeout:
+                        raise DotError('private unavailable detail', kind='timeout')
                     self.response = dict(
                         data=[
                             dict(turnId=params['turnId'], item=final(text=self.thread + ' 完成'))
@@ -286,6 +289,22 @@ class GroupTests(unittest.TestCase):
         report = self.read(f, selected)
         self.assertEqual(report['items'], [])
         self.assertFalse(report['empty_confirmed'])
+
+    def test_answer_timeout_counts_as_partial_source_and_renders_uncertainty(self):
+        f = GroupFixture()
+        f.answer_timeout.add('chat-a')
+        f.other_turns['chat-a'] = [turn('failed', status='failed')]
+        selected = scope()
+        report = self.read(f, selected)
+        self.assertTrue(ReportVoice.valid_report(selected, report))
+        self.assertEqual(report['unconfirmed_final_answer'], 1)
+        self.assertEqual(report['failed_turns'], 1)
+        self.assertEqual(report['unavailable_sources'], 0)
+        self.assertEqual([item['source_thread_id'] for item in report['items']], ['chat-b'])
+        self.assertEqual(report['sources'][0]['status'], 'read')
+        self.assertFalse(report['sources'][0]['coverage_complete'])
+        self.assertIn('缺最终答复：0；最终答复未核实：1', report_text(report))
+        self.assertNotIn('private unavailable', report_text(report))
 
     def test_source_status_counts_distinguish_observed_turns_from_unread_sources(self):
         f = GroupFixture()
@@ -349,8 +368,11 @@ class GroupTests(unittest.TestCase):
         self.assertEqual(len(f.clients), 2)
         self.assertEqual(
             [s['status'] for s in report['sources']],
-            ['unavailable', 'unavailable', 'not_read_budget', 'not_read_budget'],
+            ['read', 'read', 'not_read_budget', 'not_read_budget'],
         )
+        self.assertEqual(report['unconfirmed_final_answer'], 2)
+        self.assertEqual(report['unavailable_sources'], 2)
+        self.assertTrue(all(not row['coverage_complete'] for row in report['sources'][:2]))
         self.assertFalse(report['coverage_complete'])
         self.assertTrue(all(c.closed for c in f.clients))
 

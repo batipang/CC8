@@ -158,32 +158,51 @@ class ReportTests(unittest.TestCase):
                 self.assertEqual([row['turn_id'] for row in result['items']], ['turn-1'])
                 self.assertEqual(result['items'][0]['evidence_complete'], phase != 'item_page')
                 self.assertFalse(result['coverage_complete'])
+                self.assertEqual(result['unconfirmed_final_answer'], int(phase == 'next_result'))
                 self.assertFalse(result['empty_confirmed'])
                 self.assertNotIn('PRIVATE_PROVIDER_MESSAGE', repr(result))
                 self.assertTrue(rpc.closed)
 
-    def test_connection_loss_before_first_result_and_revocation_still_abort(self):
-        for revoke in (False, True):
-            with self.subTest(revoke=revoke):
-                f = Fixture()
-                if revoke:
-                    f.item_pages['turn-1'][0]['nextCursor'] = '1'
-                current = [True]
-                rpc = f.factory()
-                request = rpc.request
+    def test_first_answer_timeout_retains_observed_turn_states(self):
+        f = Fixture()
+        f.turn_pages[0]['data'].append(turn('failed', status='failed'))
+        rpc = f.factory()
+        request = rpc.request
 
-                def interrupted(method, params, **options):
-                    if method == 'thread/items/list' and (not revoke or 'cursor' in params):
-                        current[0] = not revoke
-                        raise DotError('Disconnected', kind='transport_or_io')
-                    return request(method, params, **options)
+        def interrupted(method, params, **options):
+            if method == 'thread/items/list':
+                raise DotError('PRIVATE_PROVIDER_MESSAGE', kind='transport_or_io')
+            return request(method, params, **options)
 
-                rpc.request = interrupted
-                with self.assertRaises(Cancelled if revoke else DotError):
-                    WorkReportReader(lambda: rpc).read(
-                        self.source, ReportWindow(100, 200), is_current=lambda: current[0]
-                    )
-                self.assertTrue(rpc.closed)
+        rpc.request = interrupted
+        result = WorkReportReader(lambda: rpc).read(self.source, ReportWindow(100, 200))
+        self.assertEqual(result['failed_turns'], 1)
+        self.assertEqual(result['unconfirmed_final_answer'], 1)
+        self.assertEqual(result['missing_final_answer'], 0)
+        self.assertFalse(result['empty_confirmed'])
+        self.assertFalse(result['coverage_complete'])
+        self.assertNotIn('PRIVATE_PROVIDER_MESSAGE', repr(result))
+        self.assertTrue(rpc.closed)
+
+    def test_revocation_during_answer_read_still_aborts(self):
+        f = Fixture()
+        f.item_pages['turn-1'][0]['nextCursor'] = '1'
+        current = [True]
+        rpc = f.factory()
+        request = rpc.request
+
+        def interrupted(method, params, **options):
+            if method == 'thread/items/list' and 'cursor' in params:
+                current[0] = False
+                raise DotError('Disconnected', kind='transport_or_io')
+            return request(method, params, **options)
+
+        rpc.request = interrupted
+        with self.assertRaises(Cancelled):
+            WorkReportReader(lambda: rpc).read(
+                self.source, ReportWindow(100, 200), is_current=lambda: current[0]
+            )
+        self.assertTrue(rpc.closed)
 
     def test_tools_reasoning_commentary_and_partial_answers_are_not_narration(self):
         f = Fixture()
@@ -273,10 +292,41 @@ class ReportTests(unittest.TestCase):
 
     def test_no_final_answer_is_missing_evidence_instead_of_empty_success(self):
         f = Fixture()
-        f.item_pages['turn-1'][0]['data'] = []
+        f.item_pages['turn-1'][0]['data'] = [dict(turnId='turn-1', item=final(text='\x01'))]
         r = self.report(f)
         self.assertEqual(r['missing_final_answer'], 1)
+        self.assertEqual(r['unconfirmed_final_answer'], 0)
         self.assertFalse(r['empty_confirmed'])
+
+    def test_bounded_answer_pages_distinguish_absent_from_unconfirmed(self):
+        f = Fixture()
+        f.turn_pages[0]['data'].append(turn('complete-read', completed=149))
+        f.item_pages = {
+            'turn-1': [dict(data=[], nextCursor='1'), dict(data=[], nextCursor='2')],
+            'complete-read': [dict(data=[], nextCursor=None)],
+        }
+        r = self.report(f)
+        self.assertEqual(r['missing_final_answer'], 1)
+        self.assertEqual(r['unconfirmed_final_answer'], 1)
+        self.assertEqual(r['items'], [])
+        self.assertFalse(r['coverage_complete'])
+        self.assertFalse(r['empty_confirmed'])
+
+    def test_answer_read_limit_counts_only_known_in_window_omissions(self):
+        f = Fixture()
+        read_count = 20
+        f.turn_pages[0]['data'] = [
+            turn(f'turn-{i}', completed=190 - i) for i in range(read_count + 1)
+        ] + [turn('after-window', completed=200)]
+        f.item_pages = {
+            f'turn-{i}': [dict(data=[dict(turnId=f'turn-{i}', item=final())], nextCursor=None)]
+            for i in range(read_count)
+        }
+        r = self.report(f)
+        self.assertEqual(len(r['items']), read_count)
+        self.assertEqual(r['unconfirmed_final_answer'], 1)
+        self.assertEqual(r['missing_final_answer'], 0)
+        self.assertFalse(r['coverage_complete'])
 
     def test_oversized_excerpt_is_marked_and_tool_evidence_pages_are_bounded(self):
         f = Fixture()
@@ -377,10 +427,11 @@ class ReportTests(unittest.TestCase):
         now = [0.0]
         f.after_request = lambda: now.__setitem__(0, 31.0)
         f.turn_pages[0]['nextCursor'] = '1'
-        with self.assertRaises(DotError):
-            WorkReportReader(f.factory, clock=lambda: now[0]).read(
-                self.source, ReportWindow(100, 200)
-            )
+        result = WorkReportReader(f.factory, clock=lambda: now[0]).read(
+            self.source, ReportWindow(100, 200)
+        )
+        self.assertEqual(result['unconfirmed_final_answer'], 1)
+        self.assertFalse(result['coverage_complete'])
         self.assertEqual(len(f.calls), 1)
         self.assertTrue(f.clients[0].closed)
 
