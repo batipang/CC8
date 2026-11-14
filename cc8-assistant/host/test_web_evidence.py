@@ -93,6 +93,40 @@ class WebEvidenceTests(unittest.TestCase):
         row = self.evidence.sources([dict(title='Final', url=receipt['final_url'])])[0]
         self.assertEqual(row['access_evidence'], 'page_body_received')
 
+    def test_equivalent_public_links_share_the_same_receipt_without_rewriting_the_link(self):
+        raw = 'https://EXAMPLE.com:443#section'
+        self.evidence.page(dict(self.page(), url=raw, final_url='https://example.com/'))
+        links = [
+            dict(title='原文', url='https://EXAMPLE.com:443'),
+            dict(title='重复链接', url='https://example.com/'),
+            dict(title='其它查询', url='https://example.com/?id=2'),
+            dict(title='其它端口', url='https://example.com:80/'),
+        ]
+        rows = self.evidence.sources(links)
+        self.assertEqual(
+            [r['access_evidence'] for r in rows],
+            ['page_body_received', 'answer_link_only', 'answer_link_only'],
+        )
+        self.assertEqual(rows[0]['url'], links[0]['url'])
+        self.evidence.page(
+            dict(ok=False, url='https://example.com/', error='http_error', http_status=404)
+        )
+        self.assertEqual(self.evidence.sources(links)[0]['access_evidence'], 'page_fetch_failed')
+
+    def test_page_operation_matches_equivalent_host_and_preserves_distinct_paths(self):
+        self.evidence.completed(self.action(url='https://Example.com:443/News'))
+        rows = self.evidence.sources(
+            [
+                dict(title='原文', url='https://example.com/News'),
+                dict(title='其他路径', url='https://example.com/news'),
+                dict(title='其他协议', url='http://example.com/News'),
+            ]
+        )
+        self.assertEqual(
+            [r['access_evidence'] for r in rows],
+            ['page_action_completed', 'answer_link_only', 'answer_link_only'],
+        )
+
     def test_failed_redirect_supersedes_prior_text_for_either_cited_url(self):
         final = 'https://other.example/final'
         self.evidence.page(dict(self.page(), final_url=final))

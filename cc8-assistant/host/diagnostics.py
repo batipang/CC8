@@ -121,7 +121,7 @@ class TraceBook:
         self.rows = deque()
         self.generations = {}
 
-    def begin(self, origin, generation=None):
+    def begin(self, origin, generation=None, *, camera_ocr=False):
         if origin not in ORIGINS:
             raise ValueError('Unknown diagnostic origin')
         with self.lock:
@@ -135,6 +135,8 @@ class TraceBook:
                 'outcome': None,
                 'error': None,
             }
+            if origin == 'vision' and camera_ocr is True:
+                row['camera_ocr'] = True
             self.rows.append(row)
             while len(self.rows) > self.limit:
                 old = self.rows.popleft()
@@ -168,6 +170,20 @@ class TraceBook:
         with self.lock:
             row = self._row(key)
             return deepcopy(row.get('capture')) if row else None
+
+    def camera_frame(self, key, width, height, byte_count):
+        from vision import HD_IMAGE
+
+        if (
+            not HD_IMAGE.valid_dimensions(width, height)
+            or type(byte_count) is not int
+            or not 32 <= byte_count <= HD_IMAGE.max_bytes
+        ):
+            raise ValueError('Invalid camera frame evidence')
+        with self.lock:
+            row = self._row(key)
+            if row is not None and row['origin'] == 'vision' and row['outcome'] is None:
+                row.setdefault('camera_frame', {'dimensions': [width, height], 'bytes': byte_count})
 
     def asr_start(self, key, samples):
         with self.lock:

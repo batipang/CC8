@@ -123,6 +123,68 @@ class ReportTests(unittest.TestCase):
         self.assertFalse(r['coverage_complete'])
         self.assertFalse(r['empty_confirmed'])
 
+    def test_later_read_failure_preserves_validated_results_with_partial_coverage(self):
+        for phase in ('turn_page', 'item_page', 'next_result'):
+            with self.subTest(phase=phase):
+                f = Fixture()
+                if phase == 'turn_page':
+                    f.turn_pages[0]['nextCursor'] = '1'
+                elif phase == 'item_page':
+                    f.item_pages['turn-1'][0]['nextCursor'] = '1'
+                else:
+                    f.turn_pages[0]['data'].append(turn('older', completed=149))
+                rpc = f.factory()
+                request = rpc.request
+
+                def interrupted(method, params, **options):
+                    if (
+                        (
+                            phase == 'turn_page'
+                            and method == 'thread/turns/list'
+                            and 'cursor' in params
+                        )
+                        or (
+                            phase == 'item_page'
+                            and method == 'thread/items/list'
+                            and 'cursor' in params
+                        )
+                        or (phase == 'next_result' and params.get('turnId') == 'older')
+                    ):
+                        raise DotError('PRIVATE_PROVIDER_MESSAGE', kind='timeout')
+                    return request(method, params, **options)
+
+                rpc.request = interrupted
+                result = WorkReportReader(lambda: rpc).read(self.source, ReportWindow(100, 200))
+                self.assertEqual([row['turn_id'] for row in result['items']], ['turn-1'])
+                self.assertEqual(result['items'][0]['evidence_complete'], phase != 'item_page')
+                self.assertFalse(result['coverage_complete'])
+                self.assertFalse(result['empty_confirmed'])
+                self.assertNotIn('PRIVATE_PROVIDER_MESSAGE', repr(result))
+                self.assertTrue(rpc.closed)
+
+    def test_connection_loss_before_first_result_and_revocation_still_abort(self):
+        for revoke in (False, True):
+            with self.subTest(revoke=revoke):
+                f = Fixture()
+                if revoke:
+                    f.item_pages['turn-1'][0]['nextCursor'] = '1'
+                current = [True]
+                rpc = f.factory()
+                request = rpc.request
+
+                def interrupted(method, params, **options):
+                    if method == 'thread/items/list' and (not revoke or 'cursor' in params):
+                        current[0] = not revoke
+                        raise DotError('Disconnected', kind='transport_or_io')
+                    return request(method, params, **options)
+
+                rpc.request = interrupted
+                with self.assertRaises(Cancelled if revoke else DotError):
+                    WorkReportReader(lambda: rpc).read(
+                        self.source, ReportWindow(100, 200), is_current=lambda: current[0]
+                    )
+                self.assertTrue(rpc.closed)
+
     def test_tools_reasoning_commentary_and_partial_answers_are_not_narration(self):
         f = Fixture()
         values = [
