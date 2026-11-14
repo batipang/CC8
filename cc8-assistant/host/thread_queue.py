@@ -1,4 +1,4 @@
-"""Bounded original-thread queue reads; no enqueue, resume, start or task-state inference."""
+"""Bounded read-only queue and runtime status for the selected Codex thread."""
 
 from copy import deepcopy
 from datetime import datetime
@@ -13,6 +13,47 @@ PAGE_SIZE = 8
 MAX_PAGES = 4
 MAX_QUEUE_ITEMS = PAGE_SIZE * MAX_PAGES
 MAX_PREVIEW = 160
+
+
+def runtime_status(reply, thread_id):
+    thread = reply.get('thread') if isinstance(reply, dict) else None
+    if not isinstance(thread, dict) or thread.get('id') != thread_id:
+        return 'unavailable'
+    status = thread.get('status')
+    if not isinstance(status, dict):
+        return 'unavailable'
+    kind = status.get('type')
+    if kind == 'active':
+        flags = status.get('activeFlags')
+        if (
+            not isinstance(flags, list)
+            or len(flags) > 8
+            or any(not isinstance(flag, str) for flag in flags)
+        ):
+            return 'unavailable'
+        if 'waitingOnApproval' in flags and 'waitingOnUserInput' in flags:
+            return 'waiting_approval_and_input'
+        if 'waitingOnApproval' in flags:
+            return 'waiting_approval'
+        if 'waitingOnUserInput' in flags:
+            return 'waiting_input'
+        return 'active'
+    return {'idle': 'idle', 'systemError': 'error', 'notLoaded': 'not_loaded'}.get(
+        kind if isinstance(kind, str) else '', 'unavailable'
+    )
+
+
+def runtime_status_text(result):
+    statuses = {
+        'waiting_approval_and_input': '本次 Codex 连接报告原聊天正在等待审批和用户输入。',
+        'waiting_approval': '本次 Codex 连接报告原聊天正在等待审批。',
+        'waiting_input': '本次 Codex 连接报告原聊天正在等待用户输入。',
+        'active': '本次 Codex 连接报告原聊天仍在运行。',
+        'idle': '本次 Codex 连接报告空闲，桌面会话仍需核对。',
+        'error': '本次 Codex 连接报告原聊天有运行错误。',
+        'not_loaded': '本次 Codex 连接没有加载该聊天，桌面执行状态未知。',
+    }
+    return statuses.get(result.get('runtime_status'), '本次未能确认原聊天的运行状态。')
 
 
 def queue_item(value):
@@ -66,6 +107,7 @@ class ThreadQueueReader:
             coverage_complete=False,
             state='unavailable',
             reason='unavailable',
+            runtime_status='unavailable',
         )
         deadline = self.clock() + 25
         rpc = None
@@ -74,13 +116,7 @@ class ThreadQueueReader:
             if not is_current():
                 raise Cancelled('Source queue read cancelled')
 
-        try:
-            current()
-            rpc = self.rpc_factory()
-            remaining = deadline - self.clock()
-            if remaining <= 0:
-                raise DotError('Source queue read deadline exceeded', kind='timeout')
-            rpc.start(timeout=min(20, remaining))
+        def read_queue():
             cursor, cursors, seen = None, set(), set()
             for _ in range(MAX_PAGES):
                 current()
@@ -122,7 +158,32 @@ class ThreadQueueReader:
                 cursors.add(next_cursor)
                 cursor = next_cursor
                 result['reason'] = 'page_limit'
+
+        try:
             current()
+            rpc = self.rpc_factory()
+            remaining = deadline - self.clock()
+            if remaining <= 0:
+                raise DotError('Source queue read deadline exceeded', kind='timeout')
+            rpc.start(timeout=min(20, remaining))
+            try:
+                read_queue()
+            except (DotError, OSError, ValueError, KeyError, TypeError):
+                result['reason'] = 'deadline' if self.clock() >= deadline else 'unavailable'
+            current()
+            remaining = deadline - self.clock()
+            if remaining > 0:
+                try:
+                    reply = rpc.request(
+                        'thread/read',
+                        dict(threadId=source['thread_id'], includeTurns=False),
+                        timeout=min(3, remaining),
+                    )
+                    if self.clock() < deadline:
+                        result['runtime_status'] = runtime_status(reply, source['thread_id'])
+                except (DotError, OSError, ValueError, KeyError, TypeError):
+                    # This optional read cannot change the queue coverage already obtained.
+                    pass
         except Cancelled:
             raise
         except (DotError, OSError, ValueError, KeyError, TypeError):
@@ -144,7 +205,8 @@ def queue_text(result):
         '原聊天：' + source['thread_id'],
         '读取时间（北京时间）：'
         + datetime.fromtimestamp(result['read_at'], BEIJING).strftime('%Y-%m-%d %H:%M:%S'),
-        '队列分页期间可能变化；这不是原任务空闲、已开始或已完成的证明。',
+        runtime_status_text(result),
+        '队列和运行状态分别读取，不能据此启动或重做原任务。',
     ]
     if result['state'] == 'unavailable':
         lines.append('本次未能确认队列，不能当作零条待办；请稍后明确重新查询。')

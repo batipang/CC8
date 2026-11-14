@@ -270,6 +270,13 @@ class SourcesControllerTests(unittest.TestCase):
 
                 def request(self, method, params, **kwargs):
                     calls.append((method, params))
+                    if method == 'thread/read':
+                        return dict(
+                            thread=dict(
+                                id=wanted,
+                                status=dict(type='active', activeFlags=['waitingOnApproval']),
+                            )
+                        )
                     if failure == 'unavailable' or failure == 'partial' and params.get('cursor'):
                         raise DotError('PRIVATE_RPC_ERROR')
                     if failure == 'revoke':
@@ -324,6 +331,7 @@ class SourcesControllerTests(unittest.TestCase):
                         )
                     )
                     self.assertIn(text, ''.join(spoken))
+                    self.assertIn('等待审批', ''.join(spoken))
                     self.assertIn(wanted, dict(events)['dot_result']['text'])
                     self.assertNotIn('PRIVATE_', str((spoken, events)))
                     self.assertIs(b.chats.voice.snapshot, snapshot)
@@ -331,7 +339,8 @@ class SourcesControllerTests(unittest.TestCase):
             self.assertEqual(len(closed), 4)
             self.assertTrue(
                 all(
-                    method == 'thread/queue/list' and p['threadId'] == wanted for method, p in calls
+                    method in ('thread/queue/list', 'thread/read') and p['threadId'] == wanted
+                    for method, p in calls
                 )
             )
             failure = 'revoke'

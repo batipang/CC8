@@ -34,6 +34,10 @@ class QueueFixture:
         self.start_timeout = None
         self.start_delay = 0
         self.after_close = lambda: None
+        self.status_reply = dict(thread=dict(id='chat-a', status=dict(type='notLoaded')))
+        self.status_calls = []
+        self.status_delay = 0
+        self.after_status = lambda: None
 
     def factory(self):
         parent = self
@@ -48,6 +52,14 @@ class QueueFixture:
                     raise DotError('PRIVATE_PROVIDER')
 
             def request(self, method, params, **kwargs):
+                if method == 'thread/read':
+                    assert params == dict(threadId='chat-a', includeTurns=False)
+                    parent.status_calls.append(kwargs['timeout'])
+                    parent.now += parent.status_delay
+                    parent.after_status()
+                    if isinstance(parent.status_reply, Exception):
+                        raise parent.status_reply
+                    return parent.status_reply
                 assert method == 'thread/queue/list', (
                     'Queue inspection must not start/resume/write a thread'
                 )
@@ -98,6 +110,8 @@ class QueueReaderTests(unittest.TestCase):
                 pass
 
             def request(self, method, params, **kwargs):
+                if method == 'thread/read':
+                    return dict(thread=dict(id='s' * 96, status=dict(type='notLoaded')))
                 assert method == 'thread/queue/list'
                 return pages[int(params.get('cursor', '0'))]
 
@@ -153,6 +167,61 @@ class QueueReaderTests(unittest.TestCase):
         self.assertEqual(result['state'], 'read')
         self.assertTrue(result['coverage_complete'])
         self.assertIn('不代表原任务已经结束', queue_text(result))
+        self.assertIn('桌面执行状态未知', queue_text(result))
+
+    def test_active_and_stalled_statuses_come_from_the_selected_thread(self):
+        for kind, flags, normalized, phrase in (
+            ('active', [], 'active', '仍在运行'),
+            ('active', ['waitingOnApproval'], 'waiting_approval', '等待审批'),
+            ('active', ['waitingOnUserInput'], 'waiting_input', '等待用户输入'),
+            (
+                'active',
+                ['waitingOnApproval', 'waitingOnUserInput'],
+                'waiting_approval_and_input',
+                '等待审批和用户输入',
+            ),
+            ('idle', [], 'idle', '桌面会话仍需核对'),
+            ('systemError', [], 'error', '有运行错误'),
+        ):
+            with self.subTest(kind=kind, flags=flags):
+                f = QueueFixture()
+                f.pages[0]['data'] = []
+                f.status_reply = {
+                    'thread': {
+                        'id': 'chat-a',
+                        'status': {'type': kind, 'activeFlags': flags},
+                        'turns': ['PRIVATE_BODY'],
+                    }
+                }
+                result = f.read()
+                self.assertEqual(result['items'], [])
+                self.assertEqual(result['runtime_status'], normalized)
+                self.assertIn(phrase, queue_text(result))
+                self.assertNotIn('PRIVATE_BODY', json.dumps(result))
+
+    def test_optional_status_errors_do_not_erase_successful_queue_coverage(self):
+        for status_reply, delay in (
+            (DotError('PRIVATE_PROVIDER'), 0),
+            (dict(thread=dict(id='other-chat', status=dict(type='idle'))), 0),
+            (dict(thread=dict(id='chat-a', status=dict(type='active', activeFlags='bad'))), 0),
+            (dict(thread=dict(id='chat-a', status=dict(type='idle'))), 2),
+        ):
+            f = QueueFixture()
+            f.start_delay, f.advance = 19, 4
+            f.status_reply, f.status_delay = status_reply, delay
+            result = f.read()
+            self.assertTrue(result['coverage_complete'])
+            self.assertEqual(result['runtime_status'], 'unavailable')
+            self.assertEqual(f.status_calls, [2])
+
+    def test_cancellation_during_status_does_not_return_stale_queue(self):
+        f = QueueFixture()
+        current = [True]
+        f.after_status = lambda: current.__setitem__(0, False)
+        with self.assertRaises(Cancelled):
+            f.read(is_current=lambda: current[0])
+        self.assertEqual(f.status_calls, [3])
+        self.assertTrue(f.clients[0].closed)
 
     def test_unavailable_and_malformed_first_page_never_become_zero_work(self):
         for page in (
@@ -231,6 +300,7 @@ class QueueReaderTests(unittest.TestCase):
         self.assertEqual(result['reason'], 'deadline')
         self.assertFalse(result['coverage_complete'])
         self.assertTrue(f.clients[0].closed)
+        self.assertEqual(f.status_calls, [])
 
     def test_unicode_controls_truncation_and_source_mutation_cannot_poison_output(self):
         f = QueueFixture()
@@ -314,8 +384,18 @@ class QueueControllerTests(unittest.TestCase):
                 self.fixture.after = change
                 helper.request(b, 'source_queue', revision=1, registration_id=self.registration)
                 self.assertEqual(len(self.fixture.calls), 1)
+                self.assertEqual(self.fixture.status_calls, [])
                 self.assertTrue(all(c.closed for c in self.fixture.clients))
                 self.assertFalse(any(fields.get('source_queue') for _, fields in b.events))
+
+    def test_removing_source_during_status_read_hides_the_old_queue_and_status(self):
+        with tempfile.TemporaryDirectory() as folder:
+            helper, b = self.prepare(folder)
+            self.fixture.after_status = lambda: b.chats.sources.apply('clear', 1)
+            helper.request(b, 'source_queue', revision=1, registration_id=self.registration)
+            self.assertEqual(len(self.fixture.status_calls), 1)
+            self.assertTrue(self.fixture.clients[0].closed)
+            self.assertFalse(any(fields.get('source_queue') for _, fields in b.events))
 
     def test_wire_cannot_supply_thread_path_body_or_implicit_target(self):
         base = dict(
