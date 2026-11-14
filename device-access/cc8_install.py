@@ -78,6 +78,31 @@ def private_staging(transport: str) -> str:
     return directory
 
 
+def probe_protected_staging(transport: str) -> str:
+    directory = private_staging(transport)
+    path = shlex.quote(directory + '/.cc8-staging-probe-' + uuid.uuid4().hex)
+    # Mode bits alone miss policy restrictions on creating files. Use an
+    # empty, exclusive marker and confirm cleanup in the same shell command.
+    command = (
+        'umask 077; '
+        f'if (set -C; : > {path}) 2>/dev/null; then '
+        f"trap 'rm -f {path}' EXIT; "
+        f'if rm -f {path} && [ ! -e {path} ]; then '
+        "trap - EXIT; printf 'CC8_STAGING_OK\\n'; "
+        "else printf 'CC8_STAGING_CLEANUP_UNCONFIRMED\\n'; fi; "
+        "else printf 'CC8_STAGING_CREATE_FAILED\\n'; fi"
+    )
+    try:
+        output = shell(transport, command, timeout=10).strip()
+    except (RuntimeError, OSError, subprocess.TimeoutExpired):
+        return 'unconfirmed'
+    return {
+        'CC8_STAGING_OK': 'verified',
+        'CC8_STAGING_CREATE_FAILED': 'create_failed',
+        'CC8_STAGING_CLEANUP_UNCONFIRMED': 'cleanup_unconfirmed',
+    }.get(output, 'unconfirmed')
+
+
 def install_notice(*parts: str) -> None:
     # A disconnected progress reader must not interrupt package verification.
     if sys.stderr is not None:
@@ -437,6 +462,11 @@ def main(argv=None):
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument('--check', action='store_true')
     mode.add_argument('--probe', action='store_true')
+    mode.add_argument(
+        '--probe-staging',
+        action='store_true',
+        help='Verify protected staging with an empty temporary marker; no package action',
+    )
     mode.add_argument('--install', type=Path, metavar='APK')
     mode.add_argument(
         '--verify-apk',
@@ -499,6 +529,12 @@ def main(argv=None):
 def _perform_actions(args, output=None):
     transport = target()
     report = probe(transport)
+    if args.probe_staging:
+        status = probe_protected_staging(transport)
+        print(json.dumps({**report, 'protected_staging': status, 'installation_started': False}))
+        if status != 'verified':
+            raise SystemExit(1)
+        return
     print(json.dumps(report), flush=True)
     if args.verify_apk:
         package, _, payload, signature = prepare_apk(
