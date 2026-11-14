@@ -51,8 +51,10 @@ class UsbTlsTests(unittest.TestCase):
     def argv(self, kind, token=None, certificate=None):
         return [
             sys.executable,
+            '-I',
             '-c',
-            PEER,
+            'import sys; sys.path.insert(0, sys.argv.pop(1))\n' + PEER,
+            str(Path(__file__).resolve().parent),
             str(certificate or self.pairing.folder / 'server.pem'),
             token or self.pairing.token,
             kind,
