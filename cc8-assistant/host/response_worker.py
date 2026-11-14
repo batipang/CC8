@@ -103,7 +103,9 @@ class ResponseWorker:
             if not source_id or self.corrections.source_token(owner) != source_id:
                 raise CorrectionUnavailable('Original recognition changed')
             try:
-                draft = self.corrections.prepare(term + '，不是' + alias, owner)
+                draft = self.corrections.prepare(
+                    term + '，不是' + alias, owner, allow_full_question=False
+                )
             except CorrectionUnavailable:
                 self.publish_corrections()
                 raise

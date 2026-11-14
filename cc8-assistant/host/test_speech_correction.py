@@ -73,6 +73,27 @@ class DraftTests(unittest.TestCase):
             '查询-3.5摄氏度是否不是正常温度',
         )
 
+    def test_explicit_separator_wins_over_negation_in_new_text(self):
+        journal, owner, _ = self.journal('查询错误名称')
+        draft = journal.prepare('这不是测试，而不是错误名称', owner)
+        self.assertEqual(draft.proposed, '查询这不是测试')
+
+    def test_wordlist_term_cannot_trigger_full_question_mode(self):
+        journal, owner, _ = self.journal('查询错误名称')
+        draft = journal.prepare('完整问题是， 不是错误名称', owner, allow_full_question=False)
+        self.assertEqual(draft.proposed, '查询完整问题是')
+
+    def test_ambiguous_pairs_require_one_change_or_explicit_full_question(self):
+        for text in ('苏州，不是常州，而不是沧州', '苏州不是常州不是沧州'):
+            with self.subTest(text=text):
+                journal, owner, _ = self.journal()
+                with self.assertRaises(CorrectionUnavailable):
+                    journal.prepare(text, owner)
+                self.assertIsNone(journal.draft)
+                proposed = '解释为什么不是常州，而不是沧州。'
+                draft = journal.prepare('完整问题是：' + proposed, owner)
+                self.assertEqual(draft.proposed, proposed)
+
     def test_expiry_owner_change_and_old_nonce_never_consume(self):
         for changed in ('time', 'route', 'capture', 'connection', 'id'):
             journal, owner, clock = self.journal()
@@ -210,6 +231,21 @@ class CorrectionFlowTests(unittest.TestCase):
         self.assertEqual(list(b.response.history), history)
         self.assertEqual(b.brain.calls, 1)
         self.assertIsNone(b.response.corrections.draft)
+
+    def test_ambiguous_voice_pair_does_not_submit_and_full_question_can_be_retracted(self):
+        b = self.session()
+        self.draft(b)
+        self.voice(b, '我说的是苏州不是常州不是沧州')
+        self.assertIsNone(b.response.corrections.draft)
+        self.voice(b, '确认更正')
+        self.assertEqual(b.brain.calls, 1)
+
+        self.voice(b, '我说的是完整问题是：只读比较常州，而不是沧州')
+        self.assertEqual(b.response.corrections.draft.proposed, '只读比较常州，而不是沧州')
+        self.voice(b, '撤回更正')
+        self.voice(b, '确认更正')
+        self.assertIsNone(b.response.corrections.draft)
+        self.assertEqual(b.brain.calls, 1)
 
     def test_expiry_manual_stop_route_and_other_inputs_clear_context(self):
         for change in ('expire', 'stop', 'route', 'new_voice', 'text'):
