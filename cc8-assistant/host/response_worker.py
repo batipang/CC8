@@ -182,6 +182,8 @@ class ResponseWorker:
         with self.hooks.lock:
             if not self.hooks.owner_access() or not self.hooks.valid(job.generation):
                 return
+            if job.live is not None and not job.live.current():
+                return
             self.hooks.diagnostics().ensure(job.generation, 'text')
             owner = self.hooks.correction_owner()
             try:
@@ -210,6 +212,13 @@ class ResponseWorker:
             except CorrectionUnavailable as error:
                 message = str(error)
             self.publish_corrections()
+            if job.live is not None:
+                if self.hooks.valid(job.generation) and job.live.current():
+                    self.hooks.status('listening', message)
+                    if self.hooks.valid(job.generation) and job.live.current():
+                        self.hooks.diagnostics().finish(job.generation, 'completed')
+                        job.live.deliver('请查看设备上的更正提示。')
+                return
         played = self.hooks.speak(message, job.generation)
         with self.hooks.lock:
             self.hooks.diagnostics().finish(job.generation, 'completed' if played else 'cancelled')
@@ -351,7 +360,11 @@ class ResponseWorker:
             if not self.hooks.valid(job.generation):
                 self.discard_announcement(job)
                 return
-            action = correction_command(job.text) if type(job) is Reply else None
+            voice = type(job) in (Reply, LiveReply)
+            live = job if isinstance(job, LiveReply) else None
+            if live is not None and not live.current():
+                return
+            action = correction_command(job.text) if voice else None
             if not self.hooks.owner_access():
                 # Guest questions do not become an owner correction source.
                 pass
@@ -366,14 +379,14 @@ class ResponseWorker:
                         target = self.corrections.current(owner).ident
                     except CorrectionUnavailable:
                         pass
-                job = CorrectionReply(job.generation, job.text, kind, body, target)
+                job = CorrectionReply(job.generation, job.text, kind, body, target, live=live)
             else:
                 brain = self.hooks.brain()
                 if type(job) in (Reply, TextReply, CorrectedReply, LiveReply) and isinstance(
                     brain, BrainRouter
                 ):
                     job.report_followup = brain.bind_report_followup(job.text)
-                text = job.text if type(job) is Reply or isinstance(job, CorrectedReply) else ''
+                text = job.text if voice or isinstance(job, CorrectedReply) else ''
                 owner = self.hooks.correction_owner() if text else None
                 changed = self.corrections.note(text, owner)
                 if changed or owner is not None:
