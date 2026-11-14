@@ -12,7 +12,7 @@ MiniMax 仍是默认语音模式。切到 GPT-Live-1 后，主人在唤醒词模
 
 ## 切换
 
-1. 从同一试用分支构建 APK 并更新 Mac 的语音运行时。使用项目原有安装方式和签名。Mac 端使用具有 GPT-Live API 权限的 OpenAI 项目密钥。交互启动可通过 `OPENAI_API_KEY` 提供，登录服务从工作区 `.toolchains/cc8/openai-api-key` 读取，文件必须仅当前用户可读写（`0600`）。密钥仅保存在 Mac。`./cc8 doctor --profile voice` 会报告试用密钥是否可读取，只检查格式和文件权限。缺少可读取的密钥时，后台继续使用现有语音并输出诊断提示。
+1. 从包含此功能的版本构建 APK 并更新 Mac 的语音运行时。使用项目原有安装方式和签名。Mac 端使用具有 GPT-Live API 权限的 OpenAI 项目密钥。交互启动可通过 `OPENAI_API_KEY` 提供，登录服务从工作区 `.toolchains/cc8/openai-api-key` 读取，文件必须仅当前用户可读写（`0600`）。密钥仅保存在 Mac。`./cc8 doctor --profile voice` 会报告试用密钥是否可读取，只检查格式和文件权限。缺少可读取的密钥时，后台继续使用现有语音并输出诊断提示。
 2. 在试用工作区运行 `.toolchains/cc8/voice-venv/bin/python cc8-assistant/host/configuration.py voice-mode gpt-live-1`。重启试用后台后生效。若已用 `CC8_VOICE_MODE` 配置服务，先按服务安装方式更新该覆盖。配对、MiniMax 密钥、原有设置按部署流程提供。
 3. 在 CC8 选择唤醒词模式，正常启动语音并等待校准。隐私说明会标示 GPT-Live 试用及 OpenAI 音频处理。音色默认 `marin`，可通过私有配置 `gpt_live_voice` 或 `CC8_GPT_LIVE_VOICE` 选择 GPT-Live 内置音色。
 4. 切回时运行同一个命令，将参数改为 `minimax`，再重启后台。
@@ -22,6 +22,14 @@ MiniMax 仍是默认语音模式。切到 GPT-Live-1 后，主人在唤醒词模
 Mac 上运行 `python3 cc8-assistant/host/diagnose.py --health` 可以查看后台实际报告的 `gpt_live_state`。它区分未启用、配置不可用、设备未连接、非主人、设备版本不支持、未启用唤醒词、本地唤醒不可用、麦克风暂停、需要完成校准、等待本地唤醒、连接中及已建立会话。`gpt_live_sessions` 统计尝试打开的会话，另提供失败、近端打断和接受的转写片段计数。此命令不打开麦克风、不调用 OpenAI，也不输出密钥、转写或音频。实际连接状态和计数只来自本次后台实例。
 
 同时看 `transport_routes` 的 USB／Wi-Fi 就绪位与当前选中线路。换线时 `capture_route_pending` 表示设备收音归属尚未确认。已经本地唤醒、等待后续语音时显示 `ready_for_speech`，占用收音或响应资源时可显示 `capture_busy`，旧会话收尾时显示 `session_ending`。线路就绪只反映本机传输状态。
+
+可先用公开测试语料验证两家服务。用带有运行依赖的现有 Python，从包含本功能的工作区运行：
+
+```sh
+python cc8-assistant/host/gpt_live_probe.py --runtime-root /absolute/path/to/active/cc8
+```
+
+默认仅展示计划。加 `--execute` 后，Mac 合成三句固定语料，将同一份 PCM 分别送给 GPT-Live 和配置的 MiniMax ASR，报告中文字符、英文词的差异以及 GPT-Live 的语音和字幕片段。可再加 `--save-voice` 请求两段对照试听，WAV 只保存到运行工作区忽略的 `device-access/private/gpt-live-probes/`。GPT-Live 可以改述固定文本，结果会标记其字幕是否与目标一致。整个检查不启动 CC8、麦克风或 Dot。它可验证云端语音和字幕事件，实机打断延迟与屏幕同步仍需通过 CC8 播放确认。
 
 | 项目 | 自动化检查 | 真机或云端检查 |
 | --- | --- | --- |
