@@ -36,7 +36,7 @@
 
 可追加 `--settings-backup /absolute/private/backup.json`，在同一流程核对备份能否用于候选和恢复版本。报告记录两个目标的兼容结论、可省略的默认字段名，以及原备份中规范化设置的 `settings_sha256`。任一目标不兼容时停止，不生成成功报告或恢复配置。该选项不读取运行时环境覆盖，也不应用设置。
 
-实际核对或安装时可给 `cc8_install.py --verify-apk` 或 `--install` 加 `--expect-installed-sha256 <verified-baseline-sha256>`。如果当前已装包缺失或摘要已变，命令会在传送安装助手前停止。同签名但不同构建也会被拒绝。回退前先确认实际已装的是哪一个包，并使用与其对应的已核对摘要。
+实际核对或安装时可给 `cc8_install.py --verify-apk` 或 `--install` 加 `--expect-installed-sha256 <verified-baseline-sha256>`。如果当前已装包缺失或摘要已变，命令会在传送安装助手前停止。同签名但不同构建也会被拒绝。回退前先确认实际已装的是哪一个包，并使用与其对应的已核对摘要。再用 `--expect-apk-sha256` 传入本次预检报告的 `stages.candidate.apk.sha256` 或 `stages.recovery.apk.sha256`。这一摘要直接核对安装器本次所读的私有字节快照，验证后的相同字节才交给签名检查和安装。仅运行 `--verify-apk` 时也可传入两份摘要，输出含本次读到的 APK 摘要。
 
 两边携带同一份 CI 文件时，可选 Mac 窗口组件的检查仅在其 `mac-window-input/Package.swift` 存在的 macOS 工作区运行：候选包含该组件，须运行合成检查、XCTest 和构建；保留旧功能的恢复源码没有该组件，可跳过这一组件步骤。主后台测试和八项工作流检查不随之跳过，不为让恢复 CI 通过而把候选运行时代码复制到恢复源码。
 

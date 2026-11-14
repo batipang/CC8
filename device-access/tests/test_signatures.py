@@ -147,6 +147,22 @@ class PreflightTests(unittest.TestCase):
             install.assert_not_called()
             shell.assert_not_called()
 
+    def test_changed_candidate_refused_before_package_checks_or_installation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            apk = Path(folder) / 'candidate.apk'
+            pin = hashlib.sha256(b'verified build').hexdigest()
+            apk.write_bytes(b'different build')
+            with (
+                patch.object(access, 'apk_package') as badging,
+                patch.object(access, 'signature_preflight') as signatures,
+                patch.object(access, '_install_verified') as install,
+            ):
+                with self.assertRaisesRegex(ValueError, 'verified SHA-256'):
+                    access.install('7', apk, False, expected_apk_sha256=pin)
+                badging.assert_not_called()
+                signatures.assert_not_called()
+                install.assert_not_called()
+
     def test_candidate_snapshot_is_same_bytes_that_are_installed(self):
         with tempfile.TemporaryDirectory() as folder:
             apk = Path(folder) / 'candidate.apk'
@@ -165,7 +181,13 @@ class PreflightTests(unittest.TestCase):
                 patch.object(access, 'signature_preflight', side_effect=verify),
                 patch.object(access, '_install_verified', return_value={}) as install,
             ):
-                access.install('7', apk, False, expected_installed_sha256='f' * 64)
+                access.install(
+                    '7',
+                    apk,
+                    False,
+                    expected_installed_sha256='f' * 64,
+                    expected_apk_sha256=hashlib.sha256(b'original').hexdigest(),
+                )
             self.assertEqual(install.call_args.args[3], b'original')
             self.assertFalse(snapshots[0].parent.exists())
 
