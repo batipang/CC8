@@ -94,6 +94,11 @@ public final class SelectionLease {
         return currentTicket
     }
 
+    public func isSelecting(ticket: Int) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return !expiredLocked() && currentPhase == .selecting && ticket == currentTicket
+    }
+
     public func accept(_ candidate: WindowFrame, ticket: Int, isSingleWindow: Bool) -> Bool {
         lock.lock(); defer { lock.unlock() }
         guard !expiredLocked(), currentPhase == .selecting, ticket == currentTicket,

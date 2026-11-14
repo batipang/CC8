@@ -2,6 +2,7 @@
 
 import base64
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -9,7 +10,7 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import test_vision as fixtures
 from window_input import (
@@ -151,6 +152,42 @@ class WindowProcessTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 picker.choose('概括窗口', IDENT, lambda: True)
             launch.assert_not_called()
+
+    def test_late_pipe_result_cannot_succeed_after_the_parent_deadline(self):
+        data = response()
+        with tempfile.TemporaryDirectory() as folder:
+            path = self.helper(folder, 'import sys\nsys.stdin.readline()\nsys.stdin.read()\n')
+            for phase in ('poll', 'decode'):
+                with self.subTest(phase=phase):
+                    picker = WindowPicker()
+                    now = 100.0
+
+                    def poll(readers, _writers, _errors, wait):
+                        nonlocal now
+                        self.assertGreater(wait, 0)
+                        if phase == 'poll':
+                            now = 190.0
+                        return readers, [], []
+
+                    def decode(payload, ident):
+                        nonlocal now
+                        now = 190.0
+                        return decode_result(payload, ident)
+
+                    with (
+                        patch('window_input.verified_helper', return_value=path),
+                        patch('window_input.time', Mock(monotonic=lambda: now)),
+                        patch('window_input.select.select', side_effect=poll),
+                        patch(
+                            'window_input.os', Mock(wraps=os, read=Mock(return_value=data))
+                        ) as io,
+                        patch('window_input.decode_result', side_effect=decode),
+                    ):
+                        with self.assertRaises(WindowSelectionEnded) as failure:
+                            picker.choose('概括窗口', IDENT, lambda: True)
+                    self.assertEqual(failure.exception.reason, 'expired')
+                    self.assertEqual(io.read.call_count, int(phase == 'decode'))
+                    self.assertIsNone(picker.process)
 
     def test_early_helper_exit_is_not_falsely_reported_as_a_ninety_second_timeout(self):
         with tempfile.TemporaryDirectory() as folder:
