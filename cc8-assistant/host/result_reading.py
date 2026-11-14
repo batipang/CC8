@@ -96,6 +96,15 @@ class ResultReading:
             if not restart and entry['offset'] >= len(entry['text']):
                 raise ReadingUnavailable('这份结果已确认读完；如需再听，请选择“从头朗读”。')
 
+    def coverage(self, ident):
+        with self.lock:
+            entry = self.entries.get(ident)
+            if entry and entry['text'] and entry['aligned'] and entry['offset']:
+                if entry['offset'] >= len(entry['text']):
+                    return 'excerpt' if entry['truncated'] else 'complete'
+                return 'partial'
+        return None
+
     def plan(self, ident, restart=False):
         with self.lock:
             self.available(ident, restart)

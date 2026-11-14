@@ -26,6 +26,11 @@ from reminder_store import ReminderStore, ReminderCommitUncertain
 ZONE = ZoneInfo('Asia/Shanghai')
 REMINDER_STORE_VERSION = 3
 EXECUTION_UNCONFIRMED_STEP = 'execution_unconfirmed'
+NARRATION_LABELS = {
+    'partial': '结果播报部分确认',
+    'complete': '结果已确认播完',
+    'excerpt': '结果摘录已确认播完',
+}
 
 
 class TaskStep(TypedDict):
@@ -424,6 +429,29 @@ class Workspace:
                         else 'completed'
                     )
             self.revision += 1
+
+    def task_narration(self, ident: str | None, coverage: str | None) -> bool:
+        if coverage not in NARRATION_LABELS:
+            return False
+        with self.lock:
+            task = next((t for t in self.tasks if t['id'] == ident), None)
+            if task is None or task['status'] != 'completed':
+                return False
+            previous = next(
+                (step for step in task['steps'] if step['id'] == 'result_narration'), None
+            )
+            label = NARRATION_LABELS[coverage]
+            if previous is not None:
+                if previous['title'] == label or previous['title'] != NARRATION_LABELS['partial']:
+                    return False
+                previous['title'] = label
+            else:
+                task['steps'] = [
+                    *task['steps'][-4:],
+                    {'id': 'result_narration', 'title': label, 'status': 'completed'},
+                ]
+            self.revision += 1
+            return True
 
     def task_provenance(self, ident: str | None, value: object) -> None:
         with self.lock:

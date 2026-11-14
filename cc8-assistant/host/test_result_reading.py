@@ -84,6 +84,16 @@ class JournalTests(unittest.TestCase):
         journal.begin('uncertain', 3)
         self.assertIsNone(journal.target([dict(id='uncertain', status='cancelled'), *tasks]))
 
+    def test_confirmed_truncated_result_is_an_excerpt_while_unaligned_is_unknown(self):
+        journal = ResultReading()
+        journal.begin(ID, 2)
+        journal.complete(ID, '第一句。', truncated=True)
+        self.assertIsNone(journal.coverage(ID))
+        journal.original_ack(ID, 2, '第一句。')
+        self.assertEqual(journal.coverage(ID), 'excerpt')
+        journal.original_ack(ID, 2, '额外提示。')
+        self.assertIsNone(journal.coverage(ID))
+
     def test_only_explicit_narration_phrases_are_local(self):
         self.assertIs(reading_command('大黄蜂，继续播报。'), False)
         self.assertIs(reading_command('从头朗读结果'), True)
@@ -143,6 +153,7 @@ class ReadingTests(unittest.TestCase):
         )
         task = deepcopy(bridge.workspace.tasks[-1])
         self.assertEqual(task['status'], 'completed')
+        self.assertEqual(task['steps'][-1]['title'], '结果播报部分确认')
         spoken.clear()
 
         def resumed(text, generation):
@@ -157,6 +168,8 @@ class ReadingTests(unittest.TestCase):
         self.assertIsInstance(job, ResultRead)
         self.assertEqual(spoken, ['第二句。'])
         self.assertEqual(bridge.brain.calls, 1)
+        self.assertEqual(task['steps'][-1]['id'], 'result_narration')
+        task['steps'][-1]['title'] = '结果已确认播完'
         self.assertEqual(bridge.workspace.tasks, [task])
         self.assertFalse(bridge.session.active)
         self.assertIsNone(bridge.session.text_generation)
@@ -177,6 +190,9 @@ class ReadingTests(unittest.TestCase):
         )
         self.assertEqual(bridge.brain.calls, 0)
         self.assertEqual(bridge.workspace.tasks[-1]['status'], 'completed')
+        self.assertFalse(
+            any(s['id'] == 'result_narration' for s in bridge.workspace.tasks[-1]['steps'])
+        )
 
     def test_duplicate_unknown_busy_or_noncompleted_never_cancel_current_work(self):
         bridge = self.session()

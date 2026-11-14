@@ -309,6 +309,12 @@ class ResponseWorker:
             failed = True
             raise
         finally:
+            with self.hooks.lock:
+                if self.hooks.workspace().task_narration(ident, self.reading.coverage(ident)):
+                    try:
+                        self.hooks.publish_workspace()
+                    except (OSError, EOFError):
+                        pass  # The local receipt remains available after reconnect.
             self.hooks.diagnostics().finish(
                 generation, 'completed' if completed else 'failed' if failed else 'cancelled'
             )
@@ -701,6 +707,8 @@ class ResponseWorker:
                 )
                 if status == 'completed':
                     self.reading.complete(task_id, result_text[0] or ''.join(spoken))
+                if live is None:
+                    self.hooks.workspace().task_narration(task_id, self.reading.coverage(task_id))
                 self.hooks.diagnostics().task_result(generation, status)
                 self.hooks.diagnostics().finish(generation, status)
                 try:

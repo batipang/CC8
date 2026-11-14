@@ -333,6 +333,22 @@ class ControllerTests(Fixture):
             self.assertIs(restored.events[-1][1]['item']['execution_unconfirmed'], unconfirmed)
         self.assertTrue(restored.response.queue.empty())
 
+    def test_explicit_save_freezes_confirmed_narration_separately_from_task_completion(self):
+        live = self.session()
+        task_id = live.workspace.task_start(live.generation, '有播报的请求')
+        live.workspace.task_finish(task_id, 'completed', '已经执行')
+        self.assertTrue(live.workspace.task_narration(task_id, 'partial'))
+        self.request(live, 'save', task_id)
+        self.assertTrue(live.events[-1][1]['ok'])
+        self.assertTrue(live.workspace.task_narration(task_id, 'complete'))
+        self.assertFalse(live.workspace.task_narration(task_id, 'partial'))
+        restored = self.session()
+        self.request(restored, 'get', task_id)
+        item = restored.events[-1][1]['item']
+        self.assertEqual(item['status'], 'completed')
+        self.assertEqual(item['steps'][-1]['title'], '结果播报部分确认')
+        self.assertEqual(item['result'], '已经执行')
+
     def test_running_unknown_and_corrupt_records_do_not_change_live_task(self):
         b = self.session()
         task_id = b.workspace.task_start(b.generation, '尚未结束')
