@@ -403,6 +403,11 @@ class Workspace:
                     else '已停止等待；工具可能仍在运行，已执行的操作不会撤销。请先在电脑核对结果。'
                 ),
             }.get(status, status)
+            if status == 'completed' and desktop_handoff:
+                task['steps'] = [
+                    *task['steps'][-4:],
+                    {'id': 'desktop_handoff', 'title': '接续指引已生成', 'status': 'completed'},
+                ]
             for step in task['steps']:
                 if step['status'] == 'running':
                     step['status'] = (
