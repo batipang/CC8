@@ -63,16 +63,19 @@ def paged_text(text, envelope, *, page=0, field='report_text', fields=None):
 
 
 def display_fields(report, text, envelope, *, page=0):
+    projected = deepcopy(report)
+    # Individual test receipts are read through the numbered evidence action.
+    for item in projected['items']:
+        item.pop('test_receipts', None)
     original = dict(
-        report=deepcopy(report),
+        report=projected,
         report_text=text,
         report_page=0,
         report_pages=1,
         report_page_marker='',
     )
     if fits(original, envelope):
-        return paged_text(text, envelope, page=page, fields=dict(report=deepcopy(report)))
-    projected = deepcopy(report)
+        return paged_text(text, envelope, page=page, fields=dict(report=projected))
     # Legacy readers still receive all result identities and evidence, with
     # explicitly shortened previews. The modern reader receives all text pages.
     for item in projected['items']:

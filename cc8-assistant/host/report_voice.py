@@ -12,10 +12,12 @@ from work_reports import (
     CALENDAR_PERIODS,
     MAX_CARDS,
     MAX_TURN_PAGES,
+    MAX_TEST_RECEIPTS,
     PAGE_SIZE,
     TURN_STATUS_COUNTS,
     ReportWindow,
 )
+from source_identity import identifier
 from report_time import ReportRange, ReportTimeError, parse_range, range_compound, window_label
 from report_progress import (
     DeliveryPlan,
@@ -295,6 +297,25 @@ def test_process_summary(tests):
     )
 
 
+def test_receipts_valid(rows, counts, final_id):
+    if (
+        not counts
+        or not isinstance(rows, list)
+        or len(rows) != min(sum(counts.values()), MAX_TEST_RECEIPTS)
+    ):
+        return False
+    remaining, seen = counts.copy(), {final_id}
+    for row in rows:
+        if not isinstance(row, dict) or set(row) != {'item_id', 'outcome'}:
+            return False
+        ident = identifier(row['item_id'])
+        if ident in seen or remaining.get(row['outcome'], 0) <= 0:
+            return False
+        seen.add(ident)
+        remaining[row['outcome']] -= 1
+    return True
+
+
 def spoken_evidence(item):
     evidence = item['evidence']
     return (
@@ -540,6 +561,10 @@ class ReportVoice:
                         )
                     ):
                         return False
+                if 'test_receipts' in item and not test_receipts_valid(
+                    item['test_receipts'], item.get('test_processes'), item['item_id']
+                ):
+                    return False
                 if item['evidence_complete'] and item['evidence']['unconfirmed_tool_items']:
                     return False
             if report['coverage_complete'] and (
@@ -798,10 +823,20 @@ class ReportVoice:
                         lines.append('这些是进程退出回执，无法确认全部测试范围或整项验收。')
                     else:
                         lines.append('现有回执不能确定哪些命令是测试，也不能确认测试已通过。')
+                    detail = [lines[0], result_identity(item, provenance['thread_id']), *lines[1:]]
+                    if receipts := item.get('test_receipts'):
+                        labels = dict(
+                            exit_zero='零退出', exit_nonzero='非零退出', unconfirmed='退出未确认'
+                        )
+                        detail.extend(
+                            f'{labels[row["outcome"]]} · {row["item_id"]}' for row in receipts
+                        )
+                        if len(receipts) < sum(tests.values()):
+                            detail.append(
+                                f'屏幕列出其中{len(receipts)}条，以上计数仍包含全部读到的回执。'
+                            )
                     return ReportReply(
-                        '\n'.join(
-                            (lines[0], result_identity(item, provenance['thread_id']), *lines[1:])
-                        ),
+                        '\n'.join(detail),
                         tuple(lines),
                         item.get('source_title', report['source_title']),
                         'item_evidence',

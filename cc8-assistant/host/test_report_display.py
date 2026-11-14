@@ -79,7 +79,13 @@ class ReportDisplayTests(unittest.TestCase):
                 source_thread_id=member.thread_id,
                 source_title=member.title,
                 source_project=member.project,
+                test_processes=dict(exit_zero=0, exit_nonzero=8, unconfirmed=0),
+                test_receipts=[
+                    dict(item_id=f'command-{n}-' + 'x' * 76, outcome='exit_nonzero')
+                    for n in range(8)
+                ],
             )
+            item['evidence']['command_failures'] = 8
         self.assertTrue(ReportVoice.valid_report(source, value))
         original = report_text(value)
         first = display_fields(value, original, ENVELOPE)
@@ -87,6 +93,7 @@ class ReportDisplayTests(unittest.TestCase):
         for page in range(first['report_pages']):
             fields = display_fields(value, original, ENVELOPE, page=page)
             self.encode(fields)
+            self.assertTrue(all('test_receipts' not in item for item in fields['report']['items']))
             parts.append(fields['report_text'][len(fields['report_page_marker']) :])
         self.assertEqual(''.join(parts), original)
 

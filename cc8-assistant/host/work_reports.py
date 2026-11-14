@@ -14,6 +14,8 @@ BEIJING = timezone(timedelta(hours=8))
 MAX_TURN_PAGES, MAX_ITEM_PAGES, PAGE_SIZE, MAX_CARDS = 4, 2, 25, 20
 PARTIAL_READ_ERRORS = frozenset(('timeout', 'transport_or_io'))
 TURN_STATUS_COUNTS = ('active_turns_seen', 'failed_turns', 'interrupted_turns')
+TEST_RECEIPT_STATES = ('exit_nonzero', 'unconfirmed', 'exit_zero')
+MAX_TEST_RECEIPTS = 8
 
 
 # Accept only direct test runners with simple arguments. Shell composition,
@@ -253,6 +255,7 @@ class WorkReportReader:
             unconfirmed_tool_items=0,
         )
         tests = dict(exit_zero=0, exit_nonzero=0, unconfirmed=0)
+        test_receipts = {state: [] for state in TEST_RECEIPT_STATES}
         complete = False
         for _ in range(MAX_ITEM_PAGES):
             params = dict(threadId=source_id, turnId=turn_id, limit=50, sortDirection='desc')
@@ -309,13 +312,15 @@ class WorkReportReader:
                 elif kind == 'commandExecution':
                     if is_test:
                         exit_code = item.get('exitCode')
+                        outcome = 'unconfirmed'
                         if state in ('completed', 'failed') and type(exit_code) is int:
-                            if exit_code != 0 or state == 'completed':
-                                tests['exit_zero' if exit_code == 0 else 'exit_nonzero'] += 1
-                            else:
-                                tests['unconfirmed'] += 1
-                        else:
-                            tests['unconfirmed'] += 1
+                            if exit_code != 0:
+                                outcome = 'exit_nonzero'
+                            elif state == 'completed':
+                                outcome = 'exit_zero'
+                        tests[outcome] += 1
+                        if len(test_receipts[outcome]) < MAX_TEST_RECEIPTS:
+                            test_receipts[outcome].append(dict(item_id=ident, outcome=outcome))
                     if state == 'completed' and type(item.get('exitCode')) is int:
                         evidence[
                             'command_successes' if item['exitCode'] == 0 else 'command_failures'
@@ -343,5 +348,14 @@ class WorkReportReader:
             evidence_complete=complete and evidence['unconfirmed_tool_items'] == 0,
             verification='not_assessed',
             result_kind='quoted_final_answer',
-            **({'test_processes': tests} if any(tests.values()) else {}),
+            **(
+                {
+                    'test_processes': tests,
+                    'test_receipts': [
+                        receipt for group in test_receipts.values() for receipt in group
+                    ][:MAX_TEST_RECEIPTS],
+                }
+                if any(tests.values())
+                else {}
+            ),
         )

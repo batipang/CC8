@@ -212,6 +212,10 @@ class VoiceTests(unittest.TestCase):
         item = data['items'][0]
         item['evidence'].update(command_successes=1, command_failures=1)
         item['test_processes'] = dict(exit_zero=1, exit_nonzero=1, unconfirmed=0)
+        item['test_receipts'] = [
+            dict(item_id='command-ok', outcome='exit_zero'),
+            dict(item_id='command-failed', outcome='exit_nonzero'),
+        ]
         voice = self.session(data)
         overview = voice.answer(ReportCommand('report', 'today'), lambda: True)
         reply = voice.answer(ReportCommand('item_evidence', 1), lambda: True)
@@ -219,6 +223,11 @@ class VoiceTests(unittest.TestCase):
             self.assertIn('退出码为零1次，非零退出1次', result.text)
         self.assertIn('无法确认全部测试范围或整项验收', reply.text)
         self.assertNotIn('测试已通过', reply.text)
+        self.assertIn('非零退出 · command-failed', reply.text)
+        self.assertNotIn('command-failed', ''.join(reply.spoken))
+        item['test_receipts'][1]['item_id'] = 'command-ok'
+        self.assertFalse(voice.valid_report(SOURCE, data))
+        item['test_receipts'][1]['item_id'] = 'command-failed'
         for malformed in (
             dict(exit_zero=True, exit_nonzero=1, unconfirmed=0),
             dict(exit_zero=2, exit_nonzero=1, unconfirmed=0),
