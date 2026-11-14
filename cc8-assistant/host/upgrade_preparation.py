@@ -621,8 +621,8 @@ def settings_for_target(settings, target_root):
     return result
 
 
-def verify_staged_settings(transition_path, backup_path, staged_path, target_root, stage):
-    """Recheck a staged file against the backup and the verified target checkout."""
+def transition_target(transition_path, target_root, stage):
+    """Resolve the exact clean checkout named by a local transition report."""
     from tools.release import git_state
 
     transition = read_private_json(transition_path)
@@ -644,6 +644,47 @@ def verify_staged_settings(transition_path, backup_path, staged_path, target_roo
         or transition['stages'][stage]['source_commit'] != commit
     ):
         raise ValueError('Target checkout differs from the verified transition')
+    return transition, target_root, (commit, dirty)
+
+
+def recheck_transition_storage(transition_path, runtime_root, target_root, stage):
+    """Check today's private store compatibility without applying the transition."""
+    from tools.release import git_state
+
+    transition, target_root, state = transition_target(transition_path, target_root, stage)
+    runtime_root = Path(runtime_root).resolve(strict=True)
+    require_worktree_root(runtime_root)
+    runtime_state = git_state(runtime_root)
+    source_stages = ('baseline', 'candidate') if stage == 'recovery' else ('baseline',)
+    if runtime_state[1] or runtime_state[0] not in {
+        transition['stages'][source]['source_commit'] for source in source_stages
+    }:
+        raise ValueError('Current runtime checkout differs from the verified transition')
+    gates = {
+        'reminder_storage': reminder_storage_gate(runtime_root, target_root),
+        'report_watch_storage': report_watch_storage_gate(runtime_root, target_root),
+        'saved_task_storage': saved_task_storage_gate(runtime_root, target_root),
+        'identity_storage': identity_storage_gate(runtime_root, target_root),
+    }
+    if git_state(target_root) != state or git_state(runtime_root) != runtime_state:
+        raise ValueError('A checkout changed during verification')
+    return {
+        'schema_version': 1,
+        'kind': 'cc8_transition_storage_recheck',
+        'stage': stage,
+        'runtime_commit': runtime_state[0],
+        'target_commit': state[0],
+        'compatible': all(gate['compatible'] for gate in gates.values()),
+        'ready_for_installation': False,
+        **gates,
+    }
+
+
+def verify_staged_settings(transition_path, backup_path, staged_path, target_root, stage):
+    """Recheck a staged file against the backup and the verified target checkout."""
+    from tools.release import git_state
+
+    transition, target_root, state = transition_target(transition_path, target_root, stage)
     settings = verify_backup(backup_path)
     if not hmac.compare_digest(transition['settings_sha256'], fingerprint(settings)):
         raise ValueError('Backup settings differ from the verified transition')
@@ -655,7 +696,7 @@ def verify_staged_settings(transition_path, backup_path, staged_path, target_roo
         raise ValueError('Target settings contract differs from the verified transition')
     if not hmac.compare_digest(fingerprint(read_private_json(staged_path)), fingerprint(expected)):
         raise ValueError('Staged settings differ from the verified backup')
-    if git_state(target_root) != (commit, dirty):
+    if git_state(target_root) != state:
         raise ValueError('Target checkout changed during verification')
 
 
@@ -730,8 +771,25 @@ def main(argv=None):
     verify_staged.add_argument('--staged-profile', type=Path, required=True)
     verify_staged.add_argument('--target-root', type=Path, required=True)
     verify_staged.add_argument('--stage', choices=('candidate', 'recovery'), required=True)
+    storage = commands.add_parser(
+        'recheck-storage', help='Recheck current private stores against a pinned transition target'
+    )
+    storage.add_argument('--transition', type=Path, required=True)
+    storage.add_argument('--runtime-root', type=Path, required=True)
+    storage.add_argument('--target-root', type=Path, required=True)
+    storage.add_argument('--stage', choices=('candidate', 'recovery'), required=True)
+    storage.add_argument('--output', type=Path)
     args = parser.parse_args(argv)
     try:
+        if args.action == 'recheck-storage':
+            value = recheck_transition_storage(
+                args.transition, args.runtime_root, args.target_root, args.stage
+            )
+            if args.output is not None:
+                print(output(value, args.output))
+            else:
+                print(json.dumps(value, ensure_ascii=False, indent=2))
+            return 0 if value['compatible'] else 2
         if args.action == 'verify-staged':
             verify_staged_settings(
                 args.transition,
