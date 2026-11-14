@@ -43,6 +43,18 @@ def delegation(ident, offset):
     }
 
 
+def started(voice='marin', rate=16000, target='client'):
+    return {
+        'type': 'session.started',
+        'session': {
+            'model': 'gpt-live-1',
+            'status': 'active',
+            'audio': {'format': {'type': 'audio/pcm', 'rate': rate}, 'output': {'voice': voice}},
+            'delegation': {'type': target},
+        },
+    }
+
+
 class LiveSocketTests(unittest.IsolatedAsyncioTestCase):
     async def test_handshake_chinese_delegation_audio_and_owned_shutdown(self):
         incoming, outgoing = asyncio.Queue(), asyncio.Queue()
@@ -82,7 +94,7 @@ class LiveSocketTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(start['session']['store'])
             with self.assertRaises(TimeoutError):
                 await asyncio.wait_for(outgoing.get(), 0.08)
-            incoming.put_nowait({'type': 'session.started', 'session': {'model': 'gpt-live-1'}})
+            incoming.put_nowait(started())
             audio = await get()
             self.assertEqual(audio['type'], 'session.input_audio.append')
             self.assertEqual(base64.b64decode(audio['audio']), bytes(320))
@@ -163,7 +175,7 @@ class LiveSocketTests(unittest.IsolatedAsyncioTestCase):
                 trial.feed(frame, True)
             self.assertFalse(trial.stop.is_set())
             self.assertTrue(sent.empty())
-            received.put_nowait('{"type":"session.started","session":{"model":"gpt-live-1"}}')
+            received.put_nowait(json.dumps(started()))
             expected = prefix + b''.join(frames)
             actual = bytearray()
             while len(actual) < len(expected):
@@ -198,7 +210,7 @@ class LiveSocketTests(unittest.IsolatedAsyncioTestCase):
         try:
             self.assertEqual((await asyncio.wait_for(sent.get(), 2))['type'], 'session.start')
             hooks.current.return_value = False
-            received.put_nowait('{"type":"session.started","session":{"model":"gpt-live-1"}}')
+            received.put_nowait(json.dumps(started()))
             self.assertEqual((await asyncio.wait_for(sent.get(), 2))['type'], 'session.close')
             received.put_nowait('{"type":"session.closed"}')
             await asyncio.wait_for(task, 2)
@@ -217,14 +229,45 @@ class LiveSocketTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(trial.stop.is_set())
         self.assertTrue(trial.input_overflow.is_set())
 
-    async def test_failed_handshake_does_not_upload(self):
+    async def test_failed_or_mismatched_handshake_does_not_upload(self):
+        for event in (
+            {'type': 'error'},
+            started(rate=24000),
+            started('cedar'),
+            started(target='responses'),
+        ):
+            with self.subTest(event=event):
+                messages = []
+
+                async def send(message):
+                    messages.append(json.loads(message)['type'])
+
+                async def recv():
+                    return json.dumps(event)
+
+                @asynccontextmanager
+                async def connector(key):
+                    yield NS(send=send, recv=recv)
+
+                hooks = Mock()
+                trial = LiveSession('fixture-only', 'marin', hooks, connector=connector)
+                trial.feed(bytes(320), True)
+                await trial.exchange()
+                self.assertEqual(messages, ['session.start'])
+                hooks.closed.assert_called_once_with(trial, True)
+
+    async def test_barge_in_while_receiving_does_not_start_queued_cloud_audio(self):
         messages = []
+        events = iter([started(), {'type': 'session.closed'}])
 
         async def send(message):
             messages.append(json.loads(message)['type'])
 
         async def recv():
-            return '{"type":"error"}'
+            if messages == ['session.start'] and trial.started.is_set():
+                trial.interrupt_playback()
+                return json.dumps({'type': 'session.output_audio.delta', 'delta': 'AAA='})
+            return json.dumps(next(events))
 
         @asynccontextmanager
         async def connector(key):
@@ -232,10 +275,10 @@ class LiveSocketTests(unittest.IsolatedAsyncioTestCase):
 
         hooks = Mock()
         trial = LiveSession('fixture-only', 'marin', hooks, connector=connector)
-        trial.feed(bytes(320), True)
         await trial.exchange()
-        self.assertEqual(messages, ['session.start'])
-        hooks.closed.assert_called_once_with(trial, True)
+        self.assertEqual(messages, ['session.start', 'session.instructions.append'])
+        hooks.play.assert_not_called()
+        hooks.closed.assert_called_once_with(trial, False)
 
     def test_old_and_duplicate_delegations_do_not_replay_old_transcripts(self):
         now = [10.0]
@@ -369,12 +412,21 @@ class LiveAdmissionTests(unittest.TestCase):
             run=Mock(),
             feed=Mock(),
             stop=threading.Event(),
+            interrupt=threading.Event(),
             initial_audio=[],
             interrupt_playback=Mock(),
             result=Mock(),
         )
         trial = LiveTrial(host, 'fixture-only', 'marin', Mock(return_value=owner))
         return trial, host, owner
+
+    def test_playback_admission_rechecks_barge_under_capture_guard(self):
+        trial, host, owner = self.make_trial()
+        self.assertTrue(trial.handoff(np.full(FRAME, 0.1)))
+        owner.interrupt.set()
+        self.assertFalse(trial.play(owner, LivePlayback(host.generation)))
+        self.assertIsNone(trial.output)
+        self.assertIsNone(trial.pending_output)
 
     def test_wake_owner_capability_and_capture_route_gate_upload(self):
         trial, host, owner = self.make_trial()
