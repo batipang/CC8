@@ -27,7 +27,7 @@ MAX_METADATA_BLOCKS = 4
 MAX_METADATA_CHARS = 16384
 SCHEMA_CONTEXTS = ('https://schema.org', 'http://schema.org')
 ARTICLE_TYPES = frozenset(('Article', 'NewsArticle', 'BlogPosting'))
-PUBLICATION_DATE = re.compile(
+ISO_DATE_LABEL = re.compile(
     r'[0-9]{4}-[0-9]{2}-[0-9]{2}'
     r'(?:T[0-9]{2}:[0-9]{2}(?::[0-9]{2}(?:\.[0-9]{1,6})?)?'
     r'(?:Z|[+-][0-9]{2}:[0-5][0-9])?)?'
@@ -242,8 +242,8 @@ def headers(raw):
     return final
 
 
-def iso_publication_label(value):
-    if not isinstance(value, str) or not PUBLICATION_DATE.fullmatch(value):
+def iso_date_label(value):
+    if not isinstance(value, str) or not ISO_DATE_LABEL.fullmatch(value):
         return None
     try:
         datetime.fromisoformat(value[:-1] + '+00:00' if value.endswith('Z') else value)
@@ -260,14 +260,16 @@ class PageText(HTMLParser):
         self.title = []
         self.parts = []
         self.dates = []
+        self.updated_dates = []
         self.metadata = None
         self.metadata_blocks = 0
         self.articles = []
 
-    def add_date(self, value):
+    @staticmethod
+    def add_date(dates, value):
         value = visible_text(value)
-        if value and len(value) <= 64 and value not in self.dates and len(self.dates) < 8:
-            self.dates.append(value)
+        if value and len(value) <= 64 and value not in dates and len(dates) < 8:
+            dates.append(value)
 
     def handle_starttag(self, tag, attrs):
         if tag == 'script' and not self.hidden and self.metadata_blocks < MAX_METADATA_BLOCKS:
@@ -288,9 +290,13 @@ class PageText(HTMLParser):
             if key in ('article:published_time', 'datepublished', 'dc.date.issued'):
                 # Preserve the publisher's string. Neither this nor an HTTP
                 # Last-Modified header proves an event or publication date.
-                self.add_date(value)
-            elif key == 'parsely-pub-date' and (date := iso_publication_label(value.strip())):
-                self.add_date(date)
+                self.add_date(self.dates, value)
+            elif key == 'parsely-pub-date':
+                if date := iso_date_label(value.strip()):
+                    self.add_date(self.dates, date)
+            elif key in ('article:modified_time', 'og:updated_time', 'datemodified'):
+                if date := iso_date_label(value.strip()):
+                    self.add_date(self.updated_dates, date)
 
     def handle_endtag(self, tag):
         if tag == 'script' and self.metadata is not None:
@@ -346,7 +352,7 @@ def article_nodes(raw):
         return []
 
 
-def article_publication_date(articles, page_url):
+def page_article(articles, page_url):
     matching = []
     target = source_key(page_url)
     for article in articles:
@@ -359,9 +365,9 @@ def article_publication_date(articles, page_url):
         if declared and source_key(declared) == target:
             matching.append(article)
     if len(matching) == 1:
-        return iso_publication_label(matching[0].get('datePublished'))
+        return matching[0]
     if len(articles) == 1 and 'url' not in articles[0] and 'mainEntityOfPage' not in articles[0]:
-        return iso_publication_label(articles[0].get('datePublished'))
+        return articles[0]
     return None
 
 
@@ -376,16 +382,20 @@ def extract(body, content_type, page_url):
     except UnicodeDecodeError:
         raise PageError('unsupported_encoding') from None
     if media == 'text/plain':
-        return '', visible_text(text), []
+        return '', visible_text(text), [], []
     parser = PageText()
     parser.feed(text)
     parser.close()
-    if date := article_publication_date(parser.articles, page_url):
-        parser.add_date(date)
+    article = page_article(parser.articles, page_url) or {}
+    if date := iso_date_label(article.get('datePublished')):
+        parser.add_date(parser.dates, date)
+    if date := iso_date_label(article.get('dateModified')):
+        parser.add_date(parser.updated_dates, date)
     return (
         visible_text(' '.join(parser.title))[:160],
         visible_text(' '.join(parser.parts)),
         parser.dates,
+        parser.updated_dates,
     )
 
 
@@ -436,7 +446,7 @@ def read_page(url, current=lambda: True, *, resolve=addresses, request=fetch, cl
             result['http_status'] = code
             if fields.get('content-encoding', 'identity').lower() != 'identity':
                 raise PageError('unsupported_content_encoding')
-            title, text, dates = extract(body, fields.get('content-type', ''), target)
+            title, text, dates, updated = extract(body, fields.get('content-type', ''), target)
             if not current() or time.monotonic() >= deadline:
                 raise PageError('cancelled' if not current() else 'timeout')
             if not text:
@@ -452,6 +462,7 @@ def read_page(url, current=lambda: True, *, resolve=addresses, request=fetch, cl
                 text_truncated=len(text) > MAX_TEXT,
                 received_bytes=len(body),
                 publication_labels=dates,
+                modification_labels=updated,
                 facts_verified=False,
                 untrusted_page=True,
             )
