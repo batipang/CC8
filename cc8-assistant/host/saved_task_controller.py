@@ -90,6 +90,17 @@ class SavedTaskController:
                 self.busy = False
             raise
 
+    @staticmethod
+    def handoff_pending(item):
+        return (
+            item['status'] == 'completed'
+            and item.get('provenance', {}).get('provider') == 'work_report'
+            and any(
+                step['id'] == 'desktop_handoff' and step['status'] == 'completed'
+                for step in item['steps']
+            )
+        )
+
     def run(self, request_id, action, task_id, task, connection, file_index=None):
         try:
             fields = {'ok': True, 'action': action}
@@ -110,14 +121,17 @@ class SavedTaskController:
                 fields['deleted'] = self.store.delete(task_id)
             elif action == 'list':
                 fields['items'] = [
-                    {key: item[key] for key in ('id', 'title', 'status', 'saved_at')}
+                    {
+                        **{key: item[key] for key in ('id', 'title', 'status', 'saved_at')},
+                        'desktop_handoff_pending': self.handoff_pending(item),
+                    }
                     for item in reversed(self.store.snapshot())
                 ]
             else:
                 item = next((t for t in self.store.snapshot() if t['id'] == task_id), None)
                 if item is None:
                     raise ValueError('Saved task no longer exists')
-                fields['item'] = item
+                fields['item'] = {**item, 'desktop_handoff_pending': self.handoff_pending(item)}
             with self.hooks.lock:
                 self.finish_slot()
                 if connection is self.hooks.connection():

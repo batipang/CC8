@@ -119,6 +119,13 @@ class ActivityCheck {
     c.snapshot(1,task("completed"),task("failed"),task("cancelled"));c.link(false);
     yes(!c.taskResultUnconfirmed,"Known terminal receipts must not become unknown");
     c.showTasks();yes(!AlertDialog.last.message.contains("可能已经执行"),"No fabricated interrupted-work warning");break;
+   case "desktop_handoff":
+    JSONObject handoff=task("completed");handoff.values.put("stage","待桌面接续");
+    JSONObject running=task("running");running.values.put("stage","待桌面接续");
+    c.snapshot(1,handoff,task("completed"),running);c.showTasks();
+    yes(AlertDialog.last.items[1].startsWith("待桌面接续 · "),"Original work shown as completed");
+    yes(AlertDialog.last.items[2].startsWith("已完成 · "),"Normal receipt changed");
+    yes(AlertDialog.last.items[3].startsWith("处理中 · "),"Running work gained a terminal label");break;
    case "completed_before_loss":
     c.snapshot(5,task("running"));c.snapshot(6,task("completed"));c.snapshot(4,task("running"));c.link(false);
     yes(!c.taskResultUnconfirmed,"Authoritative completion before loss wins over an older snapshot");break;
@@ -224,6 +231,9 @@ void link(boolean connected){link(connected,++session.routeEpoch);}"""
 
     def test_known_terminal_receipts_do_not_create_false_warnings(self):
         self.scenario('terminal_receipts')
+
+    def test_desktop_handoff_is_distinct_from_original_work_completion(self):
+        self.scenario('desktop_handoff')
 
     def test_completed_receipt_before_loss_and_stale_snapshot_are_respected(self):
         self.scenario('completed_before_loss')

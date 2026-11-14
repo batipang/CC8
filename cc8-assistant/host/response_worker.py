@@ -525,7 +525,14 @@ class ResponseWorker:
                     # The Dot turn receipt closes the task, independently of the
                     # remaining audio or device delivery. A disconnected display
                     # cannot turn successfully executed work into a failed task.
-                    self.hooks.workspace().task_finish(task_id, 'completed', result_text[0])
+                    metrics = self.hooks.brain().last_metrics
+                    desktop_handoff = (
+                        metrics.get('provider') == 'work_report'
+                        and metrics.get('operation') == 'desktop_handoff'
+                    )
+                    self.hooks.workspace().task_finish(
+                        task_id, 'completed', result_text[0], desktop_handoff=desktop_handoff
+                    )
                     self.reading.complete(task_id, result_text[0], payload.get('truncated', False))
                     self.hooks.event('dot_result', generation=generation, **payload)
                     self.hooks.publish_workspace()

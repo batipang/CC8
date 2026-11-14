@@ -224,6 +224,30 @@ class ControllerTests(Fixture):
         self.assertTrue(b.response.queue.empty())
         self.assertFalse(b.session.active)
 
+    def test_explicit_handoff_save_and_restart_preserve_pending_state_and_source(self):
+        from dot_handoff import Handoff
+        from report_voice import report_source
+
+        b = self.session()
+        task_id = b.workspace.task_start(b.generation, '继续第二项')
+        b.workspace.task_provenance(
+            task_id, report_source(Handoff('chat-one', '原聊天', (), False), 'turn-two')
+        )
+        b.workspace.task_finish(task_id, 'completed', '待桌面接续', desktop_handoff=True)
+        self.assertFalse(self.path.exists())
+        self.request(b, 'save', task_id)
+        restored = self.session()
+        self.request(restored, 'list')
+        metadata = restored.events[-1][1]['items'][0]
+        self.assertIs(metadata['desktop_handoff_pending'], True)
+        self.assertNotIn('provenance', metadata)
+        self.request(restored, 'get', task_id)
+        detail = restored.events[-1][1]['item']
+        self.assertIs(detail['desktop_handoff_pending'], True)
+        self.assertEqual(detail['provenance']['turn_id'], 'turn-two')
+        self.assertNotIn('desktop_handoff_pending', self.path.read_text())
+        self.assertTrue(restored.response.queue.empty())
+
     def test_running_unknown_and_corrupt_records_do_not_change_live_task(self):
         b = self.session()
         task_id = b.workspace.task_start(b.generation, '尚未结束')

@@ -376,7 +376,13 @@ class Workspace:
             self.revision += 1
 
     def task_finish(
-        self, ident: str | None, status: str, result: str = '', *, unconfirmed: bool = False
+        self,
+        ident: str | None,
+        status: str,
+        result: str = '',
+        *,
+        unconfirmed: bool = False,
+        desktop_handoff: bool = False,
     ) -> None:
         # 只有 running 可进入终态，迟到的进度或停止朗读不能覆盖已有完成结果。
         with self.lock:
@@ -389,7 +395,7 @@ class Workspace:
             result = result.replace('\r\n', '\n').replace('\r', '\n')
             task['result'] = ''.join(c for c in result if ord(c) >= 32 or c in '\n\t')[:1600]
             task['stage'] = {
-                'completed': '请求已完成',
+                'completed': '待桌面接续' if desktop_handoff else '请求已完成',
                 'failed': '执行结果待核对' if unconfirmed else '请求未完成',
                 'cancelled': (
                     '已停止等待，执行结果待核对；工具可能仍在运行。请先在电脑核对，勿重复交办。'
@@ -397,6 +403,11 @@ class Workspace:
                     else '已停止等待；工具可能仍在运行，已执行的操作不会撤销。请先在电脑核对结果。'
                 ),
             }.get(status, status)
+            if status == 'completed' and desktop_handoff:
+                task['steps'] = [
+                    *task['steps'][-4:],
+                    {'id': 'desktop_handoff', 'title': '接续指引已生成', 'status': 'completed'},
+                ]
             for step in task['steps']:
                 if step['status'] == 'running':
                     step['status'] = (

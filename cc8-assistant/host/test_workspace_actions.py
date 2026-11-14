@@ -24,6 +24,7 @@ package org.json;
 public class JSONObject {
  public final java.util.Map<String,Object> values=new java.util.HashMap<>();
  public JSONObject(Object... pairs){for(int i=0;i<pairs.length;i+=2)values.put((String)pairs[i],pairs[i+1]);}
+ public Object opt(String k){return values.get(k);}
  public String optString(String k){return optString(k,"");}
  public String optString(String k,String fallback){Object v=values.get(k);return v==null?fallback:String.valueOf(v);}
  public boolean optBoolean(String k){return Boolean.TRUE.equals(values.get(k));}
@@ -441,6 +442,18 @@ class ActionCheck extends Activity {
     AlertDialog.last.negative();AlertDialog confirm=AlertDialog.last;s.change();confirm.positive();
     yes(s.sent.size()==2,"Old deletion confirmation cannot target a new route");break;
    }
+   case "saved_handoff":{
+    JSONObject pending=task("completed");pending.values.put("desktop_handoff_pending",true);
+    JSONObject malformed=task("completed");malformed.values.put("desktop_handoff_pending","true");
+    c.savedTasks.open();c.answer("items",new JSONArray(pending,task("completed"),malformed));
+    AlertDialog list=AlertDialog.last;
+    yes(list.builder.labels[0].startsWith("待桌面接续 · "),"Handoff list must identify pending desktop work");
+    for(int i=1;i<3;i++)yes(list.builder.labels[i].startsWith("已完成 · "),"Normal or malformed metadata must use the ordinary receipt label");
+    list.item(0);c.answer("item",pending);
+    ScrollView scroll=(ScrollView)AlertDialog.last.builder.view;
+    LinearLayout body=(LinearLayout)scroll.child;
+    yes(((TextView)body.children.get(0)).getText().toString().contains("状态：待桌面接续"),"Saved detail must keep the pending desktop status");break;
+   }
    case "saved_response":{
     c.savedTasks.open();AlertDialog waiting=AlertDialog.last;s.change();c.answer("items",new JSONArray(task("completed")));
     yes(AlertDialog.last==waiting&&waiting.dismissed&&s.sent.size()==1,"Old saved-result response must not open a new view or request");break;
@@ -649,6 +662,9 @@ boolean savedTaskRequest(String requestId,String action,String id,long ignored){
 
     def test_old_saved_delete_confirmation_is_rejected(self):
         self.scenario('saved_delete')
+
+    def test_saved_handoff_list_and_detail_keep_pending_status(self):
+        self.scenario('saved_handoff')
 
     def test_task_send_boundary_checks_after_preparation(self):
         self.scenario('boundary_task')

@@ -159,6 +159,42 @@ class ReportTests(unittest.TestCase):
         self.assertFalse(r['original_chat_modified'])
         self.assertFalse(r['history_persisted'])
 
+    def test_direct_test_processes_derive_from_owned_command_and_exit_receipts(self):
+        f = Fixture()
+        rows = (
+            ('python3 -m unittest discover -s tests -q', 'completed', 0),
+            ('.venv/bin/pytest tests/test_suite.py::test_case -q', 'completed', 1),
+            ('pytest -q', 'failed', 2),
+            ('pytest -q', 'declined', None),
+            ('pytest -q', 'completed', False),
+            ('pytest -q', 'failed', 0),
+            ('pytest --collect-only', 'completed', 0),
+            ('pytest -h', 'completed', 0),
+            ('pytest -q || true', 'completed', 0),
+            ('sh -c pytest', 'completed', 0),
+            ('echo pytest', 'completed', 0),
+            ('python -m unittest --help', 'completed', 0),
+        )
+        f.item_pages['turn-1'][0]['data'].extend(
+            dict(
+                turnId='turn-1',
+                item=dict(
+                    id=f'command-{i}',
+                    type='commandExecution',
+                    command=cmd,
+                    status=state,
+                    exitCode=code,
+                    aggregatedOutput='PRIVATE_OUTPUT',
+                ),
+            )
+            for i, (cmd, state, code) in enumerate(rows)
+        )
+        item = self.report(f)['items'][0]
+        self.assertEqual(item['test_processes'], dict(exit_zero=1, exit_nonzero=2, unconfirmed=3))
+        self.assertNotIn('PRIVATE_OUTPUT', str(item))
+        self.assertNotIn('test_suite.py', str(item))
+        self.assertEqual(item['verification'], 'not_assessed')
+
     def test_no_final_answer_is_missing_evidence_instead_of_empty_success(self):
         f = Fixture()
         f.item_pages['turn-1'][0]['data'] = []

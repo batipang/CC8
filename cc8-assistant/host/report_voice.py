@@ -75,26 +75,45 @@ DETAIL = re.compile(
     + INDEX
     + r'项(?:的?(?:详情|详细结果|完整结果|详细内容|内容|结果|情况))?(?:读给我听|读一下)?'
 )
+ITEM_EVIDENCE = re.compile(
+    PREFIX
+    + r'(?:查看|核对|说说)?(?:本次汇报的|这次汇报的|汇报的)?第'
+    + INDEX
+    + r'项(?:的?(?:执行回执|核验状态|验证情况|测试结果)|(?:是否|有没有)?(?:通过(?:了)?测试|验证(?:了|过)?))'
+)
 CONTEXT_ITEM = re.compile(
     PREFIX + r'(?:把|将|关于|对于)?(?:本次汇报的|这次汇报的|汇报的)?第' + INDEX + r'项'
 )
 SOURCE_ACTION = re.compile(
     r'继续|推进|接着做|执行|做完|重做|修改|修复|修一下|删除|取消|发送|发给|追加|提交|运行'
 )
+CONTINUE_PREFIX = r'(?:继续|推进|继续推进|继续做|接着做)'
 CONTINUE = re.compile(
     PREFIX
-    + r'(?:(?:继续|推进|继续推进|继续做|接着做)(?:第'
+    + r'(?:'
+    + CONTINUE_PREFIX
+    + r'(?:第'
     + INDEX
     + r'项)?|第'
     + INDEX
     + r'项(?:继续|继续做|继续推进)|下一步)'
 )
+HANDOFF_TARGET = re.compile(
+    PREFIX + CONTINUE_PREFIX + r'(本次汇报的|这次汇报的|汇报的)?第' + INDEX + r'项'
+)
+HANDOFF_SEPARATOR = re.compile(r'^[，,。；;\s]*(?:下一步[：:]\s*)?')
+
+
+@dataclass(frozen=True)
+class HandoffDraft:
+    number: int
+    text: str
 
 
 @dataclass(frozen=True)
 class ReportCommand:
     kind: str
-    value: str | int | ReportRange = ''
+    value: str | int | ReportRange | HandoffDraft = ''
 
 
 def ordinal(text):
@@ -112,19 +131,31 @@ def ordinal(text):
 def report_command(text, *, followup=False):
     if not isinstance(text, str) or len(text) > 500:
         return None
-    text = re.sub(r'^(?:大黄蜂|bumblebee)[，,：:\s]*', '', text.strip(), flags=re.I)
-    text = ''.join(text.split()).rstrip('。.!！?？')
+    original = re.sub(r'^(?:大黄蜂|bumblebee)[，,：:\s]*', '', text.strip(), flags=re.I)
+    text = ''.join(original.split()).rstrip('。.!！?？')
     if match := REPORT.fullmatch(text) or QUERY.fullmatch(text):
         return ReportCommand('report', PERIOD_NAMES[match[1]])
     if COMPOUND.fullmatch(text) or range_compound(text):
         return ReportCommand('continue')
     if value := parse_range(text):
         return ReportCommand('custom', value)
+    if (followup or '汇报' in text) and (match := ITEM_EVIDENCE.fullmatch(text)):
+        return ReportCommand('item_evidence', ordinal(match[1]))
     if match := DETAIL.fullmatch(text):
         if followup or '汇报' in text:
             return ReportCommand('item', ordinal(match[1]))
-    if followup and CONTINUE.fullmatch(text):
-        return ReportCommand('continue')
+    if (match := HANDOFF_TARGET.match(original)) and (followup or match[1]):
+        tail = original[match.end() :]
+        if re.search('第' + INDEX + '项', ''.join(tail.split())):
+            return ReportCommand('item_choice')
+        number = ordinal(match[2])
+        draft = HANDOFF_SEPARATOR.sub('', tail, count=1).strip()
+        if any(ch.isalnum() for ch in draft):
+            return ReportCommand('continue', HandoffDraft(number, draft))
+        return ReportCommand('continue', number)
+    if followup and (match := CONTINUE.fullmatch(text)):
+        index = next((value for value in match.groups() if value is not None), None)
+        return ReportCommand('continue', ordinal(index) if index is not None else '')
     if followup or '汇报' in text:
         if re.fullmatch(
             PREFIX
@@ -133,10 +164,11 @@ def report_command(text, *, followup=False):
         ):
             return ReportCommand('continue' if SOURCE_ACTION.search(text) else 'item_choice')
         if match := CONTEXT_ITEM.match(text):
-            if SOURCE_ACTION.search(text[match.end() :]) or text.startswith(('把', '将')):
-                return ReportCommand('continue')
-            if re.search('第' + INDEX + '项', text[match.end() :]):
+            rest = text[match.end() :]
+            if re.search('第' + INDEX + '项', rest):
                 return ReportCommand('item_choice')
+            if SOURCE_ACTION.search(rest) or text.startswith(('把', '将')):
+                return ReportCommand('continue', ordinal(match[1]))
             return ReportCommand('item', ordinal(match[1]))
     if re.fullmatch(
         PREFIX
@@ -214,10 +246,28 @@ def item_text(item, number):
         f'文件变更成功／失败回执：{evidence["file_change_successes"]}／{evidence["file_change_failures"]}；'
         f'待确认：{evidence["unconfirmed_tool_items"]}。'
     )
+    if item.get('test_processes'):
+        lines.append(test_process_summary(item['test_processes']))
     if not item['evidence_complete']:
         lines.append('执行回执未读取完整。')
     lines.append('回合完成不代表任务已验证，以上原答复尚未独立核验。')
     return '\n'.join(lines)
+
+
+def test_process_summary(tests):
+    return (
+        f'可识别的测试进程：退出码为零{tests["exit_zero"]}次，'
+        f'非零退出{tests["exit_nonzero"]}次，退出结果未确认{tests["unconfirmed"]}次。'
+    )
+
+
+def spoken_evidence(item):
+    evidence = item['evidence']
+    return (
+        f'终端成功{evidence["command_successes"]}条、失败{evidence["command_failures"]}条回执；'
+        f'文件变更成功{evidence["file_change_successes"]}条、失败{evidence["file_change_failures"]}条回执，'
+        f'待确认{evidence["unconfirmed_tool_items"]}条。'
+    )
 
 
 def report_text(report):
@@ -415,6 +465,26 @@ class ReportVoice:
                         or not 0 <= item['evidence'][name] <= 100
                     ):
                         return False
+                if 'test_processes' in item:
+                    counts = item['test_processes']
+                    if (
+                        not isinstance(counts, dict)
+                        or set(counts) != {'exit_zero', 'exit_nonzero', 'unconfirmed'}
+                        or any(type(n) is not int or not 0 <= n <= 100 for n in counts.values())
+                        or not 1 <= sum(counts.values()) <= 100
+                        or counts['exit_zero'] > item['evidence']['command_successes']
+                        or counts['exit_nonzero'] > item['evidence']['command_failures']
+                        or sum(counts.values())
+                        > sum(
+                            item['evidence'][name]
+                            for name in (
+                                'command_successes',
+                                'command_failures',
+                                'unconfirmed_tool_items',
+                            )
+                        )
+                    ):
+                        return False
                 if item['evidence_complete'] and item['evidence']['unconfirmed_tool_items']:
                     return False
             if report['coverage_complete'] and (
@@ -511,15 +581,13 @@ class ReportVoice:
             return self.notice(
                 '请明确说“汇报过去半小时的工作”、“汇报今天的工作”、“汇报今天上午八点到上午十点的工作”或“汇报上次汇报后的工作”。'
             )
-        if command.kind == 'continue':
-            return self.notice(
-                '当前支持只读工作汇报及编号详情，原聊天续办尚未接入；没有向原聊天追加请求，请分开提出查询和后续操作。'
-            )
+        if command.kind == 'continue' and command.value == '':
+            return self.notice('没有向原聊天追加请求。请先指定本次汇报的一个编号，再到桌面继续。')
         if command.kind == 'item_choice':
             return self.notice(
                 '请先指定本次汇报中的一个编号，例如“详细说说第二项”；当前不会推测或合并多个项目执行。'
             )
-        if command.kind == 'item':
+        if command.kind in ('item', 'item_evidence', 'continue'):
             with self.hooks.lock:
                 context = self.hooks.context()
                 if (
@@ -530,20 +598,56 @@ class ReportVoice:
                     self.snapshot = None
                     return self.notice('本次汇报尚未取得或已失效，请重新请求工作汇报。')
                 report = self.snapshot[2]
-                number = command.value
+                draft = command.value if isinstance(command.value, HandoffDraft) else None
+                number = draft.number if draft else command.value
                 if type(number) is not int or not 1 <= number <= len(report['items']):
                     return self.notice('这份汇报没有该编号，请按屏幕上本次汇报的编号查询。')
-                text = item_text(report['items'][number - 1], number)
                 item = report['items'][number - 1]
-                evidence = item['evidence']
+                provenance = report_source(context[0], item['turn_id'], item)
+                if command.kind == 'continue':
+                    source_title = item.get('source_title', report['source_title'])
+                    spoken = (
+                        f'第{number}项来自「{source_title}」。请到桌面打开原聊天继续。'
+                        '没有向原聊天追加请求。'
+                    )
+                    text = (
+                        f'待桌面接续 · 第{number}项\n来源：{source_title}\n'
+                        f'原聊天：{provenance["thread_id"]}；回合：{item["turn_id"]}。\n'
+                        '请在该桌面聊天中提交下一步。没有向原聊天追加请求。'
+                    )
+                    if draft:
+                        text += '\n\n本次识别到的下一步，请核对后复制：\n' + draft.text
+                    return ReportReply(
+                        text, (spoken,), source_title, 'desktop_handoff', provenance=provenance
+                    )
+                if command.kind == 'item_evidence':
+                    lines = [f'第{number}项执行回执。']
+                    if item.get('since_status') == 'cached_unheard':
+                        lines.append('回执来自上次已读快照，本次未重新读取。')
+                    lines.append(spoken_evidence(item))
+                    if not item['evidence_complete']:
+                        lines.append('执行回执未读取完整。')
+                    tests = item.get('test_processes')
+                    if tests:
+                        lines.append(test_process_summary(tests))
+                        lines.append('这些是进程退出回执，无法确认全部测试范围或整项验收。')
+                    else:
+                        lines.append('现有回执不能确定哪些命令是测试，也不能确认测试已通过。')
+                    return ReportReply(
+                        '\n'.join(lines),
+                        tuple(lines),
+                        item.get('source_title', report['source_title']),
+                        'item_evidence',
+                        1,
+                        provenance=provenance,
+                    )
+                text = item_text(item, number)
                 messages = [f'第{number}项原答复摘录。', item['excerpt']]
                 if item.get('since_status') in SINCE_NOTES:
                     messages.insert(1, SINCE_NOTES[item['since_status']])
                 if item['excerpt_truncated']:
                     messages.append('摘录已截短，本次没有读取完整原答复。')
-                messages.append(
-                    f'终端成功{evidence["command_successes"]}条、失败{evidence["command_failures"]}条回执；文件变更成功{evidence["file_change_successes"]}条、失败{evidence["file_change_failures"]}条回执，待确认{evidence["unconfirmed_tool_items"]}条。'
-                )
+                messages.append(spoken_evidence(item))
                 if not item['evidence_complete']:
                     messages.append('执行回执未读取完整。')
                 messages.append('回合完成不代表任务已验证，以上原答复尚未独立核验。')
@@ -555,7 +659,7 @@ class ReportVoice:
                     'item',
                     1,
                     self.delivery(messages, requirements),
-                    report_source(context[0], item['turn_id'], item),
+                    provenance,
                 )
         if command.kind not in ('report', 'custom'):
             raise ValueError('Invalid report command')

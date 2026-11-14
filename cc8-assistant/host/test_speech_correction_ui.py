@@ -90,10 +90,6 @@ class CorrectionDialogTests(unittest.TestCase):
             )
         )
         fixtures = dict(FIXTURES)
-        fixtures['org/json/JSONObject.java'] = fixtures['org/json/JSONObject.java'].replace(
-            'public Object remove(String k)',
-            'public Object opt(String k){return values.get(k);}public Object remove(String k)',
-        )
         fixtures['android/app/AlertDialog.java'] = fixtures['android/app/AlertDialog.java'].replace(
             'public void setOnShowListener',
             'public boolean cancelable=true;public void setCancelable(boolean value){cancelable=value;}public void setOnShowListener',

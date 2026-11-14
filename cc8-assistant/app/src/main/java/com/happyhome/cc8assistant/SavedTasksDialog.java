@@ -127,8 +127,7 @@ final class SavedTasksDialog {
     String[] labels = new String[items.length()];
     for (int i = 0; i < labels.length; i++) {
       JSONObject item = items.optJSONObject(i);
-      labels[i] =
-          item == null ? "保存记录" : label(item.optString("status")) + " · " + item.optString("title");
+      labels[i] = item == null ? "保存记录" : receiptLabel(item) + " · " + item.optString("title");
     }
     new LargeDialogBuilder(activity)
         .setTitle("已保存结果 · Mac 本机")
@@ -149,10 +148,7 @@ final class SavedTasksDialog {
     }
     StringBuilder body =
         new StringBuilder(
-            "历史快照 · 不会自动重跑任务\n保存于："
-                + item.optString("saved_at")
-                + "\n状态："
-                + label(item.optString("status")));
+            "历史快照 · 不会自动重跑任务\n保存于：" + item.optString("saved_at") + "\n状态：" + receiptLabel(item));
     JSONArray steps = item.optJSONArray("steps");
     if (steps != null)
       for (int i = 0; i < steps.length(); i++) {
@@ -205,6 +201,13 @@ final class SavedTasksDialog {
                     .setNegativeButton("取消", null)
                     .show())
         .show();
+  }
+
+  private String receiptLabel(JSONObject item) {
+    String status = item.optString("status");
+    if ("completed".equals(status) && Boolean.TRUE.equals(item.opt("desktop_handoff_pending")))
+      return "待桌面接续";
+    return label(status);
   }
 
   private String label(String status) {

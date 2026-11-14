@@ -349,6 +349,10 @@ class GroupTests(unittest.TestCase):
         reply = voice.answer(ReportCommand('item', 1), lambda: True)
         self.assertEqual(reply.provenance['thread_id'], 'chat-b')
         self.assertIn('chat-b', reply.text)
+        handoff = voice.answer(ReportCommand('continue', 1), lambda: True)
+        self.assertEqual(handoff.provenance['thread_id'], 'chat-b')
+        self.assertEqual(handoff.source_title, '项目 chat-b')
+        self.assertIn('待桌面接续', handoff.text)
         self.assertIsNone(report_source(selected))
 
     def test_unregistered_or_spoofed_card_source_cannot_enter_the_snapshot(self):

@@ -6,7 +6,14 @@ import unittest
 from unittest.mock import patch
 from dot_client import Cancelled, DotError
 from dot_handoff import Handoff
-from report_voice import ReportCommand, ReportVoice, ReportVoiceHooks, ordinal, report_command
+from report_voice import (
+    HandoffDraft,
+    ReportCommand,
+    ReportVoice,
+    ReportVoiceHooks,
+    ordinal,
+    report_command,
+)
 from reply_types import Reply
 from test_work_reports import Fixture, turn, final
 from work_reports import WorkReportReader, ReportWindow
@@ -90,14 +97,38 @@ class VoiceTests(unittest.TestCase):
         ):
             self.assertEqual(report_command(text, followup=True).kind, 'continue')
         self.assertEqual(
-            report_command('第二项是否通过了测试', followup=True), ReportCommand('item', 2)
+            report_command('第二项是否通过了测试', followup=True), ReportCommand('item_evidence', 2)
         )
         self.assertEqual(report_command('第二项和第三项的结果', followup=True).kind, 'item_choice')
+        self.assertEqual(
+            report_command('把第二项和第三项继续做完', followup=True).kind, 'item_choice'
+        )
+        self.assertEqual(report_command('继续第二项', followup=True), ReportCommand('continue', 2))
+        self.assertEqual(
+            report_command('第二项继续推进', followup=True), ReportCommand('continue', 2)
+        )
         self.assertIsNone(report_command('设计一个按第二项编号展开的界面', followup=True))
         self.assertIsNone(report_command('继续讲故事', followup=True))
         self.assertEqual(report_command('刚才那个项目的结果', followup=True).kind, 'item_choice')
         self.assertEqual(
             report_command('把第二项的结果读给我听', followup=True), ReportCommand('item', 2)
+        )
+
+    def test_explicit_handoff_draft_preserves_wording_and_rejects_multiple_targets(self):
+        self.assertEqual(
+            report_command('大黄蜂，继续汇报的第二项，下一步：检查 Android CI 的退出码。'),
+            ReportCommand('continue', HandoffDraft(2, '检查 Android CI 的退出码。')),
+        )
+        self.assertIsNone(report_command('继续第二项，检查 Android CI 的退出码。'))
+        self.assertIsNone(report_command('继续第二项，改一下汇报'))
+        self.assertEqual(report_command('继续汇报的第二项'), ReportCommand('continue', 2))
+        self.assertEqual(
+            report_command('继续第二项检查 Android CI', followup=True),
+            ReportCommand('continue', HandoffDraft(2, '检查 Android CI')),
+        )
+        self.assertEqual(
+            report_command('继续第二项，然后继续第三项。', followup=True),
+            ReportCommand('item_choice'),
         )
 
     def test_report_reads_once_short_speech_full_cards_and_no_verification_claim(self):
@@ -120,6 +151,50 @@ class VoiceTests(unittest.TestCase):
         self.assertIn('第二个真实摘录', reply.text)
         self.assertNotIn('后来插入', reply.text)
         self.assertEqual(self.reads, ['two_hours'])
+
+    def test_evidence_followup_reads_the_frozen_receipt_without_marking_summary_heard(self):
+        data = report('第一项', '原答复说测试通过')
+        data['items'][1]['evidence']['command_successes'] = 2
+        data['items'][1]['evidence_complete'] = False
+        data['coverage_complete'] = False
+        voice = self.session(data)
+        voice.answer(ReportCommand('report', 'today'), lambda: True)
+        data['items'][1]['evidence']['command_successes'] = 9
+        plan = voice.delivery_plan
+        for utterance in ('第二项是否通过了测试', '查看汇报的第2项执行回执'):
+            reply = voice.answer(report_command(utterance, followup=True), lambda: True)
+            self.assertIn('终端成功2条', reply.text)
+            self.assertIn('未读取完整', reply.text)
+            self.assertIn('不能确认测试已通过', reply.text)
+            self.assertNotIn('原答复说测试通过', reply.text)
+            self.assertEqual(reply.provenance['turn_id'], 'turn-1')
+            self.assertEqual(reply.delivery, ())
+            self.assertIs(voice.delivery_plan, plan)
+        self.assertEqual(voice.progress.status()['summary_delivered'], 0)
+        self.assertEqual(self.reads, ['today'])
+        self.assertIsNone(report_command('第二项是否通过了测试'))
+        self.assertEqual(report_command('第二项重新运行测试', followup=True).kind, 'continue')
+        self.now[0] = 600
+        self.assertIn('已失效', voice.answer(ReportCommand('item_evidence', 2), lambda: True).text)
+
+    def test_evidence_followup_reports_process_exit_without_claiming_acceptance(self):
+        data = report('测试已通过')
+        item = data['items'][0]
+        item['evidence'].update(command_successes=1, command_failures=1)
+        item['test_processes'] = dict(exit_zero=1, exit_nonzero=1, unconfirmed=0)
+        voice = self.session(data)
+        overview = voice.answer(ReportCommand('report', 'today'), lambda: True)
+        reply = voice.answer(ReportCommand('item_evidence', 1), lambda: True)
+        for result in (overview, reply):
+            self.assertIn('退出码为零1次，非零退出1次', result.text)
+        self.assertIn('无法确认全部测试范围或整项验收', reply.text)
+        self.assertNotIn('测试已通过', reply.text)
+        for malformed in (
+            dict(exit_zero=True, exit_nonzero=1, unconfirmed=0),
+            dict(exit_zero=2, exit_nonzero=1, unconfirmed=0),
+        ):
+            item['test_processes'] = malformed
+            self.assertFalse(voice.valid_report(SOURCE, data))
 
     def test_range_errors_and_unsupported_continue_never_reexecute_original_work(self):
         voice = self.session()
@@ -251,6 +326,30 @@ class IntegrationTests(unittest.TestCase):
             self.assertFalse(mini.called or dot.called)
         self.assertTrue(any(k == 'dot_result' and '第二份结果' in v['text'] for k, v in events))
 
+    def test_evidence_followup_uses_router_without_model_or_history_read(self):
+        _, bridge = self.session()
+        list(bridge.brain.clauses('汇报今天的工作', []))
+        events = []
+        with (
+            patch.object(bridge.chats.catalog, 'report') as reread,
+            patch.object(bridge.brain.dot, 'clauses') as dot,
+            patch.object(bridge.brain.minimax, 'clauses', create=True) as mini,
+        ):
+            result = ''.join(
+                bridge.brain.clauses(
+                    '第二项是否通过了测试',
+                    [],
+                    on_web=lambda kind, data: events.append((kind, data)),
+                )
+            )
+            self.assertIn('不能确认测试已通过', result)
+            self.assertNotIn('第二份结果', result)
+            self.assertEqual(bridge.brain.last_metrics['operation'], 'item_evidence')
+            self.assertFalse(reread.called or dot.called or mini.called)
+        self.assertTrue(
+            any(k == 'result_provenance' and v['turn_id'] == 'turn-1' for k, v in events)
+        )
+
     def test_response_receipt_precedes_tts_and_report_is_not_future_model_history(self):
         from test_failure_feedback import FailureFeedbackTests
 
@@ -342,7 +441,75 @@ class IntegrationTests(unittest.TestCase):
         ):
             reply = ''.join(bridge.brain.clauses('把第二项继续做完', []))
         self.assertIn('没有向原聊天追加', reply)
+        self.assertIn('所选来源', reply)
+        self.assertEqual(bridge.brain.last_metrics['operation'], 'desktop_handoff')
         self.assertFalse(dot.called or read.called)
+
+    def test_desktop_handoff_receipt_does_not_claim_original_work_completed(self):
+        from test_failure_feedback import FailureFeedbackTests
+
+        _, bridge = self.session()
+        list(bridge.brain.clauses('汇报今天的工作', []))
+
+        def interrupt_spoken_notice(*args):
+            bridge.session.generation += 1
+            return False
+
+        bridge.speak = interrupt_spoken_notice
+        with patch.object(bridge.brain.dot, 'clauses') as dot:
+            FailureFeedbackTests().run_one(bridge.response, Reply(bridge.generation, '继续第二项'))
+        dot.assert_not_called()
+        task = bridge.workspace.snapshot()['tasks'][0]
+        self.assertEqual(task['status'], 'completed')
+        self.assertEqual(task['stage'], '待桌面接续')
+        self.assertEqual(task['provenance']['turn_id'], 'turn-1')
+        self.assertIn('没有向原聊天追加请求', task['result'])
+
+    def test_numbered_desktop_handoff_is_bound_to_the_current_snapshot(self):
+        voice = VoiceTests().session()
+        voice.answer(ReportCommand('report', 'today'), lambda: True)
+        reply = voice.answer(ReportCommand('continue', 2), lambda: True)
+        self.assertIn('待桌面接续', reply.text)
+        self.assertEqual(reply.provenance['thread_id'], SOURCE.source_id)
+        self.assertEqual(reply.provenance['turn_id'], 'turn-1')
+        self.assertEqual(reply.delivery, ())
+        for index in (0, 3):
+            self.assertIsNone(
+                voice.answer(ReportCommand('continue', index), lambda: True).provenance
+            )
+        voice.forget()
+        self.assertIsNone(voice.answer(ReportCommand('continue', 2), lambda: True).provenance)
+
+    def test_handoff_draft_stays_on_screen_and_never_dispatches_or_rereads(self):
+        from test_failure_feedback import FailureFeedbackTests
+
+        _, bridge = self.session()
+        list(bridge.brain.clauses('汇报今天的工作', []))
+        spoken = []
+
+        def speak(text, generation):
+            spoken.append(text)
+            return True
+
+        bridge.speak = speak
+        draft = '检查 Android CI 的退出码。'
+        with (
+            patch.object(bridge.brain.dot, 'clauses') as dot,
+            patch.object(bridge.chats.catalog, 'report') as read,
+        ):
+            FailureFeedbackTests().run_one(
+                bridge.response, Reply(bridge.generation, '继续第二项，下一步：' + draft)
+            )
+        dot.assert_not_called()
+        read.assert_not_called()
+        task = bridge.workspace.snapshot()['tasks'][0]
+        self.assertEqual(task['stage'], '待桌面接续')
+        self.assertEqual(task['provenance']['turn_id'], 'turn-1')
+        self.assertIn(draft, task['result'])
+        self.assertTrue(spoken)
+        self.assertNotIn(draft, ''.join(spoken))
+        self.assertNotIn(draft, str(bridge.response.history))
+        self.assertNotIn(draft, str(bridge.logs))
 
     def test_disconnect_during_real_catalog_dispatch_drops_late_report_and_unlocks(self):
         _, bridge = self.session()
