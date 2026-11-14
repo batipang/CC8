@@ -7,6 +7,8 @@ from unittest.mock import patch
 from dot_handoff import Handoff
 from dot_client import Cancelled, DotError
 from work_reports import ReportWindow, WorkReportReader
+from report_display import text_pages
+from report_voice import report_text
 
 
 def turn(ident='turn-1', *, completed=150, status='completed', started=50):
@@ -289,6 +291,36 @@ class ReportTests(unittest.TestCase):
         self.assertNotIn('test_suite.py', str(item))
         self.assertNotIn('tools/test_all.py', str(item))
         self.assertEqual(item['verification'], 'not_assessed')
+
+    def test_unreadable_final_does_not_erase_other_results_or_select_an_older_answer(self):
+        for invalid in ('\ud800', True, '长' * 64001):
+            with self.subTest(
+                text_type=type(invalid), length=len(invalid) if isinstance(invalid, str) else None
+            ):
+                f = Fixture()
+                f.turn_pages[0]['data'].extend(
+                    [turn('older', completed=149), turn('failed', status='failed')]
+                )
+                f.item_pages['turn-1'][0]['data'] = [
+                    dict(turnId='turn-1', item=final('latest', invalid)),
+                    dict(turnId='turn-1', item=final('previous', '过时答复')),
+                ]
+                f.item_pages['older'] = [
+                    dict(
+                        data=[dict(turnId='older', item=final(text='有效😀答复'))], nextCursor=None
+                    )
+                ]
+                report = self.report(f)
+                self.assertEqual([row['turn_id'] for row in report['items']], ['older'])
+                self.assertEqual(report['items'][0]['excerpt'], '有效😀答复')
+                self.assertEqual(report['failed_turns'], 1)
+                self.assertEqual(report['unconfirmed_final_answer'], 1)
+                self.assertEqual(report['missing_final_answer'], 0)
+                self.assertFalse(report['coverage_complete'])
+                self.assertFalse(report['empty_confirmed'])
+                rendered = ''.join(text_pages(report_text(report)))
+                self.assertIn('有效😀答复', rendered)
+                self.assertNotIn('过时答复', rendered)
 
     def test_no_final_answer_is_missing_evidence_instead_of_empty_success(self):
         f = Fixture()

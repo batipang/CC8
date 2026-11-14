@@ -224,14 +224,16 @@ class WorkReportReader:
             report['unconfirmed_final_answer'] = len(candidates) - len(selected)
             for index, (completed, ident) in enumerate(selected):
                 try:
-                    card, exhausted = self.items(request, source.source_id, ident)
+                    card, absence_confirmed = self.items(request, source.source_id, ident)
                 except DotError as error:
                     if error.kind not in PARTIAL_READ_ERRORS:
                         raise
                     report['unconfirmed_final_answer'] += len(selected) - index
                     break
                 if card is None:
-                    field = 'missing_final_answer' if exhausted else 'unconfirmed_final_answer'
+                    field = (
+                        'missing_final_answer' if absence_confirmed else 'unconfirmed_final_answer'
+                    )
                     report[field] += 1
                 else:
                     card.update(turn_id=ident, completed_at=completed)
@@ -256,6 +258,7 @@ class WorkReportReader:
     @staticmethod
     def items(request, source_id, turn_id):
         last_final, page_cursor, seen_cursors, seen_items = None, None, set(), {}
+        unreadable_final = False
         evidence = dict(
             command_successes=0,
             command_failures=0,
@@ -273,7 +276,9 @@ class WorkReportReader:
             try:
                 page = request('thread/items/list', params)
             except DotError as error:
-                if last_final is None or error.kind not in PARTIAL_READ_ERRORS:
+                if error.kind not in PARTIAL_READ_ERRORS or (
+                    last_final is None and not unreadable_final
+                ):
                     raise
                 break
             rows = page.get('data')
@@ -308,10 +313,18 @@ class WorkReportReader:
                     kind == 'agentMessage'
                     and item.get('phase') == 'final_answer'
                     and last_final is None
+                    and not unreadable_final
                 ):
                     text = item.get('text')
-                    if not isinstance(text, str) or len(text) > 64000:
-                        raise DotError('Invalid work report final answer')
+                    if (
+                        not isinstance(text, str)
+                        or len(text) > 64000
+                        or re.search(r'[\ud800-\udfff]', text)
+                    ):
+                        # The newest candidate is unreadable. Keep the other
+                        # turns, but never substitute an older answer for it.
+                        unreadable_final = True
+                        continue
                     display = ''.join(c for c in text if ord(c) >= 32 or c == '\n')
                     if display.strip():
                         last_final = dict(
@@ -351,7 +364,7 @@ class WorkReportReader:
                 complete = True
                 break
         if last_final is None:
-            return None, complete
+            return None, complete and not unreadable_final
         card = dict(
             **last_final,
             evidence=evidence,
