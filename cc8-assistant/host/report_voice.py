@@ -622,6 +622,11 @@ class ReportVoice:
                 if type(number) is not int or not 1 <= number <= len(report['items']):
                     return self.notice('这份汇报没有该编号，请按屏幕上本次汇报的编号查询。')
                 item = report['items'][number - 1]
+                if command.kind == 'continue' and item.get('since_status') == 'cached_unheard':
+                    return self.notice(
+                        f'第{number}项来自上次已读快照，本次未重新核验。'
+                        '请重新读取原来源，再指定新汇报中的编号继续。'
+                    )
                 provenance = report_source(context[0], item['turn_id'], item)
                 if command.kind == 'continue':
                     source_title = item.get('source_title', report['source_title'])
@@ -631,7 +636,7 @@ class ReportVoice:
                     )
                     text = (
                         f'待桌面接续 · 第{number}项\n来源：{source_title}\n'
-                        f'原聊天：{provenance["thread_id"]}；回合：{item["turn_id"]}。\n'
+                        f'{result_identity(item, provenance["thread_id"])}\n'
                         '请在该桌面聊天中提交下一步。没有向原聊天追加请求。'
                     )
                     if draft:
