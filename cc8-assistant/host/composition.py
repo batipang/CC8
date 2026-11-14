@@ -232,6 +232,9 @@ def build_components(
             save_status=lambda: host.save_status(),
             log=lambda name, **fields: host.log(name, **fields),
             owner_access=lambda: host.owner_access(),
+            speak_guarded=lambda text, generation, check: host.playback.speak(
+                text, generation, before_playback=check
+            ),
         )
     )
     reminders = ReminderScheduler(

@@ -181,7 +181,16 @@ class PlaybackController:
             ) from None
 
     def play_stream(
-        self, chunks, text, generation, role='assistant', timing=None, *, live=None, current=None
+        self,
+        chunks,
+        text,
+        generation,
+        role='assistant',
+        timing=None,
+        *,
+        live=None,
+        current=None,
+        before_playback=None,
     ):
         def valid():
             return self.hooks.valid(generation) and (current is None or current())
@@ -216,8 +225,16 @@ class PlaybackController:
             # Owner cancel takes session guard -> publication -> probe. Render
             # only queries validity (no guard acquisition), so it can still
             # drain while an owner holds the session guard. No wire I/O here.
-            with self.publication_lock:
+            # Check a reminder again after asynchronous synthesis but before
+            # committing this player's ownership. Do not hold the session
+            # lock during TTS, pacing, or acknowledgement waits.
+            with (
+                self.hooks.lock if before_playback is not None else nullcontext(),
+                self.publication_lock,
+            ):
                 if not valid():
+                    return False
+                if before_playback is not None and not before_playback():
                     return False
                 self.live_output = live
                 self.playing = True
@@ -404,7 +421,11 @@ class PlaybackController:
             if timing:
                 timing.publish = None
 
-    def speak(self, text, generation):
+    def speak(self, text, generation, *, before_playback=None):
+        if before_playback is not None:
+            with self.hooks.lock:
+                if not self.hooks.valid(generation) or not before_playback():
+                    return False
         self.hooks.diagnostics().mark(generation, 'tts_start')
         speech = self.hooks.speech()
         timing = CaptionTiming(text) if isinstance(speech, DirectSpeech) else None
@@ -418,4 +439,6 @@ class PlaybackController:
             else:
                 yield speech.synthesize(text)
 
-        return self.play_stream(source(), text, generation, timing=timing)
+        return self.play_stream(
+            source(), text, generation, timing=timing, before_playback=before_playback
+        )

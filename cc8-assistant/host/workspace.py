@@ -838,18 +838,27 @@ class Workspace:
 
     def reminder_claims_current(self, claims: list[ReminderClaim]) -> bool:
         with self.lock:
-            if quiet(self.reminder_policy, self.now()):
+            now = self.now()
+            if quiet(self.reminder_policy, now):
                 return False
-            return bool(claims) and all(
-                any(
-                    r['id'] == c['id']
-                    and r['revision'] == c['revision']
-                    and r['status'] == 'delivering'
-                    and r['delivery_attempt']['id'] == c['attempt_id']
-                    for r in self.reminders
-                )
-                for c in claims
-            )
+            latest = timedelta(minutes=self.reminder_policy['max_late_minutes'])
+            for claim in claims:
+                item = next((r for r in self.reminders if r['id'] == claim['id']), None)
+                if (
+                    item is None
+                    or item['revision'] != claim['revision']
+                    or item['status'] != 'delivering'
+                    or item['delivery_attempt']['id'] != claim['attempt_id']
+                ):
+                    return False
+                age = now - self._date(item['due'])
+                if (
+                    age < timedelta(0)
+                    or self.reminder_policy['late_policy'] == 'skip'
+                    and age > latest
+                ):
+                    return False
+            return bool(claims)
 
     def due(self) -> ReminderRecord | None:
         with self.lock:
