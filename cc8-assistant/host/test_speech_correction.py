@@ -3,10 +3,10 @@
 from copy import deepcopy
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import numpy as np
 
-from reply_types import Reply, CorrectedReply
+from reply_types import Reply, CorrectedReply, LiveReply
 from speech_correction import SpeechCorrection, CorrectionUnavailable, command
 import test_failure_feedback as fixtures
 
@@ -135,6 +135,49 @@ class CorrectionFlowTests(unittest.TestCase):
         self.voice(b, '只读查询沧州今天的天气')
         self.voice(b, '我说的是常州，不是沧州')
         return b.response.corrections.draft
+
+    def test_live_correction_uses_the_local_draft_and_submits_once(self):
+        b = self.session()
+        current, deliver = Mock(return_value=True), Mock()
+
+        def live(text):
+            b.enqueue_response(LiveReply(b.generation, text, current, deliver))
+            self.drain(b)
+
+        live('只读查询沧州今天的天气')
+        task = deepcopy(b.workspace.tasks[-1])
+        deliver.reset_mock()
+        live('我说的是常州，不是沧州')
+        self.assertEqual(b.brain.inputs, ['只读查询沧州今天的天气'])
+        self.assertEqual(b.workspace.tasks, [task])
+        self.assertEqual(b.response.corrections.draft.proposed, '只读查询常州今天的天气')
+        deliver.assert_called_once_with('请查看设备上的更正提示。')
+        self.assertEqual(b.speech_lines, [])
+        live('确认更正')
+        live('确认更正')
+        self.assertEqual(b.brain.inputs, ['只读查询沧州今天的天气', '只读查询常州今天的天气'])
+        self.assertEqual(b.workspace.tasks[0], task)
+        self.assertIsNone(b.response.corrections.draft)
+
+    def test_live_session_expiry_cannot_confirm_a_queued_draft(self):
+        b = self.session()
+        draft = self.draft(b)
+        current, deliver = Mock(return_value=True), Mock()
+        b.enqueue_response(LiveReply(b.generation, '确认更正', current, deliver))
+        current.return_value = False
+        self.drain(b)
+        self.assertIs(b.response.corrections.draft, draft)
+        self.assertEqual(b.brain.calls, 1)
+        deliver.assert_not_called()
+
+    def test_expired_live_job_does_not_replace_the_current_correction_source(self):
+        b = self.session()
+        draft = self.draft(b)
+        source = b.response.corrections.source
+        b.enqueue_response(LiveReply(b.generation, '旧问题', lambda: False, Mock()))
+        self.assertTrue(b.response.queue.empty())
+        self.assertIs(b.response.corrections.draft, draft)
+        self.assertIs(b.response.corrections.source, source)
 
     def test_voice_draft_then_confirmation_creates_one_new_request_and_keeps_receipts(self):
         b = self.session()

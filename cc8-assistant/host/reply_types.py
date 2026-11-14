@@ -32,6 +32,7 @@ class CorrectionReply(Reply):
     action: str
     body: str
     target_id: str | None
+    live: LiveReply | None = field(default=None, kw_only=True, repr=False)
 
 
 @dataclass
