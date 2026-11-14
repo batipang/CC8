@@ -229,14 +229,18 @@ class ControllerTests(unittest.TestCase):
         self.connected = object()
         self.busy = False
         self.events = []
+        self.scope = object()
+        self.now = 0
         self.controller = PreferenceController(
             PreferenceHooks(
                 threading.RLock(),
                 lambda: self.connected,
                 lambda: self.busy,
                 lambda name, **data: self.events.append((name, data)),
+                lambda: self.scope,
             ),
             self.memory,
+            clock=lambda: self.now,
         )
 
     def request(self, action='list', token='a', **fields):
@@ -246,6 +250,56 @@ class ControllerTests(unittest.TestCase):
 
     def voice(self, text):
         return self.controller.voice(text, lambda: self.current)
+
+    def test_voice_clear_requires_current_one_time_confirmation(self):
+        self.voice('记住，颜色是蓝色')
+        before = self.memory.snapshot()
+        self.assertIn('没有可确认', self.voice('确认清空偏好记忆'))
+        self.assertEqual(self.memory.snapshot(), before)
+
+        for invalidate in (
+            lambda: setattr(self, 'now', self.now + 30),
+            lambda: setattr(self, 'scope', object()),
+            lambda: self.voice('讲个故事'),
+            self.controller.cancel_confirmation,
+        ):
+            self.assertIn('30秒', self.voice('清空记忆'))
+            invalidate()
+            self.assertIn('没有可确认', self.voice('确认清空偏好记忆'))
+            self.assertEqual(self.memory.snapshot(), before)
+
+        self.voice('清空记忆')
+        self.memory.apply(dict(action='put', revision=1, key='地点', value='常州'), 'device')
+        changed = self.memory.snapshot()
+        self.assertIn('没有可确认', self.voice('确认清空偏好记忆'))
+        self.assertEqual(self.memory.snapshot(), changed)
+        self.voice('清空记忆')
+        self.assertIn('已清空', self.voice('确认清空偏好记忆'))
+        self.assertIn('没有可确认', self.voice('确认清空偏好记忆'))
+        self.assertEqual(self.memory.snapshot()['items'], [])
+
+    def test_voice_clear_survives_only_expected_voice_turn_transition(self):
+        from bridge import Bridge
+
+        bridge = Bridge(None, None, preference_memory=self.memory)
+        bridge.session.active = True
+        bridge.session.connection = self.connected
+        bridge.session.capture_id = 'fixture-capture'
+        self.voice('记住，颜色是蓝色')
+
+        def say(text):
+            generation = bridge.generation
+            return bridge.preferences.voice(text, lambda: bridge.valid(generation))
+
+        with patch.object(bridge, 'event'):
+            self.assertIn('确认清空', say('清空记忆'))
+            bridge.cancel('button')
+            self.assertIn('没有可确认', say('确认清空偏好记忆'))
+            self.assertEqual(len(self.memory.snapshot()['items']), 1)
+            self.assertIn('确认清空', say('清空记忆'))
+            bridge.cancel('verified_voice')
+            self.assertIn('已清空', say('确认清空偏好记忆'))
+            self.assertEqual(self.memory.snapshot()['items'], [])
 
     def test_device_mutation_and_duplicate_or_busy_requests(self):
         self.request('put', revision=0, key='称呼', value='公开姓名')

@@ -429,6 +429,7 @@ class SessionController:
             self.hooks.cancel_live()
             cleared_correction = False
             if reason not in ('voice', 'verified_voice'):
+                self.hooks.clear_preference_confirmation()
                 # Erase the draft without display callbacks during cleanup.
                 # The fenced cancel packet closes its UI after output stops;
                 # stopping output alone may keep the recent original question.
