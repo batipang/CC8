@@ -1,5 +1,11 @@
 # Changelog
 
+## Backend 0.16.39 / Assistant 0.9.133 — work reports and voice trial candidate
+
+- Offer Beijing calendar ranges for yesterday and last week in the device report menus. The selected-chat menu reads that chat even when registered sources are active.
+- Show original chat, turn and result identifiers and report direct CC8 test-process receipts.
+- Include the optional GPT-Live-1 trial with local wake, Dot delegation, and read-only readiness diagnostics. MiniMax remains the default voice mode.
+
 ## Backend 0.16.38 / Assistant 0.9.131 — paired USB transport candidate
 
 - Use the stored certificate pin and pairing token to authenticate USB before application traffic. Existing paired Wi-Fi can still carry an authenticated session.

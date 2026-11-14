@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "paired-usb-170-20261114.1",
+  "release_id": "cc8-combined-172-20261114.1",
   "backend": {
-    "version": "0.16.38"
+    "version": "0.16.39"
   },
   "assistant": {
-    "version": "0.9.131",
-    "version_code": 170,
+    "version": "0.9.133",
+    "version_code": 172,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {
