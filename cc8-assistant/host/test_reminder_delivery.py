@@ -12,6 +12,8 @@ import sys
 import unittest
 from unittest.mock import patch
 
+import numpy as np
+
 from announce import Announcement
 from bridge import Bridge
 from reminder_policy import defaults, quiet, validate
@@ -446,6 +448,103 @@ os._exit(23)
         self.tick()
         self.assertEqual(self.jobs, [])
         self.assertEqual(self.board.snapshot()['reminders'][0]['status'], 'unconfirmed')
+
+    def test_queued_batch_rechecks_all_occurrences_before_sending_audio(self):
+        from test_speech_correction import CorrectionFlowTests
+
+        for change in ('cancel_second', 'reschedule_second', 'quiet', 'late', 'clock_rollback'):
+            with self.subTest(change=change):
+                self.board = Workspace(now=lambda: self.now)
+                self.now = self.now.replace(hour=21, minute=58, second=0)
+                self.policy(quiet_enabled=True, late_policy='skip', max_late_minutes=1)
+                first, second = self.create(), self.create(title='合并组第二条')
+                b = CorrectionFlowTests().session()
+                b.workspace = self.board
+                self.now += timedelta(minutes=1)
+                b.reminders.tick()
+                job = b.response.queue.get_nowait()
+                self.assertEqual(job.text, '提醒你：1，公开固定提醒；2，合并组第二条')
+                if change == 'cancel_second':
+                    self.board.reminder({'action': 'cancel', 'id': second['id']})
+                elif change == 'reschedule_second':
+                    self.board.reminder(
+                        {
+                            'action': 'update',
+                            'id': second['id'],
+                            'due': (self.now + timedelta(minutes=5)).isoformat(),
+                        }
+                    )
+                elif change == 'quiet':
+                    self.now += timedelta(minutes=1)
+                elif change == 'late':
+                    self.policy(quiet_enabled=False)
+                    self.now += timedelta(minutes=2)
+                else:
+                    self.now -= timedelta(seconds=1)
+                with patch.object(b.playback, 'speak') as speak:
+                    b.respond_job(job)
+                speak.assert_not_called()
+                self.assertTrue(job.done.is_set())
+                self.assertEqual(job.result, 'interrupted')
+                b.reminders.poll = float('inf')
+                b.reminders.tick()
+                records = {row['id']: row for row in self.board.reminders}
+                self.assertEqual(records[first['id']]['status'], 'unconfirmed')
+                self.assertEqual(
+                    records[second['id']]['status'],
+                    {
+                        'cancel_second': 'cancelled',
+                        'reschedule_second': 'pending',
+                    }.get(change, 'unconfirmed'),
+                )
+
+    def test_cancel_while_reminder_synthesis_waits_discards_pcm_before_playback(self):
+        from test_speech_correction import CorrectionFlowTests
+
+        reminder = self.create()
+        b = CorrectionFlowTests().session()
+        b.workspace = self.board
+        self.now += timedelta(minutes=1)
+        b.reminders.tick()
+        job = b.response.queue.get_nowait()
+        synthesis = []
+
+        class Speech:
+            def stream(self, text, current):
+                synthesis.append(text)
+                b.reminder_action({'action': 'cancel', 'id': reminder['id']})
+                yield np.zeros(3200, dtype=np.int16)
+
+        b.speech = Speech()
+        with patch.object(b.playback, 'output_event') as output:
+            b.respond_job(job)
+        self.assertEqual(synthesis, ['提醒你：公开固定提醒'])
+        output.assert_not_called()
+        self.assertFalse(b.playback.playing)
+        self.assertTrue(job.done.is_set())
+        self.assertEqual(job.result, 'interrupted')
+
+    def test_current_reminder_reaches_speaker_and_records_device_completion(self):
+        from test_playback_stream import StreamPlaybackTests
+
+        reminder = self.create()
+        b = StreamPlaybackTests().bridge()
+        b.workspace = self.board
+        self.now += timedelta(minutes=1)
+
+        class Speech:
+            def synthesize(self, text):
+                return np.ones(320, dtype=np.int16)
+
+        b.speech = Speech()
+        b.reminders.tick()
+        job = b.response.queue.get_nowait()
+        b.respond_job(job)
+        self.assertEqual(job.result, 'completed')
+        b.reminders.tick()
+        record = next(row for row in self.board.reminders if row['id'] == reminder['id'])
+        self.assertEqual(record['status'], 'delivered')
+        self.assertEqual(record['delivery_attempt']['result'], 'played')
 
     def test_quiet_cross_midnight_survives_restart_and_releases_at_exact_end(self):
         self.policy(quiet_enabled=True)

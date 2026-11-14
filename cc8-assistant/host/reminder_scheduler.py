@@ -74,7 +74,8 @@ class ReminderScheduler:
             if not self.hooks.can_deliver():
                 return
             owner = self.hooks.delivery_owner()
-            claims = self.hooks.workspace().claim_reminders()
+            workspace = self.hooks.workspace()
+            claims = workspace.claim_reminders()
             if not claims:
                 return
             # From here, a crash or ambiguous send freezes these occurrences.
@@ -82,13 +83,20 @@ class ReminderScheduler:
             # a possibly heard reminder after a lost playback receipt.
             self.channel = claims[0].get('channel', 'cc8')
             self.pending_finish = claims
+
+            def claims_current():
+                return (
+                    self.hooks.owner_access()
+                    and self.hooks.workspace() is workspace
+                    and workspace.reminder_claims_current(claims)
+                )
+
             try:
                 self.hooks.touch()
                 if (
-                    not self.hooks.owner_access()
-                    or not self.hooks.can_deliver()
+                    not self.hooks.can_deliver()
                     or self.hooks.delivery_owner() != owner
-                    or not self.hooks.workspace().reminder_claims_current(claims)
+                    or not claims_current()
                 ):
                     self.hooks.workspace().finish_reminders(claims, False, channel=self.channel)
                     self.pending_finish = None
@@ -106,15 +114,18 @@ class ReminderScheduler:
                     def current():
                         with self.hooks.lock:
                             return (
-                                self.hooks.owner_access()
-                                and self.hooks.can_deliver()
+                                self.hooks.can_deliver()
                                 and self.hooks.delivery_owner() == owner
-                                and self.hooks.workspace().reminder_claims_current(claims)
+                                and claims_current()
                             )
 
                     job = self.hooks.desktop_notify(claims[0]['attempt_id'], text, current)
                 else:
                     job = self.hooks.announce(text)
+                    # The response worker must take this same session lock
+                    # before it can start playing the queued announcement.
+                    if not job.done.is_set():
+                        job.before_playback = claims_current
             except Exception:
                 self.hooks.workspace().finish_reminders(claims, False, channel=self.channel)
                 self.pending_finish = None

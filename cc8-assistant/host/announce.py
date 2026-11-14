@@ -35,12 +35,14 @@ class Announcement:
     result: str = 'interrupted'
     segments: tuple[str, ...] = ()
     on_segment: Callable[[int], None] | None = None
+    before_playback: Callable[[], bool] | None = field(default=None, repr=False)
 
     def discard_segments(self):
         # The response worker can keep its last job while awaiting the next
         # queue item. Do not let a terminal receipt retain result excerpts.
         if self.segments:
             self.text, self.segments, self.on_segment = '', (), None
+        self.before_playback = None
 
 
 def validate_text(text):

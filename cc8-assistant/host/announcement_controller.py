@@ -29,6 +29,7 @@ class AnnouncementHooks:
     save_status: Callable[[], None]
     log: EventSink
     owner_access: Callable[[], bool] = lambda: True
+    speak_guarded: Callable[[str, int, Callable[[], bool]], bool] | None = None
 
 
 class AnnouncementController:
@@ -169,18 +170,29 @@ class AnnouncementController:
             with self.hooks.lock:
                 if not self.hooks.owner_access() or not self.hooks.valid(generation):
                     return
+                check = job.before_playback
+                if check is not None and not check():
+                    return
                 self.hooks.event('announcement_begin', generation=generation)
                 if not self.hooks.valid(generation):
                     return
                 self.hooks.status('thinking', '正在准备播报 · 麦克风状态保持不变')
+                # Publication can synchronously edit the reminder or replace
+                # the route. Recheck before committing the request to TTS.
+                if check is not None and not check():
+                    return
             # Read user-provided text literally, without an LLM rewrite or lookup.
             for index, segment in enumerate(job.segments or (job.text,)):
                 for begin in range(0, len(segment), 120):
-                    if (
-                        not self.hooks.owner_access()
-                        or not self.hooks.valid(generation)
-                        or not self.hooks.speak(segment[begin : begin + 120], generation)
-                    ):
+                    if not self.hooks.owner_access() or not self.hooks.valid(generation):
+                        return
+                    text = segment[begin : begin + 120]
+                    if check is not None:
+                        if self.hooks.speak_guarded is None or not self.hooks.speak_guarded(
+                            text, generation, check
+                        ):
+                            return
+                    elif not self.hooks.speak(text, generation):
                         return
                 if job.on_segment is not None:
                     # Every chunk of this segment was confirmed by the device.
