@@ -93,6 +93,32 @@ class WebEvidenceTests(unittest.TestCase):
         row = self.evidence.sources([dict(title='Final', url=receipt['final_url'])])[0]
         self.assertEqual(row['access_evidence'], 'page_body_received')
 
+    def test_redirect_aliases_share_one_card_and_do_not_consume_another_slot(self):
+        final = 'https://other.example/final'
+        self.evidence.page(dict(self.page(), final_url=final))
+        extra = [
+            dict(title='Other', url=f'https://example.com/unrelated/{index}') for index in range(5)
+        ]
+        for first, second in ((self.url, final), (final, self.url)):
+            rows = self.evidence.sources(
+                [dict(title='First', url=first), dict(title='Alias', url=second), *extra]
+            )
+            self.assertEqual([row['url'] for row in rows], [first, *(r['url'] for r in extra)])
+            self.assertEqual(rows[0]['title'], 'First')
+            self.assertEqual(rows[0]['final_url'], final)
+
+    def test_distinct_latest_receipts_are_visible_even_for_linked_urls(self):
+        final = 'https://other.example/final'
+        self.evidence.page(dict(self.page(), final_url=final))
+        self.evidence.page(dict(ok=False, url=final, error='http_error', http_status=404))
+        rows = self.evidence.sources(
+            [dict(title='Original', url=self.url), dict(title='Final', url=final)]
+        )
+        self.assertEqual(
+            [row['access_evidence'] for row in rows], ['page_body_received', 'page_fetch_failed']
+        )
+        self.assertEqual(rows[1]['page_http_status'], 404)
+
     def test_equivalent_public_links_share_the_same_receipt_without_rewriting_the_link(self):
         raw = 'https://EXAMPLE.com:443#section'
         self.evidence.page(dict(self.page(), url=raw, final_url='https://example.com/'))
@@ -134,9 +160,9 @@ class WebEvidenceTests(unittest.TestCase):
             dict(ok=False, url=self.url, final_url=final, error='http_error', http_status=404)
         )
         links = [{'title': 'Original', 'url': self.url}, {'title': 'Final', 'url': final}]
-        rows = self.evidence.sources(links)
-        self.assertEqual([row['url'] for row in rows], [self.url, final])
-        for row in rows:
+        for order in (links, links[::-1]):
+            (row,) = self.evidence.sources(order)
+            self.assertEqual(row['url'], order[0]['url'])
             self.assertEqual(row['access_evidence'], 'page_fetch_failed')
             self.assertEqual(row['final_url'], final)
             self.assertEqual(row['page_http_status'], 404)
