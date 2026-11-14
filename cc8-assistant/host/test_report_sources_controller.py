@@ -265,8 +265,8 @@ class SourcesControllerTests(unittest.TestCase):
             failure = None
 
             class QueueRpc:
-                def start(self):
-                    pass
+                def start(self, *, timeout):
+                    assert 0 < timeout <= 20
 
                 def request(self, method, params, **kwargs):
                     calls.append((method, params))
