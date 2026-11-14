@@ -182,6 +182,45 @@ class VocabularyCorrectionTests(unittest.TestCase):
     def voice(self, bridge, text):
         correction_fixture.CorrectionFlowTests().voice(bridge, text)
 
+    def test_list_suggests_literal_matches_without_preparing_or_submitting(self):
+        bridge = self.session()
+        store = bridge.vocabulary.store
+        store.apply(request('put', 1, term='五十', aliases=['五']))
+        store.apply(request('put', 2, term='Codex', aliases=['Code']))
+        text = '查询沧州，比较五十与 Codebase'
+        self.voice(bridge, text)
+        bridge.on_event(request())
+        result = bridge.events[-1][1]
+        self.assertEqual(result['suggestions'], [dict(term='常州', alias='沧州')])
+        self.assertNotIn(text, str(result))
+        self.assertIsNone(bridge.response.corrections.draft)
+        self.assertEqual(bridge.brain.inputs, [text])
+        token = result['source_id']
+
+        self.voice(bridge, '对比沧州和沧州')
+        bridge.on_event(request(request_id='b' * 32))
+        self.assertEqual(bridge.events[-1][1]['suggestions'], [])
+        bridge.on_event(request('prepare', 3, term='常州', alias='沧州', source_id=token))
+        self.assertFalse(bridge.events[-1][1]['ok'])
+        self.assertIsNone(bridge.response.corrections.draft)
+
+    def test_suggestions_are_bounded_and_expire_with_the_recognition(self):
+        bridge = self.session()
+        corrections = bridge.response.corrections
+        now = [0]
+        corrections.now = lambda: now[0]
+        for revision, alias in enumerate(('淮北', '江宁', '浦口', '高淳'), 1):
+            bridge.vocabulary.store.apply(
+                request('put', revision, term=alias + '区', aliases=[alias])
+            )
+        self.voice(bridge, '比较沧州、淮北、江宁、浦口、高淳')
+        bridge.on_event(request())
+        self.assertEqual(len(bridge.events[-1][1]['suggestions']), 4)
+        now[0] = 120
+        bridge.on_event(request(request_id='b' * 32))
+        result = bridge.events[-1][1]
+        self.assertEqual((result['suggestions'], result['source_id']), ([], ''))
+
     def test_explicit_word_selection_only_prepares_and_confirmation_submits_once(self):
         bridge = self.session()
         self.voice(bridge, '只读查询沧州今天的天气')

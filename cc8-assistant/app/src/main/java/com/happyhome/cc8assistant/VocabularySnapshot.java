@@ -24,11 +24,23 @@ final class VocabularySnapshot {
   final int revision;
   final String sourceId;
   final List<Entry> items;
+  final List<Match> matches;
 
-  private VocabularySnapshot(int revision, List<Entry> items, String sourceId) {
+  static final class Match {
+    final String term, alias;
+
+    Match(String term, String alias) {
+      this.term = term;
+      this.alias = alias;
+    }
+  }
+
+  private VocabularySnapshot(
+      int revision, List<Entry> items, String sourceId, List<Match> matches) {
     this.revision = revision;
     this.sourceId = sourceId;
     this.items = Collections.unmodifiableList(new ArrayList<>(items));
+    this.matches = Collections.unmodifiableList(new ArrayList<>(matches));
   }
 
   static boolean word(String value) {
@@ -62,10 +74,10 @@ final class VocabularySnapshot {
   }
 
   static VocabularySnapshot parse(JSONObject state) {
-    return parse(state, "");
+    return parse(state, "", null);
   }
 
-  static VocabularySnapshot parse(JSONObject state, String sourceId) {
+  static VocabularySnapshot parse(JSONObject state, String sourceId, JSONArray suggestions) {
     if (sourceId == null || !(sourceId.isEmpty() || sourceId.matches("[a-f0-9]{32}"))) return null;
     if (state == null
         || !Integer.valueOf(1).equals(state.opt("schema"))
@@ -102,6 +114,25 @@ final class VocabularySnapshot {
       }
       entries.add(new Entry(term, aliases, updated));
     }
-    return new VocabularySnapshot(revision, entries, sourceId);
+    ArrayList<Match> matches = new ArrayList<>();
+    if (!sourceId.isEmpty() && suggestions != null && suggestions.length() <= 4) {
+      HashSet<List<String>> seen = new HashSet<>();
+      for (int i = 0; i < suggestions.length(); i++) {
+        JSONObject row = suggestions.optJSONObject(i);
+        if (row == null
+            || !(row.opt("term") instanceof String)
+            || !(row.opt("alias") instanceof String)) continue;
+        String term = row.optString("term"), alias = row.optString("alias");
+        for (Entry entry : entries) {
+          if (entry.term.equals(term)
+              && entry.aliases.contains(alias)
+              && seen.add(java.util.Arrays.asList(term, alias))) {
+            matches.add(new Match(term, alias));
+            break;
+          }
+        }
+      }
+    }
+    return new VocabularySnapshot(revision, entries, sourceId, matches);
   }
 }
