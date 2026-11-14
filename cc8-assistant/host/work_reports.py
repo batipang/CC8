@@ -13,6 +13,7 @@ from report_display_protocol import PERIODS, CALENDAR_PERIODS
 BEIJING = timezone(timedelta(hours=8))
 MAX_TURN_PAGES, MAX_ITEM_PAGES, PAGE_SIZE, MAX_CARDS = 4, 2, 25, 20
 PARTIAL_READ_ERRORS = frozenset(('timeout', 'transport_or_io'))
+TURN_STATUS_COUNTS = ('active_turns_seen', 'failed_turns', 'interrupted_turns')
 
 
 # Accept only direct test runners with simple arguments. Shell composition,

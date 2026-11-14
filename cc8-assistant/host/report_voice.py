@@ -7,7 +7,15 @@ import re
 import time
 from typing import Callable, ContextManager
 from dot_client import Cancelled, DotError
-from work_reports import BEIJING, CALENDAR_PERIODS, MAX_CARDS, ReportWindow
+from work_reports import (
+    BEIJING,
+    CALENDAR_PERIODS,
+    MAX_CARDS,
+    MAX_TURN_PAGES,
+    PAGE_SIZE,
+    TURN_STATUS_COUNTS,
+    ReportWindow,
+)
 from report_time import ReportRange, ReportTimeError, parse_range, range_compound, window_label
 from report_progress import (
     DeliveryPlan,
@@ -86,6 +94,10 @@ ITEM_EVIDENCE = re.compile(
     + INDEX
     + r'项(?:的?(?:执行回执|核验状态|验证情况|测试结果)|(?:是否|有没有)?(?:通过(?:了)?测试|验证(?:了|过)?))'
 )
+ACTIVE_SOURCES = re.compile(
+    PREFIX
+    + r'(?:本次汇报|这次汇报|汇报)(?:里|中)?(?:还有|有)?哪些(?:项目|聊天|来源)(?:还|仍)?在进行中'
+)
 CONTEXT_ITEM = re.compile(
     PREFIX + r'(?:把|将|关于|对于)?(?:本次汇报的|这次汇报的|汇报的)?第' + INDEX + r'项'
 )
@@ -144,6 +156,8 @@ def report_command(text, *, followup=False):
         return ReportCommand('continue')
     if value := parse_range(text):
         return ReportCommand('custom', value)
+    if ACTIVE_SOURCES.fullmatch(text):
+        return ReportCommand('active_sources')
     if (followup or '汇报' in text) and (match := ITEM_EVIDENCE.fullmatch(text)):
         return ReportCommand('item_evidence', ordinal(match[1]))
     if match := DETAIL.fullmatch(text):
@@ -295,6 +309,8 @@ def report_text(report, *, include_identity=False):
                 f'{row["title"]} · {row["project"]}：'
                 + (
                     ('已读取' if row['coverage_complete'] else '已读取（覆盖不完整）')
+                    + f'，读到仍进行中 {row["active_turns_seen"]} 个回合'
+                    + f'，窗口内失败 {row["failed_turns"]} 个、中断 {row["interrupted_turns"]} 个'
                     if row['status'] == 'read'
                     else '未读取（总期限）'
                     if row['status'] == 'not_read_budget'
@@ -404,6 +420,15 @@ class ReportVoice:
                         and type(row.get('coverage_complete')) is not bool
                     ):
                         return False
+                    counts = [row.get(name) for name in TURN_STATUS_COUNTS]
+                    if row['status'] == 'read':
+                        if (
+                            any(type(count) is not int or count < 0 for count in counts)
+                            or sum(counts) > MAX_TURN_PAGES * PAGE_SIZE
+                        ):
+                            return False
+                    elif any(name in row for name in TURN_STATUS_COUNTS):
+                        return False
                 unavailable = sum(r['status'] != 'read' for r in rows)
                 if (
                     type(report.get('unavailable_sources')) is not int
@@ -415,6 +440,11 @@ class ReportVoice:
                         or report['items_truncated']
                         or any(not r['coverage_complete'] for r in rows)
                     )
+                ):
+                    return False
+                if any(
+                    report[name] != sum(row[name] for row in rows if row['status'] == 'read')
+                    for name in TURN_STATUS_COUNTS
                 ):
                     return False
             for name in (
@@ -606,7 +636,7 @@ class ReportVoice:
             return self.notice(
                 '请先指定本次汇报中的一个编号，例如“详细说说第二项”；当前不会推测或合并多个项目执行。'
             )
-        if command.kind in ('item', 'item_evidence', 'continue'):
+        if command.kind in ('item', 'item_evidence', 'continue', 'active_sources'):
             with self.hooks.lock:
                 context = self.hooks.context()
                 if (
@@ -617,6 +647,31 @@ class ReportVoice:
                     self.snapshot = None
                     return self.notice('本次汇报尚未取得或已失效，请重新请求工作汇报。')
                 report = self.snapshot[2]
+                if command.kind == 'active_sources':
+                    rows = report.get('sources') or [
+                        dict(
+                            title=report['source_title'],
+                            status='read',
+                            coverage_complete=report['coverage_complete'],
+                            active_turns_seen=report['active_turns_seen'],
+                        )
+                    ]
+                    messages = [
+                        f'「{row["title"]}」当时读到{row["active_turns_seen"]}个仍进行中的回合。'
+                        for row in rows
+                        if row['status'] == 'read' and row['active_turns_seen'] > 0
+                    ]
+                    if not messages:
+                        messages.append('本次汇报已读取的范围内，没有看到仍进行中的回合。')
+                    if any(row['status'] != 'read' or not row['coverage_complete'] for row in rows):
+                        messages.append('部分来源覆盖不完整，未取得的状态无法确认。')
+                    messages.append('这是本次汇报读取时的状态。')
+                    return ReportReply(
+                        '\n'.join(messages),
+                        tuple(messages),
+                        report['source_title'],
+                        'active_sources',
+                    )
                 draft = command.value if isinstance(command.value, HandoffDraft) else None
                 number = draft.number if draft else command.value
                 if type(number) is not int or not 1 <= number <= len(report['items']):

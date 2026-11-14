@@ -8,12 +8,10 @@ from dot_handoff import Handoff
 from dot_client import Cancelled, DotError
 from report_sources import ReportScope, MAX_SOURCES
 from source_identity import identifier, title
-from work_reports import WorkReportReader, ReportWindow, MAX_CARDS
+from work_reports import WorkReportReader, ReportWindow, MAX_CARDS, TURN_STATUS_COUNTS
 
 COUNTERS = (
-    'failed_turns',
-    'interrupted_turns',
-    'active_turns_seen',
+    *TURN_STATUS_COUNTS,
     'unknown_completion_time',
     'missing_final_answer',
 )
@@ -82,6 +80,7 @@ class GroupWorkReports:
                     raise DotError('Unconfirmed registered-source report')
                 source['status'] = 'read'
                 source['coverage_complete'] = report['coverage_complete']
+                source.update({key: report[key] for key in TURN_STATUS_COUNTS})
                 result['coverage_complete'] &= report['coverage_complete']
                 for key in COUNTERS:
                     result[key] += report[key]
