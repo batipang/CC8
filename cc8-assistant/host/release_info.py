@@ -30,6 +30,7 @@ class Release:
     protocol_version: int
     device_protocol_min: int
     device_protocol_max: int
+    usb_authentication: str | None = None
 
     def compatible(self, device_protocol: object) -> bool:
         return (
@@ -85,6 +86,9 @@ def load_release(root: Path = ROOT) -> Release:
         data: object = json.loads(raw.decode('utf-8'), object_pairs_hook=pairs)
     except (UnicodeError, RecursionError):
         raise ValueError('Invalid release encoding') from None
+    transport = {}
+    if isinstance(data, dict) and 'transport' in data:
+        transport = _object(data.pop('transport'), {'usb_authentication'})
     values = _object(
         data,
         {
@@ -114,6 +118,11 @@ def load_release(root: Path = ROOT) -> Release:
     _version(known['backend_version'])
     _integer(known['assistant_version_code'])
     _integer(known['protocol'], 255)
+    usb = (
+        _text(transport['usb_authentication'], r'legacy_plaintext|paired_tls')
+        if transport
+        else None
+    )
     return Release(
         _text(values['release_id'], r'[a-z][a-z0-9.-]{0,63}'),
         _version(backend['version']),
@@ -122,6 +131,7 @@ def load_release(root: Path = ROOT) -> Release:
         current,
         low,
         high,
+        usb,
     )
 
 

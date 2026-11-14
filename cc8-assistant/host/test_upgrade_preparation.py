@@ -106,6 +106,61 @@ class UpgradeTests(unittest.TestCase):
             self.assertEqual(code, 2)
             self.assertFalse(json.loads(output.read_text())['ready_for_installation'])
 
+    def test_matching_application_protocol_does_not_imply_compatible_usb(self):
+        with tempfile.TemporaryDirectory() as folder:
+            before, after = self.manifests(folder)
+            path = before / 'release.json'
+            data = json.loads(path.read_text())
+            for declared, expected in (
+                (None, 'unverified'),
+                ('legacy_plaintext', 'incompatible'),
+                ('paired_tls', 'compatible'),
+            ):
+                with self.subTest(declared=declared):
+                    if declared is None:
+                        data.pop('transport', None)
+                    else:
+                        data['transport'] = {'usb_authentication': declared}
+                    path.write_text(json.dumps(data))
+                    report = upgrade.plan(before, after)
+                    self.assertTrue(report['declared_protocol_compatible'])
+                    gate = report['transport_compatibility']
+                    self.assertEqual(gate['old_device_new_host_usb'], expected)
+                    self.assertEqual(gate['new_device_old_host_usb'], expected)
+                    self.assertEqual(
+                        gate['coordinated_usb_cutover_required'], expected != 'compatible'
+                    )
+                    self.assertFalse(gate['physical_transport_verified'])
+                    self.assertFalse(report['ready_for_installation'])
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'macOS system Python compatibility')
+    def test_upgrade_plan_runs_with_system_python_and_minimal_path(self):
+        with tempfile.TemporaryDirectory() as folder:
+            before, after = self.manifests(folder)
+            output = Path(folder) / 'plan.json'
+            result = subprocess.run(
+                [
+                    '/usr/bin/python3',
+                    str(ROOT / 'cc8'),
+                    'upgrade',
+                    'plan',
+                    '--from-root',
+                    str(before),
+                    '--to-root',
+                    str(after),
+                    '--output',
+                    str(output),
+                ],
+                env={'PATH': '/usr/bin:/bin'},
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads(output.read_text())
+            self.assertTrue(report['declared_protocol_compatible'])
+            self.assertFalse(report['ready_for_installation'])
+
     def test_explicit_apk_option_reuses_the_original_signature_checker(self):
         with tempfile.TemporaryDirectory() as folder:
             before, after = self.manifests(folder)
@@ -179,6 +234,7 @@ class UpgradeTests(unittest.TestCase):
         git(base, 'init', '-q')
         (base / '.gitignore').write_text('artifacts/\n')
         manifest = json.loads((ROOT / 'release.json').read_bytes())
+        manifest.pop('transport', None)  # Exercise the published pre-TLS baseline.
         initial_code = manifest['assistant']['version_code']
         (base / 'release.json').write_text(json.dumps(manifest))
         git(base, 'add', '.')
@@ -193,6 +249,7 @@ class UpgradeTests(unittest.TestCase):
                 data['release_id'] = f'fixture-{i}'
                 if i == 1:
                     data['backend']['version'] = '9.0.1'
+                    data['transport'] = {'usb_authentication': 'paired_tls'}
                 (root / 'release.json').write_text(json.dumps(data))
                 git(root, 'commit', '-qam', 'fixed build')
             (root / 'artifacts').mkdir()
@@ -258,6 +315,12 @@ class UpgradeTests(unittest.TestCase):
             self.assertFalse(report['installed_signer_checked'])
             self.assertFalse(report['ready_for_installation'])
             self.assertEqual(list(report['stages']), ['baseline', 'candidate', 'recovery'])
+            gates = report['transport_compatibility']
+            self.assertEqual(gates['upgrade']['to_usb_authentication'], 'paired_tls')
+            self.assertEqual(gates['rollback']['from_usb_authentication'], 'paired_tls')
+            for gate in gates.values():
+                self.assertTrue(gate['coordinated_usb_cutover_required'])
+                self.assertFalse(gate['physical_transport_verified'])
             self.assertEqual(report['recovery_source']['candidate_matching_build_support'], [])
             self.assertEqual(output.stat().st_mode & 0o777, 0o600)
 

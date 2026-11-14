@@ -29,6 +29,8 @@ python3 tools/release.py check-apk diagnostics artifacts/cc8-diagnostics-1.0.1.a
 
 check-apk 用 AAPT 比对包名、versionName、versionCode，用官方 apksigner 验证 API 27 签名并核对前后内容哈希。两工程 CI 在 assemble/lint 和真实签名测试后执行同一检查；不访问设备或模型。
 
+升级报告另读可选的 `transport.usb_authentication`。当前配对 TLS 候选声明 `paired_tls`。早期清单无此字段时保留未核实状态，不能从相同协议号推断混合版本 USB 可用。见[升级准备](UPGRADE_PREPARATION.md#usb-认证切换)。
+
 ## 记录与可追溯 tag
 
 源码提交、CI 通过并合入后，从干净的对应提交重建两个 APK。另一个提交构建的同版本包不能直接写新记录：构建回执必须匹配当前提交、manifest 和内容。

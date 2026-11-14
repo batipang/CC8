@@ -173,6 +173,25 @@ def report_watch_storage_gate(before_root, after_root):
     )
 
 
+def transport_gate(before, after):
+    """A compatible application protocol alone cannot establish an interim USB link."""
+    old = before.usb_authentication
+    new = after.usb_authentication
+    if old is None or new is None:
+        mixed = 'unverified'
+    else:
+        mixed = 'compatible' if old == new else 'incompatible'
+    return {
+        'from_usb_authentication': old or 'undeclared',
+        'to_usb_authentication': new or 'undeclared',
+        'old_device_new_host_usb': mixed,
+        'new_device_old_host_usb': mixed,
+        'coordinated_usb_cutover_required': mixed != 'compatible',
+        'paired_wifi_requires_live_verification': True,
+        'physical_transport_verified': False,
+    }
+
+
 def plan(before_root, after_root, assistant_apk=None):
     before, after = load_release(Path(before_root)), load_release(Path(after_root))
     old_device_new_host = after.compatible(before.protocol_version)
@@ -187,6 +206,7 @@ def plan(before_root, after_root, assistant_apk=None):
         'old_device_new_host_protocol': old_device_new_host,
         'new_device_old_host_protocol': new_device_old_host,
         'declared_protocol_compatible': old_device_new_host and new_device_old_host,
+        'transport_compatibility': transport_gate(before, after),
         'assistant_downgrade': after.assistant.version_code < before.assistant.version_code,
         'diagnostics_downgrade': after.diagnostics.version_code < before.diagnostics.version_code,
         'apk_checked': False,
@@ -199,6 +219,7 @@ def plan(before_root, after_root, assistant_apk=None):
             'service_ownership',
             'configuration_backup',
             'physical_handover_validation',
+            'mixed_version_transport_plan',
             'reminder_store_compatibility',
             'report_watch_store_compatibility',
         ],
@@ -333,6 +354,10 @@ def verify_assistant_transition(
         'reminder_storage': reminder_gates,
         'report_watch_storage': watch_gates,
         'recovery_source': recovery_source,
+        'transport_compatibility': {
+            'upgrade': transport_gate(before, candidate),
+            'rollback': transport_gate(candidate, recovery),
+        },
         **observation,
     }
 

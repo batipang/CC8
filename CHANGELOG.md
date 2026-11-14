@@ -1,5 +1,10 @@
 # Changelog
 
+## Backend 0.16.38 / Assistant 0.9.131 — paired USB transport candidate
+
+- Use the stored certificate pin and pairing token to authenticate USB before application traffic. Existing paired Wi-Fi can still carry an authenticated session.
+- Report USB compatibility separately for mixed-version upgrades and rollback, including older manifests without a USB declaration.
+
 ## Backend 0.16.37 / Assistant 0.9.129 / Diagnostics 1.0.7 — review fixes
 
 - Bound LAN authentication, preserve MiniMax bearer authentication and keep diagnostic speech text out of saved status and logs.
