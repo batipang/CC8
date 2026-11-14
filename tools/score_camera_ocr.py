@@ -5,6 +5,7 @@ from html import escape
 import json
 from math import prod
 from pathlib import Path
+import re
 import sys
 import unicodedata
 
@@ -106,12 +107,13 @@ def card_sheet():
 """
 
 
-def template():
+def template(*, use_receipts=False):
+    field = 'request_id' if use_receipts else 'dimensions'
     return {
         'schema': 1,
         'corpus': CORPUS,
         'samples': {
-            ident: {mode: {'status': 'not_run', 'text': '', 'dimensions': None} for mode in MODES}
+            ident: {mode: {'status': 'not_run', 'text': '', field: None} for mode in MODES}
             for ident in cards()
         },
     }
@@ -122,7 +124,54 @@ def normalize(text):
     return ''.join(char for char in unicodedata.normalize('NFC', text) if not char.isspace())
 
 
-def score(data):
+def receipt_index(report):
+    if (
+        not isinstance(report, dict)
+        or report.get('ok') is not True
+        or type(report.get('schema')) is not int
+        or report['schema'] != 1
+        or report.get('contains_content') is not False
+        or not isinstance(report.get('requests'), list)
+        or len(report['requests']) > 128
+    ):
+        raise ValueError('Invalid camera diagnostics report')
+    rows = {}
+    for row in report['requests']:
+        if not isinstance(row, dict):
+            raise ValueError('Invalid diagnostics request')
+        ident = row.get('request_id')
+        if not isinstance(ident, str) or not re.fullmatch('[a-f0-9]{32}', ident) or ident in rows:
+            raise ValueError('Invalid diagnostics request identity')
+        rows[ident] = row
+    return rows
+
+
+def receipt_dimensions(rows, used, ident, status):
+    if status == 'not_run' and ident is None:
+        return None
+    if not isinstance(ident, str) or ident not in rows or ident in used:
+        raise ValueError('Missing or reused OCR request receipt')
+    row = rows[ident]
+    if (
+        row.get('origin') != 'vision'
+        or row.get('camera_ocr') is not True
+        or (status, row.get('outcome')) not in (('recognized', 'completed'), ('failed', 'failed'))
+    ):
+        raise ValueError('OCR request receipt does not match sample status')
+    used.add(ident)
+    if status == 'failed':
+        return None
+    frame = row.get('camera_frame')
+    if (
+        not isinstance(frame, dict)
+        or type(frame.get('bytes')) is not int
+        or not 32 <= frame['bytes'] <= 768 * 1024
+    ):
+        raise ValueError('OCR request has no verified frame')
+    return frame.get('dimensions')
+
+
+def score(data, *, diagnostics=None):
     expected = cards()
     if (
         not isinstance(data, dict)
@@ -135,6 +184,9 @@ def score(data):
     ):
         raise ValueError('Invalid OCR evaluation input')
     samples = []
+    receipts = None if diagnostics is None else receipt_index(diagnostics)
+    used = set()
+    frame_field = 'dimensions' if receipts is None else 'request_id'
     totals = {mode: {'recognized': 0, 'failed': 0, 'not_run': 0} for mode in MODES}
     paired = {mode: {'errors': 0, 'reference_units': 0} for mode in MODES}
     complete_pairs = hd_standard_fallbacks = hd_without_pixel_gain = 0
@@ -145,10 +197,14 @@ def score(data):
         row = {'id': ident}
         for mode in MODES:
             result = entry[mode]
-            if not isinstance(result, dict) or set(result) != {'status', 'text', 'dimensions'}:
+            if not isinstance(result, dict) or set(result) != {'status', 'text', frame_field}:
                 raise ValueError('Invalid OCR sample result')
             status, text = result['status'], result['text']
-            dimensions = result['dimensions']
+            dimensions = (
+                result[frame_field]
+                if receipts is None
+                else receipt_dimensions(receipts, used, result[frame_field], status)
+            )
             if (
                 status not in ('recognized', 'failed', 'not_run')
                 or not isinstance(text, str)
@@ -187,6 +243,7 @@ def score(data):
         'schema': 1,
         'corpus': CORPUS,
         'planned_pairs': len(expected),
+        'dimension_source': 'request_receipt' if receipts is not None else 'manual',
         'recognized_pairs': complete_pairs,
         'hd_standard_fallbacks': hd_standard_fallbacks,
         'hd_without_pixel_gain': hd_without_pixel_gain,
@@ -214,7 +271,15 @@ def main(argv=None):
     mode.add_argument('--template', action='store_true', help='Write a private input template')
     mode.add_argument('--input', type=Path, help='Score one owner-private JSON input')
     parser.add_argument('--output', type=Path, help='New JSON file in an owner-private directory')
+    parser.add_argument(
+        '--receipt-template', action='store_true', help='Use request IDs in the template'
+    )
+    parser.add_argument(
+        '--diagnostics', type=Path, help='Private diagnostics export for a receipt template'
+    )
     args = parser.parse_args(argv)
+    if (args.receipt_template and not args.template) or (args.diagnostics and not args.input):
+        parser.error('Use --receipt-template with --template or --diagnostics with --input')
     if args.cards or args.cards_html:
         if args.output:
             parser.error('Public card exports print to stdout')
@@ -226,7 +291,13 @@ def main(argv=None):
     if args.output is None:
         parser.error('--output is required for templates and scores')
     try:
-        value = template() if args.template else score(read_private_json(args.input, 128 * 1024))
+        if args.template:
+            value = template(use_receipts=args.receipt_template)
+        else:
+            report = read_private_json(args.diagnostics, 1024 * 1024) if args.diagnostics else None
+            if args.diagnostics and report is None:
+                raise ValueError('Invalid camera diagnostics report')
+            value = score(read_private_json(args.input, 128 * 1024), diagnostics=report)
         with PrivateOutput(args.output) as output:
             output.write(value)
     except (OSError, ValueError, RecursionError):

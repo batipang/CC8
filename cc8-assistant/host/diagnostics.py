@@ -121,7 +121,7 @@ class TraceBook:
         self.rows = deque()
         self.generations = {}
 
-    def begin(self, origin, generation=None):
+    def begin(self, origin, generation=None, *, camera_ocr=False):
         if origin not in ORIGINS:
             raise ValueError('Unknown diagnostic origin')
         with self.lock:
@@ -135,6 +135,8 @@ class TraceBook:
                 'outcome': None,
                 'error': None,
             }
+            if origin == 'vision' and camera_ocr is True:
+                row['camera_ocr'] = True
             self.rows.append(row)
             while len(self.rows) > self.limit:
                 old = self.rows.popleft()

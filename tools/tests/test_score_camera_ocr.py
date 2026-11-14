@@ -97,6 +97,47 @@ class CameraOcrTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ocr.score(data)
 
+    def test_receipt_scoring_requires_a_distinct_terminal_camera_ocr_request(self):
+        data = ocr.template(use_receipts=True)
+        standard, hd, failed = '1' * 32, '2' * 32, '3' * 32
+        report = dict(ok=True, schema=1, contains_content=False, requests=[])
+        for ident, dimensions in ((standard, [640, 480]), (hd, [960, 1280])):
+            report['requests'].append(
+                dict(
+                    request_id=ident,
+                    origin='vision',
+                    camera_ocr=True,
+                    outcome='completed',
+                    camera_frame=dict(dimensions=dimensions, bytes=1000),
+                )
+            )
+        report['requests'].append(
+            dict(request_id=failed, origin='vision', camera_ocr=True, outcome='failed')
+        )
+        for mode, ident in zip(ocr.MODES, (standard, hd)):
+            data['samples']['card-01'][mode] = dict(
+                status='recognized', text=ocr.cards()['card-01'], request_id=ident
+            )
+        data['samples']['card-02']['standard'] = dict(status='failed', text='', request_id=failed)
+        scored = ocr.score(data, diagnostics=report)
+        self.assertEqual(scored['recognized_pairs'], 1)
+        self.assertEqual(scored['dimension_source'], 'request_receipt')
+        self.assertEqual(scored['mode_counts']['standard']['failed'], 1)
+        self.assertNotIn(standard, json.dumps(scored))
+        self.assertNotIn(ocr.cards()['card-01'], json.dumps(scored, ensure_ascii=False))
+        with self.assertRaises(ValueError):
+            ocr.score(data)
+        first = report['requests'][0]
+        for key, value in (('camera_ocr', False), ('outcome', 'cancelled'), ('camera_frame', None)):
+            previous = first[key]
+            first[key] = value
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                ocr.score(data, diagnostics=report)
+            first[key] = previous
+        data['samples']['card-01']['hd']['request_id'] = standard
+        with self.assertRaisesRegex(ValueError, 'reused'):
+            ocr.score(data, diagnostics=report)
+
     def test_private_cli_does_not_overwrite_or_expose_transcripts(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -127,3 +168,24 @@ class CameraOcrTests(unittest.TestCase):
             self.assertNotIn(b'PRIVATE SAMPLE', before)
             self.assertEqual(run('--input', input_path, '--output', report).returncode, 2)
             self.assertEqual(report.read_bytes(), before)
+
+            receipt_input, diagnostic, scored = (
+                root / name for name in ('receipts.json', 'diagnostics.json', 'scored.json')
+            )
+            self.assertEqual(
+                run('--template', '--receipt-template', '--output', receipt_input).returncode, 0
+            )
+            self.assertIn(
+                'request_id', json.loads(receipt_input.read_text())['samples']['card-01']['hd']
+            )
+            diagnostic.write_text(
+                json.dumps(dict(ok=True, schema=1, contains_content=False, requests=[]))
+            )
+            diagnostic.chmod(0o600)
+            self.assertEqual(
+                run(
+                    '--input', receipt_input, '--diagnostics', diagnostic, '--output', scored
+                ).returncode,
+                0,
+            )
+            self.assertEqual(json.loads(scored.read_text())['recognized_pairs'], 0)

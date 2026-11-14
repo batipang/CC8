@@ -22,6 +22,8 @@ Android **0.7.0 / versionCode 24**、Mac 后台 **0.10.0** 支持按次看图。
 
 先在权限为 0700 的本机目录，用 `--template --output /absolute/private/input.json` 建输入模板。每种模式的 `status` 可为 `recognized`、`failed` 或 `not_run`。成功取得转录时填写 `text` 和 `[宽, 高]` 的 `dimensions`，失败或未执行保留空文字和 `null` 尺寸。Mac 的 `diagnose.py` 最近请求报告中，`camera_frame.dimensions` 来自通过校验、交给 Dot 的本次 JPEG。用 `--input /absolute/private/input.json --output /absolute/private/score.json` 生成新报告。
 
+也可用 `--template --receipt-template --output /absolute/private/input.json` 生成回执模板。拍摄时将每张卡和设备所选模式记在对应的转录栏，填写 `diagnose.py` 导出的该次 OCR `request_id`，未执行的栏保留 `null`。完成后趁最近 128 次请求仍覆盖本轮测试，导出诊断文件。评分时给 `--input` 增加 `--diagnostics /absolute/private/diagnostics.json`，工具会读取本次 JPEG 尺寸并核对终态。普通看图、取消、重复使用同一请求、缺失回执或成功请求缺有效画面都会拒绝评分。卡片与选定模式的对应关系仍由现场记录；评分结果只保留尺寸和统计，不导出诊断请求编号或转录原文。
+
 报告保留每张卡的替换、遗漏、插入、无法辨认标记和失败数，以及两种模式均取得有效转录时的字符错误率。空白不计，数字、大小写、标点和字符顺序参与评分。`[无法辨认]` 不按字面计入转录，缺字计遗漏。高清若落回标准尺寸，或像素数未超过同卡的标准图，会单独计数并排除出成对对照。报告不写入转录、照片或输入路径。方向、模糊、实际 USB／Wi-Fi 传输和拍后释放继续按镜头验收记录核对。
 
 保留默认「标准、取景 5 秒后直接分析」。设置 → 看图设置可以选择高清，并单独开启「拍后核对，可重拍／裁剪」；长按看一看也可进入。设置仅在本次 Activity 内存中生效，设置本身不打开镜头。返回桌面、换线或全断关闭相关页面与拍摄；重连不拍照。

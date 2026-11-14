@@ -447,7 +447,9 @@ class VisionController:
                 return
             self.generation = generation
             self.nonce = nonce
-            self.hooks.diagnostics().begin('vision', generation)
+            self.hooks.diagnostics().begin(
+                'vision', generation, camera_ocr=origin != 'mac_window' and text == OCR_PROMPT
+            )
             self.hooks.touch()
             self.hooks.event(
                 'vision_begin',
