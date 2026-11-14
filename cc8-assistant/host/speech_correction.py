@@ -9,6 +9,8 @@ from request_text import validate_request_text
 
 LIMIT = 512
 EXPIRES = 120
+EXPLICIT_PAIR = re.compile(r'[，,]\s*(?:而)?不是|而不是')
+FULL_QUESTION = re.compile(r'^完整问题是[，,：:\s]*')
 
 # Keep punctuation used inside amounts, along with Chinese numerals. Unicode
 # decimal digits cover other scripts without normalizing the transcript itself.
@@ -100,7 +102,7 @@ class SpeechCorrection:
             return None
         return self.source_ident
 
-    def prepare(self, body, owner):
+    def prepare(self, body, owner, *, allow_full_question=True):
         # Replacement is literal and must identify exactly one old occurrence.
         # The full original request remains unchanged until explicit submission.
         self.draft = None
@@ -119,39 +121,17 @@ class SpeechCorrection:
             raise CorrectionUnavailable(
                 '请说完整的新问题，或说“我说的是新词，不是旧词”。'
             ) from None
-        explicit_pair = re.search(r'[，,]\s*不是|而不是', body)
-        pair = re.fullmatch(r'(.{1,64}?)(?:[，,]\s*|而)?不是[：: ]*(.{1,64})', body)
-        if pair and (explicit_pair or pair.group(2).strip() in original):
-            new, old = (part.strip() for part in pair.groups())
-            index = original.find(old) if old else -1
-            if not new or index < 0 or original.find(old, index + 1) >= 0:
-                raise CorrectionUnavailable('旧词不能唯一定位，请重说完整的新问题；没有猜测替换。')
-            before = original[index - 1 : index] if index else ''
-            after = original[index + len(old) : index + len(old) + 1]
-            partial_number = (
-                number_character(old[0])
-                and number_character(before)
-                or number_character(old[-1])
-                and number_character(after)
-            )
-            partial_word = (
-                name_character(old[0])
-                and name_character(before)
-                or name_character(old[-1])
-                and name_character(after)
-                or unicodedata.category(old[0]).startswith('M')
-                or bool(after)
-                and unicodedata.category(after).startswith('M')
-            )
-            if partial_number or partial_word:
-                raise CorrectionUnavailable('旧词只匹配到数字或名称的一部分，请重说完整的新问题。')
-            body = original.replace(old, new, 1)
-        elif explicit_pair:
-            raise CorrectionUnavailable('替换关系不明确，请重说完整的新问题；没有猜测替换。')
+        full = FULL_QUESTION.match(body) if allow_full_question else None
+        if full:
+            body = body[full.end() :]
+        else:
+            pair = replacement_pair(body, original)
+            if pair is not None:
+                body = replace_literal(original, *pair)
         try:
             body = validate_request_text(body, LIMIT)
         except ValueError:
-            raise CorrectionUnavailable('更正内容过长，请直接说一个较短的完整新问题。') from None
+            raise CorrectionUnavailable('请重说一条完整的新问题，最多 512 字。') from None
         if body == original:
             raise CorrectionUnavailable('更正内容与原问题相同，没有重复提交。')
         self.draft = Draft(uuid.uuid4().hex, original, body, owner, self.now() + EXPIRES)
@@ -186,3 +166,51 @@ class SpeechCorrection:
             original=draft.original,
             proposed=draft.proposed,
         )
+
+
+def replacement_pair(body, original):
+    explicit = list(EXPLICIT_PAIR.finditer(body))
+    if len(explicit) > 1:
+        raise CorrectionUnavailable('一次只能更正一个词，请重说完整的新问题。')
+    if explicit:
+        boundary = explicit[0]
+        new = body[: boundary.start()].strip()
+        old = body[boundary.end() :].lstrip('：: \t').strip()
+        if not 1 <= len(new) <= 64 or not 1 <= len(old) <= 64:
+            raise CorrectionUnavailable('替换关系不明确，请重说完整的新问题。')
+        return new, old
+    markers = list(re.finditer('不是', body))
+    for marker in markers:
+        new = body[: marker.start()].strip()
+        old = body[marker.end() :].lstrip('：: \t').strip()
+        if 1 <= len(new) <= 64 and 1 <= len(old) <= 64 and old in original:
+            if len(markers) > 1:
+                raise CorrectionUnavailable('听到了多处“不是”，请一次更正一个词，或重说完整问题。')
+            return new, old
+    return None
+
+
+def replace_literal(original, new, old):
+    index = original.find(old) if old else -1
+    if not new or index < 0 or original.find(old, index + 1) >= 0:
+        raise CorrectionUnavailable('旧词不能唯一定位，请重说完整的新问题；没有猜测替换。')
+    before = original[index - 1 : index] if index else ''
+    after = original[index + len(old) : index + len(old) + 1]
+    partial_number = (
+        number_character(old[0])
+        and number_character(before)
+        or number_character(old[-1])
+        and number_character(after)
+    )
+    partial_word = (
+        name_character(old[0])
+        and name_character(before)
+        or name_character(old[-1])
+        and name_character(after)
+        or unicodedata.category(old[0]).startswith('M')
+        or bool(after)
+        and unicodedata.category(after).startswith('M')
+    )
+    if partial_number or partial_word:
+        raise CorrectionUnavailable('旧词只匹配到数字或名称的一部分，请重说完整的新问题。')
+    return original.replace(old, new, 1)
