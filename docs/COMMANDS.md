@@ -51,9 +51,9 @@ setup 可加 `--dry-run` 输出 argv 计划，不创建环境、不下载、不�
 
 后台恢复实机检查：`./cc8 verify-service --runtime-root /absolute/live/workspace` 默认只计划；显式 `--execute --cycles 10` 在严格空闲/身份门控后模拟本项目后台崩溃，观察已有守护恢复，不开麦、不安装服务。详见 [AUTOMATED_SERVICE_CHECKS](AUTOMATED_SERVICE_CHECKS.md)。
 
-英文唤醒组件回归：`./cc8 verify-wake --model-root /absolute/model/workspace` 默认只输出计划；显式 `--execute` 用现有模型环境对固定公开合成正负样本和流边界评测，不开麦、不播放、不联网。结果失败也保存私有报告，详见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)。
+英文唤醒组件回归：`./cc8 verify-wake --model-root /absolute/model/workspace` 默认只输出计划；用 `.toolchains/cc8/voice-venv/bin/python ./cc8 verify-wake --model-root /absolute/model/workspace --execute` 在语音环境中对固定公开合成正负样本和流边界评测，不开麦、不播放、不联网。结果失败也保存私有报告，详见 [AUTOMATED_DEVICE_CHECKS](AUTOMATED_DEVICE_CHECKS.md)。
 
-中文唤醒/停止组件回归：`./cc8 verify-local-speech --model-root /absolute/model/workspace` 默认只计划；隔离模型 Python 加 `--execute` 检查44条公开合成音、六个起始时点及两个独立流，使用当前源码的实际关键词实现；不开麦、不播放、不联网。详见 [自动检查](AUTOMATED_DEVICE_CHECKS.md#中文唤醒与停止指令的数字回归)。
+中文唤醒/停止组件回归：`./cc8 verify-local-speech --model-root /absolute/model/workspace` 默认只计划；用 `.toolchains/cc8/voice-venv/bin/python ./cc8 verify-local-speech --model-root /absolute/model/workspace --execute` 检查44条公开合成音、六个起始时点及两个独立流，使用当前源码的实际关键词实现；不开麦、不播放、不联网。详见 [自动检查](AUTOMATED_DEVICE_CHECKS.md#中文唤醒与停止指令的数字回归)。
 
 原生源码补丁回归：`python tools/native_kws.py` 用已固定的 C++ 片段编译修复前后置信度复现；`--overlay <新目录>` 额外导出两个源码修改和许可。不是已安装原生库的验证或升级，不加载模型或收音，详见 [NATIVE_KWS_REGRESSION](NATIVE_KWS_REGRESSION.md)。
 
