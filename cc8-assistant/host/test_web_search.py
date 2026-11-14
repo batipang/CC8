@@ -155,6 +155,15 @@ class SearchData(unittest.TestCase):
         self.assertIn('官方', spoken)
         self.assertIn('已核实', spoken)
 
+    def test_angle_autolinks_are_removed_across_stream_splits(self):
+        answer = '原文。<https://example.com/a?x=1!y>下一句。'
+        for split in range(len(answer) + 1):
+            with self.subTest(split=split):
+                speech = SpeechClauses()
+                spoken = speech.feed(answer[:split]) + speech.feed(answer[split:], final=True)
+                self.assertEqual(spoken, ['原文。', '下一句。'])
+        self.assertEqual(SpeechClauses.clean('差值 < 5，记号 <>'), '差值 < 5，记号 <>')
+
 
 class WebTurns(unittest.TestCase):
     def test_search_and_answer_share_the_question_date_across_midnight(self):

@@ -56,3 +56,17 @@ Dot 新增 `cc8_read_source` 只读工具，可在当前事实查询中读取实
 来源详情也可显示 [Schema.org `datePublished`](https://schema.org/datePublished) 的原始日期标注。读取器最多检查四段内联 JSON-LD，每段最多 16,384 字符，只考虑声明 Schema.org 上下文的 `Article`、`NewsArticle` 或 `BlogPosting` 对象及顶层 `@graph` 内的文章。跨这些块核对文章的 `mainEntityOfPage`，缺少时用 `url`，优先采用唯一指向本次实际读取最终地址的文章。若整页只识别到一篇且没有这两个字段，仍保留它的日期标注。显式指向其他地址或无法从多篇中确认归属时省略结构化日期。HTML 日期与结构化日期不同时并列显示，`dateModified` 和事件日期各自保留原有语义。重复字段、无效日期和超限段落会被忽略。JSON-LD 只按数据解析，日期以外的内容不加入正文摘录，不请求外部上下文。
 
 部分新闻页用 [Parse.ly `parsely-pub-date`](https://docs.parse.ly/installation-resources/parsely-integration/metadata/metatags/) 标注发布日期。符合 ISO 日期格式的值按原时区显示。`og:updated_time` 和未明确标为发布日期的 `time` 元素不进入发布日期列表。NASA 新闻稿实测读取到 `2026-04-11T02:31:50Z`，页面另标有 5 月 7 日更新时间。[NASA 新闻稿](https://www.nasa.gov/news-release/nasa-welcomes-record-setting-artemis-ii-moonfarers-back-to-earth/)
+
+## 真实 Dot 文字链路复核
+
+2026-11-14 在主分支提交 `18ce3c7` 上，从五个独立临时 Dot 会话发起固定文字问题，用公开页面核对回答，再检查同回合来源事件。五组均取得正确的关键事实和预期回执，查询与来源汇总时间均为北京时间。来源事件覆盖四个成功读取的网页、跳转后的最终网址及两次实际 404；失败页的摘录为空。未启用麦克风、语音合成或 CC8 屏幕。
+
+| 题目 | 核对结果 |
+| --- | --- |
+| NASA 溅落与稿件更新 | 正确区分当地 4 月 10 日 17:07 溅落与 5 月 7 日更新。 [NASA 新闻稿](https://www.nasa.gov/news-release/nasa-welcomes-record-setting-artemis-ii-moonfarers-back-to-earth/) |
+| 同一事件的北京时间 | 正确换算到 4 月 11 日 08:07。 [NASA 新闻稿](https://www.nasa.gov/news-release/nasa-welcomes-record-setting-artemis-ii-moonfarers-back-to-earth/) |
+| 同名 W3C 标准两版 | 分别引用 2023 年 10 月 5 日与 2024 年 12 月 12 日版本。 [2023 版](https://www.w3.org/TR/2023/REC-WCAG22-20231005/) · [2024 版](https://www.w3.org/TR/2024/REC-WCAG22-20241212/) |
+| 不存在的公开链接 | 明确回报 404，失败卡未包含正文。 |
+| 一条可读、一条失效 | 正确陈述示例域名的用途，并为另一个链接保留独立 404 回执。 [IANA 示例域名](https://www.iana.org/help/example-domains) |
+
+本次发现尖括号包裹的链接在朗读分句中留下空括号。播报清理现将链接与外层尖括号一并移除，覆盖所有单点分块位置。来源事件仍从原答复提取链接。完整的时效问题矩阵、互相冲突的来源及设备端听感仍待验收。
