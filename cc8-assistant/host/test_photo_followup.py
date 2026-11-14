@@ -418,6 +418,29 @@ class PhotoControllerTests(unittest.TestCase):
         self.assertEqual(sum(name == 'camera_capture' for name, _ in bridge.events), 1)
         self.assertEqual(bridge.visual.followup._photo.expires, expiry)
 
+    def test_gpt_live_followup_uses_the_existing_photo_without_opening_camera(self):
+        from gpt_live_trial import LiveTrial
+
+        bridge = self.bridge()
+        bridge.session.active = True
+        bridge.session.epoch = 9
+        self.capture(bridge)
+        expiry = bridge.visual.followup._photo.expires
+        owner = SimpleNamespace(stop=threading.Event())
+        trial = bridge.live = LiveTrial(bridge, 'fixture-only', 'marin')
+        trial.session = owner
+        trial.near_at = time.monotonic()
+        with patch.object(trial, 'eligible', return_value=True):
+            trial.scope = bridge.session.capture_owner(), bridge.generation
+            self.assertTrue(trial.delegate(owner, 'photo', '大黄蜂，追问这张照片，这是什么？'))
+        self.assertTrue(owner.stop.is_set())
+        self.assertIsInstance(bridge.job, PhotoReply)
+        self.assertEqual(bridge.job.origin, 'followup_voice')
+        bridge.answer_visual(bridge.job)
+        self.assertEqual(bridge.received_photos[-1], ('这是什么？', fixtures.jpeg()))
+        self.assertEqual(sum(name == 'camera_capture' for name, _ in bridge.events), 1)
+        self.assertEqual(bridge.visual.followup._photo.expires, expiry)
+
     def test_ordinary_voice_and_stop_drop_photo_before_normal_dispatch(self):
         for text, command in [('查一下天气', False), ('停一下', True)]:
             bridge = self.bridge()
