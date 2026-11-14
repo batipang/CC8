@@ -649,7 +649,9 @@ def main():
         'upgrade',
         help='Offline source checks, explicit settings backup and restore staging; never deploys',
     )
-    commands.add_parser('saved-handoff', help='Read explicitly saved desktop handoffs on the Mac')
+    commands.add_parser(
+        'saved-handoff', help='Read saved handoffs or open their original local Codex chat'
+    )
     commands.add_parser(
         'observe', help='Read-only bounded health/resource curves; never starts capture'
     )

@@ -1,23 +1,54 @@
-"""Read explicitly saved work-report handoffs on the Mac."""
+"""Read saved handoffs or open their original local Codex chat on the Mac."""
 
 import argparse
 import json
 from pathlib import Path
+import subprocess
 import sys
 
 from saved_tasks import HANDOFF_DRAFT_LABEL, SavedTasks, desktop_handoff_pending, ident
+from source_identity import identifier
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def open_chat(thread_id):
+    if sys.platform != 'darwin':
+        print('打开原聊天需要在 Mac 上运行。', file=sys.stderr)
+        return 2
+    # The desktop app reserves this route for creating a new chat.
+    if identifier(thread_id).lower() == 'new':
+        print('该记录没有可打开的原聊天标识。', file=sys.stderr)
+        return 2
+    try:
+        result = subprocess.run(
+            ['/usr/bin/open', '-b', 'com.openai.codex', 'codex://threads/' + thread_id],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        result = None
+    if result is None or result.returncode:
+        print('无法确认 Mac 已接收打开请求，请在桌面查找原聊天。', file=sys.stderr)
+        return 2
+    print('已请求桌面打开原聊天，请在窗口中核对后提交草稿。')
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('list', 'show'))
+    parser.add_argument('action', choices=('list', 'show', 'open'))
     parser.add_argument('id', nargs='?')
     parser.add_argument('--runtime-root', type=Path, default=ROOT)
     args = parser.parse_args(argv)
-    if (args.action == 'show') != (args.id is not None):
-        parser.error('show requires one saved task ID')
+    if args.action == 'list':
+        if args.id is not None:
+            parser.error('list takes no saved task ID')
+    elif args.id is None:
+        parser.error(f'{args.action} requires one saved task ID')
     try:
         selected = ident(args.id) if args.id is not None else None
         store = SavedTasks(
@@ -41,6 +72,8 @@ def main(argv=None):
                 'saved_at': item['saved_at'],
             }
             if selected == item['id']:
+                if args.action == 'open':
+                    return open_chat(source['thread_id'])
                 _, _, draft = item['result'].partition(HANDOFF_DRAFT_LABEL)
                 record.update(
                     thread_id=source['thread_id'],
