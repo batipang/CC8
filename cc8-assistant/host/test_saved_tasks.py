@@ -1,8 +1,11 @@
 """Real private files and concurrent writes; no replay, capture or provider calls."""
 
 import fcntl
+import json
 import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -35,6 +38,68 @@ class Fixture(unittest.TestCase):
 
 
 class StoreTests(Fixture):
+    def test_mac_cli_lists_and_reads_only_selected_saved_handoffs(self):
+        from report_voice import ReportCommand
+        from test_report_voice import VoiceTests
+
+        voice = VoiceTests().session()
+        voice.answer(ReportCommand('report', 'today'), lambda: True)
+        reply = voice.answer(voice.command('继续第二项，下一步：检查失败用例'), lambda: True)
+        store = self.root / 'device-access/private/voice-runtime/saved-task-results.json'
+        store.parent.mkdir(parents=True, mode=0o700)
+        archive = SavedTasks(store)
+        archive.save(task(1))
+        receipt = archive.save(
+            {
+                **task(2),
+                'result': reply.text,
+                'provenance': reply.provenance,
+                'steps': [{'id': 'desktop_handoff', 'title': '待桌面接续', 'status': 'completed'}],
+            }
+        )
+        archive.save({**receipt, 'id': task(3)['id'], 'result': reply.text.split('\n\n')[0]})
+        before = store.read_bytes()
+        entry = Path(__file__).resolve().parents[2] / 'cc8'
+
+        def cli(*args):
+            return subprocess.run(
+                [
+                    sys.executable,
+                    str(entry),
+                    'saved-handoff',
+                    *args,
+                    '--runtime-root',
+                    str(self.root),
+                ],
+                env={'PATH': '/usr/bin:/bin'},
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+
+        rows = cli('list')
+        self.assertEqual(rows.returncode, 0, rows.stderr)
+        self.assertEqual(
+            [item['id'] for item in json.loads(rows.stdout)], [task(3)['id'], receipt['id']]
+        )
+        self.assertNotIn('检查失败用例', rows.stdout)
+        self.assertNotIn(reply.provenance['thread_id'], rows.stdout)
+        selected = cli('show', receipt['id'])
+        self.assertEqual(selected.returncode, 0, selected.stderr)
+        detail = json.loads(selected.stdout)
+        self.assertEqual(detail['next_step'], '检查失败用例')
+        self.assertEqual(
+            (detail['thread_id'], detail['turn_id']),
+            (reply.provenance['thread_id'], reply.provenance['turn_id']),
+        )
+        self.assertIsNone(json.loads(cli('show', task(3)['id']).stdout)['next_step'])
+        self.assertEqual(cli('show', task(1)['id']).returncode, 2)
+        self.assertEqual(store.read_bytes(), before)
+        store.chmod(0o644)
+        refused = cli('show', receipt['id'])
+        self.assertEqual(refused.returncode, 2)
+        self.assertEqual(refused.stdout, '')
+
     def test_save_restart_read_delete_and_no_automatic_creation(self):
         self.assertEqual(self.store.snapshot(), [])
         self.assertFalse(self.path.exists())
