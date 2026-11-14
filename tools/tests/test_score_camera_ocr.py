@@ -1,6 +1,7 @@
 """Paired scoring uses actual image dimensions and private result files."""
 
 import json
+from html.parser import HTMLParser
 from pathlib import Path
 import subprocess
 import sys
@@ -15,6 +16,30 @@ def recognized(text, dimensions):
 
 
 class CameraOcrTests(unittest.TestCase):
+    def test_html_export_preserves_every_scoring_reference_and_order(self):
+        class Sheet(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.current = None
+                self.panels = {}
+
+            def handle_starttag(self, tag, attrs):
+                if tag == 'section':
+                    self.current = dict(attrs)['id']
+                    self.panels[self.current] = ''
+
+            def handle_data(self, value):
+                if self.current is not None:
+                    self.panels[self.current] += value
+
+            def handle_endtag(self, tag):
+                if tag == 'section':
+                    self.current = None
+
+        sheet = Sheet()
+        sheet.feed(ocr.card_sheet())
+        self.assertEqual(list(sheet.panels.items()), list(ocr.cards().items()))
+
     def test_paired_scores_count_missing_characters_and_keep_digits(self):
         data = ocr.template()
         reference = ocr.cards()['card-09']

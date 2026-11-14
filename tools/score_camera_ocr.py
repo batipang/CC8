@@ -1,6 +1,7 @@
 """Score paired CC8 camera OCR results against fixed public test cards."""
 
 import argparse
+from html import escape
 import json
 from math import prod
 from pathlib import Path
@@ -48,6 +49,61 @@ UNREADABLE = '[无法辨认]'
 
 def cards():
     return {f'card-{index:02}': text for index, text in enumerate(CARDS, 1)}
+
+
+def card_sheet():
+    options = []
+    panels = []
+    for ident, text in cards().items():
+        options.append(f'<option value="{ident}">{ident}</option>')
+        panels.append(f'<section id="{ident}" class="card">{escape(text)}</section>')
+    return f"""<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CC8 OCR 测试卡</title>
+<style>
+  :root {{ color-scheme: light; font-family: system-ui, "PingFang SC", sans-serif; }}
+  body {{ margin: 0; background: white; color: black; }}
+  nav {{ display: flex; gap: .75rem; align-items: center; justify-content: center;
+    padding: 1rem; background: #f0f0f0; }}
+  button, select {{ min-height: 2.5rem; font: inherit; }}
+  .card {{ display: grid; place-content: center; box-sizing: border-box;
+    width: 100%; min-height: 68vh; padding: 1rem; text-align: left;
+    white-space: pre-wrap; font-size: clamp(1.25rem, 6vw, 3rem); line-height: 1.5; }}
+  .card[hidden] {{ display: none; }}
+  @page {{ size: A4 landscape; margin: 18mm; }}
+  @media print {{
+    nav {{ display: none; }}
+    .card, .card[hidden] {{ display: grid; min-height: 150mm; font-size: 32pt;
+      break-after: page; }}
+    .card:last-child {{ break-after: auto; }}
+  }}
+</style>
+<nav aria-label="测试卡导航">
+  <button type="button" id="previous">上一张</button>
+  <label>测试卡 <select id="card-picker">{''.join(options)}</select></label>
+  <button type="button" id="next">下一张</button>
+</nav>
+<main>{''.join(panels)}</main>
+<script>
+  const picker = document.getElementById('card-picker');
+  const previous = document.getElementById('previous');
+  const next = document.getElementById('next');
+  const cards = document.querySelectorAll('.card');
+  function showCard() {{
+    const index = picker.selectedIndex;
+    cards.forEach((card, position) => {{ card.hidden = position !== index; }});
+    previous.disabled = index === 0;
+    next.disabled = index === cards.length - 1;
+  }}
+  picker.addEventListener('change', showCard);
+  previous.addEventListener('click', () => {{ picker.selectedIndex--; showCard(); }});
+  next.addEventListener('click', () => {{ picker.selectedIndex++; showCard(); }});
+  showCard();
+</script>
+</html>
+"""
 
 
 def template():
@@ -152,14 +208,20 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument('--cards', action='store_true', help='Print public test cards as JSON')
+    mode.add_argument(
+        '--cards-html', action='store_true', help='Print the offline test card sheet as HTML'
+    )
     mode.add_argument('--template', action='store_true', help='Write a private input template')
     mode.add_argument('--input', type=Path, help='Score one owner-private JSON input')
     parser.add_argument('--output', type=Path, help='New JSON file in an owner-private directory')
     args = parser.parse_args(argv)
-    if args.cards:
+    if args.cards or args.cards_html:
         if args.output:
-            parser.error('--cards prints to stdout')
-        print(json.dumps(cards(), ensure_ascii=False, indent=2))
+            parser.error('Public card exports print to stdout')
+        if args.cards_html:
+            sys.stdout.buffer.write(card_sheet().encode('utf-8'))
+        else:
+            print(json.dumps(cards(), ensure_ascii=False, indent=2))
         return 0
     if args.output is None:
         parser.error('--output is required for templates and scores')

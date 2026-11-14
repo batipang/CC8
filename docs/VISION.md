@@ -18,7 +18,7 @@ Android **0.7.0 / versionCode 24**、Mac 后台 **0.10.0** 支持按次看图。
 
 ### 固定样本对照
 
-`python3 tools/score_camera_ocr.py --cards` 显示 20 张公开测试卡的文字，包含物品标签、数字、中英混排和多行内容。用同一张卡、位置和光照分别拍标准与高清两次。记录实际交给 Dot 的 JPEG 尺寸和原样转录，保留 `[无法辨认]` 标记。比较画质时避免裁剪，以便两次取景对应同一张卡。
+`python3 tools/score_camera_ocr.py --cards` 显示 20 张公开测试卡的文字，包含物品标签、数字、中英混排和多行内容。也可运行 `python3 tools/score_camera_ocr.py --cards-html > cc8-ocr-cards.html`，在浏览器离线逐张展示，或关闭打印页眉页脚后按 A4 横向每页一张打印。保持同一种介质、卡片、位置和光照，分别拍标准与高清两次。记录实际交给 Dot 的 JPEG 尺寸和原样转录，保留 `[无法辨认]` 标记。比较画质时避免裁剪，以便两次取景对应同一张卡。
 
 先在权限为 0700 的本机目录，用 `--template --output /absolute/private/input.json` 建输入模板。每种模式的 `status` 可为 `recognized`、`failed` 或 `not_run`。成功取得转录时填写 `text` 和 `[宽, 高]` 的 `dimensions`，失败或未执行保留空文字和 `null` 尺寸。Mac 的 `diagnose.py` 最近请求报告中，`camera_frame.dimensions` 来自通过校验、交给 Dot 的本次 JPEG。用 `--input /absolute/private/input.json --output /absolute/private/score.json` 生成新报告。
 
