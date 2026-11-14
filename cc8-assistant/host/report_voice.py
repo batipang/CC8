@@ -112,6 +112,12 @@ ITEM_QUEUE = re.compile(
 CONTEXT_ITEM = re.compile(
     PREFIX + r'(?:把|将|关于|对于)?(?:本次汇报的|这次汇报的|汇报的)?第' + INDEX + r'项'
 )
+STOP_TARGET = re.compile(
+    PREFIX
+    + r'(?:停止|取消|终止)(本次汇报的?|这次汇报的?|汇报的?)?第'
+    + INDEX
+    + r'(?:个任务|项任务|项)(.*)'
+)
 SOURCE_ACTION = re.compile(
     r'继续|推进|接着做|执行|做完|重做|修改|修复|修一下|删除|取消|发送|发给|追加|提交|运行'
 )
@@ -159,6 +165,7 @@ SNAPSHOT_FOLLOWUPS = frozenset(
         'item_evidence',
         'item_queue',
         'item_choice',
+        'item_stop',
         'continue',
         'active_sources',
         *PROJECT_OPERATIONS,
@@ -214,6 +221,10 @@ def report_command(text, *, followup=False):
         return ReportCommand('item_queue', ordinal(match[1]))
     if (followup or '汇报' in text) and (match := ITEM_EVIDENCE.fullmatch(text)):
         return ReportCommand('item_evidence', ordinal(match[1]))
+    if (match := STOP_TARGET.fullmatch(text)) and (followup or match[1]):
+        if match[3]:
+            return ReportCommand('item_choice')
+        return ReportCommand('item_stop', ordinal(match[2]))
     if match := DETAIL.fullmatch(text):
         if followup or '汇报' in text:
             return ReportCommand('item', ordinal(match[1]))
@@ -461,6 +472,15 @@ class ReportVoice:
     def command(self, text):
         with self.hooks.lock:
             return self.resolve_project(report_command(text, followup=self.followup))
+
+    def has_current_snapshot(self):
+        with self.hooks.lock:
+            snapshot = self.snapshot
+            return (
+                snapshot is not None
+                and self.clock() < snapshot[1]
+                and self.same_context(snapshot[0], self.hooks.context())
+            )
 
     def resolve_project(self, command):
         if command is None or command.kind not in PROJECT_OPERATIONS:
@@ -873,7 +893,7 @@ class ReportVoice:
             )
         if command.kind == 'item_queue':
             return self.item_queue(command.value, is_current, bound=bound)
-        if command.kind in ('item', 'item_evidence', 'continue', 'active_sources'):
+        if command.kind in ('item', 'item_evidence', 'item_stop', 'continue', 'active_sources'):
             with self.hooks.lock:
                 if not is_current():
                     raise Cancelled('Report cancelled')
@@ -926,6 +946,19 @@ class ReportVoice:
                         '请重新读取原来源，再指定新汇报中的编号继续。'
                     )
                 provenance = report_source(context[0], item['turn_id'], item)
+                if command.kind == 'item_stop':
+                    source_title = item.get('source_title', report['source_title'])
+                    message = (
+                        f'第{number}项来自「{source_title}」，这条汇报记录的是已完成答复。'
+                        '未向原聊天发送停止请求。请到桌面核对仍在运行的任务。'
+                    )
+                    return ReportReply(
+                        message + '\n' + result_identity(item, provenance['thread_id']),
+                        (message,),
+                        source_title,
+                        'item_stop',
+                        provenance=provenance,
+                    )
                 if command.kind == 'continue':
                     source_title = item.get('source_title', report['source_title'])
                     spoken = (
