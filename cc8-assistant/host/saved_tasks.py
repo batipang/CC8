@@ -1,6 +1,6 @@
 """Explicit terminal-task snapshots; lazy, bounded owner-private storage."""
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from copy import deepcopy
 from datetime import datetime
 import fcntl
@@ -240,14 +240,7 @@ class SavedTasks:
             raise ValueError('Duplicate saved task ID')
         return items, (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_size)
 
-    def write(self, directory, items, expected):
-        try:
-            current = os.stat(self.path.name, dir_fd=directory, follow_symlinks=False)
-            actual = (current.st_dev, current.st_ino, current.st_mtime_ns, current.st_size)
-        except FileNotFoundError:
-            actual = None
-        if actual != expected:
-            raise OSError('Saved task store changed externally')
+    def write(self, directory, items, expected, *, commit_guard):
         version = 3 if any('window_input' in item for item in items) else 2
         raw = (
             json.dumps(
@@ -267,7 +260,17 @@ class SavedTasks:
                 target.write(raw)
                 target.flush()
                 os.fsync(target.fileno())
-            os.replace(temporary, self.path.name, src_dir_fd=directory, dst_dir_fd=directory)
+            # Routing may change while waiting for the writer or syncing the
+            # temporary file. Authorize only the final commit under its lock.
+            with commit_guard():
+                try:
+                    current = os.stat(self.path.name, dir_fd=directory, follow_symlinks=False)
+                    actual = (current.st_dev, current.st_ino, current.st_mtime_ns, current.st_size)
+                except FileNotFoundError:
+                    actual = None
+                if actual != expected:
+                    raise OSError('Saved task store changed externally')
+                os.replace(temporary, self.path.name, src_dir_fd=directory, dst_dir_fd=directory)
             os.fsync(directory)
         finally:
             try:
@@ -284,7 +287,7 @@ class SavedTasks:
             except FileNotFoundError:
                 return []
 
-    def save(self, task):
+    def save(self, task, *, commit_guard=nullcontext):
         # Only a backend-owned terminal receipt is accepted, never client text.
         if not isinstance(task, dict) or task.get('status') not in TERMINAL:
             raise ValueError('Only ended task receipts can be saved')
@@ -307,10 +310,10 @@ class SavedTasks:
             if len(items) >= LIMIT:
                 raise SavedTaskCapacityError('Saved task capacity reached')
             items.append(item)
-            self.write(directory, items, identity)
+            self.write(directory, items, identity, commit_guard=commit_guard)
             return deepcopy(item)
 
-    def delete(self, task_id):
+    def delete(self, task_id, *, commit_guard=nullcontext):
         ident(task_id)
         with self.lock:
             try:
@@ -319,7 +322,7 @@ class SavedTasks:
                     kept = [item for item in items if item['id'] != task_id]
                     if len(kept) == len(items):
                         return False
-                    self.write(directory, kept, identity)
+                    self.write(directory, kept, identity, commit_guard=commit_guard)
                     return True
             except FileNotFoundError:
                 return False

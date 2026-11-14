@@ -118,13 +118,16 @@ class SavedTaskController:
             return connection is self.hooks.connection() and owner == self.hooks.owner_scope()
 
         @contextmanager
-        def reveal_guard():
+        def owner_guard():
             with self.hooks.lock:
                 if not current():
-                    raise ValueError('File location owner changed before launch')
+                    raise ValueError('Saved result request owner changed')
                 yield
 
         try:
+            with self.hooks.lock:
+                if not current():
+                    return
             fields = {'ok': True, 'action': action}
             if action in DESKTOP_ACTIONS:
                 if action in ('reveal_saved', OPEN_HANDOFF):
@@ -147,13 +150,13 @@ class SavedTaskController:
                     confirm_open(process)
                     fields['open_requested'] = True
                 else:
-                    self.hooks.reveal(task, file_index, launch_guard=reveal_guard)
+                    self.hooks.reveal(task, file_index, launch_guard=owner_guard)
                     fields['revealed'] = True
             elif action == 'save':
-                item = self.store.save(task)
+                item = self.store.save(task, commit_guard=owner_guard)
                 fields['id'] = item['id']
             elif action == 'delete':
-                fields['deleted'] = self.store.delete(task_id)
+                fields['deleted'] = self.store.delete(task_id, commit_guard=owner_guard)
             elif action == 'list':
                 fields['items'] = [
                     {
