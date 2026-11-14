@@ -105,7 +105,7 @@ class DotTests(unittest.TestCase):
         list(b.clauses('第二句', []))
         self.assertEqual(sum(m == 'thread/start' for m, _ in rpc.calls), 1)
 
-    def test_real_web_search_activity_can_publish_answer_source_links(self):
+    def test_real_web_search_source_links_preserve_the_question_date(self):
         rpc = FakeRpc(text='这是结果。来源：[官方](https://example.com/news)。')
         rpc.before_ack = lambda: rpc.events.put(
             {
@@ -119,8 +119,16 @@ class DotTests(unittest.TestCase):
         )
         events = []
         b = DotBrain(rpc)
-        list(b.clauses('查一下', [], on_web=lambda kind, data: events.append((kind, data))))
+        before = '2026-10-30T23:59:59+08:00'
+        after = '2026-10-31T00:00:03+08:00'
+        with patch('dot_client.now', side_effect=[before, after]):
+            list(b.clauses('查一下今天的新闻', [], on_web=lambda k, v: events.append((k, v))))
+        request = next(params for method, params in rpc.calls if method == 'turn/start')
+        self.assertIn('[提问时北京时间 ' + before + ']', request['input'][-1]['text'])
         sources = next(data for kind, data in events if kind == 'sources')
+        self.assertEqual(sources['requested_at'], before)
+        self.assertEqual(sources['retrieved_at'], after)
+        self.assertEqual(sources['time_basis'], 'answer_completed')
         self.assertEqual(sources['items'][0]['url'], 'https://example.com/news')
         self.assertEqual(b.last_metrics['web_search_calls'], 1)
 

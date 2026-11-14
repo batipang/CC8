@@ -169,6 +169,7 @@ class WebTurns(unittest.TestCase):
         for request in (f.calls[0][1], f.calls[-1][1]):
             self.assertIn(before, request['messages'][0]['content'])
             self.assertNotIn(after, request['messages'][0]['content'])
+        self.assertEqual(updates['sources']['requested_at'], before)
         self.assertEqual(updates['sources']['retrieved_at'], after)
         self.assertEqual(updates['sources']['items'][0]['observed_at'], after)
         self.assertIn(after, f.calls[-1][1]['messages'][-1]['content'])
@@ -181,7 +182,10 @@ class WebTurns(unittest.TestCase):
         with patch('minimax_client.now', side_effect=[before, after, after]):
             b.reply('今天天气怎么样', [])
             f.plan = {'query': '上海 2026-10-30 天气', 'clarification': ''}
-            b.reply('上海', [])
+            updates = {}
+            list(b.clauses('上海', [], on_web=updates.__setitem__))
+        self.assertEqual(updates['sources']['requested_at'], before)
+        self.assertEqual(updates['sources']['retrieved_at'], after)
         for request in (f.calls[1][1], f.calls[-1][1]):
             self.assertIn(after, request['messages'][0]['content'])
             self.assertTrue(

@@ -2464,7 +2464,7 @@ public final class MainActivity extends Activity
                   final AlertDialog detail =
                       new LargeDialogBuilder(this)
                           .setTitle("来源详情 · 请核对")
-                          .setMessage(source.label())
+                          .setMessage(current.details(index))
                           .setNegativeButton("关闭", null)
                           .setPositiveButton(
                               "打开网页",

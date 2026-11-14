@@ -1519,6 +1519,7 @@ final class VoiceSession {
                     j.optJSONArray("items"),
                     j.optString("retrieved_at"),
                     j.optString("time_basis"),
+                    j.opt("requested_at"),
                     route,
                     p.generation);
             listener.sources(sourcesPresentation);
@@ -1534,7 +1535,7 @@ final class VoiceSession {
           if (!revoked.isEmpty() && revoked.equals(pendingVisionNonce)) pendingVisionNonce = "";
           photoFollowup.clear();
           pendingPhotoForgetId = "";
-          sourcesPresentation = new SourcesPresentation(null, "", "", route, p.generation);
+          sourcesPresentation = new SourcesPresentation(null, "", "", null, route, p.generation);
           listener.sources(sourcesPresentation);
           if (Boolean.TRUE.equals(j.opt("speech_correction_cleared"))) clearSpeechCorrection(route);
           if (visual) {

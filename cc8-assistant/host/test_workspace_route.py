@@ -783,11 +783,11 @@ SCENARIOS = r"""
    case "web_sources_dialog":{
     s.recording=true;s.minimumGeneration=7;
     JSONObject row=new JSONObject("title","公开来源","url","https://example.com/article","access_evidence","answer_link_only");
-    Wire.Packet packet=new Wire.Packet(new JSONObject("event","web_sources","items",new JSONArray(row),"retrieved_at","2026-11-09T20:00:00+08:00","time_basis","answer_completed"));
+    Wire.Packet packet=new Wire.Packet(new JSONObject("event","web_sources","items",new JSONArray(row),"requested_at","2026-11-08T23:59:59+08:00","retrieved_at","2026-11-09T00:00:02+08:00","time_basis","answer_completed"));
     s.deliver(packet,old);c.drain();c.showSources();AlertDialog dialog=c.sourcesDialog;AlertDialog.Builder first=AlertDialog.last;
-    yes(first.title.startsWith("回答来源汇总时间")&&first.items[0].contains("读取状态未知"),"real dialog promoted source evidence");
+    yes(first.title.equals("回答来源汇总时间：2026-11-09 00:00:02+08:00")&&first.items[0].contains("读取状态未知"),"real dialog promoted source evidence");
     first.itemClick.click(dialog,0);dialog.dismiss();AlertDialog detail=c.sourcesDialog;AlertDialog.Builder details=AlertDialog.last;
-    yes(c.openedLinks==0&&details.title.equals("来源详情 · 请核对")&&details.message.contains("来源标注日期：未知"),"source details silently opened browser or invented date");
+    yes(c.openedLinks==0&&details.title.equals("来源详情 · 请核对")&&details.message.contains("来源标注日期：未知")&&details.message.startsWith("查询参考的北京时间 2026-11-08 23:59:59"),"source details silently opened browser or invented date");
     details.positive.click(detail,-1);yes(c.openedLinks==1&&c.lastLink.equals("https://example.com/article"),"explicit open lost source URL");
     s.deliver(packet,old);first.itemClick.click(dialog,0);details.positive.click(detail,-1);yes(c.openedLinks==1,"retired queued dialog opened a link");c.drain();yes(detail.dismissed,"new sources kept old detail dialog open");
     c.showSources();c.browserUnavailable=true;AlertDialog.Builder second=AlertDialog.last;second.itemClick.click(c.sourcesDialog,0);
