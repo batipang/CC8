@@ -61,10 +61,12 @@ final class PickerApplication: NSObject, NSApplicationDelegate, NSWindowDelegate
     private let imageView = NSImageView()
     private let questionField = NSTextField()
     private let scope = NSTextField(wrappingLabelWithString: "尚未选择窗口。只发送预览中这一次的画面。")
+    private let choose = NSButton(title: "选择／重新选择窗口", target: nil, action: nil)
     private let send = NSButton(title: "发送这一张给 Dot", target: nil, action: nil)
     private var observer: PickerObserver?
     private var timer: Timer?
     private var previewTicket: Int?
+    private var previewApplication: NSRunningApplication?
     private var terminal = false
 
     init(request: PickerRequest) throws {
@@ -93,7 +95,7 @@ final class PickerApplication: NSObject, NSApplicationDelegate, NSWindowDelegate
         scope.font = .systemFont(ofSize: 14)
         imageView.imageScaling = .scaleProportionallyUpOrDown
         imageView.setContentHuggingPriority(.defaultLow, for: .vertical)
-        let choose = NSButton(title: "选择／重新选择窗口", target: self, action: #selector(chooseWindow))
+        choose.target = self; choose.action = #selector(chooseWindow)
         send.target = self; send.action = #selector(sendPreview); send.isEnabled = false
         let cancel = NSButton(title: "取消", target: self, action: #selector(cancelRequest))
         let buttons = NSStackView(views: [choose, send, cancel])
@@ -119,7 +121,12 @@ final class PickerApplication: NSObject, NSApplicationDelegate, NSWindowDelegate
         timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             self.lease.expire()
-            if self.lease.phase == .expired { self.finish(status: "expired") }
+            if self.lease.phase == .expired {
+                self.finish(status: "expired")
+            } else if let ticket = self.previewTicket, let frame = self.lease.preview,
+                      !self.stillExists(frame.identity, application: self.previewApplication) {
+                self.revokeSelection(ticket)
+            }
         }
         // EOF from the owning parent revokes the preview, even while the system
         // picker is open. A helper can never outlive its initiating connection.
@@ -131,7 +138,8 @@ final class PickerApplication: NSObject, NSApplicationDelegate, NSWindowDelegate
 
     @objc private func chooseWindow() {
         guard !terminal, NSApp.isActive, let ticket = lease.beginSelection() else { return }
-        previewTicket = nil; imageView.image = nil; send.isEnabled = false
+        clearPreview()
+        choose.isEnabled = false
         scope.stringValue = "请在系统面板明确选择一个窗口；最多三次选择，90 秒内完成。"
         let picker = SCContentSharingPicker.shared
         var config = SCContentSharingPickerConfiguration()
@@ -155,16 +163,37 @@ final class PickerApplication: NSObject, NSApplicationDelegate, NSWindowDelegate
         if detach(current) { finish(status: "cancelled") }
     }
 
-    // Query only the selected ID. Never enumerate other window titles and never
-    // substitute a display filter when the chosen window disappears.
-    private func stillExists(_ identity: WindowIdentity) -> Bool {
-        guard let rows = CGWindowListCopyWindowInfo(.optionIncludingWindow, identity.id)
+    private func clearPreview() {
+        previewTicket = nil
+        previewApplication = nil
+        imageView.image = nil
+        send.isEnabled = false
+    }
+
+    private func revokeSelection(_ ticket: Int) {
+        guard lease.revoke(ticket: ticket) else { return }
+        clearPreview()
+        SCContentSharingPicker.shared.isActive = false
+        choose.isEnabled = lease.canSelect
+        scope.stringValue = choose.isEnabled
+            ? "原窗口已关闭或无法核对。请重新选择，或取消。"
+            : "原窗口已关闭或无法核对。已用完三次选择，请关闭后重新发起。"
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    // Query exactly the selected ID and retain the original running application
+    // so a restarted process cannot validate the earlier selection.
+    private func stillExists(_ identity: WindowIdentity, application: NSRunningApplication?) -> Bool {
+        guard let application = application, !application.isTerminated,
+              application.processIdentifier == identity.processID,
+              let rows = CGWindowListCreateDescriptionFromArray([NSNumber(value: identity.id)] as CFArray)
                 as? [[String: Any]], rows.count == 1,
               let row = rows.first,
               (row[kCGWindowNumber as String] as? NSNumber)?.uint32Value == identity.id,
               (row[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == identity.processID
         else { return false }
-        return true
+        return !application.isTerminated
     }
 
     func selected(_ filter: SCContentFilter, observer current: PickerObserver) {
@@ -175,9 +204,13 @@ final class PickerApplication: NSObject, NSApplicationDelegate, NSWindowDelegate
               let app = chosen.owningApplication else { finish(status: "selection_invalid"); return }
         let identity = WindowIdentity(id: chosen.windowID, processID: app.processID,
                                       application: app.applicationName, title: chosen.title ?? "未命名窗口")
+        let runningApplication = NSRunningApplication(processIdentifier: identity.processID)
         guard identity.processID != ProcessInfo.processInfo.processIdentifier,
-              stillExists(identity),
-              let dimensions = try? WindowImage.size(width: filter.contentRect.width,
+              stillExists(identity, application: runningApplication) else {
+            revokeSelection(current.ticket)
+            return
+        }
+        guard let dimensions = try? WindowImage.size(width: filter.contentRect.width,
                                                      height: filter.contentRect.height) else {
             finish(status: "selection_invalid"); return
         }
@@ -193,18 +226,24 @@ final class PickerApplication: NSObject, NSApplicationDelegate, NSWindowDelegate
                 let encoded = image.flatMap { try? WindowImage.encode($0) }
                 DispatchQueue.main.async {
                     guard let self = self, !self.terminal else { return }
-                    guard let (data, width, height) = encoded, self.stillExists(identity) else {
+                    guard self.stillExists(identity, application: runningApplication) else {
+                        self.revokeSelection(current.ticket)
+                        return
+                    }
+                    guard let (data, width, height) = encoded else {
                         self.finish(status: "capture_failed"); return
                     }
                     let frame = WindowFrame(identity: identity, jpeg: data, width: width, height: height)
                     guard self.lease.accept(frame, ticket: current.ticket, isSingleWindow: true) else { return }
                     self.previewTicket = current.ticket
+                    self.previewApplication = runningApplication
                     SCContentSharingPicker.shared.isActive = false
                     self.imageView.image = NSImage(data: data)
                     self.scope.stringValue = "\(identity.application) · \(identity.title)\n仅此窗口的冻结画面 · \(width) × \(height) · 点击发送才交给 Dot"
                     NSApp.activate(ignoringOtherApps: true)
                     self.window.makeKeyAndOrderFront(nil)
                     self.send.isEnabled = true
+                    self.choose.isEnabled = self.lease.canSelect
                 }
             }
         }
@@ -216,10 +255,12 @@ final class PickerApplication: NSObject, NSApplicationDelegate, NSWindowDelegate
             scope.stringValue = "请填写 1–1000 字的问题，再确认发送当前预览。"
             return
         }
-        guard NSApp.isActive, let ticket = previewTicket, let preview = lease.preview,
-              stillExists(preview.identity), let frame = lease.take(ticket: ticket) else {
-            finish(status: "selection_invalid"); return
+        guard NSApp.isActive, let ticket = previewTicket, let preview = lease.preview else { return }
+        guard stillExists(preview.identity, application: previewApplication) else {
+            revokeSelection(ticket)
+            return
         }
+        guard let frame = lease.take(ticket: ticket) else { return }
         finish(status: "completed", frame: frame, question: question)
     }
 
@@ -234,7 +275,7 @@ final class PickerApplication: NSObject, NSApplicationDelegate, NSWindowDelegate
         lease.cancel(); timer?.invalidate(); timer = nil
         if let current = observer { _ = detach(current) }
         SCContentSharingPicker.shared.isActive = false
-        imageView.image = nil; previewTicket = nil; send.isEnabled = false
+        clearPreview()
         var result: [String: Any] = ["status": status, "request_id": request.request_id]
         if let frame = frame, let question = question {
             result.merge(["source_type": "mac_window", "window_id": frame.identity.id,

@@ -77,6 +77,12 @@ public final class SelectionLease {
         return expiredLocked() ? nil : frame
     }
 
+    public var canSelect: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return !expiredLocked() && selections < 3
+            && (currentPhase == .waiting || currentPhase == .preview)
+    }
+
     public func beginSelection() -> Int? {
         lock.lock(); defer { lock.unlock() }
         guard !expiredLocked(), selections < 3,
@@ -101,6 +107,18 @@ public final class SelectionLease {
         else { return false }
         frame = candidate
         currentPhase = .preview
+        return true
+    }
+
+    /// Retire only the current attempt after its source disappears.
+    @discardableResult
+    public func revoke(ticket: Int) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard !expiredLocked(), ticket == currentTicket,
+              currentPhase == .selecting || currentPhase == .preview else { return false }
+        frame = nil
+        currentTicket += 1
+        currentPhase = .waiting
         return true
     }
 
