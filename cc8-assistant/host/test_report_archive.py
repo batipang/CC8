@@ -10,7 +10,14 @@ import unittest
 import uuid
 from unittest.mock import patch
 
-from report_archive import ReportArchive, record, validate, historical_text, LIMIT
+from report_archive import (
+    ReportArchive,
+    archived_receipts,
+    record,
+    validate,
+    historical_text,
+    LIMIT,
+)
 from reminder_store import ReminderCommitUncertain
 import test_work_reports as reports
 from test_report_sources import scope, GroupFixture
@@ -63,6 +70,29 @@ class ArchiveTests(unittest.TestCase):
         self.assertEqual(
             len({(r['thread_id'], r['turn_id'], r['item_id']) for r in item['index']}), 2
         )
+
+    def test_receipt_appendix_capacity_preserves_summary_and_whole_result_blocks(self):
+        r = {
+            'source_id': 'chat-c',
+            'items': [
+                dict(
+                    turn_id=f'turn-{index}',
+                    item_id=f'answer-{index}',
+                    execution_receipts=[
+                        dict(item_id=f'patch-{index}' + 'x' * 84, outcome='file_change_failures')
+                    ],
+                )
+                for index in (1, 2)
+            ],
+        }
+        prefix = '汉' * 23750
+        text = archived_receipts(prefix, r)
+        self.assertTrue(text.startswith(prefix))
+        self.assertLessEqual(len(text), 24000)
+        self.assertIn('原聊天：chat-c；回合：turn-1；结果：answer-1', text)
+        self.assertIn('文件变更失败 · patch-1' + 'x' * 84, text)
+        self.assertNotIn('patch-2', text)
+        self.assertIn('因快照长度限制未保存', text)
 
     def test_revision_current_duplicate_unknown_and_spoofed_index_preserve_bytes(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -105,11 +105,17 @@ public class ReportSourcesCheck {
     yes(s.requests.size()==count&&!AlertDialog.last.showing,"uncertain mutation retried or kept UI alive");break;
    }
    case "archive_save":{
-    JSONObject data=reportPayload();report(ui,s,data);int count=s.requests.size();AlertDialog.last.click(-1);
-    data.put("archive_revision",9);data.optJSONObject("report").put("snapshot_id","f".repeat(32));
-    yes(s.requests.size()==count,"save did not require confirmation");AlertDialog.last.click(-1);
-    JSONObject sent=s.requests.get(s.requests.size()-1);
-    yes("save_report".equals(sent.optString("action"))&&"c".repeat(32).equals(sent.optString("snapshot_id"))&&sent.optInt("revision")==2&&Boolean.TRUE.equals(sent.opt("confirmed")),"save confirmation retargeted immutable report");break;
+    for(Object supported:new Object[]{true,null,"true"}){
+     JSONObject data=reportPayload().put("archive_receipts_supported",supported);report(ui,s,data);
+     int count=s.requests.size();AlertDialog.last.click(-1);
+     data.put("archive_revision",9);data.optJSONObject("report").put("snapshot_id","f".repeat(32));
+     data.put("archive_receipts_supported",!Boolean.TRUE.equals(supported));
+     yes(s.requests.size()==count,"save did not require confirmation");AlertDialog.last.click(-1);
+     JSONObject sent=s.requests.get(s.requests.size()-1);
+     yes("save_report".equals(sent.optString("action"))&&"c".repeat(32).equals(sent.optString("snapshot_id"))&&sent.optInt("revision")==2&&Boolean.TRUE.equals(sent.opt("confirmed")),"save confirmation retargeted immutable report");
+     yes(Boolean.TRUE.equals(sent.opt("include_receipts"))==Boolean.TRUE.equals(supported),"saved evidence consent was added for an older host or changed during confirmation");
+     ui.close();
+    }break;
    }
    case "archive_stale":{
     report(ui,s,reportPayload());AlertDialog.last.click(-1);AlertDialog confirm=AlertDialog.last;int count=s.requests.size();

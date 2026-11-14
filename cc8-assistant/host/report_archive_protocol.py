@@ -43,5 +43,9 @@ def validate_request(value: object) -> None:
     if action == 'save_report':
         fields.add('snapshot_id')
         token(value.get('snapshot_id'))
+        if 'include_receipts' in value:
+            fields.add('include_receipts')
+            if value['include_receipts'] is not True:
+                raise ValueError('Invalid saved execution receipt consent')
     if set(value) != fields or value.get('event') != 'dot_chat_request':
         raise ValueError('Invalid saved report request fields')

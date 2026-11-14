@@ -13,6 +13,7 @@ from dot_handoff import Handoff
 from report_archive_protocol import token
 
 LIMIT = 16
+TEXT_LIMIT = 24000
 REVISION_LIMIT = 2**31 - 1
 
 
@@ -53,7 +54,7 @@ def validate_record(item):
     if (
         type(item['coverage_complete']) is not bool
         or not isinstance(text, str)
-        or not 0 < len(text) <= 24000
+        or not 0 < len(text) <= TEXT_LIMIT
         or any(ord(c) < 32 and c not in '\n\t' for c in text)
     ):
         raise ValueError('Invalid saved report excerpt')
@@ -117,7 +118,34 @@ def validate(value):
     return value
 
 
-def record(source, report, *, clock=time.time):
+def archived_receipts(text, report):
+    from report_voice import execution_receipt_lines, result_identity
+
+    blocks = []
+    for number, item in enumerate(report['items'], 1):
+        lines = execution_receipt_lines(item)
+        if not lines:
+            continue
+        outline = result_identity(item, item.get('source_thread_id', report['source_id']))
+        blocks.append('\n'.join((f'第{number}项 · {outline}', *lines)))
+    if not blocks:
+        return text
+    heading = '\n\n保存时取得的原回合执行编号（每项最多8条）\n'
+    omitted = '\n部分或全部执行编号因快照长度限制未保存。'
+    # Preserve the report and its coverage warning if the receipt appendix is too large.
+    body = '\n\n'.join(blocks)
+    if len(text) + len(heading) + len(body) <= TEXT_LIMIT:
+        return text + heading + body
+    appendix = ''
+    for block in blocks:
+        candidate = appendix + ('\n\n' if appendix else heading) + block
+        if len(text) + len(candidate) + len(omitted) > TEXT_LIMIT:
+            break
+        appendix = candidate
+    return text + appendix + (omitted if len(text) + len(omitted) <= TEXT_LIMIT else '')
+
+
+def record(source, report, *, include_receipts=False, clock=time.time):
     # Project an actual validated server snapshot, never arbitrary device text.
     # No raw chat, model history, credentials or extra provider fields survive.
     from report_voice import ReportVoice, report_text
@@ -131,6 +159,9 @@ def record(source, report, *, clock=time.time):
         if isinstance(source, ReportScope)
         else [dict(thread_id=source.source_id, title=source.source_title, project='未记录项目')]
     )
+    text = report_text(report)
+    if include_receipts is True:
+        text = archived_receipts(text, report)
     item = dict(
         id=uuid.uuid4().hex,
         provider='codex',
@@ -141,7 +172,7 @@ def record(source, report, *, clock=time.time):
         window_start=report['window_start'],
         window_end=report['window_end'],
         coverage_complete=report['coverage_complete'],
-        text=report_text(report),
+        text=text,
         sources=sources,
         index=[
             dict(

@@ -13,11 +13,11 @@ import test_work_reports as reports
 
 
 class ArchiveControllerTests(unittest.TestCase):
-    def session(self, folder):
+    def session(self, folder, fixture=None):
         b = sessions.ControllerTests().session()
         b.chats.archive = ReportArchive(Path(folder) / 'reports.json')
         b.chats.selection = reports.ReportTests.source
-        r = reports.ReportTests().report(reports.Fixture())
+        r = reports.ReportTests().report(fixture or reports.Fixture())
         with patch.object(b.chats.catalog, 'report', return_value=r):
             self.request(b, 'report', period='today')
         self.assertTrue(b.events[-1][1]['ok'])
@@ -103,6 +103,9 @@ class ArchiveControllerTests(unittest.TestCase):
             dict(snapshot_id='../x'),
             dict(text='PRIVATE'),
             dict(path='/tmp/x'),
+            dict(include_receipts=1),
+            dict(include_receipts=False),
+            dict(include_receipts=True, execution_receipts=['injected']),
         ):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 validate_device_event(dict(data, **changes))
@@ -110,6 +113,38 @@ class ArchiveControllerTests(unittest.TestCase):
             wrong = dict(data, action=action)
             with self.assertRaises(ValueError):
                 validate_device_event(wrong)
+
+    def test_receipts_require_explicit_current_save_and_survive_restart(self):
+        fixture = reports.Fixture()
+        fixture.item_pages['turn-1'][0]['data'].append(
+            dict(
+                turnId='turn-1',
+                item=dict(
+                    id='patch-123', type='fileChange', status='failed', changes=['PRIVATE_DIFF']
+                ),
+            )
+        )
+        for consent in ({}, {'include_receipts': True}):
+            with self.subTest(consent=consent), tempfile.TemporaryDirectory() as folder:
+                b = self.session(folder, fixture)
+                live = b.events[-1][1]
+                self.assertIs(live['archive_receipts_supported'], True)
+                self.assertNotIn('patch-123', str(live))
+                self.save(b, **consent)
+                self.assertTrue(b.events[-1][1]['ok'])
+                archive = ReportArchive(Path(folder) / 'reports.json')
+                state = archive.snapshot()
+                self.assertEqual(state['schema'], 1)
+                ident = state['items'][0]['id']
+                restarted = sessions.ControllerTests().session()
+                restarted.chats.archive = archive
+                with patch.object(restarted.chats.catalog, 'report', side_effect=AssertionError):
+                    self.request(restarted, 'saved_report', saved_id=ident)
+                body = restarted.events[-1][1]['saved_report_text']
+                self.assertEqual('文件变更失败 · patch-123' in body, bool(consent))
+                self.assertNotIn('PRIVATE_DIFF', body)
+                self.assertIn('非实时结果', body)
+                self.assertIsNone(restarted.chats.voice.snapshot)
 
     def test_duplicate_nonce_and_stale_revision_cannot_delete_saved_records(self):
         with tempfile.TemporaryDirectory() as folder:

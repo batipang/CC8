@@ -2,12 +2,12 @@ package com.happyhome.cc8assistant;
 
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.os.Handler;
-import android.os.Looper;
-import android.widget.Toast;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.os.Handler;
+import android.os.Looper;
+import android.widget.Toast;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -291,7 +291,8 @@ final class ReportSourcesDialog {
             .setNegativeButton("关闭", null);
     if (labels.length == 0)
       builder.setMessage(
-          "仅在明确添加时保存本机 Codex 聊天的名称、项目简称和标识，最多8个，保留至手动删除。原始聊天按需读取，不保存正文，不自动汇报，不向原聊天追加。重启不自动启用登记范围。\n当前汇报范围："
+          "仅在明确添加时保存本机 Codex 聊天的名称、项目简称和标识，最多8个，保留至手动删除。原始聊天按需读取，不保存正文，不自动汇报，不向原聊天追加。重启不自动启用登记范围。\n"
+              + "当前汇报范围："
               + (scope.isEmpty() ? "未选择" : scope));
     else
       builder.setItems(
@@ -530,6 +531,7 @@ final class ReportSourcesDialog {
                 && (Integer) revision >= 0
             ? (Integer) revision
             : -1;
+    final boolean includeReceipts = Boolean.TRUE.equals(data.opt("archive_receipts_supported"));
     final long owner = epoch + 1;
     AlertDialog.Builder builder =
         new LargeDialogBuilder(activity)
@@ -541,7 +543,7 @@ final class ReportSourcesDialog {
         builder.setPositiveButton(
             "保存快照",
             (d, n) -> {
-              if (live(owner, null)) confirmSave(id, saveRevision);
+              if (live(owner, null)) confirmSave(id, saveRevision, includeReceipts);
             });
     } else {
       builder.setTitle("工作汇报 · " + (page.index + 1) + "/" + page.count);
@@ -564,7 +566,8 @@ final class ReportSourcesDialog {
                         (w, choice) -> {
                           if (!live(menu, null)) return;
                           if (choice == 0 && page.index > 0) requestReportPage(id, page.index - 1);
-                          else if (choice == 1 && saveRevision >= 0) confirmSave(id, saveRevision);
+                          else if (choice == 1 && saveRevision >= 0)
+                            confirmSave(id, saveRevision, includeReceipts);
                           else toast("当前没有上一页或不可保存，请重新读取后再试");
                         })
                     .setNegativeButton("关闭", null)
@@ -574,13 +577,15 @@ final class ReportSourcesDialog {
     show(builder.create());
   }
 
-  private void confirmSave(String id, int revision) {
+  private void confirmSave(String id, int revision, boolean includeReceipts) {
     final long owner = epoch + 1;
     show(
         new LargeDialogBuilder(activity)
             .setTitle("保存本次工作汇报？")
             .setMessage(
-                "只保存本次汇报的摘录、来源标识、完成时间和覆盖提示，不保存完整聊天或录音。最多16份、总计256KiB，保留至手动删除，不自动淘汰。重启只供查看，不恢复语音编号、已播账本、自动播报或原任务。请先暂停语音。")
+                "保存本次汇报的摘录、来源标识、完成时间和覆盖提示。"
+                    + (includeReceipts ? "同时保存已读的终端与文件变更回执编号，每项最多8条。" : "")
+                    + "不保存完整聊天、终端输出或录音。最多16份、总计256KiB，保留至手动删除，不自动淘汰。重启只供查看。请先暂停语音。")
             .setPositiveButton(
                 "确认保存",
                 (d, n) -> {
@@ -589,6 +594,7 @@ final class ReportSourcesDialog {
                   Wire.put(value, "snapshot_id", id);
                   Wire.put(value, "revision", revision);
                   Wire.put(value, "confirmed", true);
+                  if (includeReceipts) Wire.put(value, "include_receipts", true);
                   request(value);
                 })
             .setNegativeButton("取消", null)
