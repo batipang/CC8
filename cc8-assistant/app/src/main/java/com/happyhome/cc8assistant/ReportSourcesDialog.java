@@ -32,13 +32,15 @@ final class ReportSourcesDialog {
   private static final class Snapshot {
     final int revision;
     final List<Source> sources;
+    final boolean calendar;
 
-    Snapshot(int revision, List<Source> sources) {
+    Snapshot(int revision, List<Source> sources, boolean calendar) {
       this.revision = revision;
       this.sources = Collections.unmodifiableList(new ArrayList<>(sources));
+      this.calendar = calendar;
     }
 
-    static Snapshot parse(JSONObject value) {
+    static Snapshot parse(JSONObject value, boolean calendar) {
       if (value == null || !Integer.valueOf(1).equals(value.opt("schema"))) return null;
       Object revision = value.opt("revision");
       if (!(revision instanceof Integer) || (Integer) revision < 0) return null;
@@ -64,7 +66,7 @@ final class ReportSourcesDialog {
             || !threads.add(thread)) return null;
         result.add(new Source(id, thread, title, project));
       }
-      return new Snapshot((Integer) revision, result);
+      return new Snapshot((Integer) revision, result, calendar);
     }
   }
 
@@ -251,7 +253,10 @@ final class ReportSourcesDialog {
       showArchive(data);
       return;
     }
-    Snapshot value = Snapshot.parse(data.optJSONObject("registry"));
+    Snapshot value =
+        Snapshot.parse(
+            data.optJSONObject("registry"),
+            Boolean.TRUE.equals(data.opt("work_report_calendar_supported")));
     if (value == null) {
       toast("来源格式不兼容，请刷新查看");
       return;
@@ -454,16 +459,15 @@ final class ReportSourcesDialog {
 
   private void periods(Snapshot value) {
     final long owner = epoch + 1;
-    String[] periods = {"half_hour", "two_hours", "today"};
     show(
         new LargeDialogBuilder(activity)
             .setTitle("读取当前汇报范围 · 北京时间")
             .setItems(
-                new String[] {"过去半小时", "过去两小时", "今天"},
+                ReportTextPage.periodLabels(value.calendar),
                 (d, n) -> {
                   if (!live(owner, value)) return;
                   JSONObject args = args("report");
-                  Wire.put(args, "period", periods[n]);
+                  Wire.put(args, "period", ReportTextPage.PERIODS[n]);
                   request(args);
                 })
             .setNegativeButton("取消", null)

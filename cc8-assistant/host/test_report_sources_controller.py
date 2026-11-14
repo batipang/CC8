@@ -162,6 +162,31 @@ class SourcesControllerTests(unittest.TestCase):
             self.assertIsNone(fresh.chats.report_scope)
             self.assertEqual(len(fresh.chats.sources.snapshot()['items']), 1)
 
+    def test_selected_chat_preview_does_not_read_registered_scope_or_replace_its_snapshot(self):
+        from test_work_reports import Fixture
+        from work_reports import ReportWindow, WorkReportReader
+
+        with tempfile.TemporaryDirectory() as folder:
+            b = self.session(folder)
+            b.chats.sources.apply('register', 0, entry=entry())
+            selected = Handoff('selected-chat', '所选聊天', (), False)
+            b.chats.selection = selected
+            self.request(b, 'use_sources', revision=1)
+            scope = b.chats.report_scope
+            sentinel = object()
+            b.chats.display_snapshot.value = sentinel
+            report = WorkReportReader(Fixture().factory).read(selected, ReportWindow(100, 200))
+            revision = b.chats.voice.revision
+            with patch.object(b.chats.catalog, 'report', return_value=report) as read:
+                self.request(b, 'report', period='yesterday', report_scope='selected_chat')
+            self.assertIs(read.call_args.args[0], selected)
+            self.assertIs(b.chats.report_scope, scope)
+            self.assertIs(b.chats.display_snapshot.value, sentinel)
+            self.assertEqual(b.chats.voice.revision, revision)
+            self.assertIs(b.events[-1][1]['ok'], True)
+            self.assertIs(b.events[-1][1]['report_snapshot_adopted'], False)
+            self.assertIn('本机 Codex 原聊天：selected-chat', b.events[-1][1]['report_text'])
+
     def test_cancel_before_metadata_commit_discards_the_late_offer(self):
         with tempfile.TemporaryDirectory() as folder:
             b = self.session(folder)

@@ -80,6 +80,19 @@ public class ReportSourcesCheck {
     int count=s.requests.size();ui.accept(new JSONObject("request_id",s.lastId,"ok",true,"report_text","已登记范围：只读结果"));
     yes(s.requests.size()==count&&AlertDialog.last.showing,"report opened a model request");ui.close();yes(!AlertDialog.last.showing,"Home retained report body UI");break;
    }
+   case "calendar_report":{
+    for(Object supported:new Object[]{true,"true"}){
+     ui.open();ui.accept(result(s,state(row())).put("work_report_calendar_supported",supported));
+     AlertDialog.last.click(-3);AlertDialog.last.pick(2);
+     AlertDialog periods=AlertDialog.last;
+     yes(periods.builder.labels.length==(Boolean.TRUE.equals(supported)?5:3),"calendar negotiation ignored");
+     if(Boolean.TRUE.equals(supported)){
+      periods.pick(4);JSONObject sent=s.requests.get(s.requests.size()-1);
+      yes("report".equals(sent.optString("action"))&&"last_week".equals(sent.optString("period")),"last week not submitted");
+     }
+     ui.close();
+    }break;
+   }
    case "invalid":{
     ui.open();ui.accept(result(s,state(row()).put("revision",true)));
     yes(!AlertDialog.last.showing,"Boolean revision opened an actionable list");
@@ -371,6 +384,9 @@ class ReportSourcesUiTests(unittest.TestCase):
 
     def test_explicit_scope_and_range_show_readonly_report_then_close_on_home(self):
         self.scenario('scope_report')
+
+    def test_calendar_periods_are_offered_only_by_a_compatible_host(self):
+        self.scenario('calendar_report')
 
     def test_malformed_registry_and_unsupported_host_fail_closed(self):
         self.scenario('invalid')

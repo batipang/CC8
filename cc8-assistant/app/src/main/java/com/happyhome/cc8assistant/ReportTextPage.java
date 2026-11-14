@@ -4,6 +4,13 @@ import org.json.JSONObject;
 
 /** Immutable wire page and bounded all-or-nothing clipboard assembly. Never owns a route. */
 final class ReportTextPage {
+  static final String[] PERIODS = {"half_hour", "two_hours", "today", "yesterday", "last_week"};
+
+  static String[] periodLabels(boolean calendar) {
+    String[] labels = {"过去半小时", "过去两小时", "今天", "昨天", "上周"};
+    return calendar ? labels : java.util.Arrays.copyOf(labels, 3);
+  }
+
   final String text, marker;
   final int index, count;
 

@@ -1627,13 +1627,20 @@ final class VoiceSession {
   }
 
   boolean dotChatRequest(
-      String requestId, String action, String sourceId, String cursor, String period, long route) {
+      String requestId,
+      String action,
+      String sourceId,
+      String cursor,
+      String period,
+      boolean selectedReport,
+      long route) {
     JSONObject j = Wire.event("dot_chat_request");
     Wire.put(j, "request_id", requestId);
     Wire.put(j, "action", action);
     if (sourceId != null) Wire.put(j, "source_id", sourceId);
     if (cursor != null) Wire.put(j, "cursor", cursor);
     if (period != null) Wire.put(j, "period", period);
+    if (selectedReport) Wire.put(j, "report_scope", "selected_chat");
     return sendWorkspace(j, route);
   }
 

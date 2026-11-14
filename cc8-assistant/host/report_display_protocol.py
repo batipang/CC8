@@ -1,6 +1,15 @@
 """Only bounded page references travel from the device, never report bodies."""
 
 import re
+from collections.abc import Mapping
+
+PERIODS = ('half_hour', 'two_hours', 'today')
+CALENDAR_PERIODS = ('yesterday', 'last_week')
+
+
+def validate_report_scope(value: Mapping[str, object]) -> None:
+    if 'report_scope' in value and value['report_scope'] != 'selected_chat':
+        raise ValueError('Invalid explicit report scope')
 
 
 def page_number(value: object) -> None:

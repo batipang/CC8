@@ -83,7 +83,10 @@ final class DotChatsDialog {
           toast("未确认聊天状态，请连接后刷新查看");
         };
     handler.postDelayed(timeout, 50000);
-    if (!session.dotChatRequest(ident, nextAction, source, cursor, period, route)) {
+    boolean selectedReport =
+        "report".equals(nextAction)
+            && Boolean.TRUE.equals(state.opt("work_report_selected_scope_supported"));
+    if (!session.dotChatRequest(ident, nextAction, source, cursor, period, selectedReport, route)) {
       close();
       toast("连接已变化，请重新打开聊天接续。");
     }
@@ -116,7 +119,11 @@ final class DotChatsDialog {
 
   private void showMode() {
     boolean selected = "summary_handoff".equals(state.optString("mode"));
-    boolean reports = selected && state.optBoolean("work_reports_supported");
+    boolean reports =
+        selected
+            && state.optBoolean("work_reports_supported")
+            && (!"registered".equals(state.optString("report_scope"))
+                || Boolean.TRUE.equals(state.opt("work_report_selected_scope_supported")));
     AlertDialog.Builder builder =
         new LargeDialogBuilder(activity)
             .setTitle("Dot 聊天接续")
@@ -140,12 +147,19 @@ final class DotChatsDialog {
   }
 
   private void showReportPeriods() {
-    String[] periods = {"half_hour", "two_hours", "today"};
+    long owner = route;
+    JSONObject offer = state;
+    String[] labels =
+        ReportTextPage.periodLabels(
+            Boolean.TRUE.equals(state.opt("work_report_calendar_supported")));
     new LargeDialogBuilder(activity)
-        .setTitle("所选聊天的工作汇报")
+        .setTitle("所选聊天的工作汇报 · 北京时间")
         .setItems(
-            new String[] {"过去半小时", "过去两小时", "今天 · 北京时间"},
-            (d, n) -> request("report", null, null, periods[n]))
+            labels,
+            (d, n) -> {
+              if (owner == route && state == offer && session.currentRoute(owner))
+                request("report", null, null, ReportTextPage.PERIODS[n]);
+            })
         .setNegativeButton("取消", null)
         .show();
   }
@@ -159,6 +173,8 @@ final class DotChatsDialog {
     dates.setTimeZone(TimeZone.getTimeZone("Asia/Shanghai"));
     StringBuilder text = new StringBuilder();
     text.append("来源：").append(report.optString("source_title"));
+    String thread = report.optString("source_id");
+    if (!thread.isEmpty()) text.append("\n本机 Codex 原聊天：").append(thread);
     text.append("\n北京时间：")
         .append(dates.format(new Date(report.optLong("window_start") * 1000)))
         .append(" 至 ")
@@ -191,6 +207,9 @@ final class DotChatsDialog {
             .append("\n原答复摘录：\n")
             .append(item.optString("excerpt"));
         if (item.optBoolean("excerpt_truncated")) text.append("\n（摘录已截短）");
+        String turn = item.optString("turn_id"), result = item.optString("item_id");
+        if (!turn.isEmpty() && !result.isEmpty())
+          text.append("\n回合：").append(turn).append("；结果：").append(result);
         JSONObject evidence = item.optJSONObject("evidence");
         if (evidence != null) {
           text.append("\n终端成功／失败回执：")

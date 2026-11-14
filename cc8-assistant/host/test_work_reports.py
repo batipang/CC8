@@ -350,11 +350,12 @@ class ReportControllerTests(unittest.TestCase):
         b.chats.selection = selected
         report = WorkReportReader(Fixture().factory).read(selected, ReportWindow(100, 200))
         with patch.object(b.chats.catalog, 'report', return_value=report) as read:
-            helper.request(b, 'report', period='half_hour', source_id='unrelated-source')
+            helper.request(b, 'report', period='yesterday', source_id='unrelated-source')
             helper.join(b)
         self.assertIs(read.call_args.args[0], selected)
-        self.assertEqual(read.call_args.args[1], 'half_hour')
+        self.assertEqual(read.call_args.args[1], 'yesterday')
         self.assertTrue(b.events[-1][1]['ok'])
+        self.assertIs(b.events[-1][1]['work_report_calendar_supported'], True)
         self.assertEqual(b.events[-1][1]['action'], 'report')
         self.assertFalse(b.session.active)
         self.assertIsNone(b.brain.dot.handoff)
