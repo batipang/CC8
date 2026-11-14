@@ -448,6 +448,9 @@ def build_components(
             source_id=lambda: host.response.corrections.source_token(
                 host.response.hooks.correction_owner()
             ),
+            matches=lambda items: host.response.corrections.vocabulary_matches(
+                host.response.hooks.correction_owner(), items
+            ),
             event=lambda name, **fields: host.event(name, **fields),
         ),
         vocabulary_store

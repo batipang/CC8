@@ -119,7 +119,10 @@ final class VocabularyDialog {
       return;
     }
     VocabularySnapshot state =
-        VocabularySnapshot.parse(data.optJSONObject("state"), data.optString("source_id"));
+        VocabularySnapshot.parse(
+            data.optJSONObject("state"),
+            data.optString("source_id"),
+            data.optJSONArray("suggestions"));
     if (state == null) {
       toast("词表格式不兼容，请核对后台版本。");
       return;
@@ -130,11 +133,16 @@ final class VocabularyDialog {
   private void showList(VocabularySnapshot state, long route) {
     if (!available(route)) return;
     final long owner = epoch;
-    String[] labels = new String[state.items.size()];
-    for (int i = 0; i < labels.length; i++) labels[i] = state.items.get(i).term;
+    int suggestions = state.matches.size();
+    String[] labels = new String[suggestions + state.items.size()];
+    for (int i = 0; i < suggestions; i++) {
+      VocabularySnapshot.Match match = state.matches.get(i);
+      labels[i] = "本次可更正：" + match.alias + " → " + match.term;
+    }
+    for (int i = 0; i < state.items.size(); i++) labels[suggestions + i] = state.items.get(i).term;
     AlertDialog.Builder builder =
         new LargeDialogBuilder(activity)
-            .setTitle("用户词表 · " + labels.length + "/64 · 手动纠错参考")
+            .setTitle("用户词表 · " + state.items.size() + "/64 · 手动纠错参考")
             .setPositiveButton(
                 "新增词语",
                 (d, n) -> {
@@ -153,7 +161,13 @@ final class VocabularyDialog {
       builder.setItems(
           labels,
           (d, n) -> {
-            if (owner == epoch) detail(state.items.get(n), state.revision, state.sourceId, route);
+            if (owner != epoch) return;
+            if (n < suggestions) {
+              VocabularySnapshot.Match match = state.matches.get(n);
+              prepare(match.term, match.alias, state.revision, state.sourceId, route);
+            } else {
+              detail(state.items.get(n - suggestions), state.revision, state.sourceId, route);
+            }
           });
     dialog = builder.create();
     display(dialog);
@@ -176,15 +190,7 @@ final class VocabularyDialog {
                 (d, n) -> {
                   if (owner != epoch || !available(route)) return;
                   if (n < item.aliases.size()) {
-                    if (sourceId.isEmpty()) {
-                      toast("没有可更正的本次语音。请开启语音说完整问题，再重新打开词表。");
-                      return;
-                    }
-                    JSONObject data = args("prepare", revision);
-                    Wire.put(data, "term", item.term);
-                    Wire.put(data, "alias", item.aliases.get(n));
-                    Wire.put(data, "source_id", sourceId);
-                    request(data, route);
+                    prepare(item.term, item.aliases.get(n), revision, sourceId, route);
                   } else if (n == item.aliases.size()) edit(item, revision, route);
                   else {
                     JSONObject data = args("delete", revision);
@@ -195,6 +201,18 @@ final class VocabularyDialog {
             .setNegativeButton("关闭", null)
             .create();
     display(dialog);
+  }
+
+  private void prepare(String term, String alias, int revision, String sourceId, long route) {
+    if (sourceId.isEmpty()) {
+      toast("没有可更正的本次语音。请开启语音说完整问题，再重新打开词表。");
+      return;
+    }
+    JSONObject data = args("prepare", revision);
+    Wire.put(data, "term", term);
+    Wire.put(data, "alias", alias);
+    Wire.put(data, "source_id", sourceId);
+    request(data, route);
   }
 
   private void explain(int revision, long route) {

@@ -13,6 +13,7 @@ class VocabularyHooks:
     busy: Callable
     prepare: Callable
     source_id: Callable
+    matches: Callable
     event: Callable
 
 
@@ -60,4 +61,5 @@ class VocabularyController:
                 prepared=prepared,
                 message=message,
                 source_id=self.hooks.source_id() or '',
+                suggestions=self.hooks.matches(state['items']) if ok and state else [],
             )

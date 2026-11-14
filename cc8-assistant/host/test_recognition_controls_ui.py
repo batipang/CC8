@@ -128,6 +128,16 @@ public class RecognitionControlsCheck{
   int count=s.requests.size();ui.accept(new JSONObject("request_id",s.lastId,"ok",true,"prepared",true),1);
   yes(s.requests.size()==count&&!AlertDialog.last.showing,"preparation automatically submitted or left wait open");break;
  }
+ case "suggestions":{
+  VocabularyDialog ui=new VocabularyDialog(a,s);ui.open();
+  JSONObject good=new JSONObject("term","常州","alias","沧州");
+  JSONObject invalid=new JSONObject("term","常州","alias","其他");
+  JSONObject receipt=result(s.lastId).put("suggestions",new JSONArray(good,good,invalid));
+  ui.accept(receipt,1);AlertDialog list=AlertDialog.last;good.put("term","被修改");list.pick(0);
+  JSONObject sent=s.requests.get(s.requests.size()-1);
+  yes(s.requests.size()==2&&"prepare".equals(sent.optString("action"))&&"常州".equals(sent.optString("term"))&&"沧州".equals(sent.optString("alias"))&&"d".repeat(32).equals(sent.optString("source_id")),"suggestion retargeted or submitted instead of prepared");
+  list.builder.item.onClick(list,0);yes(s.requests.size()==2,"retired suggestion prepared again");break;
+ }
  case "handover":{
   VocabularyDialog ui=new VocabularyDialog(a,s);ui.open();String old=s.lastId;s.route=2;ui.close();ui.open();AlertDialog waiting=AlertDialog.last;
   ui.accept(result(old),1);yes(AlertDialog.last==waiting&&waiting.showing,"old route receipt replaced current UI");break;
@@ -207,6 +217,9 @@ class RecognitionControlsUiTests(unittest.TestCase):
 
     def test_selected_pair_only_prepares_without_confirming(self):
         self.scenario('prepare')
+
+    def test_current_suggestion_only_prepares_the_bound_pair(self):
+        self.scenario('suggestions')
 
     def test_old_route_receipt_cannot_close_new_route_wait(self):
         self.scenario('handover')

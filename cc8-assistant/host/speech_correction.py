@@ -102,6 +102,27 @@ class SpeechCorrection:
             return None
         return self.source_ident
 
+    def vocabulary_matches(self, owner, items):
+        if not self.source_token(owner):
+            return []
+        original = self.source[0]
+        choices = []
+        for item in items:
+            for alias in item['aliases']:
+                try:
+                    term = item['term']
+                    pair = replacement_pair(term + '，不是' + alias, original)
+                    if pair != (term, alias):
+                        continue
+                    proposed = replace_literal(original, *pair)
+                    validate_request_text(proposed, LIMIT)
+                except ValueError:
+                    continue
+                choices.append({'term': term, 'alias': alias})
+                if len(choices) == 4:
+                    return choices
+        return choices
+
     def prepare(self, body, owner, *, allow_full_question=True):
         # Replacement is literal and must identify exactly one old occurrence.
         # The full original request remains unchanged until explicit submission.
