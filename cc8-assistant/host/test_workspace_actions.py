@@ -462,12 +462,16 @@ class ActionCheck extends Activity {
     JSONObject malformed=task("completed");malformed.values.put("desktop_handoff_pending","true");
     JSONObject uncertain=task("cancelled");uncertain.values.put("execution_unconfirmed",true);
     JSONObject malformedUncertain=task("failed");malformedUncertain.values.put("execution_unconfirmed","true");
-    c.savedTasks.open();c.answer("items",new JSONArray(pending,task("completed"),malformed,uncertain,malformedUncertain));
+    JSONObject declined=task("failed");declined.values.put("approval_declined",true);
+    JSONObject malformedDecline=task("failed");malformedDecline.values.put("approval_declined","true");
+    c.savedTasks.open();c.answer("items",new JSONArray(pending,task("completed"),malformed,uncertain,malformedUncertain,declined,malformedDecline));
     AlertDialog list=AlertDialog.last;
     yes(list.builder.labels[0].startsWith("待桌面接续 · "),"Handoff list must identify pending desktop work");
     for(int i=1;i<3;i++)yes(list.builder.labels[i].startsWith("已完成 · "),"Normal or malformed metadata must use the ordinary receipt label");
     yes(list.builder.labels[3].startsWith("执行结果待核对 · "),"Unconfirmed execution must survive the saved list");
     yes(list.builder.labels[4].startsWith("未完成 · "),"String flags cannot become execution evidence");
+    yes(list.builder.labels[5].startsWith("需审批 · 已结束 · "),"Approval outcome missing from saved list");
+    yes(list.builder.labels[6].startsWith("未完成 · "),"String flags cannot become approval evidence");
     list.item(0);c.answer("item",pending);
     ScrollView pendingScroll=(ScrollView)AlertDialog.last.builder.view;
     LinearLayout pendingBody=(LinearLayout)pendingScroll.child;
@@ -476,7 +480,11 @@ class ActionCheck extends Activity {
     ScrollView scroll=(ScrollView)AlertDialog.last.builder.view;
     LinearLayout body=(LinearLayout)scroll.child;
     String detail=((TextView)body.children.get(0)).getText().toString();
-    yes(detail.contains("状态：执行结果待核对")&&detail.contains("请先在 Mac 核对原任务"),"Saved detail must tell the user to verify execution");break;
+    yes(detail.contains("状态：执行结果待核对")&&detail.contains("请先在 Mac 核对原任务"),"Saved detail must tell the user to verify execution");
+    c.savedTasks.open();c.answer("items",new JSONArray(declined));AlertDialog.last.item(0);c.answer("item",declined);
+    ScrollView declinedScroll=(ScrollView)AlertDialog.last.builder.view;
+    LinearLayout declinedBody=(LinearLayout)declinedScroll.child;
+    yes(((TextView)declinedBody.children.get(0)).getText().toString().contains("状态：需审批 · 已结束"),"Saved detail lost the terminal approval outcome");break;
    }
    case "saved_response":{
     c.savedTasks.open();AlertDialog waiting=AlertDialog.last;s.change();c.answer("items",new JSONArray(task("completed")));

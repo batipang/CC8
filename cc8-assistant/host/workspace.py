@@ -27,6 +27,7 @@ from reminder_store import ReminderStore, ReminderCommitUncertain
 ZONE = ZoneInfo('Asia/Shanghai')
 REMINDER_STORE_VERSION = 3
 EXECUTION_UNCONFIRMED_STEP = 'execution_unconfirmed'
+APPROVAL_DECLINED_STEP = 'approval_declined'
 NARRATION_LABELS = {
     'partial': '结果播报部分确认',
     'complete': '结果已确认播完',
@@ -407,6 +408,7 @@ class Workspace:
         *,
         unconfirmed: bool = False,
         desktop_handoff: bool = False,
+        approval_declined: bool = False,
     ) -> None:
         # 只有 running 可进入终态，迟到的进度或停止朗读不能覆盖已有完成结果。
         with self.lock:
@@ -436,6 +438,16 @@ class Workspace:
                 task['steps'] = [
                     *task['steps'][-4:],
                     {'id': EXECUTION_UNCONFIRMED_STEP, 'title': '执行结果待核对', 'status': status},
+                ]
+            if approval_declined and status == 'failed' and not unconfirmed:
+                task['stage'] = '需审批 · 已结束'
+                task['steps'] = [
+                    *task['steps'][-4:],
+                    {
+                        'id': APPROVAL_DECLINED_STEP,
+                        'title': '需要审批的操作未执行',
+                        'status': 'failed',
+                    },
                 ]
             for step in task['steps']:
                 if step['status'] == 'running':

@@ -14,7 +14,7 @@ import time
 import uuid
 from zoneinfo import ZoneInfo
 from result_provenance import validate as validate_provenance
-from workspace import EXECUTION_UNCONFIRMED_STEP
+from workspace import APPROVAL_DECLINED_STEP, EXECUTION_UNCONFIRMED_STEP
 from window_receipt import validate_window_receipt
 
 LIMIT = 32
@@ -58,6 +58,13 @@ def desktop_handoff_source(item):
 def execution_unconfirmed(item):
     return item['status'] in ('failed', 'cancelled') and any(
         step['id'] == EXECUTION_UNCONFIRMED_STEP and step['status'] == item['status']
+        for step in item['steps']
+    )
+
+
+def approval_declined(item):
+    return item['status'] == 'failed' and any(
+        step['id'] == APPROVAL_DECLINED_STEP and step['status'] == 'failed'
         for step in item['steps']
     )
 
