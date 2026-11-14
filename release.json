@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "review-fixes-168-20261111.1",
+  "release_id": "paired-usb-recovery-171-20261114.1",
   "backend": {
     "version": "0.16.37"
   },
   "assistant": {
-    "version": "0.9.129",
-    "version_code": 168,
+    "version": "0.9.132",
+    "version_code": 171,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {
