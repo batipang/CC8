@@ -326,6 +326,10 @@ class BridgeVisionTests(unittest.TestCase):
         b.event = event
         b.answer_visual(b.job)
         self.assertEqual(answers, [jpeg()])
+        evidence = b.diagnostics.report()
+        row = next(row for row in evidence['requests'] if row['generation'] == b.job.generation)
+        self.assertEqual(row['camera_frame'], {'dimensions': [640, 480], 'bytes': len(jpeg())})
+        self.assertFalse(evidence['contains_content'])
         self.assertIsNone(b.visual.inbox.pending)
         self.assertIsNone(b.visual.generation)
         self.assertNotIn('image', b.metrics)
@@ -353,6 +357,7 @@ class BridgeVisionTests(unittest.TestCase):
         b.event = event
         b.answer_visual(b.job)
         self.assertEqual(b.events[-1][1]['result'], 'failed')
+        self.assertFalse(any('camera_frame' in row for row in b.diagnostics.report()['requests']))
 
 
 if __name__ == '__main__':

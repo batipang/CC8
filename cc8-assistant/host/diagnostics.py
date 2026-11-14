@@ -169,6 +169,20 @@ class TraceBook:
             row = self._row(key)
             return deepcopy(row.get('capture')) if row else None
 
+    def camera_frame(self, key, width, height, byte_count):
+        from vision import HD_IMAGE
+
+        if (
+            not HD_IMAGE.valid_dimensions(width, height)
+            or type(byte_count) is not int
+            or not 32 <= byte_count <= HD_IMAGE.max_bytes
+        ):
+            raise ValueError('Invalid camera frame evidence')
+        with self.lock:
+            row = self._row(key)
+            if row is not None and row['origin'] == 'vision' and row['outcome'] is None:
+                row.setdefault('camera_frame', {'dimensions': [width, height], 'bytes': byte_count})
+
     def asr_start(self, key, samples):
         with self.lock:
             if valid_asr_input_samples(samples):

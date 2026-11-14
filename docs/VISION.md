@@ -20,7 +20,7 @@ Android **0.7.0 / versionCode 24**、Mac 后台 **0.10.0** 支持按次看图。
 
 `python3 tools/score_camera_ocr.py --cards` 显示 20 张公开测试卡的文字，包含物品标签、数字、中英混排和多行内容。用同一张卡、位置和光照分别拍标准与高清两次。记录实际交给 Dot 的 JPEG 尺寸和原样转录，保留 `[无法辨认]` 标记。比较画质时避免裁剪，以便两次取景对应同一张卡。
 
-先在权限为 0700 的本机目录，用 `--template --output /absolute/private/input.json` 建输入模板。每种模式的 `status` 可为 `recognized`、`failed` 或 `not_run`。成功取得转录时填写 `text` 和 `[宽, 高]` 的 `dimensions`，失败或未执行保留空文字和 `null` 尺寸。用 `--input /absolute/private/input.json --output /absolute/private/score.json` 生成新报告。
+先在权限为 0700 的本机目录，用 `--template --output /absolute/private/input.json` 建输入模板。每种模式的 `status` 可为 `recognized`、`failed` 或 `not_run`。成功取得转录时填写 `text` 和 `[宽, 高]` 的 `dimensions`，失败或未执行保留空文字和 `null` 尺寸。Mac 的 `diagnose.py` 最近请求报告中，`camera_frame.dimensions` 来自通过校验、交给 Dot 的本次 JPEG。用 `--input /absolute/private/input.json --output /absolute/private/score.json` 生成新报告。
 
 报告保留每张卡的替换、遗漏、插入、无法辨认标记和失败数，以及两种模式均取得有效转录时的字符错误率。空白不计，数字、大小写、标点和字符顺序参与评分。`[无法辨认]` 不按字面计入转录，缺字计遗漏。高清若落回标准尺寸，或像素数未超过同卡的标准图，会单独计数并排除出成对对照。报告不写入转录、照片或输入路径。方向、模糊、实际 USB／Wi-Fi 传输和拍后释放继续按镜头验收记录核对。
 
