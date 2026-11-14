@@ -232,6 +232,7 @@ class BrainRouter:
                     message = {
                         'item_evidence': '正在核对本次汇报的执行回执…',
                         'active_sources': '正在查看本次汇报中的来源状态…',
+                        'item_queue': '正在读取该条汇报的原聊天队列…',
                         'continue': '正在核对本次汇报的原聊天…',
                     }.get(command.kind, '正在读取所选聊天的工作汇报…')
                     on_web('progress', {'message': message})

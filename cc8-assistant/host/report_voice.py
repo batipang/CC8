@@ -28,6 +28,7 @@ from report_progress import (
 )
 from result_provenance import validate as validate_provenance
 from report_sources import ReportScope
+from thread_queue import MAX_QUEUE_ITEMS
 
 PERIOD_NAMES = {
     '上次汇报后': 'since_last',
@@ -98,6 +99,12 @@ ACTIVE_SOURCES = re.compile(
     PREFIX
     + r'(?:本次汇报|这次汇报|汇报)(?:里|中)?(?:还有|有)?哪些(?:项目|聊天|来源)(?:还|仍)?在进行中'
 )
+ITEM_QUEUE = re.compile(
+    PREFIX
+    + r'(?:查看|查询|说说)?(?:本次汇报的?|这次汇报的?|汇报的?)?第'
+    + INDEX
+    + r'项的?(?:待办队列|排队请求)'
+)
 CONTEXT_ITEM = re.compile(
     PREFIX + r'(?:把|将|关于|对于)?(?:本次汇报的|这次汇报的|汇报的)?第' + INDEX + r'项'
 )
@@ -158,6 +165,8 @@ def report_command(text, *, followup=False):
         return ReportCommand('custom', value)
     if ACTIVE_SOURCES.fullmatch(text):
         return ReportCommand('active_sources')
+    if (followup or '汇报' in text) and (match := ITEM_QUEUE.fullmatch(text)):
+        return ReportCommand('item_queue', ordinal(match[1]))
     if (followup or '汇报' in text) and (match := ITEM_EVIDENCE.fullmatch(text)):
         return ReportCommand('item_evidence', ordinal(match[1]))
     if match := DETAIL.fullmatch(text):
@@ -204,6 +213,7 @@ class ReportVoiceHooks:
     context: Callable[[], tuple]
     read: Callable
     revoked: Callable[[], None] = lambda: None
+    read_queue: Callable | None = None
 
 
 @dataclass(frozen=True)
@@ -620,6 +630,79 @@ class ReportVoice:
     def notice(text):
         return ReportReply(text, (text,))
 
+    def item_queue(self, number, is_current):
+        with self.hooks.lock:
+            snapshot = self.snapshot
+            context = self.hooks.context()
+            if (
+                snapshot is None
+                or not self.same_context(snapshot[0], context)
+                or self.clock() >= snapshot[1]
+            ):
+                return self.notice('本次汇报尚未取得或已失效，请重新请求工作汇报。')
+            report = snapshot[2]
+            if type(number) is not int or not 1 <= number <= len(report['items']):
+                return self.notice('这份汇报没有该编号，请按屏幕上的编号查询待办队列。')
+            source = context[0]
+            if not isinstance(source, ReportScope) or self.hooks.read_queue is None:
+                return self.notice('请先用已登记来源进行工作汇报，再按结果编号查询待办队列。')
+            item = report['items'][number - 1]
+            if item.get('since_status') == 'cached_unheard':
+                return self.notice('该项来自上次汇报，请重新读取原来源后再查队列。')
+            member = next(m for m in source.members if m.thread_id == item['source_thread_id'])
+
+        def current():
+            with self.hooks.lock:
+                return (
+                    is_current()
+                    and self.snapshot is snapshot
+                    and self.clock() < snapshot[1]
+                    and self.same_context(context, self.hooks.context())
+                )
+
+        result = self.hooks.read_queue(source, member, current)
+        if not current():
+            raise Cancelled('Report queue cancelled')
+        details = result['source']
+        if (details['thread_id'], details['title'], details['project']) != (
+            member.thread_id,
+            member.title,
+            member.project,
+        ):
+            raise DotError('Report queue source changed')
+        count = len(result['items'])
+        if count > MAX_QUEUE_ITEMS:
+            raise DotError('Invalid report queue size')
+        status = result['state']
+        if status == 'read' and result['coverage_complete'] is True:
+            summary = f'本次看到{count}条排队请求。'
+        elif status == 'partial' and result['coverage_complete'] is False and count:
+            summary = f'本次至少看到{count}条排队请求，队列读取不完整。'
+        elif status == 'unavailable' and result['coverage_complete'] is False and not count:
+            summary = '本次未能确认待办队列。'
+        else:
+            raise DotError('Invalid report queue coverage')
+        lines = (
+            f'第{number}项原聊天「{member.title}」。',
+            summary,
+            '队列条数只反映此次读取，任务执行状态需另行核对。',
+        )
+        read_at = datetime.fromtimestamp(result['read_at'], BEIJING).strftime('%Y-%m-%d %H:%M:%S')
+        return ReportReply(
+            '\n'.join(
+                (
+                    *lines,
+                    f'北京时间 {read_at}',
+                    f'项目 {member.project}',
+                    result_identity(item, member.thread_id),
+                )
+            ),
+            lines,
+            member.title,
+            'item_queue',
+            provenance=report_source(source, item['turn_id'], item),
+        )
+
     def answer(self, command, is_current):
         if not is_current():
             raise Cancelled('Report cancelled')
@@ -636,6 +719,8 @@ class ReportVoice:
             return self.notice(
                 '请先指定本次汇报中的一个编号，例如“详细说说第二项”；当前不会推测或合并多个项目执行。'
             )
+        if command.kind == 'item_queue':
+            return self.item_queue(command.value, is_current)
         if command.kind in ('item', 'item_evidence', 'continue', 'active_sources'):
             with self.hooks.lock:
                 context = self.hooks.context()
