@@ -198,6 +198,41 @@ class DesktopReminderTests(unittest.TestCase):
         self.tick()
         self.assertEqual(self.board.reminders[0]['status'], 'cancelled')
 
+    def test_desktop_delivery_revoked_before_send_restores_only_unchanged_occurrences(self):
+        first, second = self.create(repeat='daily'), self.create()
+        self.now += timedelta(minutes=2)
+        self.tick()
+        self.jobs[0][3].result = 'notification_center'
+        self.jobs[0][3].done.set()
+        self.tick()
+        previous = self.board.reminders[0]['delivery_attempt'].copy()
+        self.now += timedelta(days=1)
+        third = self.create()
+        self.now += timedelta(minutes=1)
+        self.tick()
+        _, _, current, job = self.jobs[-1]
+        self.assertTrue(current())
+        self.current = False
+        self.board.reminder({'action': 'cancel', 'id': third['id']})
+        self.assertFalse(current())
+        job.result = 'cancelled'
+        job.done.set()
+        self.tick()
+        self.assertEqual(len(self.jobs), 2)
+
+        self.board = Workspace(self.path, now=lambda: self.now)
+        by_id = {item['id']: item for item in self.board.reminders}
+        self.assertEqual(by_id[first['id']]['status'], 'pending')
+        self.assertEqual(by_id[first['id']]['delivery_attempt'], previous)
+        self.assertEqual(by_id[second['id']]['status'], 'delivered')
+        self.assertEqual(by_id[third['id']]['status'], 'cancelled')
+        self.current = True
+        self.tick()
+        self.assertEqual(len(self.jobs), 3)
+        self.assertEqual([claim['id'] for claim in self.scheduler.claims], [first['id']])
+        self.assertNotEqual(self.jobs[-1][0], previous['id'])
+        self.assertEqual(self.audio, [])
+
     def test_repeat_retains_original_clock_but_uses_next_occurrence(self):
         self.create(repeat='daily')
         self.now += timedelta(days=4, minutes=2)
@@ -387,6 +422,33 @@ class DesktopIPC(unittest.TestCase):
             'cancelled',
         )
         self.assertEqual(self.received, [])
+
+    def test_revocation_after_helper_connect_sends_no_post_and_releases_delivery(self):
+        status = iter((True, False))
+
+        class Notifier:
+            def post(_self, ident, body, current):
+                return self.request(
+                    {'action': 'post', 'id': ident, 'body': body},
+                    b'{}\n',
+                    current=current,
+                )
+
+        job = DesktopDelivery(Notifier(), 'a' * 32, '公开固定提醒', lambda: next(status))
+        self.assertTrue(job.done.wait(4))
+        self.assertEqual(job.result, 'cancelled')
+        self.assertEqual(len(self.socket_paths), 1)
+        self.assertEqual(self.received, [])
+
+    def test_helper_cannot_claim_no_send_after_receiving_post(self):
+        self.assertEqual(
+            self.request(
+                {'action': 'post', 'id': 'a' * 32, 'body': '公开固定提醒'},
+                b'{"protocol":1,"result":"cancelled","id":"' + b'a' * 32 + b'"}\n',
+            )['result'],
+            'unconfirmed',
+        )
+        self.assertEqual(len(self.received), 1)
 
     def test_status_cannot_accept_post_receipt_or_missing_authorization(self):
         for reply in (

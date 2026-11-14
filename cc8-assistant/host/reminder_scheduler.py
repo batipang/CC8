@@ -58,7 +58,10 @@ class ReminderScheduler:
                     return
                 # A failed disk commit retries only the same receipt, never TTS.
                 workspace = self.hooks.workspace()
-                if self.channel == 'desktop':
+                deferred = self.channel == 'desktop' and job.result == 'cancelled'
+                if deferred:
+                    workspace.release_unstarted_reminders(self.claims, channel=self.channel)
+                elif self.channel == 'desktop':
                     workspace.finish_reminders(
                         self.claims,
                         job.result == 'notification_center',
@@ -73,6 +76,10 @@ class ReminderScheduler:
                 self.claims = []
                 self.played_count = 0
                 self.hooks.publish_workspace()
+                if deferred:
+                    # Let the next poll re-evaluate the route and lateness.
+                    self.poll = time.monotonic() + 5
+                    return
             self.settle_pending()
             if time.monotonic() < self.poll:
                 return
