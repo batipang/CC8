@@ -84,6 +84,10 @@ class ReportDisplayTests(unittest.TestCase):
                     dict(item_id=f'command-{n}-' + 'x' * 76, outcome='exit_nonzero')
                     for n in range(8)
                 ],
+                execution_receipts=[
+                    dict(item_id=f'command-{n}-' + 'x' * 76, outcome='command_failures')
+                    for n in range(8)
+                ],
             )
             item['evidence']['command_failures'] = 8
         self.assertTrue(ReportVoice.valid_report(source, value))
@@ -94,6 +98,9 @@ class ReportDisplayTests(unittest.TestCase):
             fields = display_fields(value, original, ENVELOPE, page=page)
             self.encode(fields)
             self.assertTrue(all('test_receipts' not in item for item in fields['report']['items']))
+            self.assertTrue(
+                all('execution_receipts' not in item for item in fields['report']['items'])
+            )
             parts.append(fields['report_text'][len(fields['report_page_marker']) :])
         self.assertEqual(''.join(parts), original)
 

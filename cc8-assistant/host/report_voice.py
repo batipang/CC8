@@ -11,6 +11,7 @@ from work_reports import (
     BEIJING,
     CALENDAR_PERIODS,
     MAX_CARDS,
+    MAX_EXECUTION_RECEIPTS,
     MAX_TURN_PAGES,
     MAX_TEST_RECEIPTS,
     PAGE_SIZE,
@@ -307,12 +308,8 @@ def test_process_summary(tests):
     )
 
 
-def test_receipts_valid(rows, counts, final_id):
-    if (
-        not counts
-        or not isinstance(rows, list)
-        or len(rows) != min(sum(counts.values()), MAX_TEST_RECEIPTS)
-    ):
+def receipts_valid(rows, counts, final_id, limit):
+    if not counts or not isinstance(rows, list) or len(rows) != min(sum(counts.values()), limit):
         return False
     remaining, seen = counts.copy(), {final_id}
     for row in rows:
@@ -590,8 +587,18 @@ class ReportVoice:
                         )
                     ):
                         return False
-                if 'test_receipts' in item and not test_receipts_valid(
-                    item['test_receipts'], item.get('test_processes'), item['item_id']
+                if 'test_receipts' in item and not receipts_valid(
+                    item['test_receipts'],
+                    item.get('test_processes'),
+                    item['item_id'],
+                    MAX_TEST_RECEIPTS,
+                ):
+                    return False
+                if 'execution_receipts' in item and not receipts_valid(
+                    item['execution_receipts'],
+                    item['evidence'],
+                    item['item_id'],
+                    MAX_EXECUTION_RECEIPTS,
                 ):
                     return False
                 if item['evidence_complete'] and item['evidence']['unconfirmed_tool_items']:
@@ -869,6 +876,20 @@ class ReportVoice:
                     else:
                         lines.append('现有回执不能确定哪些命令是测试，也不能确认测试已通过。')
                     detail = [lines[0], result_identity(item, provenance['thread_id']), *lines[1:]]
+                    if execution := item.get('execution_receipts'):
+                        labels = dict(
+                            command_failures='终端失败',
+                            file_change_failures='文件变更失败',
+                            unconfirmed_tool_items='执行待确认',
+                            command_successes='终端成功',
+                            file_change_successes='文件变更成功',
+                        )
+                        detail.append('原回合执行编号')
+                        detail.extend(
+                            f'{labels[row["outcome"]]} · {row["item_id"]}' for row in execution
+                        )
+                        if len(execution) < sum(item['evidence'].values()):
+                            detail.append(f'屏幕列出其中{len(execution)}条执行回执。')
                     if receipts := item.get('test_receipts'):
                         labels = dict(
                             exit_zero='零退出', exit_nonzero='非零退出', unconfirmed='退出未确认'

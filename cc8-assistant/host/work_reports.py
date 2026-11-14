@@ -16,6 +16,14 @@ PARTIAL_READ_ERRORS = frozenset(('timeout', 'transport_or_io'))
 TURN_STATUS_COUNTS = ('active_turns_seen', 'failed_turns', 'interrupted_turns')
 TEST_RECEIPT_STATES = ('exit_nonzero', 'unconfirmed', 'exit_zero')
 MAX_TEST_RECEIPTS = 8
+MAX_EXECUTION_RECEIPTS = 8
+EXECUTION_RECEIPT_FIELDS = (
+    'command_failures',
+    'file_change_failures',
+    'unconfirmed_tool_items',
+    'command_successes',
+    'file_change_successes',
+)
 
 
 # Accept only direct test runners with simple arguments. Shell composition,
@@ -276,6 +284,7 @@ class WorkReportReader:
         )
         tests = dict(exit_zero=0, exit_nonzero=0, unconfirmed=0)
         test_receipts = {state: [] for state in TEST_RECEIPT_STATES}
+        execution_receipts = {field: [] for field in EXECUTION_RECEIPT_FIELDS}
         complete = False
         for _ in range(MAX_ITEM_PAGES):
             params = dict(threadId=source_id, turnId=turn_id, limit=50, sortDirection='desc')
@@ -354,21 +363,22 @@ class WorkReportReader:
                         tests[outcome] += 1
                         if len(test_receipts[outcome]) < MAX_TEST_RECEIPTS:
                             test_receipts[outcome].append(dict(item_id=ident, outcome=outcome))
-                    if state == 'completed' and type(item.get('exitCode')) is int:
-                        evidence[
-                            'command_successes' if item['exitCode'] == 0 else 'command_failures'
-                        ] += 1
+                if kind in ('commandExecution', 'fileChange'):
+                    field = 'unconfirmed_tool_items'
+                    if kind == 'commandExecution':
+                        if state == 'completed' and type(item.get('exitCode')) is int:
+                            field = (
+                                'command_successes' if item['exitCode'] == 0 else 'command_failures'
+                            )
+                        elif state in ('failed', 'declined'):
+                            field = 'command_failures'
+                    elif state == 'completed':
+                        field = 'file_change_successes'
                     elif state in ('failed', 'declined'):
-                        evidence['command_failures'] += 1
-                    else:
-                        evidence['unconfirmed_tool_items'] += 1
-                elif kind == 'fileChange':
-                    if state == 'completed':
-                        evidence['file_change_successes'] += 1
-                    elif state in ('failed', 'declined'):
-                        evidence['file_change_failures'] += 1
-                    else:
-                        evidence['unconfirmed_tool_items'] += 1
+                        field = 'file_change_failures'
+                    evidence[field] += 1
+                    if len(execution_receipts[field]) < MAX_EXECUTION_RECEIPTS:
+                        execution_receipts[field].append(dict(item_id=ident, outcome=field))
             page_cursor = cursor(page.get('nextCursor'), seen_cursors)
             if page_cursor is None:
                 complete = True
@@ -392,4 +402,8 @@ class WorkReportReader:
                 else {}
             ),
         )
+        if any(evidence.values()):
+            card['execution_receipts'] = [
+                receipt for group in execution_receipts.values() for receipt in group
+            ][:MAX_EXECUTION_RECEIPTS]
         return card, complete
