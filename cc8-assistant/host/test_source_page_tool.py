@@ -102,6 +102,7 @@ class SourceToolTests(unittest.TestCase):
 
     def test_real_failed_tool_receipt_reaches_final_sources_without_model_body_claims(self):
         rpc = ReadingRpc()
+        rpc.text = '未能取得可用的公开正文。'
         brain = DotBrain(rpc)
         events = []
         failure = {
@@ -123,6 +124,7 @@ class SourceToolTests(unittest.TestCase):
         self.assertEqual(row['page_http_status'], 200)
         self.assertEqual(row['observed_at'], READ_FINISHED)
         self.assertEqual(row['page_excerpt'], '')
+        self.assertIs(row['answer_cited'], False)
         self.assertIsNone(row['page_text_chars'])
         self.assertIs(row['body_verified'], False)
 
