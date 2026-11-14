@@ -27,7 +27,7 @@ class ReportDisplayTests(unittest.TestCase):
         value = report(*(['😀' * 500] * 20))
         self.assertTrue(ReportVoice.valid_report(SOURCE, value))
         original = deepcopy(value)
-        text = report_text(value)
+        text = report_text(value, include_identity=True)
         with self.assertRaises(ValueError):
             Packet.event('dot_chat_state', report=value, report_text=text).encode()
         fields = display_fields(value, text, ENVELOPE)

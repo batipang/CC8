@@ -167,11 +167,16 @@ class VoiceTests(unittest.TestCase):
 
     def test_numbered_detail_uses_deep_frozen_snapshot_without_another_read(self):
         voice = self.session()
-        voice.answer(ReportCommand('report', 'two_hours'), lambda: True)
+        overview = voice.answer(ReportCommand('report', 'two_hours'), lambda: True)
+        self.assertIn(f'本机 Codex 原聊天：{SOURCE.source_id}', overview.text)
+        self.assertIn('回合：turn-1；结果：final-1', overview.text)
+        self.assertNotIn(SOURCE.source_id, ''.join(overview.spoken))
         self.data['items'].reverse()
         self.data['items'][0]['excerpt'] = '后来插入的结果不能替换旧编号'
         reply = voice.answer(ReportCommand('item', 2), lambda: True)
         self.assertIn('第二个真实摘录', reply.text)
+        self.assertIn(f'原聊天：{SOURCE.source_id}；回合：turn-1；结果：final-1', reply.text)
+        self.assertNotIn(SOURCE.source_id, ''.join(reply.spoken))
         self.assertNotIn('后来插入', reply.text)
         self.assertEqual(self.reads, ['two_hours'])
 
@@ -190,6 +195,8 @@ class VoiceTests(unittest.TestCase):
             self.assertIn('未读取完整', reply.text)
             self.assertIn('不能确认测试已通过', reply.text)
             self.assertNotIn('原答复说测试通过', reply.text)
+            self.assertIn(f'原聊天：{SOURCE.source_id}；回合：turn-1；结果：final-1', reply.text)
+            self.assertNotIn(SOURCE.source_id, ''.join(reply.spoken))
             self.assertEqual(reply.provenance['turn_id'], 'turn-1')
             self.assertEqual(reply.delivery, ())
             self.assertIs(voice.delivery_plan, plan)
