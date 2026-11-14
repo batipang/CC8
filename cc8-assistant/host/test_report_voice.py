@@ -216,6 +216,10 @@ class VoiceTests(unittest.TestCase):
             dict(item_id='command-ok', outcome='exit_zero'),
             dict(item_id='command-failed', outcome='exit_nonzero'),
         ]
+        item['execution_receipts'] = [
+            dict(item_id='command-failed', outcome='command_failures'),
+            dict(item_id='command-ok', outcome='command_successes'),
+        ]
         voice = self.session(data)
         overview = voice.answer(ReportCommand('report', 'today'), lambda: True)
         reply = voice.answer(ReportCommand('item_evidence', 1), lambda: True)
@@ -224,7 +228,12 @@ class VoiceTests(unittest.TestCase):
         self.assertIn('无法确认全部测试范围或整项验收', reply.text)
         self.assertNotIn('测试已通过', reply.text)
         self.assertIn('非零退出 · command-failed', reply.text)
+        self.assertIn('终端失败 · command-failed', reply.text)
+        self.assertNotIn('command-failed', overview.text)
         self.assertNotIn('command-failed', ''.join(reply.spoken))
+        item['execution_receipts'][0]['outcome'] = 'file_change_failures'
+        self.assertFalse(voice.valid_report(SOURCE, data))
+        item['execution_receipts'][0]['outcome'] = 'command_failures'
         item['test_receipts'][1]['item_id'] = 'command-ok'
         self.assertFalse(voice.valid_report(SOURCE, data))
         item['test_receipts'][1]['item_id'] = 'command-failed'

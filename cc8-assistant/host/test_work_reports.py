@@ -297,6 +297,34 @@ class ReportTests(unittest.TestCase):
         self.assertFalse(r['coverage_complete'])
         self.assertFalse(r['original_chat_modified'])
         self.assertFalse(r['history_persisted'])
+        self.assertEqual(
+            [(row['item_id'], row['outcome']) for row in r['items'][0]['execution_receipts']],
+            [
+                ('cmd-fail', 'command_failures'),
+                ('cmd-exit', 'command_failures'),
+                ('cmd-bool', 'unconfirmed_tool_items'),
+                ('cmd', 'command_successes'),
+                ('patch', 'file_change_successes'),
+            ],
+        )
+
+    def test_execution_references_are_bounded_and_prioritize_failures_over_newer_successes(self):
+        f = Fixture()
+        rows = [
+            dict(id=f'success-{i}', type='commandExecution', status='completed', exitCode=0)
+            for i in range(10)
+        ]
+        rows += [
+            dict(id='patch-failed', type='fileChange', status='failed'),
+            dict(id='patch-unconfirmed', type='fileChange', status='inProgress'),
+        ]
+        f.item_pages['turn-1'][0]['data'].extend(dict(turnId='turn-1', item=row) for row in rows)
+        item = self.report(f)['items'][0]
+        self.assertEqual(item['evidence']['command_successes'], 10)
+        self.assertEqual(
+            [row['item_id'] for row in item['execution_receipts']],
+            ['patch-failed', 'patch-unconfirmed', *(f'success-{i}' for i in range(6))],
+        )
 
     def test_direct_test_processes_derive_from_owned_command_and_exit_receipts(self):
         f = Fixture()
