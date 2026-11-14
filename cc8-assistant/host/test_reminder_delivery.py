@@ -385,6 +385,51 @@ os._exit(23)
         self.assertEqual(record['due'], '2026-11-10T12:01:00+08:00')
         self.assertEqual(record['delivery_attempt']['result'], 'missed')
 
+    def test_restart_skips_old_repeats_but_delivers_current_occurrence_once(self):
+        base = self.now
+        for repeat, days in (('daily', 2), ('weekly', 14), ('weekdays', 7)):
+            with self.subTest(repeat=repeat):
+                self.now = base
+                path = self.path.with_name(repeat + '.json')
+                self.board = Workspace(path, now=lambda: self.now)
+                self.policy(late_policy='skip', max_late_minutes=10)
+                reminder = self.create(repeat=repeat)
+                occurrence = base + timedelta(days=days, minutes=1)
+                self.now = occurrence + timedelta(minutes=10)
+                self.board = Workspace(path, now=lambda: self.now)
+                self.assertTrue(self.board.expire_reminders())
+                missed = self.board.reminder({'action': 'history'})['reminders'][0]
+                self.assertEqual(missed['delivery_attempt']['due'], reminder['due'])
+                self.assertEqual(missed['delivery_attempt']['result'], 'missed')
+                self.assertEqual(missed['due'], occurrence.isoformat(timespec='seconds'))
+                self.tick()
+                job = self.jobs[-1]
+                claimed = deepcopy(self.scheduler.claims)
+                self.assertEqual(claimed[0]['id'], reminder['id'])
+                current = self.board.snapshot()['reminders'][0]['delivery_attempt']
+                self.assertEqual(current['due'], occurrence.isoformat(timespec='seconds'))
+                job.result = 'completed'
+                job.done.set()
+                self.tick()
+                self.assertIsNone(self.scheduler.job)
+                self.assertFalse(self.board.finish_reminders(claimed, True))
+                next_due = occurrence + timedelta(days=7 if repeat == 'weekly' else 1)
+                self.assertEqual(
+                    self.board.snapshot()['reminders'][0]['due'],
+                    next_due.isoformat(timespec='seconds'),
+                )
+        self.assertEqual(len(self.jobs), 3)
+
+    def test_resume_on_weekend_never_drafts_a_weekday_occurrence(self):
+        self.policy(late_policy='skip', max_late_minutes=10)
+        reminder = self.create(repeat='weekdays', channel='desktop')
+        self.now += timedelta(days=6, minutes=4)
+        self.assertEqual(self.board.claim_reminders(), [])
+        record = self.board.snapshot()['reminders'][0]
+        self.assertEqual(record['due'], '2026-11-16T12:01:00+08:00')
+        self.assertEqual(record['delivery_attempt']['due'], reminder['due'])
+        self.assertEqual(record['delivery_attempt']['channel'], 'desktop')
+
     def test_stale_policy_duplicate_submit_cancelled_turn_and_failed_write(self):
         original = self.board.reminder({'action': 'policy'})['policy']
         args = {'action': 'set_policy', 'policy': {**original, 'quiet_enabled': True}}
