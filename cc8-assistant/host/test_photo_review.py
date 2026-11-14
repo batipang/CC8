@@ -110,6 +110,46 @@ class ReviewGrantTests(unittest.TestCase):
         self.assertFalse(b.session.active)
         self.assertIsNone(b.visual.inbox.pending)
 
+    def test_ocr_diagnostics_keep_selected_mode_and_edit_from_validated_frame(self):
+        b = fixtures.BridgeVisionTests().bridge()
+        b.visual.update_peer({'vision_capture_version': 2, 'vision_review_version': 1})
+        b.on_event({'event': 'vision_request', 'mode': 'ocr', 'nonce': 'a' * 32})
+        b.answer = lambda *a, **k: None
+        original = b.event
+
+        def event(name, **fields):
+            original(name, **fields)
+            if name == 'camera_capture':
+                rows = list(fixtures.events(b.visual.inbox.pending))
+                rows[0].update(requested_mode='hd', edited=True)
+                for row in rows:
+                    b.on_event(row)
+
+        b.event = event
+        b.answer_visual(b.job)
+        row = b.diagnostics.report()['requests'][-1]
+        self.assertIs(row['camera_ocr'], True)
+        self.assertEqual(
+            row['camera_frame'],
+            dict(
+                dimensions=[640, 480], bytes=len(fixtures.jpeg()), requested_mode='hd', edited=True
+            ),
+        )
+
+    def test_edit_metadata_requires_complete_typed_review_grant(self):
+        for review, metadata in (
+            (False, dict(requested_mode='hd', edited=True)),
+            (True, dict(requested_mode='hd', edited=1)),
+            (True, dict(requested_mode='other', edited=False)),
+            (True, dict(requested_mode='standard')),
+        ):
+            inbox = CameraInbox()
+            capture = inbox.begin(1, review=review)
+            begin = next(fixtures.events(capture))
+            self.assertTrue(inbox.feed(dict(begin, **metadata)))
+            self.assertEqual(capture.error, 'request_not_authorized')
+            self.assertIsNone(capture.image)
+
     def test_voice_ocr_uses_the_same_transcription_prompt_and_current_frame(self):
         b = fixtures.BridgeVisionTests().bridge()
         b.on_event({'event': 'vision_request', 'mode': 'ocr', 'nonce': 'a' * 32})

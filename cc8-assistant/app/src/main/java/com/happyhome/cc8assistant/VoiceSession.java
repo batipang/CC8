@@ -2,19 +2,19 @@ package com.happyhome.cc8assistant;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
-import android.content.Context;
 import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.media.*;
-import android.os.SystemClock;
 import android.os.Build;
+import android.os.SystemClock;
 import java.io.*;
 import java.net.*;
 import java.util.concurrent.*;
-import org.json.JSONObject;
 import org.json.JSONArray;
+import org.json.JSONObject;
 
 final class VoiceSession {
   // 设备端资源所有者：前台期间维护双通道、AudioRecord 与 AudioTrack，退出即释放。
@@ -2398,11 +2398,14 @@ final class VoiceSession {
     }
   }
 
-  void imageReady(JSONObject request, byte[] jpeg, int width, int height) {
-    imageReady(request, jpeg, width, height, false);
-  }
-
-  void imageReady(JSONObject request, byte[] jpeg, int width, int height, boolean keepPhoto) {
+  void imageReady(
+      JSONObject request,
+      byte[] jpeg,
+      int width,
+      int height,
+      boolean keepPhoto,
+      boolean requestedHD,
+      boolean edited) {
     final int gen = request.optInt("vision_generation", -1);
     final String ident = request.optString("request_id");
     final long route = request.optLong("vision_route", -1);
@@ -2418,6 +2421,8 @@ final class VoiceSession {
                 Wire.put(head, "width", width);
                 Wire.put(head, "height", height);
                 Wire.put(head, "sha256", hex.toString());
+                Wire.put(head, "requested_mode", requestedHD ? "hd" : "standard");
+                Wire.put(head, "edited", edited);
                 if (keepPhoto && Boolean.TRUE.equals(request.opt("followup_allowed")))
                   Wire.put(head, "retain_for_followup", true);
                 sendCameraEvent(head, gen, ident, route);

@@ -101,14 +101,19 @@ class CameraOcrTests(unittest.TestCase):
         data = ocr.template(use_receipts=True)
         standard, hd, failed = '1' * 32, '2' * 32, '3' * 32
         report = dict(ok=True, schema=1, contains_content=False, requests=[])
-        for ident, dimensions in ((standard, [640, 480]), (hd, [960, 1280])):
+        for mode, ident, dimensions in (
+            ('standard', standard, [640, 480]),
+            ('hd', hd, [960, 1280]),
+        ):
             report['requests'].append(
                 dict(
                     request_id=ident,
                     origin='vision',
                     camera_ocr=True,
                     outcome='completed',
-                    camera_frame=dict(dimensions=dimensions, bytes=1000),
+                    camera_frame=dict(
+                        dimensions=dimensions, bytes=1000, requested_mode=mode, edited=False
+                    ),
                 )
             )
         report['requests'].append(
@@ -134,6 +139,19 @@ class CameraOcrTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 ocr.score(data, diagnostics=report)
             first[key] = previous
+        frame = first['camera_frame']
+        for metadata, reason in (
+            ({}, 'capture_metadata_missing'),
+            (dict(requested_mode='hd', edited=False), 'mode_mismatch'),
+            (dict(requested_mode='standard', edited=True), 'edited_frame'),
+        ):
+            first['camera_frame'] = dict(dimensions=[640, 480], bytes=1000, **metadata)
+            excluded = ocr.score(data, diagnostics=report)
+            self.assertEqual(excluded['recognized_pairs'], 0)
+            self.assertEqual(excluded['samples'][0]['standard']['comparison_exclusion'], reason)
+            self.assertEqual(excluded['excluded_pairs'][reason], 1)
+            self.assertFalse(excluded['full_coverage'])
+        first['camera_frame'] = frame
         data['samples']['card-01']['hd']['request_id'] = standard
         with self.assertRaisesRegex(ValueError, 'reused'):
             ocr.score(data, diagnostics=report)

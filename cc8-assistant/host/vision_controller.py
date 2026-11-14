@@ -583,7 +583,12 @@ class VisionController:
                     return
                 if not retained and not window:
                     self.hooks.diagnostics().camera_frame(
-                        generation, capture.width, capture.height, len(image)
+                        generation,
+                        capture.width,
+                        capture.height,
+                        len(image),
+                        requested_mode=capture.requested_mode,
+                        edited=capture.edited,
                     )
                     self.hooks.metric('vision_frames_received', increment=True)
             if not retained and not window:
