@@ -387,6 +387,14 @@ class ActionCheck extends Activity {
     AlertDialog choice=AlertDialog.last;s.change();choice.item(0);
     yes(s.sent.isEmpty(),"Old result choice must not reveal on a new route");break;
    }
+   case "window_source":{
+    JSONObject row=task("completed");row.values.put("window_input",new JSONObject("application","文档","title","示例窗口","window_id",7,"width",640,"height",480));
+    c.resultDetails.open(row,false,s.routeEpoch);
+    LinearLayout layout=(LinearLayout)((ScrollView)AlertDialog.last.builder.view).child;
+    String body=((TextView)layout.children.get(0)).getText().toString();
+    yes(body.contains("示例窗口")&&body.contains("640 × 480")&&body.contains("窗口编号：7"),"Window source details must be visible independently of Dot provenance");
+    yes(layout.children.size()==1&&s.sent.isEmpty(),"Historic window metadata cannot reopen capture or locate a file");break;
+   }
    case "result_bad_receipt":{
     c.resultDetails.open(sourceTask("delete","completed"),false,s.routeEpoch);locateButton().performClick();AlertDialog.last.item(0);
     c.resultDetails.open(sourceTask("update","failed"),false,s.routeEpoch);locateButton().performClick();AlertDialog.last.item(0);
@@ -699,6 +707,9 @@ boolean savedTaskRequest(String requestId,String action,String id,long ignored){
 
     def test_saved_handoff_list_and_detail_keep_pending_status(self):
         self.scenario('saved_handoff')
+
+    def test_window_input_receipt_is_visible_without_command_or_file_action(self):
+        self.scenario('window_source')
 
     def test_saved_handoff_requires_confirmation_on_the_same_route(self):
         self.scenario('saved_open_handoff')

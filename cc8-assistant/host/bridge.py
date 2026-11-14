@@ -588,8 +588,8 @@ class Bridge:
     def respond_job(self, job):
         return self.response.respond_job(job)
 
-    def answer(self, text, generation, image=None):
-        return self.response.answer(text, generation, image=image)
+    def answer(self, text, generation, image=None, *, window_input=None):
+        return self.response.answer(text, generation, image=image, window_input=window_input)
 
 
 def main():

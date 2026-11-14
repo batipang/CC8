@@ -18,6 +18,39 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class UpgradeTests(unittest.TestCase):
+    def test_window_receipt_archive_blocks_older_reader_and_reports_no_content(self):
+        from saved_tasks import SavedTasks
+        from test_saved_tasks import task
+
+        with tempfile.TemporaryDirectory() as folder:
+            before, after = self.manifests(folder)
+            path = before / 'device-access/private/voice-runtime/saved-task-results.json'
+            path.parent.mkdir(parents=True, mode=0o700)
+            reader = after / 'cc8-assistant/host/saved_tasks.py'
+            reader.parent.mkdir(parents=True)
+            reader.write_text("if value['schema_version'] not in (1, 2): raise ValueError()\n")
+            item = {
+                **task(),
+                'window_input': {
+                    'window_id': 9,
+                    'application': 'Document',
+                    'title': 'PRIVATE_TITLE',
+                    'width': 640,
+                    'height': 480,
+                },
+            }
+            SavedTasks(path).save(item)
+            raw = path.read_bytes()
+            plan = upgrade.plan(before, after)
+            self.assertFalse(plan['saved_task_storage']['compatible'])
+            self.assertEqual(plan['saved_task_storage']['reader_max_version'], 2)
+            self.assertNotIn('PRIVATE_TITLE', str(plan))
+            code, _, _ = self.invoke(['plan', '--from-root', str(before), '--to-root', str(after)])
+            self.assertEqual(code, 2)
+            reader.write_text('READER_VERSION = 3\n')
+            self.assertTrue(upgrade.plan(before, after)['saved_task_storage']['compatible'])
+            self.assertEqual(path.read_bytes(), raw)
+
     def test_scheduled_summary_format_blocks_old_recovery_without_export_or_migration(self):
         from report_watch_store import ReportWatchStore
         from test_report_watch_store import SOURCE

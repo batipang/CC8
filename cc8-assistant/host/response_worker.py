@@ -484,7 +484,9 @@ class ResponseWorker:
         finally:
             self.busy = False
 
-    def answer(self, text, generation, image=None, *, live=None, report_followup=None):
+    def answer(
+        self, text, generation, image=None, *, live=None, report_followup=None, window_input=None
+    ):
         def current():
             return self.hooks.valid(generation) and (live is None or live.current())
 
@@ -515,7 +517,7 @@ class ResponseWorker:
                 return
             self.hooks.diagnostics().ensure(generation, 'vision' if image is not None else 'text')
             self.hooks.diagnostics().mark(generation, 'brain_start')
-            task_id = self.hooks.workspace().task_start(generation, text)
+            task_id = self.hooks.workspace().task_start(generation, text, window_input=window_input)
             self.reading.begin(task_id, generation)
         result_text = ['']
         clauses = None

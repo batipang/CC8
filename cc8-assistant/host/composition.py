@@ -160,7 +160,9 @@ def build_components(
                 host.transport_hub.pairing.token, challenge, nonce, generation
             ),
             enqueue=lambda job: host.enqueue_response(job),
-            answer=lambda text, generation, image: host.answer(text, generation, image=image),
+            answer=lambda text, generation, image, **source: host.answer(
+                text, generation, image=image, **source
+            ),
             answer_completed=lambda: host.brain.last_metrics.get('completed'),
             metric=host.record_metric,
             log=lambda name, **fields: host.log(name, **fields),

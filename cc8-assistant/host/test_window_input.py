@@ -238,6 +238,46 @@ class WindowVisionTests(unittest.TestCase):
         self.assertFalse(hasattr(bridge, 'job'))
         self.assertEqual(bridge.events[-1][0], 'vision_unavailable')
 
+    def test_window_metadata_survives_real_response_and_explicit_save_without_pixels(self):
+        from bridge import Bridge
+        from saved_tasks import SavedTasks
+
+        bridge = self.bridge()
+        bridge.answer = Bridge.answer.__get__(bridge)
+        selected = decode_result(response(), IDENT)
+        bridge.speak = lambda *args: True
+
+        class Brain:
+            last_metrics = {'completed': True}
+
+            def vision_clauses(self, text, image, history, current, update):
+                if image != selected.image:
+                    raise AssertionError('Wrong input image')
+                yield '已分析窗口'
+
+        with (
+            patch('vision_controller.window_available', return_value=True),
+            patch('vision_controller.WindowPicker') as factory,
+        ):
+            factory.return_value.choose.return_value = selected
+            bridge.on_event(dict(event='vision_request', nonce=IDENT, mode='mac_window'))
+            bridge.brain = Brain()
+            bridge.answer_visual(bridge.job)
+        task = bridge.workspace.snapshot()['tasks'][0]
+        self.assertEqual(task['status'], 'completed')
+        self.assertEqual(task['window_input'], selected.receipt())
+        with tempfile.TemporaryDirectory() as folder:
+            archive = Path(folder) / 'results.json'
+            store = SavedTasks(archive)
+            store.save(task)
+            self.assertEqual(SavedTasks(archive).snapshot()[0]['window_input'], selected.receipt())
+            saved = json.loads(archive.read_bytes())
+            self.assertEqual(saved['schema_version'], 3)
+            self.assertNotIn('image_base64', str(saved))
+            self.assertNotIn('process_id', str(saved))
+            self.assertTrue(store.delete(task['id']))
+            self.assertEqual(json.loads(archive.read_bytes())['schema_version'], 2)
+
     def test_handover_while_choosing_rejects_late_pixels_and_preserves_new_owner(self):
         bridge = self.bridge()
         with (

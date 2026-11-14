@@ -41,13 +41,60 @@ final class ResultDetailsDialog {
 
   void open(JSONObject record, boolean saved, long route) {
     JSONObject source = record.optJSONObject("provenance");
-    if (source == null) {
+    JSONObject window = record.optJSONObject("window_input");
+    if (source == null && window == null) {
       toast("这条旧记录未保存结构化来源，不能从答复文字推测文件或会话。");
       return;
     }
     StringBuilder body = new StringBuilder();
     body.append("任务记录：").append(record.optString("id"));
     body.append("\n结束时间：").append(record.optString("finished_at", "旧记录未保存"));
+    if (window != null) {
+      body.append("\n\n输入来源：Mac 单窗口截图");
+      body.append("\n应用：").append(window.optString("application", "未知"));
+      body.append("\n窗口：").append(window.optString("title", "未命名窗口"));
+      body.append("\n当时的窗口编号：").append(window.optString("window_id"));
+      body.append("\n截图尺寸：")
+          .append(window.optInt("width", 0))
+          .append(" × ")
+          .append(window.optInt("height", 0));
+    }
+    JSONArray files = null;
+    if (source != null) files = appendProvenance(body, source);
+    TextView text = new TextView(activity);
+    text.setText(body.toString());
+    text.setTextSize(30);
+    text.setTextIsSelectable(true);
+    text.setPadding(24, 18, 24, 18);
+    LinearLayout content = new LinearLayout(activity);
+    content.setOrientation(LinearLayout.VERTICAL);
+    content.addView(text);
+    if (files != null && files.length() > 0 && session.supportsResultProvenance()) {
+      JSONArray choices = files;
+      Button locate = new Button(activity);
+      locate.setText("在 Mac 定位文件");
+      locate.setTextSize(28);
+      locate.setOnClickListener(v -> chooseFile(record.optString("id"), choices, saved, route));
+      content.addView(locate);
+    }
+    ScrollView scroll = new ScrollView(activity);
+    scroll.addView(content);
+    new LargeDialogBuilder(activity)
+        .setTitle("来源与文件 · 实际回执")
+        .setView(scroll)
+        .setPositiveButton("关闭", null)
+        .setNeutralButton(
+            "复制来源与回执",
+            (d, n) -> {
+              ClipboardManager clipboard =
+                  (ClipboardManager) activity.getSystemService(Activity.CLIPBOARD_SERVICE);
+              clipboard.setPrimaryClip(ClipData.newPlainText("结果来源与文件回执", body.toString()));
+              toast("已复制；不会自动发送到其他聊天。");
+            })
+        .show();
+  }
+
+  private JSONArray appendProvenance(StringBuilder body, JSONObject source) {
     boolean report = "work_report".equals(source.optString("provider"));
     body.append(report ? "\n只读汇报来源 · 未追加原聊天" : "\n独立 Dot 语音执行 · 临时会话");
     body.append("\n主机：").append(source.optString("host"));
@@ -81,36 +128,7 @@ final class ResultDetailsDialog {
                     : "declined".equals(file.optString("status")) ? "已拒绝" : "失败");
         body.append("\n回执项目：").append(file.optString("item_id"));
       }
-    TextView text = new TextView(activity);
-    text.setText(body.toString());
-    text.setTextSize(30);
-    text.setTextIsSelectable(true);
-    text.setPadding(24, 18, 24, 18);
-    LinearLayout content = new LinearLayout(activity);
-    content.setOrientation(LinearLayout.VERTICAL);
-    content.addView(text);
-    if (files != null && files.length() > 0 && session.supportsResultProvenance()) {
-      Button locate = new Button(activity);
-      locate.setText("在 Mac 定位文件");
-      locate.setTextSize(28);
-      locate.setOnClickListener(v -> chooseFile(record.optString("id"), files, saved, route));
-      content.addView(locate);
-    }
-    ScrollView scroll = new ScrollView(activity);
-    scroll.addView(content);
-    new LargeDialogBuilder(activity)
-        .setTitle("来源与文件 · 实际回执")
-        .setView(scroll)
-        .setPositiveButton("关闭", null)
-        .setNeutralButton(
-            "复制来源与回执",
-            (d, n) -> {
-              ClipboardManager clipboard =
-                  (ClipboardManager) activity.getSystemService(Activity.CLIPBOARD_SERVICE);
-              clipboard.setPrimaryClip(ClipData.newPlainText("结果来源与文件回执", body.toString()));
-              toast("已复制；不会自动发送到其他聊天。");
-            })
-        .show();
+    return files;
   }
 
   private void chooseFile(String taskId, JSONArray files, boolean saved, long route) {

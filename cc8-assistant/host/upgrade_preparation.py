@@ -134,6 +134,73 @@ def reminder_storage_gate(before_root, after_root):
     }
 
 
+def saved_task_storage_gate(before_root, after_root):
+    from reminder_store import ReminderStore
+
+    reader = Path(after_root) / 'cc8-assistant/host/saved_tasks.py'
+    maximum = 0
+    if reader.is_file():
+        tree = ast.parse(reader.read_text())
+        # Legacy readers accepted exactly 1, or a literal tuple of 1 and 2.
+        # Do not infer support from the mere presence of a store module.
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Compare)
+                and isinstance(node.left, ast.Subscript)
+                and isinstance(node.left.slice, ast.Constant)
+                and node.left.slice.value == 'schema_version'
+                and len(node.ops) == 1
+            ):
+                fallback = node.comparators[0]
+                if (
+                    isinstance(node.ops[0], ast.NotEq)
+                    and isinstance(fallback, ast.Constant)
+                    and fallback.value == 1
+                ):
+                    maximum = 1
+                if (
+                    isinstance(node.ops[0], ast.NotIn)
+                    and isinstance(fallback, ast.Tuple)
+                    and len(fallback.elts) == 2
+                    and all(isinstance(part, ast.Constant) for part in fallback.elts)
+                    and ast.literal_eval(fallback) == (1, 2)
+                ):
+                    maximum = 2
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == 'READER_VERSION' for t in node.targets
+            ):
+                if (
+                    not isinstance(node.value, ast.Constant)
+                    or type(node.value.value) is not int
+                    or node.value.value not in (1, 2, 3)
+                ):
+                    raise ValueError('Invalid saved task reader declaration')
+                maximum = node.value.value
+    disk = ReminderStore(
+        Path(before_root) / 'device-access/private/voice-runtime/saved-task-results.json',
+        max_bytes=512 * 1024,
+    )
+    value = disk.load()
+    version = 1
+    if value is not None:
+        if (
+            not isinstance(value, dict)
+            or set(value) != {'schema_version', 'items'}
+            or type(value['schema_version']) is not int
+            or value['schema_version'] not in (1, 2, 3)
+        ):
+            raise ValueError('Invalid saved task store schema')
+        version = value['schema_version']
+    return dict(
+        present=value is not None,
+        store_version=version,
+        reader_max_version=maximum,
+        compatible=value is None or version <= maximum,
+        task_content_exported=False,
+    )
+
+
 def report_watch_storage_gate(before_root, after_root):
     """Optional summary format may outgrow recovery; inspect metadata without exporting it."""
     from reminder_store import ReminderStore
@@ -227,9 +294,11 @@ def plan(before_root, after_root, assistant_apk=None):
             'mixed_version_transport_plan',
             'reminder_store_compatibility',
             'report_watch_store_compatibility',
+            'saved_task_store_compatibility',
         ],
         'reminder_storage': reminder_storage_gate(before_root, after_root),
         'report_watch_storage': report_watch_storage_gate(before_root, after_root),
+        'saved_task_storage': saved_task_storage_gate(before_root, after_root),
         'identity_storage': identity_storage_gate(before_root, after_root),
     }
     if assistant_apk is not None:
@@ -306,6 +375,12 @@ def verify_assistant_transition(
         raise ValueError(
             'Scheduled report store is not readable by candidate/recovery; keep it intact'
         )
+    task_gates = {
+        name: saved_task_storage_gate(roots[0], target)
+        for name, target in (('candidate', roots[1]), ('recovery', roots[2]))
+    }
+    if not all(gate['compatible'] for gate in task_gates.values()):
+        raise ValueError('Saved task store is not readable by candidate/recovery; keep it intact')
     identity_gates = {
         name: identity_storage_gate(roots[0], target)
         for name, target in (('candidate', roots[1]), ('recovery', roots[2]))
@@ -387,6 +462,7 @@ def verify_assistant_transition(
         'device_acceptance': 'not_asserted',
         'reminder_storage': reminder_gates,
         'report_watch_storage': watch_gates,
+        'saved_task_storage': task_gates,
         'identity_storage': identity_gates,
         'recovery_source': recovery_source,
         'transport_compatibility': {
@@ -707,6 +783,7 @@ def main(argv=None):
             not value['declared_protocol_compatible']
             or not value['reminder_storage']['compatible']
             or not value['report_watch_storage']['compatible']
+            or not value['saved_task_storage']['compatible']
             or not value['identity_storage']['compatible']
         ):
             return 2

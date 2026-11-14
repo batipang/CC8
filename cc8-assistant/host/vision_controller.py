@@ -531,6 +531,7 @@ class VisionController:
         retained = isinstance(job, PhotoReply)
         window = job.origin == 'mac_window'
         picker = None
+        window_input = None
         question = job.text
         try:
             with self.hooks.lock:
@@ -561,6 +562,7 @@ class VisionController:
                 selected = picker.choose(job.text, job.nonce, lambda: self.hooks.valid(generation))
                 image = selected.image
                 question = selected.prompt()
+                window_input = selected.receipt()
                 selected = None
             elif not retained:
                 self.hooks.status('thinking', '正在打开摄像头 · 预览 5 秒后拍摄给 Dot')
@@ -591,7 +593,10 @@ class VisionController:
                     width=capture.width,
                     height=capture.height,
                 )
-            self.hooks.answer(question, generation, image=image)
+            if window_input is not None:
+                self.hooks.answer(question, generation, image=image, window_input=window_input)
+            else:
+                self.hooks.answer(question, generation, image=image)
             outcome = 'failed' if self.hooks.answer_completed() is False else 'completed'
             with self.hooks.lock:
                 if outcome == 'completed' and self.hooks.valid(generation):
