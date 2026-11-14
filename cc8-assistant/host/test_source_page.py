@@ -1,5 +1,6 @@
 """Actual public-reader parsing, pinned DNS and bounded child I/O; no internet."""
 
+import json
 import socket
 import subprocess
 import sys
@@ -8,7 +9,17 @@ import time
 import unittest
 from unittest.mock import patch
 
-from source_page import MAX_BYTES, MAX_TEXT, PageError, addresses, fetch, headers, read_page
+from source_page import (
+    MAX_BYTES,
+    MAX_METADATA_CHARS,
+    MAX_TEXT,
+    PageError,
+    addresses,
+    fetch,
+    headers,
+    read_page,
+)
+from web_evidence import WebEvidence
 
 
 def response(body=b'<title>Article</title><p>Actual page text.</p>', status=200, **fields):
@@ -60,6 +71,23 @@ class PageReaderTests(unittest.TestCase):
         self.rows = [response(**{'Last-Modified': 'Tue, 10 Nov 2026 01:00:00 GMT'})]
         self.assertEqual(self.read('https://example.com/2026/11/10/page')['publication_labels'], [])
 
+    def test_parsely_publication_label_is_distinct_from_updates_and_events(self):
+        self.rows = [
+            response(
+                b'<meta property="og:updated_time" content="2026-05-07T11:39:50-04:00">'
+                b'<meta name="parsely-pub-date" content="2026-04-11T02:31:50Z">'
+                b'<meta name="parsely-pub-date" content="2026-02-30T02:31:50Z">'
+                b'<time datetime="2026-04-10">Event date</time><p>Story</p>'
+            )
+        ]
+        result = self.read()
+        self.assertEqual(result['publication_labels'], ['2026-04-11T02:31:50Z'])
+        evidence = WebEvidence(clock=lambda: 'now')
+        evidence.page(result)
+        row = evidence.sources([{'url': result['url'], 'title': 'Story'}])[0]
+        self.assertEqual(row['page_dates'], '2026-04-11T02:31:50Z')
+        self.assertEqual(row['event_at'], '')
+
     def test_page_control_characters_are_normalized_before_native_display(self):
         self.rows = [response('<p>first\x00 second\x85 third</p>'.encode())]
         self.assertEqual(self.read()['text'], 'first second third')
@@ -78,6 +106,85 @@ class PageReaderTests(unittest.TestCase):
             response(b'<meta property="article:published_time" content="A" content="B"><p>text</p>')
         ]
         self.assertEqual(self.read()['publication_labels'], [])
+
+    def test_json_ld_publication_label_from_article_graph_keeps_conflicting_meta(self):
+        self.rows = [
+            response(
+                b'<meta name="datePublished" content="2026-11-10">'
+                b'<script type="application/ld+json">{"@context":"https://schema.org",'
+                b'"@graph":[{"@type":"WebSite","datePublished":"2000-01-01"},'
+                b'{"@type":["Article","NewsArticle"],"datePublished":"2026-11-11T07:00:00Z",'
+                b'"dateModified":"2026-11-13","description":"private fixture text"}]}</script>'
+                b'<p>Visible story</p>'
+            )
+        ]
+        result = self.read()
+        self.assertEqual(result['publication_labels'], ['2026-11-10', '2026-11-11T07:00:00Z'])
+        self.assertEqual(result['text'], 'Visible story')
+        self.assertFalse(result['facts_verified'])
+        evidence = WebEvidence(clock=lambda: 'now')
+        evidence.page(result)
+        row = evidence.sources([{'url': result['url'], 'title': 'Story'}])[0]
+        self.assertEqual(row['page_dates'], '2026-11-10；2026-11-11T07:00:00Z')
+        self.assertEqual(row['event_at'], '')
+        self.assertFalse(row['body_verified'])
+
+    def test_json_ld_ignores_non_article_bad_dates_duplicate_keys_and_ambiguous_graph(self):
+        base = {'@context': 'https://schema.org', '@type': 'NewsArticle'}
+        for raw in (
+            json.dumps({**base, '@type': 'Event', 'datePublished': '2026-11-10'}),
+            json.dumps({**base, 'dateModified': '2026-11-10', 'startDate': '2026-11-12'}),
+            json.dumps({**base, 'datePublished': '2026-02-30'}),
+            json.dumps(
+                {
+                    **base,
+                    '@context': {'datePublished': 'https://example.com'},
+                    'datePublished': '2026-11-10',
+                }
+            ),
+            '{"@context":"https://schema.org","@type":"Article","datePublished":"2026-11-10","datePublished":"2026-11-11"}',
+            json.dumps(
+                {
+                    '@context': base['@context'],
+                    '@graph': [
+                        {'@type': 'NewsArticle', 'datePublished': '2026-11-10'},
+                        {'@type': 'BlogPosting', 'datePublished': '2026-11-11'},
+                    ],
+                }
+            ),
+        ):
+            with self.subTest(raw=raw):
+                self.rows = [
+                    response(
+                        f'<script type="application/ld+json">{raw}</script><p>Story</p>'.encode()
+                    )
+                ]
+                self.assertEqual(self.read()['publication_labels'], [])
+
+    def test_json_ld_processing_is_bounded_and_does_not_hide_page_text(self):
+        block = b'<script type="application/ld+json">%s</script>'
+        valid = b'{"@context":"https://schema.org","@type":"Article","datePublished":"2026-11-10"}'
+        ignored = block % (b' ' * MAX_METADATA_CHARS + valid)
+        self.rows = [response(ignored + block % b'{}' * 3 + block % valid + b'<p>Story</p>')]
+        result = self.read()
+        self.assertEqual(result['publication_labels'], [])
+        self.assertEqual(result['text'], 'Story')
+
+    def test_only_inline_json_ld_with_an_unambiguous_media_type_is_read(self):
+        valid = b'{"@context":"https://schema.org","@type":"Article","datePublished":"2026-11-10"}'
+        self.rows = [
+            response(
+                b'<script src="https://other.example/data" type="application/ld+json">'
+                + valid
+                + b'</script><script type="text/javascript" type="application/ld+json">'
+                + valid
+                + b'</script><p>Story</p>'
+            )
+        ]
+        result = self.read()
+        self.assertEqual(result['publication_labels'], [])
+        self.assertEqual(result['text'], 'Story')
+        self.assertEqual(self.resolves, ['example.com'])
 
     def test_every_redirect_is_resolved_and_pinned_with_one_shared_deadline(self):
         self.rows = [response(status=302, Location='https://other.example/final'), response()]

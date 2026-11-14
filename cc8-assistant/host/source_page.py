@@ -5,8 +5,10 @@ proxies or automatic redirects; each redirect is resolved and checked again.
 The caller receives untrusted page text, never a claim that its facts are true.
 """
 
+from datetime import datetime
 from html.parser import HTMLParser
 import ipaddress
+import json
 import queue
 import re
 import selectors
@@ -21,6 +23,15 @@ from web_search import now, public_url
 MAX_BYTES = 1024 * 1024
 MAX_HEADERS = 32 * 1024
 MAX_TEXT = 20000
+MAX_METADATA_BLOCKS = 4
+MAX_METADATA_CHARS = 16384
+SCHEMA_CONTEXTS = ('https://schema.org', 'http://schema.org')
+ARTICLE_TYPES = frozenset(('Article', 'NewsArticle', 'BlogPosting'))
+PUBLICATION_DATE = re.compile(
+    r'[0-9]{4}-[0-9]{2}-[0-9]{2}'
+    r'(?:T[0-9]{2}:[0-9]{2}(?::[0-9]{2}(?:\.[0-9]{1,6})?)?'
+    r'(?:Z|[+-][0-9]{2}:[0-5][0-9])?)?'
+)
 DNS_SLOTS = threading.BoundedSemaphore(2)
 FAILURE_CODES = frozenset(
     {
@@ -223,6 +234,16 @@ def headers(raw):
     return final
 
 
+def iso_publication_label(value):
+    if not isinstance(value, str) or not PUBLICATION_DATE.fullmatch(value):
+        return None
+    try:
+        datetime.fromisoformat(value[:-1] + '+00:00' if value.endswith('Z') else value)
+    except ValueError:
+        return None
+    return value
+
+
 class PageText(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
@@ -231,8 +252,20 @@ class PageText(HTMLParser):
         self.title = []
         self.parts = []
         self.dates = []
+        self.metadata = None
+        self.metadata_blocks = 0
+
+    def add_date(self, value):
+        value = visible_text(value)
+        if value and len(value) <= 64 and value not in self.dates and len(self.dates) < 8:
+            self.dates.append(value)
 
     def handle_starttag(self, tag, attrs):
+        if tag == 'script' and not self.hidden and self.metadata_blocks < MAX_METADATA_BLOCKS:
+            types = [(value or '').strip().lower() for name, value in attrs if name == 'type']
+            if types == ['application/ld+json'] and all(name != 'src' for name, _ in attrs):
+                self.metadata_blocks += 1
+                self.metadata = ''
         if tag in ('script', 'style', 'noscript', 'template'):
             self.hidden += 1
         if tag == 'title':
@@ -246,22 +279,66 @@ class PageText(HTMLParser):
             if key in ('article:published_time', 'datepublished', 'dc.date.issued'):
                 # Preserve the publisher's string. Neither this nor an HTTP
                 # Last-Modified header proves an event or publication date.
-                value = visible_text(value)
-                if value and len(value) <= 64 and value not in self.dates and len(self.dates) < 8:
-                    self.dates.append(value)
+                self.add_date(value)
+            elif key == 'parsely-pub-date' and (date := iso_publication_label(value.strip())):
+                self.add_date(date)
 
     def handle_endtag(self, tag):
+        if tag == 'script' and self.metadata is not None:
+            value = article_publication_date(self.metadata)
+            self.metadata = None
+            if value is not None:
+                self.add_date(value)
         if tag in ('script', 'style', 'noscript', 'template'):
             self.hidden = max(0, self.hidden - 1)
         if tag == 'title':
             self.in_title = False
 
     def handle_data(self, data):
+        if self.metadata is not None:
+            self.metadata = (
+                self.metadata + data
+                if len(self.metadata) + len(data) <= MAX_METADATA_CHARS
+                else None
+            )
         if self.hidden:
             return
         if self.in_title:
             self.title.append(data)
         self.parts.append(data)
+
+
+def unique_json_fields(pairs):
+    result = dict(pairs)
+    if len(result) != len(pairs):
+        raise ValueError('Ambiguous JSON-LD fields')
+    return result
+
+
+def article_publication_date(raw):
+    try:
+        root = json.loads(raw, object_pairs_hook=unique_json_fields)
+        if not isinstance(root, dict) or root.get('@context') not in SCHEMA_CONTEXTS:
+            return None
+        nodes = root.get('@graph', [root])
+        if not isinstance(nodes, list) or len(nodes) > 32:
+            return None
+        articles = []
+        for node in nodes:
+            if not isinstance(node, dict) or '@context' in node and node is not root:
+                continue
+            types = node.get('@type')
+            if isinstance(types, str):
+                types = [types]
+            if isinstance(types, list) and any(
+                isinstance(kind, str) and kind in ARTICLE_TYPES for kind in types
+            ):
+                articles.append(node)
+        if len(articles) != 1:
+            return None
+        return iso_publication_label(articles[0].get('datePublished'))
+    except (ValueError, RecursionError):
+        return None
 
 
 def extract(body, content_type):
