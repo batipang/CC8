@@ -19,7 +19,7 @@ from capture_evidence import FRAME_NS
 from configuration import ROOT, load_config, select_voice_mode
 from dsp import FRAME, VoiceDetector
 from echo_pipeline import CleanFrame
-from gpt_live import Fragment, LivePlayback, LiveSession, pcm16
+from gpt_live import MAX_INPUT_FRAMES, Fragment, LivePlayback, LiveSession, pcm16
 from gpt_live_credentials import load_key
 from gpt_live_trial import LiveTrial
 from reply_types import LiveReply
@@ -137,6 +137,85 @@ class LiveSocketTests(unittest.IsolatedAsyncioTestCase):
             if not task.done():
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
+
+    async def test_delayed_handshake_preserves_order_without_pre_ready_upload(self):
+        received, sent = asyncio.Queue(), asyncio.Queue()
+
+        async def send(message):
+            sent.put_nowait(json.loads(message))
+
+        @asynccontextmanager
+        async def connector(key):
+            yield NS(send=send, recv=received.get)
+
+        hooks = Mock()
+        trial = LiveSession('fixture-only', 'marin', hooks, connector=connector)
+        prefix = b'\x00\x20' * FRAME
+        trial.initial_audio.append(prefix)
+        task = asyncio.create_task(trial.exchange())
+        try:
+            start = await asyncio.wait_for(sent.get(), 2)
+            self.assertEqual(start['type'], 'session.start')
+            # 2.5 seconds of 10 ms capture frames used to overflow the queue
+            # while the socket was still within its allowed startup window.
+            frames = [index.to_bytes(2, 'little') * FRAME for index in range(250)]
+            for frame in frames:
+                trial.feed(frame, True)
+            self.assertFalse(trial.stop.is_set())
+            self.assertTrue(sent.empty())
+            received.put_nowait('{"type":"session.started","session":{"model":"gpt-live-1"}}')
+            expected = prefix + b''.join(frames)
+            actual = bytearray()
+            while len(actual) < len(expected):
+                event = await asyncio.wait_for(sent.get(), 2)
+                self.assertEqual(event['type'], 'session.input_audio.append')
+                actual.extend(base64.b64decode(event['audio']))
+            self.assertEqual(actual, expected)
+            hooks.current.return_value = False
+            self.assertEqual((await asyncio.wait_for(sent.get(), 2))['type'], 'session.close')
+            received.put_nowait('{"type":"session.closed"}')
+            await asyncio.wait_for(task, 2)
+            hooks.closed.assert_called_once_with(trial, False)
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    async def test_capture_invalidated_during_handshake_never_uploads_buffer(self):
+        received, sent = asyncio.Queue(), asyncio.Queue()
+
+        async def send(message):
+            sent.put_nowait(json.loads(message))
+
+        @asynccontextmanager
+        async def connector(key):
+            yield NS(send=send, recv=received.get)
+
+        hooks = Mock()
+        trial = LiveSession('fixture-only', 'marin', hooks, connector=connector)
+        trial.feed(bytes(FRAME * 2), True)
+        task = asyncio.create_task(trial.exchange())
+        try:
+            self.assertEqual((await asyncio.wait_for(sent.get(), 2))['type'], 'session.start')
+            hooks.current.return_value = False
+            received.put_nowait('{"type":"session.started","session":{"model":"gpt-live-1"}}')
+            self.assertEqual((await asyncio.wait_for(sent.get(), 2))['type'], 'session.close')
+            received.put_nowait('{"type":"session.closed"}')
+            await asyncio.wait_for(task, 2)
+            self.assertTrue(sent.empty())
+            hooks.closed.assert_called_once_with(trial, False)
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    def test_stalled_input_queue_is_bounded(self):
+        trial = LiveSession('fixture-only', 'marin', Mock())
+        for _ in range(MAX_INPUT_FRAMES + 1):
+            trial.feed(bytes(FRAME * 2), True)
+        self.assertEqual(trial.audio.qsize(), MAX_INPUT_FRAMES)
+        self.assertTrue(trial.stop.is_set())
+        self.assertTrue(trial.input_overflow.is_set())
 
     async def test_failed_handshake_does_not_upload(self):
         messages = []

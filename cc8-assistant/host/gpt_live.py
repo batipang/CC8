@@ -16,6 +16,8 @@ import uuid
 
 import numpy as np
 
+from audio_signal import FRAME, RATE
+
 MODEL = 'gpt-live-1'
 ENDPOINT = 'wss://api.openai.com/v1/live/sessions'
 INSTRUCTIONS = (
@@ -27,6 +29,11 @@ INSTRUCTIONS = (
 MAX_SESSION_SECONDS = 180
 IDLE_SECONDS = 30
 OUTPUT_GAP = 0.45
+CONNECT_TIMEOUT_SECONDS = 5
+START_TIMEOUT_SECONDS = 5
+# Capture starts at local wake. Hold enough frames for both startup phases
+# plus a short scheduling margin, so a slow handshake does not lose the request.
+MAX_INPUT_FRAMES = (CONNECT_TIMEOUT_SECONDS + START_TIMEOUT_SECONDS + 2) * RATE // FRAME
 
 
 def connect(key):
@@ -39,7 +46,7 @@ def connect(key):
         additional_headers={'Authorization': 'Bearer ' + key},
         ssl=ssl.create_default_context(),
         proxy=None,
-        open_timeout=5,
+        open_timeout=CONNECT_TIMEOUT_SECONDS,
         close_timeout=1,
         max_size=256 * 1024,
         max_queue=8,
@@ -167,7 +174,7 @@ class LiveSession:
     def __init__(self, key, voice, callbacks, *, connector=connect, clock=time.monotonic):
         self.key, self.voice, self.callbacks = key, voice, callbacks
         self.connector, self.clock = connector, clock
-        self.audio = queue.Queue(maxsize=100)
+        self.audio = queue.Queue(maxsize=MAX_INPUT_FRAMES)
         self.results = queue.Queue(maxsize=8)
         self.initial_audio = deque()
         self.stop = threading.Event()
@@ -227,7 +234,7 @@ class LiveSession:
                 if not self.callbacks.current(self):
                     return
                 await self.send(socket, start_message(self.voice))
-                deadline = self.clock() + 5
+                deadline = self.clock() + START_TIMEOUT_SECONDS
                 while not self.stop.is_set() and not self.started.is_set():
                     try:
                         event = await self.receive(socket, 0.05)
