@@ -30,7 +30,7 @@ from report_progress import (
 )
 from result_provenance import validate as validate_provenance
 from saved_tasks import HANDOFF_DRAFT_LABEL
-from report_sources import ReportScope
+from report_sources import MAX_SOURCES, ReportScope
 from thread_queue import MAX_QUEUE_ITEMS
 
 PERIOD_NAMES = {
@@ -374,9 +374,12 @@ def report_text(report, *, include_identity=False):
         )
     if not report['coverage_complete']:
         lines.append('覆盖不完整，不能据此断言没有其他成果。')
+    unconfirmed = report.get('unconfirmed_final_answer', 0)
+    answer_coverage = f'最终答复未核实：{unconfirmed}；' if unconfirmed else ''
     lines.append(
         f'缺完成时间：{report["unknown_completion_time"]}；缺最终答复：{report["missing_final_answer"]}；'
-        f'窗口内失败：{report["failed_turns"]}；中断：{report["interrupted_turns"]}；'
+        + answer_coverage
+        + f'窗口内失败：{report["failed_turns"]}；中断：{report["interrupted_turns"]}；'
         f'读取时仍进行中：{report["active_turns_seen"]}。'
     )
     if report['empty_confirmed']:
@@ -593,9 +596,16 @@ class ReportVoice:
                     return False
                 if item['evidence_complete'] and item['evidence']['unconfirmed_tool_items']:
                     return False
+            unconfirmed = report.get('unconfirmed_final_answer', 0)
+            if (
+                type(unconfirmed) is not int
+                or not 0 <= unconfirmed <= MAX_TURN_PAGES * PAGE_SIZE * MAX_SOURCES
+            ):
+                return False
             if report['coverage_complete'] and (
                 report['unknown_completion_time']
                 or report['missing_final_answer']
+                or unconfirmed
                 or any(not item['evidence_complete'] for item in report['items'])
             ):
                 return False

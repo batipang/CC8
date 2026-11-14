@@ -287,6 +287,18 @@ class VoiceTests(unittest.TestCase):
             voice.answer(ReportCommand('report', 'today'), lambda: current[0])
         self.assertIsNone(voice.snapshot)
 
+    def test_unconfirmed_final_answers_cannot_claim_complete_coverage(self):
+        data = report('部分已确认成果')
+        data['unconfirmed_final_answer'] = 1
+        self.assertFalse(ReportVoice.valid_report(SOURCE, data))
+        data['coverage_complete'] = False
+        self.assertTrue(ReportVoice.valid_report(SOURCE, data))
+        for invalid in (True, -1, 801):
+            data['unconfirmed_final_answer'] = invalid
+            self.assertFalse(ReportVoice.valid_report(SOURCE, data))
+        del data['unconfirmed_final_answer']
+        self.assertTrue(ReportVoice.valid_report(SOURCE, data))
+
     def test_bad_or_missing_evidence_does_not_become_a_successful_report(self):
         for field in ('source_id', 'window_start', 'coverage_complete', 'unknown_completion_time'):
             voice = self.session()

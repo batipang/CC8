@@ -14,6 +14,7 @@ COUNTERS = (
     *TURN_STATUS_COUNTS,
     'unknown_completion_time',
     'missing_final_answer',
+    'unconfirmed_final_answer',
 )
 
 

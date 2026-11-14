@@ -155,6 +155,7 @@ class WorkReportReader:
             'active_turns_seen': 0,
             'unknown_completion_time': 0,
             'missing_final_answer': 0,
+            'unconfirmed_final_answer': 0,
             'coverage_complete': False,
             'history_persisted': False,
             'original_chat_modified': False,
@@ -219,24 +220,32 @@ class WorkReportReader:
                 else:
                     candidates.append((end, ident))
             candidates.sort(reverse=True)
-            if len(candidates) > MAX_CARDS:
-                report['coverage_complete'] = False
-            for completed, ident in candidates[:MAX_CARDS]:
+            selected = candidates[:MAX_CARDS]
+            report['unconfirmed_final_answer'] = len(candidates) - len(selected)
+            for index, (completed, ident) in enumerate(selected):
                 try:
-                    card = self.items(request, source.source_id, ident)
+                    card, exhausted = self.items(request, source.source_id, ident)
                 except DotError as error:
-                    if not report['items'] or error.kind not in PARTIAL_READ_ERRORS:
+                    if error.kind not in PARTIAL_READ_ERRORS:
                         raise
-                    report['coverage_complete'] = False
+                    report['unconfirmed_final_answer'] += len(selected) - index
                     break
                 if card is None:
-                    report['missing_final_answer'] += 1
+                    field = 'missing_final_answer' if exhausted else 'unconfirmed_final_answer'
+                    report[field] += 1
                 else:
                     card.update(turn_id=ident, completed_at=completed)
                     report['items'].append(card)
                     if not card['evidence_complete']:
                         report['coverage_complete'] = False
-            if report['unknown_completion_time'] or report['missing_final_answer']:
+            if any(
+                report[field]
+                for field in (
+                    'unknown_completion_time',
+                    'missing_final_answer',
+                    'unconfirmed_final_answer',
+                )
+            ):
                 report['coverage_complete'] = False
             report['empty_confirmed'] = report['coverage_complete'] and not report['items']
             current()
@@ -303,11 +312,12 @@ class WorkReportReader:
                     text = item.get('text')
                     if not isinstance(text, str) or len(text) > 64000:
                         raise DotError('Invalid work report final answer')
-                    if text.strip():
+                    display = ''.join(c for c in text if ord(c) >= 32 or c == '\n')
+                    if display.strip():
                         last_final = dict(
                             item_id=ident,
-                            excerpt=''.join(c for c in text if ord(c) >= 32 or c == '\n')[:500],
-                            excerpt_truncated=len(text) > 500,
+                            excerpt=display[:500],
+                            excerpt_truncated=len(display) > 500,
                         )
                 elif kind == 'commandExecution':
                     if is_test:
@@ -341,8 +351,8 @@ class WorkReportReader:
                 complete = True
                 break
         if last_final is None:
-            return None
-        return dict(
+            return None, complete
+        card = dict(
             **last_final,
             evidence=evidence,
             evidence_complete=complete and evidence['unconfirmed_tool_items'] == 0,
@@ -359,3 +369,4 @@ class WorkReportReader:
                 else {}
             ),
         )
+        return card, complete
