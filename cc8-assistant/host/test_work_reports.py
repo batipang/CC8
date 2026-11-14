@@ -174,6 +174,15 @@ class ReportTests(unittest.TestCase):
             ('sh -c pytest', 'completed', 0),
             ('echo pytest', 'completed', 0),
             ('python -m unittest --help', 'completed', 0),
+            ('python3 tools/test_all.py', 'completed', 0),
+            ('/tmp/dev-venv/bin/python3.13 ./tools/test_all.py --suite host', 'failed', 1),
+            ('python -m tools.test_all --suite installer --suite java', 'completed', 0),
+            ('python -m tools.test_all --suite tooling', 'inProgress', None),
+            ('python tools/test_all.py --help', 'completed', 0),
+            ('python tools/test_all.py --suite', 'completed', 0),
+            ('python tools/test_all.py --suite fake', 'completed', 0),
+            ('tools.test_all', 'completed', 0),
+            ('python tools/test_all.py && echo success', 'completed', 0),
         )
         f.item_pages['turn-1'][0]['data'].extend(
             dict(
@@ -190,9 +199,10 @@ class ReportTests(unittest.TestCase):
             for i, (cmd, state, code) in enumerate(rows)
         )
         item = self.report(f)['items'][0]
-        self.assertEqual(item['test_processes'], dict(exit_zero=1, exit_nonzero=2, unconfirmed=3))
+        self.assertEqual(item['test_processes'], dict(exit_zero=3, exit_nonzero=3, unconfirmed=4))
         self.assertNotIn('PRIVATE_OUTPUT', str(item))
         self.assertNotIn('test_suite.py', str(item))
+        self.assertNotIn('tools/test_all.py', str(item))
         self.assertEqual(item['verification'], 'not_assessed')
 
     def test_no_final_answer_is_missing_evidence_instead_of_empty_success(self):
