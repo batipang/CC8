@@ -26,7 +26,13 @@ ROOT = Path(__file__).resolve().parents[2]
 
 class WindowSelectionEnded(RuntimeError):
     def __init__(self, reason):
-        if reason not in ('cancelled', 'expired', 'selection_invalid', 'capture_failed'):
+        if reason not in (
+            'cancelled',
+            'expired',
+            'selection_invalid',
+            'capture_failed',
+            'permission_denied',
+        ):
             raise ValueError('Invalid window selection outcome')
         self.reason = reason
         super().__init__('Window selection did not complete')
@@ -127,6 +133,8 @@ def decode_result(data, ident):
     if not isinstance(value, dict) or value.get('request_id') != ident:
         raise ValueError('Window response does not match request')
     if value.get('status') != 'completed':
+        if set(value) != {'status', 'request_id'}:
+            raise ValueError('Unexpected fields in terminal window response')
         raise WindowSelectionEnded(value.get('status'))
     if set(value) != {
         'request_id',

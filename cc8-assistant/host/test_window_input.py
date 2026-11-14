@@ -50,7 +50,7 @@ class WindowProtocolTests(unittest.TestCase):
             'private error', stage='vision', kind='timeout', input_source='mac_window'
         )
         result = feedback(error.stage, error.kind, input_source=error.input_source)
-        self.assertIn('Mac 系统面板', result.message)
+        self.assertIn('Mac 窗口选择已超时', result.message)
         self.assertNotIn('摄像头', result.message)
         self.assertNotIn('private error', result.message)
 
@@ -87,7 +87,18 @@ class WindowProtocolTests(unittest.TestCase):
     def test_cancel_and_timeout_never_return_a_previous_image(self):
         for status in ('cancelled', 'expired', 'capture_failed', 'selection_invalid'):
             with self.subTest(status=status), self.assertRaises(RuntimeError):
-                decode_result(response(status=status), IDENT)
+                decode_result(
+                    (json.dumps(dict(status=status, request_id=IDENT)) + '\n').encode(), IDENT
+                )
+
+    def test_permission_denial_uses_a_payload_free_terminal_envelope(self):
+        terminal = dict(status='permission_denied', request_id=IDENT)
+        with self.assertRaises(WindowSelectionEnded) as failure:
+            decode_result((json.dumps(terminal) + '\n').encode(), IDENT)
+        self.assertEqual(failure.exception.reason, 'permission_denied')
+        terminal['message'] = 'PRIVATE_WINDOW_PERMISSION_ERROR'
+        with self.assertRaises(ValueError):
+            decode_result((json.dumps(terminal) + '\n').encode(), IDENT)
 
     def test_device_window_mode_requires_valid_explicit_nonce(self):
         validate_device_event(dict(event='vision_request', mode='mac_window', nonce=IDENT))
@@ -313,6 +324,30 @@ class WindowVisionTests(unittest.TestCase):
         self.assertIsNone(bridge.visual.generation)
         self.assertIsNone(bridge.visual.window_picker)
         self.assertFalse(any(name == 'runtime_error' for name, _ in bridge.events))
+
+    def test_denied_permission_reports_screen_recording_and_does_not_send_an_image(self):
+        bridge = self.bridge()
+        bridge.status = lambda phase, message: bridge.event('status', phase=phase, message=message)
+        with (
+            patch('vision_controller.window_available', return_value=True),
+            patch('vision_controller.WindowPicker') as factory,
+        ):
+            factory.return_value.choose.side_effect = WindowSelectionEnded('permission_denied')
+            bridge.on_event(dict(event='vision_request', nonce=IDENT, mode='mac_window'))
+            bridge.answer_visual(bridge.job)
+        self.assertFalse(hasattr(bridge, 'answered'))
+        self.assertEqual(bridge.metrics['vision_last_error'], 'credential_or_permission')
+        self.assertEqual(bridge.metrics['vision_last_result'], 'failed')
+        errors = [
+            fields['message']
+            for name, fields in bridge.events
+            if name == 'status' and fields.get('phase') == 'error'
+        ]
+        self.assertEqual(len(errors), 1)
+        self.assertIn('Mac 未授予屏幕录制权限', errors[0])
+        self.assertNotIn('摄像头', errors[0])
+        self.assertFalse(any(name == 'camera_capture' for name, _ in bridge.events))
+        self.assertIsNone(bridge.visual.window_picker)
 
     def test_expired_selection_reports_timeout_with_mac_scope_without_camera_fallback(self):
         bridge = self.bridge()

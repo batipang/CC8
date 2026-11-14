@@ -10,7 +10,7 @@
 
 ## 准备环境
 
-需要 macOS 15.2 及以上。系统选择器由 `SCContentSharingPicker.shared` 提供，固定 `singleWindow`；仅对回调中的窗口过滤器调用一次 `SCScreenshotManager.captureImage`。较旧系统不替换为范围更大的接口。实际权限弹窗仍以当前 macOS 为准。
+需要 macOS 15.2 及以上。系统选择器由 `SCContentSharingPicker.shared` 提供，固定 `singleWindow`；仅对回调中的窗口过滤器调用一次 `SCScreenshotManager.captureImage`。较旧系统不替换为范围更大的接口。实际权限弹窗由 macOS 显示。系统回报屏幕录制权限被拒绝时，CC8 提示到 Mac 系统设置核对权限。系统面板启动失败、取图失败和用户取消分别处理，错误回执只含固定结果和本次请求号。
 
 从确认的源码构建本机私有选择器：
 

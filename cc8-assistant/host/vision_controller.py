@@ -636,13 +636,14 @@ class VisionController:
                             '已取消 Mac 窗口输入，没有发送画面。',
                         )
                         return
+                    kind = error_kind(error)
+                    if window and isinstance(error, WindowSelectionEnded):
+                        kind = {
+                            'expired': 'timeout',
+                            'permission_denied': 'credential_or_permission',
+                        }.get(error.reason, kind)
                     self.hooks.metric(
-                        'vision_last_error',
-                        error.code
-                        if isinstance(error, VisionError)
-                        else 'timeout'
-                        if isinstance(error, WindowSelectionEnded) and error.reason == 'expired'
-                        else error_kind(error),
+                        'vision_last_error', error.code if isinstance(error, VisionError) else kind
                     )
                     stage = self.hooks.diagnostics().current_stage(
                         generation, default='vision' if image is None else 'brain'
@@ -653,9 +654,7 @@ class VisionController:
                         else OperationFailure(
                             'Vision operation failed',
                             stage=stage,
-                            kind='timeout'
-                            if isinstance(error, WindowSelectionEnded) and error.reason == 'expired'
-                            else error_kind(error),
+                            kind=kind,
                             input_source='mac_window' if window else None,
                         )
                     )
