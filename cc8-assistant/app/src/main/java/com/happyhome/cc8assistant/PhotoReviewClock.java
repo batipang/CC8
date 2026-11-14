@@ -3,7 +3,7 @@ package com.happyhome.cc8assistant;
 /** No images: one absolute deadline, distinct task/attempt ownership, at most three shots. */
 final class PhotoReviewClock {
   static final long REVIEW_MS = 70000, ATTEMPT_MS = 11000;
-  private long task, deadline;
+  private long task, deadline, attemptDeadline;
   private int attempt;
   private boolean active, review, ready;
 
@@ -13,6 +13,7 @@ final class PhotoReviewClock {
       throw new IllegalArgumentException("Invalid review clock");
     task++;
     deadline = now + duration;
+    attemptDeadline = now + ATTEMPT_MS;
     attempt = 1;
     active = true;
     review = allowReview;
@@ -25,15 +26,20 @@ final class PhotoReviewClock {
   }
 
   synchronized boolean captured(long token, int shot, long now) {
-    if (!current(token, now) || shot != attempt || ready) return false;
+    if (!framing(token, now) || shot != attempt) return false;
     ready = true;
     return true;
+  }
+
+  synchronized boolean framing(long token, long now) {
+    return current(token, now) && !ready && now < attemptDeadline;
   }
 
   synchronized boolean retake(long token, long now) {
     if (!current(token, now) || !review || !ready || attempt >= 3 || deadline - now < ATTEMPT_MS)
       return false;
     attempt++;
+    attemptDeadline = now + ATTEMPT_MS;
     ready = false;
     return true;
   }

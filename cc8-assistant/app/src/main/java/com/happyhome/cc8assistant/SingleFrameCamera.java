@@ -133,7 +133,7 @@ final class SingleFrameCamera implements TextureView.SurfaceTextureListener {
     final int token = serial;
     ui.postDelayed(
         () -> {
-          if (alive(token) && !reviewClock.reviewing()) fail(token, "camera_timeout");
+          if (alive(token) && !reviewClock.hasFrame()) fail(token, "attempt_timeout");
         },
         PhotoReviewClock.ATTEMPT_MS);
   }
@@ -205,6 +205,12 @@ final class SingleFrameCamera implements TextureView.SurfaceTextureListener {
         retire(token);
         return;
       }
+      final long task = reviewTask;
+      final int shot = reviewClock.attempt();
+      if (!reviewClock.framing(task, SystemClock.elapsedRealtime())) {
+        fail(token, "attempt_timeout");
+        return;
+      }
       if (activity.checkCallingOrSelfPermission(Manifest.permission.CAMERA)
           != PackageManager.PERMISSION_GRANTED) {
         fail(token, "permission_denied");
@@ -233,6 +239,10 @@ final class SingleFrameCamera implements TextureView.SurfaceTextureListener {
         retire(token);
         return;
       }
+      if (!reviewClock.framing(task, SystemClock.elapsedRealtime())) {
+        fail(token, "attempt_timeout");
+        return;
+      }
       Camera.Parameters p = owned.getParameters();
       java.util.List<Camera.Size> sizes = p.getSupportedPreviewSizes();
       if (sizes == null
@@ -248,8 +258,6 @@ final class SingleFrameCamera implements TextureView.SurfaceTextureListener {
         candidates[i][1] = sizes.get(i).height;
       }
       final CaptureProfile limits = profile;
-      final long task = reviewTask;
-      final int shot = reviewClock.attempt();
       int[] selected = PreviewSizes.select(candidates, preferHD, limits.maxEdge, limits.maxPixels);
       if (selected == null) {
         fail(token, "unsupported_preview");
@@ -308,6 +316,10 @@ final class SingleFrameCamera implements TextureView.SurfaceTextureListener {
               fail(token, "invalid_frame");
               return;
             }
+            if (!reviewClock.framing(task, SystemClock.elapsedRealtime())) {
+              fail(token, "camera_timeout");
+              return;
+            }
             frameReceived = true;
             frames[0]++;
             if (frames[0] < 8 || !delay.ready(SystemClock.elapsedRealtime())) {
@@ -355,24 +367,26 @@ final class SingleFrameCamera implements TextureView.SurfaceTextureListener {
   }
 
   private void fail(int token, String reason) {
-    boolean previewLost = "preview_surface_lost".equals(reason);
+    boolean attemptTimeout = "attempt_timeout".equals(reason);
+    boolean framingOnly = attemptTimeout || "preview_surface_lost".equals(reason);
+    String visibleReason = attemptTimeout ? "camera_timeout" : reason;
     worker.post(
         () -> {
-          if (!alive(token) || (previewLost && reviewClock.hasFrame())) return;
+          if (!alive(token) || (framingOnly && reviewClock.hasFrame())) return;
           release();
           ui.post(
               () -> {
-                if (!alive(token) || (previewLost && reviewClock.hasFrame())) return;
+                if (!alive(token) || (framingOnly && reviewClock.hasFrame())) return;
                 boolean report = authorized.current();
                 reviewClock.cancel();
                 wanted = false;
                 opening = false;
-                lastError = reason;
+                lastError = visibleReason;
                 panel.setVisibility(View.GONE);
                 reviewPanel.clear();
                 Result done = result;
                 result = null;
-                if (report && done != null) done.error(reason);
+                if (report && done != null) done.error(visibleReason);
               });
         });
   }
@@ -523,6 +537,7 @@ final class SingleFrameCamera implements TextureView.SurfaceTextureListener {
   public void onSurfaceTextureUpdated(SurfaceTexture texture) {
     if (texture != surface) return;
     if (wanted
+        && reviewClock.framing(reviewTask, SystemClock.elapsedRealtime())
         && frameReceived
         && !delay.started()
         && (reviewClock.attempt() == 1 || texture.getTimestamp() != retakeVisibleBaseline)) {
