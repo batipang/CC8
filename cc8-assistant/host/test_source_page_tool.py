@@ -11,6 +11,7 @@ from voice_tools import VoiceTools
 
 
 URL = 'https://example.com/article'
+READ_FINISHED = '2026-11-14T23:59:58+08:00'
 
 
 class ReadingRpc(FakeRpc):
@@ -69,6 +70,7 @@ class SourceToolTests(unittest.TestCase):
             publication_labels=['2026-11-10'],
             received_bytes=100,
             http_status=200,
+            observed_at=READ_FINISHED,
             facts_verified=False,
             untrusted_page=True,
         )
@@ -94,6 +96,7 @@ class SourceToolTests(unittest.TestCase):
         row = next(payload for kind, payload in events if kind == 'sources')['items'][0]
         self.assertEqual(row['access_evidence'], 'page_body_received')
         self.assertEqual(row['page_excerpt'], rpc.outputs[0]['text'])
+        self.assertEqual(row['observed_at'], READ_FINISHED)
         self.assertIs(row['body_verified'], False)
         self.assertNotIn('原文中', row['page_excerpt'])
 
@@ -101,7 +104,13 @@ class SourceToolTests(unittest.TestCase):
         rpc = ReadingRpc()
         brain = DotBrain(rpc)
         events = []
-        failure = {'ok': False, 'url': URL, 'error': 'unsupported_encoding', 'http_status': 200}
+        failure = {
+            'ok': False,
+            'url': URL,
+            'error': 'unsupported_encoding',
+            'http_status': 200,
+            'observed_at': READ_FINISHED,
+        }
         with patch('dot_client.read_page', return_value=failure):
             list(
                 brain.clauses(
@@ -112,6 +121,7 @@ class SourceToolTests(unittest.TestCase):
         self.assertEqual(row['access_evidence'], 'page_fetch_failed')
         self.assertEqual(row['page_error_code'], 'unsupported_encoding')
         self.assertEqual(row['page_http_status'], 200)
+        self.assertEqual(row['observed_at'], READ_FINISHED)
         self.assertEqual(row['page_excerpt'], '')
         self.assertIsNone(row['page_text_chars'])
         self.assertIs(row['body_verified'], False)

@@ -49,6 +49,7 @@ public class SourceCheck {
  yes(s.at(0).summary().contains("HTTP 页面已读取，事实仍需核对"),"HTTP receipt became fact verification or was hidden");
  yes(s.at(0).label().contains("实际页面文本")&&s.at(0).label().contains("事件日期未知")&&s.at(0).label().contains("https://other.example/final"),"real text, unknown event date or redirect receipt lost");
  yes(s.at(0).label().contains("页面发布日期标注：2026-11-10；2026-11-09")&&s.at(0).label().contains("页面更新日期标注：2026-11-12"),"publication and modification were conflated");
+ yes(s.at(0).label().contains("页面读取结束的北京时间 2026-11-10 20:00:00"),"actual read completion time was hidden");
  read.data.put("page_excerpt","mutated");read.data.put("page_dates","mutated");read.data.put("page_modified_dates","mutated");
  yes(!s.at(0).label().contains("mutated"),"mutable page data rewrote the source view");
  read.data.put("page_bytes",true);
@@ -58,6 +59,7 @@ public class SourceCheck {
  JSONObject coverage=new JSONObject("title","范围","url",url,"access_evidence","page_body_received",
   "observed_at","now","page_bytes",1000,"page_excerpt","汉😀字","page_text_chars",20000,"page_text_truncated",true);
  SourcesPresentation.Source scoped=new SourcesPresentation(new JSONArray(coverage),"now","answer_completed",null,4,9).at(0);
+ yes(scoped.pageRead&&scoped.label().contains("页面读取结束的北京时间 未知"),"invalid read timestamp erased or invented evidence");
  yes(scoped.label().contains("保留文字：20000 字符；当前摘录：3 字符")&&scoped.label().contains("后文未核对"),"UTF16 units or truncation promoted full-page coverage");
  coverage.data.put("page_text_chars",3);coverage.data.put("page_text_truncated",false);
  yes(scoped.label().contains("20000 字符")&&scoped.label().contains("后文未核对"),"mutable coverage rewrote the receipt");
@@ -79,6 +81,7 @@ public class SourceCheck {
  String failed=new SourcesPresentation(new JSONArray(failure),"","",null,4,9).at(0).label();
  yes(failed.contains("UTF-8")&&failed.contains("HTTP 响应：200；未取得可用正文")&&!failed.contains("正文摘录"),"HTTP 200 or stale excerpt manufactured body evidence");
  yes(failed.contains("最后尝试的地址：https://other.example/final"),"terminal failure destination hidden");
+ yes(failed.contains("页面读取结束的北京时间 未知"),"missing failed-read timestamp became known");
  failure.data.put("final_url","http://127.0.0.1/private");
  failure.data.put("page_error_code","/private/credential-secret");failure.data.put("page_http_status",true);
  failed=new SourcesPresentation(new JSONArray(failure),"","",null,4,9).at(0).label();
