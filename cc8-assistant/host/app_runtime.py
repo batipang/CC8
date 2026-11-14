@@ -144,9 +144,10 @@ def run_backend(dependencies: BackendDependencies):
         echo_check=args.echo_check_after_start,
         workspace=dependencies.workspace(dependencies.private / 'reminders.json'),
     )
+    pairing = dependencies.pairing(port=config.tls_port)
     hub = dependencies.transport_hub(
-        dependencies.pairing(port=config.tls_port),
-        dependencies.connect_device,
+        pairing,
+        lambda: dependencies.connect_device(pairing),
         dependencies.usb_present,
         bridge.log,
         tls_port=config.tls_port,

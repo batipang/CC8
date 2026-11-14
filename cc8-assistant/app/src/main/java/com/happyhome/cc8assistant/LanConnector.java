@@ -14,9 +14,9 @@ import javax.net.ssl.*;
 import org.json.JSONObject;
 import org.json.JSONArray;
 
-/** USB-provisioned private pairing; no transport secret is compiled into the APK. */
+/** Shared private pairing and pinned TLS for USB and Wi-Fi. */
 final class LanConnector {
-  // USB 写入的私有配对信息是信任来源，Wi-Fi 连接还须校验证书指纹和共享密钥。
+  // Both links prove possession of the stored pairing before joining the session.
   interface Current {
     boolean active();
   }
@@ -90,11 +90,41 @@ final class LanConnector {
     }
   }
 
-  void configure(JSONObject value) throws Exception {
-    String sid = value.optString("server_id"),
-        token = value.optString("token"),
-        pin = value.optString("certificate_sha256");
-    int port = value.optInt("port");
+  synchronized void enroll(String source) throws Exception {
+    if (paired() || source == null || source.length() > 2048)
+      throw new IOException("Pairing import unavailable");
+    JSONObject value = new JSONObject(source);
+    JSONArray hosts = value.optJSONArray("hosts");
+    if (value.length() != 5 || hosts == null || hosts.length() > 8)
+      throw new IOException("Invalid pairing import");
+    for (int i = 0; i < hosts.length(); i++) {
+      Object host = hosts.get(i);
+      if (!(host instanceof String) || !((String) host).matches("[0-9]{1,3}(\\.[0-9]{1,3}){3}"))
+        throw new IOException("Invalid pairing host");
+      String[] components = ((String) host).split("\\.");
+      byte[] bytes = new byte[4];
+      for (int j = 0; j < bytes.length; j++) {
+        int octet = Integer.parseInt(components[j]);
+        if (octet > 255) throw new IOException("Invalid IPv4 octet");
+        bytes[j] = (byte) octet;
+      }
+      if (!InetAddress.getByAddress(bytes).isSiteLocalAddress())
+        throw new IOException("Private IPv4 required");
+    }
+    configure(value);
+  }
+
+  synchronized void configure(JSONObject value) throws Exception {
+    Object sidValue = value.opt("server_id");
+    Object tokenValue = value.opt("token");
+    Object pinValue = value.opt("certificate_sha256");
+    Object portValue = value.opt("port");
+    if (!(sidValue instanceof String)
+        || !(tokenValue instanceof String)
+        || !(pinValue instanceof String)
+        || !(portValue instanceof Integer)) throw new IOException("Invalid LAN pairing fields");
+    String sid = (String) sidValue, token = (String) tokenValue, pin = (String) pinValue;
+    int port = (Integer) portValue;
     if (!sid.matches("[0-9a-f]{32}")
         || !token.matches("[0-9a-f]{64}")
         || !pin.matches("[0-9a-f]{64}")
@@ -104,6 +134,7 @@ final class LanConnector {
     if (!old.isEmpty()) {
       JSONObject previous = new JSONObject(old);
       if (!previous.optString("server_id").equals(sid)
+          || !TransportAuth.matches(previous.optString("token"), token)
           || !previous.optString("certificate_sha256").equals(pin))
         throw new IOException("Different paired Mac");
     }
@@ -142,7 +173,29 @@ final class LanConnector {
     InetAddress address = InetAddress.getByName(host);
     if (!(address instanceof Inet4Address) || !address.isSiteLocalAddress())
       throw new IOException("LAN address required");
-    final String pin = config.getString("certificate_sha256");
+    Socket raw = new Socket();
+    pendingSocket = raw;
+    try {
+      check(current);
+      int port = config.getInt("port");
+      raw.connect(new InetSocketAddress(address, port), 900);
+      Socket socket = authenticate(raw, host, port, config, current, false);
+      prefs.edit().putString("last_host", host).apply();
+      return socket;
+    } catch (Exception error) {
+      TransportClose.asynchronously(raw);
+      throw error;
+    } finally {
+      if (pendingSocket == raw) pendingSocket = null;
+    }
+  }
+
+  Socket authenticateUsb(Socket raw, Current current) throws Exception {
+    JSONObject config = new JSONObject(prefs.getString("config", "{}"));
+    return authenticate(raw, "localhost", raw.getPort(), config, current, true);
+  }
+
+  private static SSLContext pinnedContext(String pin) throws GeneralSecurityException {
     SSLContext ssl = SSLContext.getInstance("TLSv1.2");
     ssl.init(
         null,
@@ -174,23 +227,30 @@ final class LanConnector {
           }
         },
         new SecureRandom());
-    Socket raw = new Socket();
-    SSLSocket socket = null;
-    pendingSocket = raw;
+    return ssl;
+  }
+
+  private static Socket authenticate(
+      Socket raw, String host, int port, JSONObject config, Current current, boolean usb)
+      throws Exception {
+    check(current);
+    String pin = config.getString("certificate_sha256"), token = config.getString("token");
+    if (!pin.matches("[0-9a-f]{64}") || !token.matches("[0-9a-f]{64}"))
+      throw new IOException("Missing valid pairing");
+    SSLContext ssl = pinnedContext(pin);
+    raw.setTcpNoDelay(true);
+    raw.setSoTimeout(3500);
+    SSLSocket socket = (SSLSocket) ssl.getSocketFactory().createSocket(raw, host, port, true);
     try {
-      check(current);
-      raw.connect(new InetSocketAddress(address, config.getInt("port")), 900);
-      raw.setTcpNoDelay(true);
-      raw.setSoTimeout(3500);
-      socket =
-          (SSLSocket) ssl.getSocketFactory().createSocket(raw, host, config.getInt("port"), true);
+      // On USB Android accepts the TCP connection, but it remains the TLS client.
+      socket.setUseClientMode(true);
       socket.setEnabledProtocols(new String[] {"TLSv1.2"});
       socket.setSoTimeout(3500);
       socket.startHandshake();
       check(current);
       JSONObject auth = Wire.event("transport_auth");
-      Wire.put(auth, "token", config.getString("token"));
-      byte[] bytes = Wire.jsonBytes(auth);
+      Wire.put(auth, "token", token);
+      if (usb) Wire.put(auth, "transport", "usb");
       Wire.write(
           new DataOutputStream(socket.getOutputStream()),
           Wire.EVENT,
@@ -198,28 +258,16 @@ final class LanConnector {
           0,
           0,
           System.nanoTime(),
-          bytes);
+          Wire.jsonBytes(auth));
       Wire.Packet reply = Wire.read(new DataInputStream(socket.getInputStream()));
       if (reply.type != Wire.EVENT
           || !"transport_welcome".equals(Wire.json(reply).optString("event")))
         throw new IOException("Mac authentication incomplete");
       check(current);
-      prefs.edit().putString("last_host", host).apply();
       return socket;
     } catch (Exception error) {
-      if (socket != null)
-        try {
-          socket.close();
-        } catch (IOException ignored) {
-        }
-      else
-        try {
-          raw.close();
-        } catch (IOException ignored) {
-        }
+      TransportClose.asynchronously(socket);
       throw error;
-    } finally {
-      if (pendingSocket == raw) pendingSocket = null;
     }
   }
 

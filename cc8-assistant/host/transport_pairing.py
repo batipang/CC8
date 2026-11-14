@@ -51,21 +51,26 @@ def local_addresses() -> list[str]:
 
 
 class Pairing:
-    # 私有文件保存共享密钥与 TLS 证书；USB 负责初次交付设备侧配对信息。
-    def __init__(self, folder: str | Path = PAIR_DIR, port: int = TLS_PORT) -> None:
+    # The device imports this pairing explicitly or retains it from a previous release.
+    def __init__(
+        self, folder: str | Path = PAIR_DIR, port: int = TLS_PORT, *, create: bool = True
+    ) -> None:
         if type(port) is not int or not 0 <= port <= 65535:
             raise ValueError('Invalid TLS port')
         self.port = port
         self.folder = Path(folder)
         store = ReminderStore(self.folder / 'pairing.json', max_bytes=4096)
-        with store.directory(create=True):
-            pass
+        if create:
+            with store.directory(create=True):
+                pass
         try:
             data = store.load()
         except RecursionError:
             raise ValueError('Invalid local transport pairing file') from None
         new_pair = data is None and store.expected is None
         if new_pair:
+            if not create:
+                raise FileNotFoundError('No existing Mac pairing')
             data = {'server_id': secrets.token_hex(16), 'token': secrets.token_hex(32)}
         if not isinstance(data, dict):
             raise ValueError('Invalid local transport pairing file')
@@ -80,6 +85,8 @@ class Pairing:
         cert = self.folder / 'server.pem'
         key = self.folder / 'server-key.pem'
         if not cert.exists() or not key.exists():
+            if not create:
+                raise FileNotFoundError('No existing Mac pairing certificate')
             subprocess.run(
                 [
                     '/usr/bin/openssl',
@@ -104,8 +111,9 @@ class Pairing:
                 check=True,
                 timeout=20,
             )
-        os.chmod(key, 0o600)
-        os.chmod(cert, 0o600)
+        if create:
+            os.chmod(key, 0o600)
+            os.chmod(cert, 0o600)
         if new_pair:
             store.save(data)
         self.server_id = server_id
