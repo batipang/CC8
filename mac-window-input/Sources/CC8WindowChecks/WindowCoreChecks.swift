@@ -99,6 +99,29 @@ private final class SelectionChecks {
         expectNil(value.preview);expectNil(value.take(ticket:ticket))
     }
 
+    func testRevokedSourceClearsPreviewAndRejectsLateCapture() throws {
+        let value = try lease()
+        let first = try require(value.beginSelection())
+        expectTrue(value.revoke(ticket: first))
+        expectTrue(value.canSelect)
+        expectFalse(value.accept(frame(), ticket: first, isSingleWindow: true))
+
+        now = 120
+        let second = try require(value.beginSelection())
+        expectTrue(value.accept(frame(), ticket: second, isSingleWindow: true))
+        expectFalse(value.revoke(ticket: first))
+        expectNotNil(value.preview)
+        expectTrue(value.revoke(ticket: second))
+        expectNil(value.preview)
+        expectNil(value.take(ticket: second))
+
+        let third = try require(value.beginSelection())
+        expectTrue(value.revoke(ticket: third))
+        expectFalse(value.canSelect)
+        expectNil(value.beginSelection())
+        expectEqual(value.deadline, 190)
+    }
+
     func testConcurrentSendConsumesThePreviewExactlyOnce() throws {
         let value = try lease()
         let ticket = try require(value.beginSelection())
@@ -123,6 +146,14 @@ private struct CheckFailure: Error, CustomStringConvertible {
 /// Shared assertions for XCTest CI and CLT-only development; no screen or capture APIs.
 public enum WindowCoreChecks {
     public static func runAll(report: (String) -> Void = { _ in }) throws {
+        do {
+            let checks = SelectionChecks()
+            try checks.testRevokedSourceClearsPreviewAndRejectsLateCapture()
+            if !checks.failures.isEmpty {
+                throw CheckFailure(message: "revoked source: " + checks.failures.joined(separator: ", "))
+            }
+            report("PASS testRevokedSourceClearsPreviewAndRejectsLateCapture")
+        }
         do { let checks = SelectionChecks(); try checks.testConcurrentSendConsumesThePreviewExactlyOnce(); if !checks.failures.isEmpty { throw CheckFailure(message: "concurrent send: " + checks.failures.joined(separator: ", ")) }; report("PASS testConcurrentSendConsumesThePreviewExactlyOnce") }
         do { let checks = SelectionChecks(); try checks.testOnlySelectedWindowAndCurrentTicketCanProduceOneSend(); if !checks.failures.isEmpty { throw CheckFailure(message: "testOnlySelectedWindowAndCurrentTicketCanProduceOneSend: " + checks.failures.joined(separator: ", ")) }; report("PASS testOnlySelectedWindowAndCurrentTicketCanProduceOneSend") }
         do { let checks = SelectionChecks(); try checks.testRetakeRevokesLateCallbacksAndNeverExtendsDeadline(); if !checks.failures.isEmpty { throw CheckFailure(message: "testRetakeRevokesLateCallbacksAndNeverExtendsDeadline: " + checks.failures.joined(separator: ", ")) }; report("PASS testRetakeRevokesLateCallbacksAndNeverExtendsDeadline") }
