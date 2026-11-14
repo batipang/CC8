@@ -416,6 +416,9 @@ def build_components(
                 host.session.active or host.session.text_generation is not None or voice_busy(host)
             ),
             event=lambda name, **fields: host.event(name, **fields),
+            confirmation_scope=lambda: (
+                host.session.capture_owner() if not host.session.capture_route_pending else None
+            ),
         ),
         preference_memory
         if preference_memory is not None
@@ -673,6 +676,7 @@ def build_session(host: Bridge, *, capture_frontend: str = 'mono') -> SessionCon
             cancel_observation=lambda: host.cancel_playback_observation(),
             live_trial_enabled=lambda: host.live is not None,
             cancel_live=lambda: host.live and host.live.cancel(stop_device=False),
+            clear_preference_confirmation=lambda: host.preferences.cancel_confirmation(),
             discard_corrections=lambda preserve: host.response.clear_corrections(
                 preserve_source=preserve, publish=False
             ),

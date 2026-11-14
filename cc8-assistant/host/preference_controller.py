@@ -2,6 +2,7 @@
 
 from collections import deque
 from dataclasses import dataclass
+import time
 from typing import Callable, ContextManager
 
 from minimax_client import Cancelled
@@ -16,12 +17,15 @@ class PreferenceHooks:
     connection: Callable
     busy: Callable
     event: Callable
+    confirmation_scope: Callable = lambda: None
 
 
 class PreferenceController:
-    def __init__(self, hooks, store):
+    def __init__(self, hooks, store, *, clock=time.monotonic):
         self.hooks, self.store = hooks, store
         self.requests = deque(maxlen=64)
+        self.clock = clock
+        self.clear_confirmation = None
 
     def request(self, data):
         validate_request(data)
@@ -49,25 +53,46 @@ class PreferenceController:
                 'preference_result', request_id=request_id, ok=ok, state=state, message=message
             )
 
+    def cancel_confirmation(self):
+        with self.hooks.lock:
+            self.clear_confirmation = None
+
     def context(self):
         return self.store.context()
 
     def voice(self, text, is_current):
         request = command(text)
-        if request is None:
-            return None
         with self.hooks.lock:
+            if request is None:
+                if is_current():
+                    self.clear_confirmation = None
+                return None
             if not is_current() or self.hooks.connection() is None:
                 raise Cancelled('Memory request cancelled')
             action = request['action']
+            confirmation, self.clear_confirmation = self.clear_confirmation, None
             if action == 'help':
                 return (
                     '请明确说“记住，称呼是老王”，或“把记忆中的称呼改成老李”。普通聊天不会自动保存。'
                 )
-            if action == 'clear_help':
-                return '清空会删除全部偏好。确认的话，请说“确认清空偏好记忆”，也可在设置中操作。'
             try:
                 state = self.store.snapshot()
+                if action in ('clear_help', 'clear'):
+                    scope = self.hooks.confirmation_scope()
+                    if action == 'clear_help':
+                        if scope is None:
+                            return '请在设置中清空偏好，或在开启语音后发起确认。'
+                        self.clear_confirmation = (scope, state['revision'], self.clock() + 30)
+                        return (
+                            '清空会删除全部偏好。请在30秒内说“确认清空偏好记忆”，也可在设置中操作。'
+                        )
+                    if (
+                        scope is None
+                        or confirmation is None
+                        or confirmation[:2] != (scope, state['revision'])
+                        or self.clock() >= confirmation[2]
+                    ):
+                        return '没有可确认的清空请求。请先说“清空偏好记忆”，也可在设置中操作。'
                 if action == 'list':
                     return (
                         '偏好记忆已开启。'

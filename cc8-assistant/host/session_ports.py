@@ -79,6 +79,7 @@ class SessionHooks:
     cancel_observation: Callable[[], None] = lambda: None
     live_trial_enabled: Callable[[], bool] = lambda: False
     cancel_live: Callable[[], None] = lambda: None
+    clear_preference_confirmation: Callable[[], None] = lambda: None
     discard_corrections: Callable[[bool], bool] = lambda _: False
     invalidate_workflows: Callable[[str], None] = lambda reason: None
     invalidate_meetings: Callable[[str], None] = lambda reason: None
