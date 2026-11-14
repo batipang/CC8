@@ -44,6 +44,10 @@ final class PhotoReviewClock {
     return true;
   }
 
+  synchronized boolean hasFrame() {
+    return active && ready;
+  }
+
   synchronized boolean reviewing() {
     return active && review && ready;
   }

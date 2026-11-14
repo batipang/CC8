@@ -190,7 +190,7 @@ final class SingleFrameCamera implements TextureView.SurfaceTextureListener {
 
   private void openIfReady() {
     SurfaceTexture target = surface;
-    if (!wanted || opening || target == null) return;
+    if (!wanted || opening || target == null || reviewClock.hasFrame()) return;
     opening = true;
     final int token = serial;
     worker.post(() -> open(token, target));
@@ -355,13 +355,14 @@ final class SingleFrameCamera implements TextureView.SurfaceTextureListener {
   }
 
   private void fail(int token, String reason) {
+    boolean previewLost = "preview_surface_lost".equals(reason);
     worker.post(
         () -> {
-          if (!alive(token)) return;
+          if (!alive(token) || (previewLost && reviewClock.hasFrame())) return;
           release();
           ui.post(
               () -> {
-                if (!alive(token)) return;
+                if (!alive(token) || (previewLost && reviewClock.hasFrame())) return;
                 boolean report = authorized.current();
                 reviewClock.cancel();
                 wanted = false;
@@ -505,8 +506,9 @@ final class SingleFrameCamera implements TextureView.SurfaceTextureListener {
   public boolean onSurfaceTextureDestroyed(SurfaceTexture texture) {
     if (texture != surface) return true;
     surface = null;
-    if (wanted) fail(serial, "preview_surface_lost");
-    else worker.post(this::release);
+    // Once the camera has released a frozen frame, only the request owns it.
+    if (!wanted) worker.post(this::release);
+    else if (!reviewClock.hasFrame()) fail(serial, "preview_surface_lost");
     return true;
   }
 

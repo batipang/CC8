@@ -158,6 +158,9 @@ class ReviewJavaTests(unittest.TestCase):
         methods = '\n'.join(
             method(source, signature)
             for signature in (
+                'private void fail(',
+                'private void openIfReady(',
+                'public void onSurfaceTextureAvailable(',
                 'public boolean onSurfaceTextureDestroyed(',
                 'public void onSurfaceTextureSizeChanged(',
                 'public void onSurfaceTextureUpdated(',
@@ -167,12 +170,26 @@ class ReviewJavaTests(unittest.TestCase):
 public class SurfaceCheck {
  static class SurfaceTexture {long timestamp=10;long getTimestamp(){return timestamp;}}
  static class SystemClock {static long now=100;static long elapsedRealtime(){return now;}}
- static class Worker {void post(Runnable r){r.run();}}
- final Worker worker=new Worker();final PreviewDelay delay=new PreviewDelay();
+ static class Worker {
+  Runnable pending; boolean defer;
+  void post(Runnable r){if(defer)pending=r;else r.run();}
+  void flush(){Runnable r=pending;pending=null;r.run();}
+ }
+ static class View {static final int GONE=8;}
+ static class Panel {void setVisibility(int state){yes(state==View.GONE);}}
+ static class Review {void clear(){}}
+ interface Result {void error(String reason);}
+ interface Authorization {boolean current();}
+ final Worker worker=new Worker(),ui=new Worker();
+ final Panel panel=new Panel();final Review reviewPanel=new Review();
+ final Authorization authorized=()->true;
+ boolean alive(int token){return wanted&&serial==token;}
+ final PreviewDelay delay=new PreviewDelay();
  final PhotoReviewClock reviewClock=new PhotoReviewClock();
- SurfaceTexture surface=new SurfaceTexture();boolean wanted=true,frameReceived=true;
- long retakeVisibleBaseline=10;int serial=7,fails,releases,fits,countdowns;
- void fail(int token,String reason){yes(token==serial);fails++;}
+ SurfaceTexture surface=new SurfaceTexture();boolean wanted=true,frameReceived=true,opening;
+ long retakeVisibleBaseline=10;int serial=7,fails,releases,fits,countdowns,opens;
+ Result result=reason->fails++;String lastError;
+ void open(int token,SurfaceTexture target){yes(token==serial&&surface==target);opens++;}
  void release(){releases++;}void fitPreview(){fits++;}void countdown(int token){yes(token==serial);countdowns++;}
  static void yes(boolean b){if(!b)throw new AssertionError();}
  METHODS
@@ -187,8 +204,36 @@ public class SurfaceCheck {
  c.delay.reset();SystemClock.now=5400;c.onSurfaceTextureUpdated(active);yes(!c.delay.started());
  active.timestamp=11;c.onSurfaceTextureUpdated(active);yes(c.delay.started()&&!c.delay.ready(10399)&&c.delay.ready(10400));
  c.onSurfaceTextureSizeChanged(active,100,100);yes(c.fits==1);
- yes(c.onSurfaceTextureDestroyed(active));yes(c.surface==null&&c.fails==1&&c.releases==0);
- c.surface=new SurfaceTexture();c.wanted=false;c.onSurfaceTextureDestroyed(c.surface);yes(c.releases==1);
+ yes(c.onSurfaceTextureDestroyed(active));yes(c.surface==null&&c.fails==1&&c.releases==1);
+ c.surface=new SurfaceTexture();c.wanted=false;c.onSurfaceTextureDestroyed(c.surface);yes(c.releases==2);
+
+ // A queued texture loss after capture must not discard a frozen frame.
+ for(boolean review:new boolean[]{false,true}){
+  SurfaceCheck frozen=new SurfaceCheck();SurfaceTexture previous=frozen.surface;
+  long request=frozen.reviewClock.begin(0,review);
+  yes(frozen.reviewClock.captured(request,1,5100));
+  frozen.onSurfaceTextureDestroyed(previous);
+  yes(frozen.surface==null&&frozen.fails==0);
+  SurfaceTexture replacement=new SurfaceTexture();
+  frozen.onSurfaceTextureAvailable(replacement,100,100);
+  yes(frozen.opens==0&&frozen.releases==0);
+  if(review){
+   yes(frozen.reviewClock.retake(request,5200));
+   frozen.openIfReady();yes(frozen.opens==1);
+   frozen.onSurfaceTextureDestroyed(replacement);yes(frozen.fails==1);
+  }else{
+   yes(frozen.reviewClock.finish(request,5200));
+  }
+ }
+ // A surface failure may already be queued when a valid frame finishes.
+ SurfaceCheck queued=new SurfaceCheck();
+ long request=queued.reviewClock.begin(0,true);
+ queued.worker.defer=true;
+ queued.onSurfaceTextureDestroyed(queued.surface);
+ yes(queued.worker.pending!=null);
+ yes(queued.reviewClock.captured(request,1,5100));
+ queued.worker.flush();
+ yes(queued.fails==0&&queued.releases==0&&queued.reviewClock.reviewing());
  }
 }""".replace('METHODS', methods)
         java = java_bin()
