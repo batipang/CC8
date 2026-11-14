@@ -179,6 +179,49 @@ class LiveSocketTests(unittest.IsolatedAsyncioTestCase):
 
 
 class LiveAdmissionTests(unittest.TestCase):
+    def test_private_health_distinguishes_trial_readiness_and_live_session(self):
+        bridge = Bridge(None, BrainRouter(Mock(), selected='dot'))
+
+        def state(expected):
+            self.assertEqual(bridge.health()['gpt_live_state'], expected)
+
+        state('disabled')
+        bridge.live_trial_requested = True
+        state('configuration_unavailable')
+        bridge.live = LiveTrial(bridge, 'fixture-private-key', 'marin')
+        state('device_disconnected')
+        bridge.session.connection = object()
+        with patch.object(bridge, 'owner_access', return_value=False):
+            state('owner_required')
+        state('device_incompatible')
+        bridge.session.live_caption_supported = True
+        bridge.session.wake = False
+        state('wake_mode_required')
+        bridge.session.wake = True
+        state('local_wake_unavailable')
+        bridge.wake.detector = NS()
+        state('capture_paused')
+        bridge.session.active = True
+        with patch.object(bridge.calibration, 'failed', True):
+            state('calibration_required')
+        state('waiting_for_local_wake')
+        owner = LiveSession('fixture-private-key', 'marin', bridge.live, connector=Mock())
+        bridge.live.session = owner
+        with patch.object(bridge.live, 'current', return_value=True):
+            state('connecting')
+            owner.started.set()
+            state('active')
+        with patch.object(bridge.live, 'current', return_value=False):
+            state('waiting_for_local_wake')
+        bridge.session.active = False
+        bridge.add_capture_metric('live_sessions', 1)
+        health = bridge.health()
+        self.assertEqual(health['gpt_live_sessions'], 1)
+        self.assertEqual(health['gpt_live_failures'], 0)
+        self.assertNotIn('fixture-private-key', json.dumps(health))
+        owner.connector.assert_not_called()
+        self.assertFalse(health['microphone_active'])
+
     def make_trial(self):
         playback = NS(
             playing=False,

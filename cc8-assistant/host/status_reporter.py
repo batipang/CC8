@@ -52,6 +52,7 @@ class ReportingHooks:
     log: EventSink
     status: Callable[[str, str], None]
     meeting_state: Callable[[], dict[str, object]] = lambda: {}
+    live_voice_state: Callable[[], str] = lambda: 'disabled'
 
 
 class StatusReporter:
@@ -190,6 +191,11 @@ class StatusReporter:
             'calibrating': self.hooks.calibration().active,
             'asr_engine': getattr(getattr(self.hooks.speech(), 'recognizer', None), 'engine', None),
             'brain_provider': getattr(self.hooks.brain(), 'selected', 'echo'),
+            'gpt_live_state': self.hooks.live_voice_state(),
+            'gpt_live_sessions': metrics.get('live_sessions', 0),
+            'gpt_live_failures': metrics.get('live_failures', 0),
+            'gpt_live_barge_ins': metrics.get('live_barge_ins', 0),
+            'gpt_live_transcript_fragments': metrics.get('live_transcript_fragments', 0),
             'dot_runtime': self.hooks.dot_runtime(),
             'playing': self.hooks.playback().playing,
             'mic_frames': metrics.get('mic_frames', 0),

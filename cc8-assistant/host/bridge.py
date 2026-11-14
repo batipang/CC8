@@ -92,6 +92,7 @@ class Bridge:
         self.local_mode = local_mode
         self.identity = self.identity_runtime = None
         self.live = None
+        self.live_trial_requested = False
         self.library = library
         self.workspace = workspace or Workspace()
         self.owner_workspace = self.workspace
@@ -341,6 +342,33 @@ class Bridge:
 
     def health(self):
         return self.reporting.health()
+
+    def live_voice_state(self):
+        # Status only: this must not start a connection or advance wake state.
+        with self.guard:
+            trial = self.live
+            if not self.live_trial_requested:
+                return 'disabled'
+            if trial is None:
+                return 'configuration_unavailable'
+            if self.session.connection is None:
+                return 'device_disconnected'
+            if not self.owner_access():
+                return 'owner_required'
+            if not self.session.live_caption_supported:
+                return 'device_incompatible'
+            if not self.session.wake:
+                return 'wake_mode_required'
+            if not self.wake.ready:
+                return 'local_wake_unavailable'
+            if not self.session.active:
+                return 'capture_paused'
+            if self.calibration.active or self.calibration.running or self.calibration.failed:
+                return 'calibration_required'
+            owner = trial.session
+            if owner is None or not trial.current(owner):
+                return 'waiting_for_local_wake'
+            return 'active' if owner.started.is_set() else 'connecting'
 
     def diagnostics_report(self):
         return {'ok': True, 'health': self.health(), **self.diagnostics.report()}

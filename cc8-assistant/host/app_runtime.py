@@ -158,6 +158,7 @@ def run_backend(dependencies: BackendDependencies):
     if not local and getattr(config, 'voice_mode', 'minimax') == 'gpt-live-1':
         from gpt_live_trial import create_trial
 
+        bridge.live_trial_requested = True
         try:
             bridge.live = create_trial(bridge, config, dependencies.private.parents[2])
         except (OSError, ValueError):
