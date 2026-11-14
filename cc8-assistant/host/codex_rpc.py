@@ -99,7 +99,15 @@ class CodexRpc:
                 listener(message)
             self.events.put_nowait(message)
 
-    def start(self):
+    def start(self, *, timeout=20):
+        deadline = deadline_after(timeout)
+
+        def remaining():
+            budget = deadline - time.monotonic()
+            if budget <= 0:
+                raise DotError('Codex initialization timed out', kind='timeout')
+            return budget
+
         with self.lifecycle_lock:
             if self.failed or self.guardian_ending.is_set():
                 self.failed = True
@@ -157,9 +165,11 @@ class CodexRpc:
                     },
                     'capabilities': {'experimentalApi': True},
                 },
-                timeout=20,
+                timeout=remaining(),
             )
-            self.notify('initialized', {})
+            remaining()
+            self._send({'method': 'initialized', 'params': {}}, deadline=deadline)
+            remaining()
         except Exception:
             # A partial thread/initialize failure still owns its guardian/pipes.
             # Preserve the startup cause if releasing those resources also fails.

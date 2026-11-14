@@ -206,6 +206,8 @@ class GroupFixture:
         self.advance = 0
         self.completed = 150
         self.after_request = lambda: None
+        self.slow_first_start = False
+        self.start_timeouts = []
 
     def factory(self):
         fixture = self
@@ -215,8 +217,12 @@ class GroupFixture:
                 self.closed = False
                 self.started = False
 
-            def start(self):
+            def start(self, *, timeout):
                 self.started = True
+                fixture.start_timeouts.append(timeout)
+                if len(fixture.start_timeouts) == 1 and fixture.slow_first_start:
+                    fixture.now += timeout
+                    raise DotError('Private startup failure', kind='timeout')
 
             def close(self):
                 self.closed = True
@@ -385,6 +391,17 @@ class GroupTests(unittest.TestCase):
         self.assertFalse(f.clients[0].started)
         self.assertTrue(f.clients[0].closed)
         self.assertEqual(f.calls, [])
+
+    def test_slow_initialization_spends_only_its_source_budget(self):
+        f = GroupFixture()
+        f.slow_first_start = True
+        result = self.read(f, scope('one', 'two'))
+        self.assertEqual(f.start_timeouts, [12, 12])
+        self.assertEqual(f.now, 12)
+        self.assertEqual([row['status'] for row in result['sources']], ['unavailable', 'read'])
+        self.assertEqual([row['source_thread_id'] for row in result['items']], ['two'])
+        self.assertFalse(result['coverage_complete'])
+        self.assertTrue(all(rpc.closed for rpc in f.clients))
 
     def test_cancellation_cannot_continue_to_the_next_registered_source(self):
         f = GroupFixture()

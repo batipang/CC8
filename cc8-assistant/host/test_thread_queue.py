@@ -31,6 +31,8 @@ class QueueFixture:
         self.now = 0
         self.advance = 0
         self.failed_start = False
+        self.start_timeout = None
+        self.start_delay = 0
         self.after_close = lambda: None
 
     def factory(self):
@@ -39,7 +41,9 @@ class QueueFixture:
         class Rpc:
             closed = False
 
-            def start(self):
+            def start(self, *, timeout):
+                parent.start_timeout = timeout
+                parent.now += parent.start_delay
                 if parent.failed_start:
                     raise DotError('PRIVATE_PROVIDER')
 
@@ -90,7 +94,7 @@ class QueueReaderTests(unittest.TestCase):
                 item['input'].append(dict(type='image', url='PRIVATE_ATTACHMENT'))
 
         class Rpc:
-            def start(self):
+            def start(self, *, timeout):
                 pass
 
             def request(self, method, params, **kwargs):
@@ -216,6 +220,17 @@ class QueueReaderTests(unittest.TestCase):
         with self.assertRaises(Cancelled):
             f.read(is_current=lambda: False)
         self.assertEqual(f.clients, [])
+
+    def test_initialization_consumes_queue_read_budget(self):
+        f = QueueFixture()
+        f.start_delay = 19
+        f.advance = 6
+        result = f.read()
+        self.assertEqual(f.start_timeout, 20)
+        self.assertEqual(f.calls[0][2]['timeout'], 6)
+        self.assertEqual(result['reason'], 'deadline')
+        self.assertFalse(result['coverage_complete'])
+        self.assertTrue(f.clients[0].closed)
 
     def test_unicode_controls_truncation_and_source_mutation_cannot_poison_output(self):
         f = QueueFixture()

@@ -37,8 +37,9 @@ class Fixture:
             def __init__(self):
                 self.closed = self.started = False
 
-            def start(self):
+            def start(self, *, timeout):
                 self.started = True
+                self.start_timeout = timeout
 
             def request(self, method, params, **kwargs):
                 fixture.calls.append((method, dict(params)))
@@ -238,6 +239,7 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(result['items'], [])
         self.assertEqual(result['unconfirmed_final_answer'], 3)
         self.assertFalse(result['empty_confirmed'])
+        self.assertEqual(rpc.start_timeout, 3.0)
         self.assertTrue(rpc.closed)
 
     def test_revocation_during_answer_read_still_aborts(self):
