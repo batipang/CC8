@@ -7,7 +7,7 @@ import re
 import time
 from typing import Callable, ContextManager
 from dot_client import Cancelled, DotError
-from work_reports import BEIJING, MAX_CARDS, ReportWindow
+from work_reports import BEIJING, CALENDAR_PERIODS, MAX_CARDS, ReportWindow
 from report_time import ReportRange, ReportTimeError, parse_range, range_compound, window_label
 from report_progress import (
     DeliveryPlan,
@@ -35,6 +35,9 @@ PERIOD_NAMES = {
     '过去两个小时': 'two_hours',
     '最近两个小时': 'two_hours',
     '今天': 'today',
+    '昨天': 'yesterday',
+    '上周': 'last_week',
+    '上一周': 'last_week',
     '过去2小时': 'two_hours',
     '最近2小时': 'two_hours',
     '近2小时': 'two_hours',
@@ -49,6 +52,8 @@ PERIOD_LABELS = {
     'half_hour': '过去半小时',
     'two_hours': '过去两小时',
     'today': '今天',
+    'yesterday': '昨天',
+    'last_week': '上周',
     'since_last': '上次汇报后的新增及待补播结果',
 }
 PERIOD_PATTERN = '|'.join(PERIOD_NAMES)
@@ -546,6 +551,11 @@ class ReportVoice:
             if not isinstance(command.value, ReportRange):
                 raise ValueError('Invalid report range')
             return command.value.resolve(self.wall_clock())
+        if command.value in CALENDAR_PERIODS:
+            try:
+                return ReportWindow.period(command.value, self.wall_clock())
+            except (ValueError, OverflowError, OSError):
+                raise ReportTimeError('当前时间不可确认，请先检查Mac系统时间。') from None
         if command.value != 'since_last':
             return command.value
         if self.progress is None:
@@ -706,9 +716,7 @@ class ReportVoice:
                 raise DotError('Work report result is unconfirmed')
             text = report_text(report)
             label = (
-                window_label(window)
-                if isinstance(window, ReportWindow) and not since
-                else PERIOD_LABELS[command.value]
+                window_label(window) if command.kind == 'custom' else PERIOD_LABELS[command.value]
             )
             messages = [f'这是{label}所选聊天的只读汇报。原答复尚未独立核验。']
             if since:

@@ -10,6 +10,7 @@ from dot_handoff import Handoff, identifier
 from dot_client import Cancelled, DotError
 
 PERIODS = ('half_hour', 'two_hours', 'today')
+CALENDAR_PERIODS = ('yesterday', 'last_week')
 BEIJING = timezone(timedelta(hours=8))
 MAX_TURN_PAGES, MAX_ITEM_PAGES, PAGE_SIZE, MAX_CARDS = 4, 2, 25, 20
 
@@ -59,13 +60,22 @@ class ReportWindow:
 
     @classmethod
     def period(cls, period, now):
-        if period not in PERIODS or type(now) not in (int, float) or not 0 < now < 253402300799:
+        if (
+            period not in (*PERIODS, *CALENDAR_PERIODS)
+            or type(now) not in (int, float)
+            or not 0 < now < 253402300799
+        ):
             raise ValueError('Invalid report period')
         end = int(now)
-        start = (
-            int(
-                datetime.fromtimestamp(end, BEIJING).replace(hour=0, minute=0, second=0).timestamp()
+        midnight = datetime.fromtimestamp(end, BEIJING).replace(hour=0, minute=0, second=0)
+        if period in CALENDAR_PERIODS:
+            stop = (
+                midnight if period == 'yesterday' else midnight - timedelta(days=midnight.weekday())
             )
+            start = stop - timedelta(days=1 if period == 'yesterday' else 7)
+            return cls(int(start.timestamp()), int(stop.timestamp()))
+        start = (
+            int(midnight.timestamp())
             if period == 'today'
             else end - (1800 if period == 'half_hour' else 7200)
         )

@@ -260,6 +260,23 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(ReportWindow.period('half_hour', now).start, now - 1800)
         self.assertEqual(ReportWindow.period('two_hours', now).start, now - 7200)
 
+    def test_previous_calendar_windows_use_beijing_midnight_and_monday(self):
+        def utc(year, month, day, hour):
+            return int(datetime(year, month, day, hour, tzinfo=timezone.utc).timestamp())
+
+        # 16:00 UTC on Sunday is already Monday in Beijing.
+        now = utc(2026, 11, 8, 16)
+        self.assertEqual(
+            ReportWindow.period('yesterday', now), ReportWindow(utc(2026, 11, 7, 16), now)
+        )
+        self.assertEqual(
+            ReportWindow.period('last_week', now), ReportWindow(utc(2026, 11, 1, 16), now)
+        )
+        self.assertEqual(
+            ReportWindow.period('last_week', utc(2027, 1, 4, 2)),
+            ReportWindow(utc(2026, 12, 27, 16), utc(2027, 1, 3, 16)),
+        )
+
     def test_card_limit_keeps_coverage_partial_instead_of_hiding_older_results(self):
         f = Fixture()
         f.turn_pages[0]['data'] = [turn('turn-' + str(i)) for i in range(25)]
