@@ -33,6 +33,10 @@ NARRATION_LABELS = {
 }
 
 
+class ReminderRescheduleRequired(ValueError):
+    pass
+
+
 class TaskStep(TypedDict):
     id: str
     title: str
@@ -580,13 +584,21 @@ class Workspace:
                     raise ValueError('这条提醒不存在或已经结束')
                 item = current
                 if action == 'cancel':
-                    if item['status'] in ('delivering', 'unconfirmed'):
+                    if item['status'] == 'delivering':
                         item['delivery_attempt']['result'] = 'unconfirmed'
                         item['delivery_attempt']['finished_at'] = self.now().isoformat(
                             timespec='seconds'
                         )
                     item['status'] = 'cancelled'
                 else:
+                    needs_reschedule = item['status'] in ('delivering', 'unconfirmed')
+                    if needs_reschedule and (
+                        'due' not in args
+                        or self._date(args['due']).replace(microsecond=0) == self._date(item['due'])
+                    ):
+                        raise ReminderRescheduleRequired(
+                            '送达可能已发生，请明确选择新的提醒时间，或取消这条提醒'
+                        )
                     candidate: dict[str, object] = {
                         **item,
                         **{
@@ -595,9 +607,14 @@ class Workspace:
                             if k in ('title', 'due', 'repeat', 'channel')
                         },
                     }
-                    candidate['due'] = self._validate(candidate).isoformat(timespec='seconds')
+                    due = self._validate(candidate).replace(microsecond=0)
+                    if needs_reschedule and due == self._date(item['delivery_attempt']['due']):
+                        raise ReminderRescheduleRequired(
+                            '新提醒时间与未确认的送达时间相同，请选择其他时间'
+                        )
+                    candidate['due'] = due.isoformat(timespec='seconds')
                     item.update(cast(ReminderRecord, candidate))
-                    if item['status'] in ('delivering', 'unconfirmed'):
+                    if item['status'] == 'delivering':
                         attempt = item['delivery_attempt']
                         attempt['result'] = 'unconfirmed'
                         attempt['finished_at'] = self.now().isoformat(timespec='seconds')

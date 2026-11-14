@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Callable
 from protocol import validate_device_event
 from session_ports import EventSink
 from vision import OCR_PROMPT
+from workspace import ReminderRescheduleRequired
 
 if TYPE_CHECKING:
     from capture_pipeline import CapturePipeline
@@ -173,6 +174,8 @@ class DeviceEventRouter:
             try:
                 self.reminder_action(j.get('arguments'))
                 self.event('workspace_result', ok=True, message='提醒已更新')
+            except ReminderRescheduleRequired as error:
+                self.event('workspace_result', ok=False, message=str(error))
             except (ValueError, OSError):
                 self.event(
                     'workspace_result',
