@@ -294,6 +294,30 @@ class LiveSocketTests(unittest.IsolatedAsyncioTestCase):
         trial.tick()
         hooks.delegate.assert_not_called()
 
+    def test_barge_in_starts_a_fresh_chinese_caption_and_delegates_the_new_request(self):
+        now = [10.0]
+        hooks = Mock()
+        trial = LiveSession('fixture-only', 'marin', hooks, clock=lambda: now[0])
+        captions = []
+
+        def capture_caption(owner):
+            captions.append(owner.user_caption())
+            return True
+
+        hooks.transcript.side_effect = capture_caption
+        trial.event(transcript('讲一个故事', 100, 600))
+        trial.interrupt_playback()
+        trial.tick()
+        trial.event(transcript('换一个，', 680, 850))
+        trial.event(transcript('讲讲常州', 850, 1150))
+        trial.event(delegation('replacement', 1200))
+        now[0] += 1
+        trial.tick()
+
+        self.assertEqual(captions, ['讲一个故事', '换一个，', '换一个，讲讲常州'])
+        self.assertEqual(trial.user_caption(), '换一个，讲讲常州')
+        hooks.delegate.assert_called_once_with(trial, 'replacement', '换一个，讲讲常州')
+
     def test_live_caption_uses_utf16_and_sample_positions(self):
         publish = Mock()
         player = LivePlayback(10)
