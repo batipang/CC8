@@ -34,6 +34,16 @@ class JournalTests(unittest.TestCase):
         self.assertFalse(journal.ack(plan, 0, '第二句。'))
         self.assertEqual(journal.plan(ID).offset, 0)
 
+    def test_original_gap_preserves_preceding_confirmed_prefix(self):
+        journal = ResultReading()
+        journal.begin(ID, 2)
+        journal.complete(ID, '第一句。相同句。相同句。')
+        journal.original_ack(ID, 2, '第一句。')
+        journal.original_ack(ID, 2, '相同句。', confirmed=False)
+        journal.original_ack(ID, 2, '相同句。')
+        self.assertEqual(journal.coverage(ID), 'partial')
+        self.assertEqual(journal.plan(ID).text, '相同句。相同句。')
+
     def test_unmatched_transcript_requires_explicit_restart(self):
         journal = ResultReading()
         journal.begin(ID, 2)
@@ -174,6 +184,47 @@ class ReadingTests(unittest.TestCase):
         self.assertFalse(bridge.session.active)
         self.assertIsNone(bridge.session.text_generation)
         self.assertEqual(list(bridge.response.history), [])
+
+    def test_later_original_ack_does_not_fill_a_gap_even_if_text_repeats(self):
+        bridge = self.session(text='相同句。相同句。')
+        brain = bridge.brain
+
+        def clauses(prompt, history, current, update):
+            brain.calls += 1
+            yield '相同句。'
+            update('dot_result', {'text': '相同句。相同句。', 'truncated': False})
+            yield '相同句。'
+
+        brain.clauses = clauses
+        spoken = []
+
+        def speak(text, generation):
+            spoken.append(text)
+            if len(spoken) > 1:
+                bridge.diagnostics.playback_done(generation, confirmed_ack_ms=0)
+            return True
+
+        bridge.speak = speak
+        fixtures.FailureFeedbackTests().run_one(
+            bridge.response, Reply(bridge.generation, '公开请求')
+        )
+        task = bridge.workspace.tasks[-1]
+        self.assertEqual(task['status'], 'completed')
+        self.assertIsNone(bridge.response.reading.coverage(task['id']))
+        self.assertEqual(spoken, ['相同句。', '相同句。'])
+        spoken.clear()
+
+        def resumed(text, generation):
+            spoken.append(text)
+            bridge.diagnostics.playback_done(generation, confirmed_ack_ms=0)
+            return True
+
+        bridge.speak = resumed
+        self.request(bridge, task['id'])
+        self.work(bridge)
+        self.assertEqual(''.join(spoken), '相同句。相同句。')
+        self.assertEqual(task['steps'][-1]['title'], '结果已确认播完')
+        self.assertEqual(brain.calls, 1)
 
     def test_speak_success_without_device_ack_does_not_claim_done_or_advance(self):
         bridge = self.session()
