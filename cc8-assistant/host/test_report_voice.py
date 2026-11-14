@@ -519,6 +519,73 @@ class IntegrationTests(unittest.TestCase):
         voice.forget()
         self.assertIsNone(voice.answer(ReportCommand('continue', 2), lambda: True).provenance)
 
+    def test_queued_followups_cannot_resolve_against_replaced_report_numbers(self):
+        from reply_types import TextReply
+        from test_failure_feedback import FailureFeedbackTests
+
+        cases = (
+            (Reply, '继续第二项，下一步：检查旧结果'),
+            (TextReply, '查看这次汇报的第二项待办队列'),
+            (Reply, '第二项是否通过了测试'),
+        )
+        for job_type, text in cases:
+            with self.subTest(text=text):
+                _, bridge = self.session()
+                voice = bridge.chats.voice
+                list(bridge.brain.clauses('汇报今天的工作', []))
+                bridge.enqueue_response(job_type(bridge.generation, text))
+                job = bridge.response.queue.get_nowait()
+                replacement = report('更新后的第一项', '更新后的第二项')
+                replacement['items'][1]['turn_id'] = 'replacement-turn'
+                self.assertTrue(voice.remember(SOURCE, replacement))
+                with patch.object(bridge.brain.dot, 'clauses') as dot:
+                    FailureFeedbackTests().run_one(bridge.response, job)
+                dot.assert_not_called()
+                task = bridge.workspace.snapshot()['tasks'][0]
+                self.assertIn('按当前汇报的编号重新选择', task['result'])
+                self.assertNotIn('provenance', task)
+                self.assertNotIn('检查旧结果', task['result'])
+                self.assertIsNotNone(voice.snapshot)
+
+    def test_queued_ordinary_question_does_not_become_a_numbered_report_followup(self):
+        from test_failure_feedback import FailureFeedbackTests
+
+        _, bridge = self.session()
+        bridge.enqueue_response(Reply(bridge.generation, '第二项'))
+        job = bridge.response.queue.get_nowait()
+        list(bridge.brain.clauses('汇报今天的工作', []))
+        with patch.object(bridge.brain.dot, 'clauses', return_value=iter(['普通回答'])) as dot:
+            FailureFeedbackTests().run_one(bridge.response, job)
+        dot.assert_called_once()
+
+    def test_current_queued_handoff_preserves_original_turn_and_draft(self):
+        from test_failure_feedback import FailureFeedbackTests
+
+        _, bridge = self.session()
+        list(bridge.brain.clauses('汇报今天的工作', []))
+        bridge.enqueue_response(Reply(bridge.generation, '继续第二项，下一步：检查退出码'))
+        job = bridge.response.queue.get_nowait()
+        with patch.object(bridge.brain.dot, 'clauses') as dot:
+            FailureFeedbackTests().run_one(bridge.response, job)
+        dot.assert_not_called()
+        task = bridge.workspace.snapshot()['tasks'][0]
+        self.assertEqual(task['provenance']['turn_id'], 'turn-1')
+        self.assertEqual(task['stage'], '待桌面接续')
+        self.assertIn('检查退出码', task['result'])
+
+    def test_queued_ambiguous_handoff_still_clarifies_after_report_closes(self):
+        from test_failure_feedback import FailureFeedbackTests
+
+        _, bridge = self.session()
+        list(bridge.brain.clauses('汇报今天的工作', []))
+        bridge.enqueue_response(Reply(bridge.generation, '继续第一项和第二项'))
+        job = bridge.response.queue.get_nowait()
+        bridge.chats.voice.forget()
+        with patch.object(bridge.brain.dot, 'clauses') as dot:
+            FailureFeedbackTests().run_one(bridge.response, job)
+        dot.assert_not_called()
+        self.assertIn('指定本次汇报中的一个编号', bridge.workspace.snapshot()['tasks'][0]['result'])
+
     def test_handoff_draft_stays_on_screen_and_never_dispatches_or_rereads(self):
         from test_failure_feedback import FailureFeedbackTests
 

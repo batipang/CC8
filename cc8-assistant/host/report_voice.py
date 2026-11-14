@@ -129,6 +129,10 @@ HANDOFF_TARGET = re.compile(
     PREFIX + CONTINUE_PREFIX + r'(本次汇报的|这次汇报的|汇报的)?第' + INDEX + r'项'
 )
 HANDOFF_SEPARATOR = re.compile(r'^[，,。；;\s]*(?:下一步[：:]\s*)?')
+SNAPSHOT_FOLLOWUPS = frozenset(
+    ('item', 'item_evidence', 'item_queue', 'item_choice', 'continue', 'active_sources')
+)
+STALE_FOLLOWUP = '本次汇报已更换，请按当前汇报的编号重新选择。'
 
 
 @dataclass(frozen=True)
@@ -141,6 +145,12 @@ class HandoffDraft:
 class ReportCommand:
     kind: str
     value: str | int | ReportRange | HandoffDraft = ''
+
+
+@dataclass(frozen=True)
+class BoundReportFollowup:
+    command: ReportCommand | None
+    snapshot_token: object | None
 
 
 def ordinal(text):
@@ -384,6 +394,7 @@ class ReportVoice:
     def __init__(self, hooks, *, clock=time.monotonic, wall_clock=time.time):
         self.hooks, self.clock, self.wall_clock = hooks, clock, wall_clock
         self.snapshot = None
+        self.snapshot_token = None
         self.followup = False
         self.revision = 0
         self.progress = self.delivery_plan = None
@@ -392,10 +403,24 @@ class ReportVoice:
         with self.hooks.lock:
             return report_command(text, followup=self.followup)
 
+    def bind_followup(self, text):
+        with self.hooks.lock:
+            command = report_command(text, followup=self.followup)
+            if command is not None and command.kind in SNAPSHOT_FOLLOWUPS:
+                return BoundReportFollowup(command, self.snapshot_token)
+            if command is None and not self.followup:
+                potential = report_command(text, followup=True)
+                if potential is not None and potential.kind in SNAPSHOT_FOLLOWUPS:
+                    # A normal utterance admitted without report context must
+                    # not be reinterpreted against a report that arrives later.
+                    return BoundReportFollowup(None, None)
+            return None
+
     def forget(self):
         with self.hooks.lock:
             self.hooks.revoked()
             self.snapshot, self.followup = None, False
+            self.snapshot_token = None
             self.delivery_plan = None
             self.revision += 1
 
@@ -409,6 +434,7 @@ class ReportVoice:
         with self.hooks.lock:
             self.hooks.revoked()
             self.snapshot, self.followup = None, True
+            self.snapshot_token = None
             self.delivery_plan = None
             self.revision += 1
             return self.revision
@@ -589,6 +615,7 @@ class ReportVoice:
             ):
                 return False
             self.snapshot = (context, self.clock() + 600, deepcopy(report))
+            self.snapshot_token = object()
             self.progress = progress if progress is not None else ReportProgress(source, report)
             self.delivery_plan = None
             self.followup = True
@@ -656,10 +683,12 @@ class ReportVoice:
     def notice(text):
         return ReportReply(text, (text,))
 
-    def item_queue(self, number, is_current):
+    def item_queue(self, number, is_current, *, bound=None):
         with self.hooks.lock:
             snapshot = self.snapshot
             context = self.hooks.context()
+            if bound is not None and self.snapshot_token is not bound.snapshot_token:
+                return self.notice(STALE_FOLLOWUP)
             if (
                 snapshot is None
                 or not self.same_context(snapshot[0], context)
@@ -730,6 +759,9 @@ class ReportVoice:
         )
 
     def answer(self, command, is_current):
+        bound = command if isinstance(command, BoundReportFollowup) else None
+        if bound is not None:
+            command = bound.command
         if not is_current():
             raise Cancelled('Report cancelled')
         with self.hooks.lock:
@@ -746,16 +778,19 @@ class ReportVoice:
                 '请先指定本次汇报中的一个编号，例如“详细说说第二项”；当前不会推测或合并多个项目执行。'
             )
         if command.kind == 'item_queue':
-            return self.item_queue(command.value, is_current)
+            return self.item_queue(command.value, is_current, bound=bound)
         if command.kind in ('item', 'item_evidence', 'continue', 'active_sources'):
             with self.hooks.lock:
                 context = self.hooks.context()
+                if bound is not None and self.snapshot_token is not bound.snapshot_token:
+                    return self.notice(STALE_FOLLOWUP)
                 if (
                     self.snapshot is None
                     or not self.same_context(self.snapshot[0], context)
                     or self.clock() >= self.snapshot[1]
                 ):
                     self.snapshot = None
+                    self.snapshot_token = None
                     return self.notice('本次汇报尚未取得或已失效，请重新请求工作汇报。')
                 report = self.snapshot[2]
                 if command.kind == 'active_sources':
@@ -877,6 +912,7 @@ class ReportVoice:
             except ReportTimeError as error:
                 return self.notice(str(error))
             previous = self.snapshot
+            previous_token = self.snapshot_token
             revision = self.begin()
         report = self.hooks.read(source, window, is_current)
         with self.hooks.lock:
@@ -903,6 +939,7 @@ class ReportVoice:
                         and self.same_context(previous[0], context)
                     ):
                         self.snapshot = previous
+                        self.snapshot_token = previous_token
                     return self.notice(
                         '汇报账本已达256项容量，原待播记录保留；请先查看待播编号详情，再明确查询新的时间范围。'
                     )

@@ -12,6 +12,7 @@ import sys
 import threading
 from typing import Callable, ContextManager
 from announce import Announcement
+from brain_router import BrainRouter
 from diagnostics import ROUTE_COMPLETION_STAGES, TraceBook, error_kind
 from failure_feedback import FailureSink, feedback
 from dot_receipt import UnconfirmedTurnStart
@@ -363,6 +364,11 @@ class ResponseWorker:
                         pass
                 job = CorrectionReply(job.generation, job.text, kind, body, target)
             else:
+                brain = self.hooks.brain()
+                if type(job) in (Reply, TextReply, CorrectedReply, LiveReply) and isinstance(
+                    brain, BrainRouter
+                ):
+                    job.report_followup = brain.bind_report_followup(job.text)
                 text = job.text if type(job) is Reply or isinstance(job, CorrectedReply) else ''
                 owner = self.hooks.correction_owner() if text else None
                 changed = self.corrections.note(text, owner)
@@ -453,7 +459,9 @@ class ResponseWorker:
             elif isinstance(job, LiveReply):
                 if job.current():
                     try:
-                        self.answer(job.text, job.generation, live=job)
+                        self.answer(
+                            job.text, job.generation, live=job, report_followup=job.report_followup
+                        )
                     except Exception:
                         job.deliver('Dot 没有确认任务结果，请查看屏幕上的任务状态。')
                         raise
@@ -469,12 +477,14 @@ class ResponseWorker:
                 self.read_result(job.result_id, job.restart, job.generation)
             elif isinstance(job, VisualReply):
                 self.hooks.answer_visual(job)
+            elif job.report_followup is not None:
+                self.answer(job.text, job.generation, report_followup=job.report_followup)
             else:
                 self.hooks.answer(job.text, job.generation)
         finally:
             self.busy = False
 
-    def answer(self, text, generation, image=None, *, live=None):
+    def answer(self, text, generation, image=None, *, live=None, report_followup=None):
         def current():
             return self.hooks.valid(generation) and (live is None or live.current())
 
@@ -638,6 +648,15 @@ class ResponseWorker:
             brain = self.hooks.brain()
             if image is not None:
                 clauses = brain.vision_clauses(text, image, self.history, current, web_update)
+            elif report_followup is not None:
+                clauses = brain.clauses(
+                    text,
+                    self.history,
+                    current,
+                    web_update,
+                    report_followup=report_followup,
+                    force_dot=live is not None,
+                )
             elif live is not None:
                 clauses = brain.clauses(text, self.history, current, web_update, force_dot=True)
             elif brain:
