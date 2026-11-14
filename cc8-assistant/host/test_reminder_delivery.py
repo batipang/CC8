@@ -445,21 +445,93 @@ os._exit(23)
         self.scheduler.hooks = replace(self.scheduler.hooks, touch=touch)
         self.tick()
         self.assertEqual(self.jobs, [])
-        self.assertEqual(self.board.snapshot()['reminders'][0]['status'], 'unconfirmed')
+        self.assertEqual(self.board.snapshot()['reminders'][0]['status'], 'pending')
+        self.scheduler.hooks = replace(self.scheduler.hooks, touch=lambda: None)
+        self.tick()
+        self.assertEqual(len(self.jobs), 1)
 
-    def test_crossing_quiet_boundary_during_claim_cannot_start_a_new_broadcast(self):
-        self.policy(quiet_enabled=True)
-        self.now = self.now.replace(hour=21, minute=58)
-        self.create()
+    def test_reminder_claimed_at_quiet_boundary_can_deliver_once_in_the_morning(self):
+        self.policy(quiet_enabled=True, late_policy='deliver')
+        self.now = self.now.replace(hour=21, minute=58) - timedelta(days=1)
+        self.create(repeat='daily')
         self.now += timedelta(minutes=1)
+        self.tick()
+        self.confirm(self.jobs[0])
+        self.jobs[0].done.set()
+        self.tick()
+        previous = self.board.reminders[0]['delivery_attempt'].copy()
+        self.now += timedelta(days=1)
 
         def touch():
             self.now += timedelta(minutes=1)
 
         self.scheduler.hooks = replace(self.scheduler.hooks, touch=touch)
         self.tick()
+        self.assertEqual(len(self.jobs), 1)
+        restarted = Workspace(self.path, now=lambda: self.now)
+        record = restarted.reminders[0]
+        self.assertEqual(record['status'], 'pending')
+        self.assertEqual(record['delivery_attempt'], previous)
+        self.assertEqual(restarted.claim_reminders(), [])
+
+        self.board = restarted
+        self.now = (self.now + timedelta(days=1)).replace(hour=7)
+        self.scheduler.hooks = replace(self.scheduler.hooks, touch=lambda: None)
+        self.tick()
+        self.assertEqual(len(self.jobs), 2)
+        self.confirm(self.jobs[1])
+        self.jobs[1].done.set()
+        self.tick()
+        self.assertEqual(len(self.jobs), 2)
+        self.assertEqual(self.board.reminders[0]['delivery_attempt']['result'], 'played')
+
+    def test_failed_pre_dispatch_release_retries_the_release_and_respects_late_skip(self):
+        self.policy(late_policy='skip', max_late_minutes=1)
+        self.create()
+        self.now += timedelta(minutes=1)
+        save = self.board._save
+
+        def fail_release():
+            if self.board.reminders[0]['status'] == 'pending':
+                raise OSError('disk full')
+            save()
+
+        def touch():
+            self.now += timedelta(minutes=2)
+
+        self.scheduler.hooks = replace(self.scheduler.hooks, touch=touch)
+        with (
+            patch.object(self.board, '_save', side_effect=fail_release),
+            self.assertRaises(OSError),
+        ):
+            self.tick()
         self.assertEqual(self.jobs, [])
-        self.assertEqual(self.board.snapshot()['reminders'][0]['status'], 'unconfirmed')
+        self.assertEqual(self.board.reminders[0]['status'], 'delivering')
+
+        self.tick()
+        self.assertEqual(self.jobs, [])
+        record = Workspace(self.path, now=lambda: self.now).reminders[0]
+        self.assertEqual(record['status'], 'missed')
+
+    def test_pre_dispatch_release_preserves_new_schedule_inside_a_batch(self):
+        first, second = self.create(), self.create(title='第二条提醒')
+        self.now += timedelta(minutes=1)
+        new_due = (self.now + timedelta(minutes=10)).isoformat()
+
+        def touch():
+            self.board.reminder({'action': 'update', 'id': second['id'], 'due': new_due})
+
+        self.scheduler.hooks = replace(self.scheduler.hooks, touch=touch)
+        self.tick()
+        self.assertEqual(self.jobs, [])
+        records = {row['id']: row for row in self.board.reminders}
+        self.assertEqual(records[first['id']]['status'], 'pending')
+        self.assertNotIn('delivery_attempt', records[first['id']])
+        self.assertEqual(records[second['id']]['due'], new_due)
+
+        self.scheduler.hooks = replace(self.scheduler.hooks, touch=lambda: None)
+        self.tick()
+        self.assertEqual([job.text for job in self.jobs], ['提醒你：公开固定提醒'])
 
     def test_queued_batch_rechecks_all_occurrences_before_sending_audio(self):
         from test_speech_correction import CorrectionFlowTests

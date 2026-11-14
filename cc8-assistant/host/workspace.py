@@ -92,6 +92,7 @@ class ReminderClaim(TypedDict):
     attempt_id: str
     title: str
     channel: str
+    previous_attempt: NotRequired[DeliveryAttempt]
 
 
 class Snapshot(TypedDict):
@@ -746,6 +747,7 @@ class Workspace:
                 item['status'] = 'delivering'
                 item['revision'] += 1
                 item['updated_at'] = self.now().isoformat(timespec='seconds')
+                previous_attempt = item.get('delivery_attempt')
                 item['delivery_attempt'] = {
                     'id': attempt_id,
                     'due': item['due'],
@@ -762,6 +764,8 @@ class Workspace:
                         'channel': channel,
                     }
                 )
+                if previous_attempt is not None:
+                    claims[-1]['previous_attempt'] = previous_attempt
                 if len(claims) == limit:
                     break
             if claims:
@@ -780,6 +784,47 @@ class Workspace:
                     self.reminders = before
                     raise
             return claims
+
+    @staticmethod
+    def _matches_reminder_claim(item: ReminderRecord, claim: ReminderClaim, channel: str) -> bool:
+        return (
+            item['id'] == claim['id']
+            and item['status'] == 'delivering'
+            and item['revision'] == claim['revision']
+            and item['delivery_attempt']['id'] == claim['attempt_id']
+            and item.get('channel', 'cc8') == channel
+            and claim.get('channel', 'cc8') == channel
+        )
+
+    def release_unstarted_reminders(self, claims: list[ReminderClaim], *, channel: str) -> bool:
+        """Restore occurrences that never reached either output provider."""
+        with self.lock:
+            before = self.reminders
+            working = deepcopy(before)
+            changed = False
+            for claim in claims:
+                item = next((r for r in working if r['id'] == claim['id']), None)
+                if item is None or not self._matches_reminder_claim(item, claim, channel):
+                    continue
+                item['status'] = 'pending'
+                item['revision'] += 1
+                item['updated_at'] = self.now().isoformat(timespec='seconds')
+                previous = claim.get('previous_attempt')
+                if previous is None:
+                    item.pop('delivery_attempt', None)
+                else:
+                    item['delivery_attempt'] = deepcopy(previous)
+                changed = True
+            if changed:
+                self.reminders = working
+                try:
+                    self._save()
+                except ReminderCommitUncertain:
+                    raise
+                except Exception:
+                    self.reminders = before
+                    raise
+            return changed
 
     def finish_reminders(
         self,
@@ -805,14 +850,7 @@ class Workspace:
             changed = False
             for claim in claims:
                 item = next((r for r in working if r['id'] == claim['id']), None)
-                if (
-                    item is None
-                    or item['status'] != 'delivering'
-                    or item['revision'] != claim['revision']
-                    or item['delivery_attempt']['id'] != claim['attempt_id']
-                    or item.get('channel', 'cc8') != channel
-                    or claim.get('channel', 'cc8') != channel
-                ):
+                if item is None or not self._matches_reminder_claim(item, claim, channel):
                     continue
                 item['delivery_attempt']['result'] = (
                     ('notified' if channel == 'desktop' else 'played')

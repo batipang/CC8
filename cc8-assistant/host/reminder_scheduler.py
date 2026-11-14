@@ -28,7 +28,7 @@ class ReminderScheduler:
         self.job = None
         self.claims = []
         self.played_count = 0
-        self.pending_finish = None
+        self.pending_finish: Callable[[], bool] | None = None
         self.poll = 0
         self.channel = 'cc8'
 
@@ -40,6 +40,12 @@ class ReminderScheduler:
             if result.get('ok'):
                 self.hooks.publish_workspace()
             return result
+
+    def settle_pending(self):
+        if self.pending_finish is not None:
+            self.pending_finish()
+            self.pending_finish = None
+            self.hooks.publish_workspace()
 
     def tick(self):
         # Do not interrupt conversations or turn on capture to deliver a reminder.
@@ -67,12 +73,7 @@ class ReminderScheduler:
                 self.claims = []
                 self.played_count = 0
                 self.hooks.publish_workspace()
-            if self.pending_finish is not None:
-                self.hooks.workspace().finish_reminders(
-                    self.pending_finish, False, channel=self.channel
-                )
-                self.pending_finish = None
-                self.hooks.publish_workspace()
+            self.settle_pending()
             if time.monotonic() < self.poll:
                 return
             self.poll = time.monotonic() + 5
@@ -85,11 +86,10 @@ class ReminderScheduler:
             claims = workspace.claim_reminders()
             if not claims:
                 return
-            # From here, a crash or ambiguous send freezes these occurrences.
-            # Only explicit rescheduling can offer them again; do not replay
-            # a possibly heard reminder after a lost playback receipt.
-            self.channel = claims[0].get('channel', 'cc8')
-            self.pending_finish = claims
+            channel = self.channel = claims[0]['channel']
+            self.pending_finish = lambda: workspace.release_unstarted_reminders(
+                claims, channel=channel
+            )
 
             def claims_current():
                 return (
@@ -100,15 +100,22 @@ class ReminderScheduler:
 
             try:
                 self.hooks.touch()
-                if (
-                    not self.hooks.can_deliver()
-                    or self.hooks.delivery_owner() != owner
-                    or not claims_current()
-                ):
-                    self.hooks.workspace().finish_reminders(claims, False, channel=self.channel)
-                    self.pending_finish = None
-                    self.hooks.publish_workspace()
-                    return
+                ready = (
+                    self.hooks.can_deliver()
+                    and self.hooks.delivery_owner() == owner
+                    and claims_current()
+                )
+            except Exception:
+                self.settle_pending()
+                raise
+            if not ready:
+                self.settle_pending()
+                return
+
+            # A crash leaves the durable claim frozen. From provider admission
+            # onward, an exception can also mean output was already submitted.
+            self.pending_finish = lambda: workspace.finish_reminders(claims, False, channel=channel)
+            try:
                 segments = (
                     ('提醒你：' + claims[0]['title'],)
                     if len(claims) == 1
@@ -119,7 +126,7 @@ class ReminderScheduler:
                         for i, item in enumerate(claims)
                     )
                 )
-                if self.channel == 'desktop':
+                if channel == 'desktop':
                     if self.hooks.desktop_notify is None:
                         raise RuntimeError('Desktop notification service unavailable')
 
@@ -146,9 +153,7 @@ class ReminderScheduler:
                         segments, on_segment=played, before_playback=claims_current
                     )
             except Exception:
-                self.hooks.workspace().finish_reminders(claims, False, channel=self.channel)
-                self.pending_finish = None
-                self.hooks.publish_workspace()
+                self.settle_pending()
                 raise
             job.reminder_id = claims[0]['id']
             job.reminder_revision = claims[0]['revision']
