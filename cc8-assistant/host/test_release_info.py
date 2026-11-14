@@ -34,6 +34,9 @@ class ReleaseTests(unittest.TestCase):
             item = json.loads(json.dumps(original))
             item[component][field] = value
             cases.append(json.dumps(item))
+        for declaration in (None, {'usb_authentication': True}, {'usb_authentication': 'unknown'}):
+            item = {**original, 'transport': declaration}
+            cases.append(json.dumps(item))
         cases += ['{"schema_version":1,"schema_version":1}', 'x' * 16385]
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

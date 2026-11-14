@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "release_id": "review-fixes-168-20261111.1",
+  "release_id": "paired-usb-170-20261114.1",
   "backend": {
-    "version": "0.16.37"
+    "version": "0.16.38"
   },
   "assistant": {
-    "version": "0.9.129",
-    "version_code": 168,
+    "version": "0.9.131",
+    "version_code": 170,
     "package": "com.happyhome.cc8assistant"
   },
   "diagnostics": {
@@ -18,6 +18,9 @@
     "version": 2,
     "device_min": 2,
     "device_max": 2
+  },
+  "transport": {
+    "usb_authentication": "paired_tls"
   },
   "known_deployed_pair": {
     "assistant_version": "0.9.14",

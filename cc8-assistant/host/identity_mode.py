@@ -1,5 +1,7 @@
 """Explicit owner/guest selection with private CAS persistence; constructors perform no I/O."""
 
+from __future__ import annotations
+
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass

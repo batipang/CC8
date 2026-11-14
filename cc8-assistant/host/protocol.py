@@ -1,7 +1,7 @@
 """Bounded framing shared by USB-loopback and authenticated LAN connections."""
 
 from dataclasses import dataclass
-from typing import Protocol, TypeAlias, Union, cast
+from typing import Protocol, Union, cast
 import json
 import math
 import re
@@ -14,8 +14,8 @@ MIC, RENDER, EVENT, SPEAKER, MIC_PAIRED, ROUTE_BOUND, MEETING = 1, 2, 3, 4, 5, 6
 MAX_PACKET = 65536
 MAX_JSON_DEPTH = 16
 MAX_JSON_NODES = 4096
-JsonValue: TypeAlias = Union[None, bool, int, float, str, list['JsonValue'], dict[str, 'JsonValue']]
-JsonObject: TypeAlias = dict[str, JsonValue]
+JsonValue = Union[None, bool, int, float, str, list['JsonValue'], dict[str, 'JsonValue']]
+JsonObject = dict[str, JsonValue]
 
 
 class PacketStream(Protocol):
