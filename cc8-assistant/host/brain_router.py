@@ -229,7 +229,12 @@ class BrainRouter:
             try:
                 if on_web:
                     on_web('clear', {})
-                    on_web('progress', {'message': '正在读取所选聊天的工作汇报…'})
+                    message = (
+                        '正在核对本次汇报的执行回执…'
+                        if command.kind == 'item_evidence'
+                        else '正在读取所选聊天的工作汇报…'
+                    )
+                    on_web('progress', {'message': message})
                 reply = self.work_reports.answer(command, is_current)
                 if not is_current():
                     raise Cancelled('Report cancelled')

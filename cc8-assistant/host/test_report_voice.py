@@ -90,7 +90,7 @@ class VoiceTests(unittest.TestCase):
         ):
             self.assertEqual(report_command(text, followup=True).kind, 'continue')
         self.assertEqual(
-            report_command('第二项是否通过了测试', followup=True), ReportCommand('item', 2)
+            report_command('第二项是否通过了测试', followup=True), ReportCommand('item_evidence', 2)
         )
         self.assertEqual(report_command('第二项和第三项的结果', followup=True).kind, 'item_choice')
         self.assertIsNone(report_command('设计一个按第二项编号展开的界面', followup=True))
@@ -120,6 +120,31 @@ class VoiceTests(unittest.TestCase):
         self.assertIn('第二个真实摘录', reply.text)
         self.assertNotIn('后来插入', reply.text)
         self.assertEqual(self.reads, ['two_hours'])
+
+    def test_evidence_followup_reads_the_frozen_receipt_without_marking_summary_heard(self):
+        data = report('第一项', '原答复说测试通过')
+        data['items'][1]['evidence']['command_successes'] = 2
+        data['items'][1]['evidence_complete'] = False
+        data['coverage_complete'] = False
+        voice = self.session(data)
+        voice.answer(ReportCommand('report', 'today'), lambda: True)
+        data['items'][1]['evidence']['command_successes'] = 9
+        plan = voice.delivery_plan
+        for utterance in ('第二项是否通过了测试', '查看汇报的第2项执行回执'):
+            reply = voice.answer(report_command(utterance, followup=True), lambda: True)
+            self.assertIn('终端成功2条', reply.text)
+            self.assertIn('未读取完整', reply.text)
+            self.assertIn('不能确认测试已通过', reply.text)
+            self.assertNotIn('原答复说测试通过', reply.text)
+            self.assertEqual(reply.provenance['turn_id'], 'turn-1')
+            self.assertEqual(reply.delivery, ())
+            self.assertIs(voice.delivery_plan, plan)
+        self.assertEqual(voice.progress.status()['summary_delivered'], 0)
+        self.assertEqual(self.reads, ['today'])
+        self.assertIsNone(report_command('第二项是否通过了测试'))
+        self.assertEqual(report_command('第二项重新运行测试', followup=True).kind, 'continue')
+        self.now[0] = 600
+        self.assertIn('已失效', voice.answer(ReportCommand('item_evidence', 2), lambda: True).text)
 
     def test_range_errors_and_unsupported_continue_never_reexecute_original_work(self):
         voice = self.session()
@@ -250,6 +275,30 @@ class IntegrationTests(unittest.TestCase):
             self.assertEqual(bridge.brain.selected, 'minimax')
             self.assertFalse(mini.called or dot.called)
         self.assertTrue(any(k == 'dot_result' and '第二份结果' in v['text'] for k, v in events))
+
+    def test_evidence_followup_uses_router_without_model_or_history_read(self):
+        _, bridge = self.session()
+        list(bridge.brain.clauses('汇报今天的工作', []))
+        events = []
+        with (
+            patch.object(bridge.chats.catalog, 'report') as reread,
+            patch.object(bridge.brain.dot, 'clauses') as dot,
+            patch.object(bridge.brain.minimax, 'clauses', create=True) as mini,
+        ):
+            result = ''.join(
+                bridge.brain.clauses(
+                    '第二项是否通过了测试',
+                    [],
+                    on_web=lambda kind, data: events.append((kind, data)),
+                )
+            )
+            self.assertIn('不能确认测试已通过', result)
+            self.assertNotIn('第二份结果', result)
+            self.assertEqual(bridge.brain.last_metrics['operation'], 'item_evidence')
+            self.assertFalse(reread.called or dot.called or mini.called)
+        self.assertTrue(
+            any(k == 'result_provenance' and v['turn_id'] == 'turn-1' for k, v in events)
+        )
 
     def test_response_receipt_precedes_tts_and_report_is_not_future_model_history(self):
         from test_failure_feedback import FailureFeedbackTests

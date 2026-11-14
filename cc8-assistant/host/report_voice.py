@@ -75,6 +75,12 @@ DETAIL = re.compile(
     + INDEX
     + r'项(?:的?(?:详情|详细结果|完整结果|详细内容|内容|结果|情况))?(?:读给我听|读一下)?'
 )
+ITEM_EVIDENCE = re.compile(
+    PREFIX
+    + r'(?:查看|核对|说说)?(?:本次汇报的|这次汇报的|汇报的)?第'
+    + INDEX
+    + r'项(?:的?(?:执行回执|核验状态|验证情况|测试结果)|(?:是否|有没有)?(?:通过(?:了)?测试|验证(?:了|过)?))'
+)
 CONTEXT_ITEM = re.compile(
     PREFIX + r'(?:把|将|关于|对于)?(?:本次汇报的|这次汇报的|汇报的)?第' + INDEX + r'项'
 )
@@ -120,6 +126,8 @@ def report_command(text, *, followup=False):
         return ReportCommand('continue')
     if value := parse_range(text):
         return ReportCommand('custom', value)
+    if (followup or '汇报' in text) and (match := ITEM_EVIDENCE.fullmatch(text)):
+        return ReportCommand('item_evidence', ordinal(match[1]))
     if match := DETAIL.fullmatch(text):
         if followup or '汇报' in text:
             return ReportCommand('item', ordinal(match[1]))
@@ -218,6 +226,15 @@ def item_text(item, number):
         lines.append('执行回执未读取完整。')
     lines.append('回合完成不代表任务已验证，以上原答复尚未独立核验。')
     return '\n'.join(lines)
+
+
+def spoken_evidence(item):
+    evidence = item['evidence']
+    return (
+        f'终端成功{evidence["command_successes"]}条、失败{evidence["command_failures"]}条回执；'
+        f'文件变更成功{evidence["file_change_successes"]}条、失败{evidence["file_change_failures"]}条回执，'
+        f'待确认{evidence["unconfirmed_tool_items"]}条。'
+    )
 
 
 def report_text(report):
@@ -519,7 +536,7 @@ class ReportVoice:
             return self.notice(
                 '请先指定本次汇报中的一个编号，例如“详细说说第二项”；当前不会推测或合并多个项目执行。'
             )
-        if command.kind == 'item':
+        if command.kind in ('item', 'item_evidence'):
             with self.hooks.lock:
                 context = self.hooks.context()
                 if (
@@ -533,17 +550,31 @@ class ReportVoice:
                 number = command.value
                 if type(number) is not int or not 1 <= number <= len(report['items']):
                     return self.notice('这份汇报没有该编号，请按屏幕上本次汇报的编号查询。')
-                text = item_text(report['items'][number - 1], number)
                 item = report['items'][number - 1]
-                evidence = item['evidence']
+                provenance = report_source(context[0], item['turn_id'], item)
+                if command.kind == 'item_evidence':
+                    lines = [f'第{number}项执行回执。']
+                    if item.get('since_status') == 'cached_unheard':
+                        lines.append('回执来自上次已读快照，本次未重新读取。')
+                    lines.append(spoken_evidence(item))
+                    if not item['evidence_complete']:
+                        lines.append('执行回执未读取完整。')
+                    lines.append('现有回执不能确定哪些命令是测试，也不能确认测试已通过。')
+                    return ReportReply(
+                        '\n'.join(lines),
+                        tuple(lines),
+                        item.get('source_title', report['source_title']),
+                        'item_evidence',
+                        1,
+                        provenance=provenance,
+                    )
+                text = item_text(item, number)
                 messages = [f'第{number}项原答复摘录。', item['excerpt']]
                 if item.get('since_status') in SINCE_NOTES:
                     messages.insert(1, SINCE_NOTES[item['since_status']])
                 if item['excerpt_truncated']:
                     messages.append('摘录已截短，本次没有读取完整原答复。')
-                messages.append(
-                    f'终端成功{evidence["command_successes"]}条、失败{evidence["command_failures"]}条回执；文件变更成功{evidence["file_change_successes"]}条、失败{evidence["file_change_failures"]}条回执，待确认{evidence["unconfirmed_tool_items"]}条。'
-                )
+                messages.append(spoken_evidence(item))
                 if not item['evidence_complete']:
                     messages.append('执行回执未读取完整。')
                 messages.append('回合完成不代表任务已验证，以上原答复尚未独立核验。')
@@ -555,7 +586,7 @@ class ReportVoice:
                     'item',
                     1,
                     self.delivery(messages, requirements),
-                    report_source(context[0], item['turn_id'], item),
+                    provenance,
                 )
         if command.kind not in ('report', 'custom'):
             raise ValueError('Invalid report command')
