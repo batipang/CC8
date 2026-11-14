@@ -569,7 +569,11 @@ class ChatController:
                         item = None
                         if action == 'save_report':
                             source, report = self.voice.snapshot_for_save(data['snapshot_id'])
-                            item = archive_record(source, report)
+                            item = archive_record(
+                                source,
+                                report,
+                                include_receipts=data.get('include_receipts') is True,
+                            )
                         state = self.archive.apply(
                             {
                                 'save_report': 'save',
@@ -650,6 +654,8 @@ class ChatController:
                             pass
                 if action in ('report', 'report_page'):
                     value, text = result.pop('report'), result.pop('report_text')
+                    if 'archive_revision' in result:
+                        result['archive_receipts_supported'] = True
                     result.update(
                         display_fields(
                             value,

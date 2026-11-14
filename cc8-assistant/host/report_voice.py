@@ -323,6 +323,19 @@ def receipts_valid(rows, counts, final_id, limit):
     return True
 
 
+def execution_receipt_lines(item):
+    labels = dict(
+        command_failures='终端失败',
+        file_change_failures='文件变更失败',
+        unconfirmed_tool_items='执行待确认',
+        command_successes='终端成功',
+        file_change_successes='文件变更成功',
+    )
+    return [
+        f'{labels[row["outcome"]]} · {row["item_id"]}' for row in item.get('execution_receipts', [])
+    ]
+
+
 def spoken_evidence(item):
     evidence = item['evidence']
     return (
@@ -876,18 +889,9 @@ class ReportVoice:
                     else:
                         lines.append('现有回执不能确定哪些命令是测试，也不能确认测试已通过。')
                     detail = [lines[0], result_identity(item, provenance['thread_id']), *lines[1:]]
-                    if execution := item.get('execution_receipts'):
-                        labels = dict(
-                            command_failures='终端失败',
-                            file_change_failures='文件变更失败',
-                            unconfirmed_tool_items='执行待确认',
-                            command_successes='终端成功',
-                            file_change_successes='文件变更成功',
-                        )
+                    if execution := execution_receipt_lines(item):
                         detail.append('原回合执行编号')
-                        detail.extend(
-                            f'{labels[row["outcome"]]} · {row["item_id"]}' for row in execution
-                        )
+                        detail.extend(execution)
                         if len(execution) < sum(item['evidence'].values()):
                             detail.append(f'屏幕列出其中{len(execution)}条执行回执。')
                     if receipts := item.get('test_receipts'):
