@@ -77,7 +77,10 @@ class ThreadQueueReader:
         try:
             current()
             rpc = self.rpc_factory()
-            rpc.start()
+            remaining = deadline - self.clock()
+            if remaining <= 0:
+                raise DotError('Source queue read deadline exceeded', kind='timeout')
+            rpc.start(timeout=min(20, remaining))
             cursor, cursors, seen = None, set(), set()
             for _ in range(MAX_PAGES):
                 current()
@@ -123,7 +126,7 @@ class ThreadQueueReader:
         except Cancelled:
             raise
         except (DotError, OSError, ValueError, KeyError, TypeError):
-            result['reason'] = 'unavailable'
+            result['reason'] = 'deadline' if self.clock() >= deadline else 'unavailable'
         finally:
             if rpc is not None:
                 rpc.close()  # This read owns only its short-lived client.

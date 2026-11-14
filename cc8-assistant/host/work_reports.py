@@ -123,19 +123,23 @@ class WorkReportReader:
             type(deadline) not in (int, float) or not math.isfinite(deadline)
         ):
             raise ValueError('Invalid work report deadline')
+        limit = self.clock() + 30
+        deadline = min(limit, deadline) if deadline is not None else limit
         rpc = self.rpc_factory()
-        deadline = min(self.clock() + 30, deadline) if deadline is not None else self.clock() + 30
 
         def current():
             if not is_current():
                 raise Cancelled('Work report cancelled')
 
-        def request(method, params):
+        def remaining():
             current()
-            remaining = deadline - self.clock()
-            if remaining <= 0:
+            budget = deadline - self.clock()
+            if budget <= 0:
                 raise DotError('Work report read deadline exceeded', kind='timeout')
-            result = rpc.request(method, params, timeout=min(5, remaining))
+            return budget
+
+        def request(method, params):
+            result = rpc.request(method, params, timeout=min(5, remaining()))
             current()
             if not isinstance(result, dict):
                 raise DotError('Invalid work report response')
@@ -161,11 +165,7 @@ class WorkReportReader:
             'original_chat_modified': False,
         }
         try:
-            current()
-            if self.clock() >= deadline:
-                raise DotError('Work report read deadline exceeded', kind='timeout')
-            rpc.start()
-            current()
+            rpc.start(timeout=min(20, remaining()))
             turns, page_cursor, seen_cursors = {}, None, set()
             for page_index in range(MAX_TURN_PAGES):
                 params = dict(

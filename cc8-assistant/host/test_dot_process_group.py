@@ -94,6 +94,22 @@ def wait_until(condition, timeout=4):
 
 
 class DotProcessGroupTests(unittest.TestCase):
+    def test_initialization_timeout_releases_the_owned_server(self):
+        server = 'import sys; sys.stdin.readline(); sys.stdin.read()'
+        rpc = CodexRpc(command=[sys.executable, '-u', '-c', server])
+        try:
+            with patch('codex_rpc.runtime_environment', return_value={'PATH': '/usr/bin:/bin'}):
+                start = time.monotonic()
+                with self.assertRaises(DotError) as caught:
+                    rpc.start(timeout=0.25)
+            self.assertEqual(caught.exception.kind, 'timeout')
+            self.assertLess(time.monotonic() - start, 5)
+            self.assertFalse(rpc.initialized)
+            self.assertFalse(rpc.pending)
+            self.assertIsNotNone(rpc.process.poll())
+        finally:
+            rpc.close()
+
     def test_close_drains_owned_group_after_leader_exit_or_term(self):
         for mode in ('cooperative', 'resistant', 'leader_exit'):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as folder:
