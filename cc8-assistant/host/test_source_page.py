@@ -71,6 +71,23 @@ class PageReaderTests(unittest.TestCase):
         self.rows = [response(**{'Last-Modified': 'Tue, 10 Nov 2026 01:00:00 GMT'})]
         self.assertEqual(self.read('https://example.com/2026/11/10/page')['publication_labels'], [])
 
+    def test_parsely_publication_label_is_distinct_from_updates_and_events(self):
+        self.rows = [
+            response(
+                b'<meta property="og:updated_time" content="2026-05-07T11:39:50-04:00">'
+                b'<meta name="parsely-pub-date" content="2026-04-11T02:31:50Z">'
+                b'<meta name="parsely-pub-date" content="2026-02-30T02:31:50Z">'
+                b'<time datetime="2026-04-10">Event date</time><p>Story</p>'
+            )
+        ]
+        result = self.read()
+        self.assertEqual(result['publication_labels'], ['2026-04-11T02:31:50Z'])
+        evidence = WebEvidence(clock=lambda: 'now')
+        evidence.page(result)
+        row = evidence.sources([{'url': result['url'], 'title': 'Story'}])[0]
+        self.assertEqual(row['page_dates'], '2026-04-11T02:31:50Z')
+        self.assertEqual(row['event_at'], '')
+
     def test_page_control_characters_are_normalized_before_native_display(self):
         self.rows = [response('<p>first\x00 second\x85 third</p>'.encode())]
         self.assertEqual(self.read()['text'], 'first second third')

@@ -5,8 +5,8 @@ proxies or automatic redirects; each redirect is resolved and checked again.
 The caller receives untrusted page text, never a claim that its facts are true.
 """
 
-from html.parser import HTMLParser
 from datetime import datetime
+from html.parser import HTMLParser
 import ipaddress
 import json
 import queue
@@ -234,6 +234,16 @@ def headers(raw):
     return final
 
 
+def iso_publication_label(value):
+    if not isinstance(value, str) or not PUBLICATION_DATE.fullmatch(value):
+        return None
+    try:
+        datetime.fromisoformat(value[:-1] + '+00:00' if value.endswith('Z') else value)
+    except ValueError:
+        return None
+    return value
+
+
 class PageText(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
@@ -270,6 +280,8 @@ class PageText(HTMLParser):
                 # Preserve the publisher's string. Neither this nor an HTTP
                 # Last-Modified header proves an event or publication date.
                 self.add_date(value)
+            elif key == 'parsely-pub-date' and (date := iso_publication_label(value.strip())):
+                self.add_date(date)
 
     def handle_endtag(self, tag):
         if tag == 'script' and self.metadata is not None:
@@ -324,11 +336,7 @@ def article_publication_date(raw):
                 articles.append(node)
         if len(articles) != 1:
             return None
-        value = articles[0].get('datePublished')
-        if not isinstance(value, str) or not PUBLICATION_DATE.fullmatch(value):
-            return None
-        datetime.fromisoformat(value[:-1] + '+00:00' if value.endswith('Z') else value)
-        return value
+        return iso_publication_label(articles[0].get('datePublished'))
     except (ValueError, RecursionError):
         return None
 
