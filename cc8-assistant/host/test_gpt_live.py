@@ -1,6 +1,7 @@
 import asyncio
 import base64
 from contextlib import asynccontextmanager
+from dataclasses import replace
 import json
 from pathlib import Path
 import queue
@@ -16,7 +17,9 @@ from brain_router import BrainRouter
 from bridge import Bridge
 from capture_evidence import FRAME_NS
 from configuration import ROOT, load_config, select_voice_mode
-from gpt_live import Fragment, LivePlayback, LiveSession
+from dsp import FRAME, VoiceDetector
+from echo_pipeline import CleanFrame
+from gpt_live import Fragment, LivePlayback, LiveSession, pcm16
 from gpt_live_credentials import load_key
 from gpt_live_trial import LiveTrial
 from reply_types import LiveReply
@@ -196,6 +199,9 @@ class LiveAdmissionTests(unittest.TestCase):
         bridge.live = LiveTrial(bridge, 'fixture-private-key', 'marin')
         state('device_disconnected')
         bridge.session.connection = object()
+        bridge.session.capture_route_pending = True
+        state('capture_route_pending')
+        bridge.session.capture_route_pending = False
         with patch.object(bridge, 'owner_access', return_value=False):
             state('owner_required')
         state('device_incompatible')
@@ -207,9 +213,17 @@ class LiveAdmissionTests(unittest.TestCase):
         bridge.wake.detector = NS()
         state('capture_paused')
         bridge.session.active = True
+        bridge.session.awake = False
         with patch.object(bridge.calibration, 'failed', True):
             state('calibration_required')
         state('waiting_for_local_wake')
+        bridge.session.awake = True
+        state('ready_for_speech')
+        with patch.object(bridge.response, 'busy', True):
+            state('capture_busy')
+        bridge.session.text_generation = bridge.generation
+        state('capture_busy')
+        bridge.session.text_generation = None
         owner = LiveSession('fixture-private-key', 'marin', bridge.live, connector=Mock())
         bridge.live.session = owner
         with patch.object(bridge.live, 'current', return_value=True):
@@ -217,7 +231,7 @@ class LiveAdmissionTests(unittest.TestCase):
             owner.started.set()
             state('active')
         with patch.object(bridge.live, 'current', return_value=False):
-            state('waiting_for_local_wake')
+            state('session_ending')
         bridge.session.active = False
         bridge.add_capture_metric('live_sessions', 1)
         health = bridge.health()
@@ -308,6 +322,47 @@ class LiveAdmissionTests(unittest.TestCase):
         self.assertTrue(trial.consume(frame, True, True))
         self.assertTrue(owner.stop.is_set())
         owner.feed.assert_not_called()
+
+    def test_streaming_wake_passes_same_utterance_pcm_before_new_frames(self):
+        for echo_risk in ('none', 'render', 'pre_roll'):
+            with self.subTest(echo_risk=echo_risk):
+                trial, host, owner = self.make_trial()
+                host.wake.allowed.return_value = False
+                endpoint = Bridge(Mock(), host.brain).capture.endpoint
+                endpoint.vad = VoiceDetector()
+                endpoint.near_speech.feed = Mock(return_value=(True, True))
+                playing = Mock(return_value=False)
+                endpoint.hooks = replace(
+                    endpoint.hooks,
+                    capture_current=lambda _: True,
+                    awake=host.wake.allowed,
+                    wake_allowed=host.wake.allowed,
+                    playing=playing,
+                    last_audio_end=lambda: float('-inf'),
+                    live_audio=trial.consume,
+                )
+                before = np.full(FRAME, 0.125)
+                after = np.full(FRAME, 0.25)
+                render = before if echo_risk == 'render' else np.zeros(FRAME)
+                for i in range(1, VoiceDetector.ONSET_FRAMES + 1):
+                    playing.return_value = echo_risk == 'pre_roll' and i == 1
+                    endpoint.consume(CleanFrame(i * FRAME_NS, before, render, before, before))
+                self.assertTrue(endpoint.vad.talking)
+                trial.factory.assert_not_called()
+
+                def confirm(*args, **kwargs):
+                    host.wake.allowed.return_value = True
+                    return True
+
+                endpoint.hooks = replace(endpoint.hooks, wake_feed=confirm)
+                stamp = (VoiceDetector.ONSET_FRAMES + 1) * FRAME_NS
+                endpoint.consume(CleanFrame(stamp, after, render, after, after))
+                expected = (
+                    pcm16(before) * VoiceDetector.ONSET_FRAMES if echo_risk == 'none' else b''
+                )
+                self.assertEqual(b''.join(owner.initial_audio), expected)
+                owner.feed.assert_called_once_with(pcm16(after), True)
+                self.assertFalse(endpoint.vad.talking)
 
     def test_local_barge_stops_output_without_invalidating_dot(self):
         trial, host, owner = self.make_trial()

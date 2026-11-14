@@ -4,6 +4,8 @@ from pathlib import Path
 import threading
 import time
 
+import numpy as np
+
 from brain_router import BrainRouter
 from gpt_live import LiveSession, pcm16
 from gpt_live_credentials import KEY_FILE, load_key
@@ -13,6 +15,10 @@ from recognition_commands import SLEEP_COMMAND, stop_command, wake_payload
 from vision import visual_request
 from recognition_echo import resembles_playback
 from capture_evidence import FRAME_NS, FRAME_JITTER_NS
+from dsp import RATE, FRAME
+
+
+MAX_WAKE_PREFIX_SECONDS = 8
 
 
 class LiveTrial:
@@ -74,14 +80,17 @@ class LiveTrial:
             if stop_device:
                 self.stop_playback()
 
-    def admit(self, initial=None):
-        if self.session is not None:
-            return self.active
-        if (
+    def admission_busy(self):
+        return (
             self.host.playback.playing
             or self.host.response.busy
             or self.host.capture.live_response_probe() is not None
-        ):
+        )
+
+    def admit(self, initial=None):
+        if self.session is not None:
+            return self.active
+        if self.admission_busy():
             return False
         self.scope = self.host.session.capture_owner(), self.host.generation
         self.near_frames = 0
@@ -91,9 +100,8 @@ class LiveTrial:
         self.barge_latched = False
         owner = self.factory(self.key, self.voice, self)
         if initial is not None:
-            # Completed local verifier audio is admitted only after its
-            # wake verdict. Send it ahead of subsequently captured frames.
-            raw = pcm16(initial[-16000 * 8 :])
+            # Send only locally confirmed wake audio ahead of newer frames.
+            raw = pcm16(initial[-RATE * MAX_WAKE_PREFIX_SECONDS :])
             owner.initial_audio.extend(raw[i : i + 3200] for i in range(0, len(raw), 3200))
         self.session = owner
         self.host.add_capture_metric('live_sessions', 1)
@@ -112,22 +120,24 @@ class LiveTrial:
         if self.session is not None and not self.current(self.session):
             self.cancel()
 
-    def consume(self, frame, voiced, credible):
+    def consume(self, frame, voiced, credible, wake_prefix=()):
         # Called after the existing local wake/stop detectors and AEC, under
         # the capture owner guard. No WebSocket I/O on the capture thread.
         with self.host.guard:
             if not self.host.capture.endpoint_audio_current(frame.nanos):
                 return True
-            return self.consume_current(frame, voiced, credible)
+            return self.consume_current(frame, voiced, credible, wake_prefix)
 
-    def consume_current(self, frame, voiced, credible):
+    def consume_current(self, frame, voiced, credible, wake_prefix):
         if not self.eligible():
             self.cancel()
             return False
         if self.session is None:
             if self.host.recognition.busy:
                 return True
-            if not self.admit():
+            prefix_frames = RATE * MAX_WAKE_PREFIX_SECONDS // FRAME
+            initial = np.concatenate(wake_prefix[-prefix_frames:]) if wake_prefix else None
+            if not self.admit(initial):
                 return False
         if not self.current(self.session):
             self.cancel()

@@ -65,8 +65,9 @@ def build_audio_pipeline(
                 complete_chinese_ticket=lambda base, stamp: host.wake.complete_chinese_ticket(
                     base, stamp
                 ),
-                live_audio=lambda frame, voiced, credible: (
-                    host.live is not None and host.live.consume(frame, voiced, credible)
+                live_audio=lambda frame, voiced, credible, wake_prefix: (
+                    host.live is not None
+                    and host.live.consume(frame, voiced, credible, wake_prefix)
                 ),
                 playing=lambda: host.playback.playing,
                 natural_barge_enabled=lambda: host.session.voice_preferences.natural_barge,
