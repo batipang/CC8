@@ -405,6 +405,12 @@ def build_components(
             connection=lambda: host.session.connection,
             tasks=lambda: host.workspace.snapshot()['tasks'],
             event=lambda name, **fields: host.event(name, **fields),
+            owner_scope=lambda: (
+                host.session.bound_route_token,
+                host.owner_access(),
+                getattr(host.brain, 'identity', None),
+                host.identity.state.revision if host.identity is not None else None,
+            ),
         ),
         SavedTasks(private_directory() / 'saved-task-results.json'),
     )
