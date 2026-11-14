@@ -266,6 +266,7 @@ class ClockWireTests(unittest.TestCase):
                         if supported:
                             done.update(
                                 playback_id=begins[-1]['playback_id'] + (1 if wrong_id else 0),
+                                played_frames=event['frames'],
                                 render_clock=payload,
                             )
                         bridge.on_event(done)
@@ -277,6 +278,7 @@ class ClockWireTests(unittest.TestCase):
                                     'event': 'play_done',
                                     'generation': p.generation,
                                     'playback_id': begins[-1]['playback_id'],
+                                    'played_frames': event['frames'],
                                 }
                             )
 
@@ -343,6 +345,7 @@ class ClockWireTests(unittest.TestCase):
                             'event': 'play_done',
                             'generation': packet.generation,
                             'playback_id': clause[-1],
+                            'played_frames': event['frames'],
                         }
                     )
 
@@ -370,15 +373,18 @@ class ClockWireTests(unittest.TestCase):
         bridge.playback.playing = True
         bridge.playback.end_frames = 1
         for event in (
-            {'event': 'play_done', 'generation': generation, 'playback_id': 1},
+            {'event': 'play_done', 'generation': generation, 'playback_id': 1, 'played_frames': 1},
             {'event': 'playback_error', 'generation': generation, 'playback_id': 1},
-            {'event': 'play_done', 'generation': generation},
+            {'event': 'play_done', 'generation': generation, 'played_frames': 1},
+            {'event': 'play_done', 'generation': generation, 'playback_id': 2},
         ):
             bridge.on_event(event)
             self.assertTrue(bridge.playback.playing)
             self.assertEqual(bridge.generation, generation)
             self.assertNotIn(generation, bridge.playback.completed)
-        bridge.on_event({'event': 'play_done', 'generation': generation, 'playback_id': 2})
+        bridge.on_event(
+            {'event': 'play_done', 'generation': generation, 'playback_id': 2, 'played_frames': 1}
+        )
         self.assertFalse(bridge.playback.playing)
         self.assertIn(generation, bridge.playback.completed)
 

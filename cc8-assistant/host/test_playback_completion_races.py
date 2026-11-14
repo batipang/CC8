@@ -56,6 +56,36 @@ class CompletionRacesTests(unittest.TestCase):
         self.assertTrue(b.play(np.ones(400, dtype=np.int16), 'fixed', generation))
         self.assertEqual(observations, [(True, False), (True, False), (False, True), True])
 
+    def test_missing_frame_count_on_negotiated_link_times_out_without_completion(self):
+        b = self.session()
+        b.playback.set_completion_capability(True)
+        generation = b.generation
+        b.diagnostics.begin('text', generation)
+        now = [0.0]
+
+        def output(name, **fields):
+            if name == 'play_end':
+                b.on_event(
+                    {
+                        'event': 'play_done',
+                        'generation': generation,
+                        'playback_id': b.playback.playback_serial,
+                    }
+                )
+
+        b.event = output
+        with (
+            patch('playback_controller.time.monotonic', side_effect=lambda: now[0]),
+            patch.object(b.playback.done, 'wait', side_effect=lambda _: now.__setitem__(0, 5)),
+        ):
+            self.assertFalse(b.play(np.ones(400, dtype=np.int16), 'fixed', generation))
+        self.assertNotIn(generation, b.playback.completed)
+        self.assertFalse(b.playback.playing)
+        self.assertEqual(b.generation, generation + 1)
+        self.assertEqual(
+            b.diagnostics.failure_record(generation), {'stage': 'playback', 'kind': 'timeout'}
+        )
+
     def test_cancelled_unpublished_clause_keeps_the_existing_wake_reference(self):
         b = self.session()
         b.playback.last_spoken = '后一句。'
