@@ -8,9 +8,8 @@ import time
 import uuid
 from dot_handoff import Handoff, identifier
 from dot_client import Cancelled, DotError
+from report_display_protocol import PERIODS, CALENDAR_PERIODS
 
-PERIODS = ('half_hour', 'two_hours', 'today')
-CALENDAR_PERIODS = ('yesterday', 'last_week')
 BEIJING = timezone(timedelta(hours=8))
 MAX_TURN_PAGES, MAX_ITEM_PAGES, PAGE_SIZE, MAX_CARDS = 4, 2, 25, 20
 

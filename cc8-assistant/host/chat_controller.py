@@ -24,7 +24,7 @@ from report_checkpoint_protocol import (
 )
 from report_checkpoint_controller import CheckpointController
 from report_display import display_fields, paged_text
-from report_display_protocol import validate_request as validate_page
+from report_display_protocol import CALENDAR_PERIODS, PERIODS, validate_request as validate_page
 from report_display_snapshot import DisplaySnapshot
 from report_watch_controller import WatchController
 from report_watch_protocol import (
@@ -246,6 +246,7 @@ class ChatController:
             'shared_chat': False,
             'history_persisted': False,
             'work_reports_supported': True,
+            'work_report_calendar_supported': True,
             'registered_sources_supported': self.sources is not None,
             'report_watch_supported': self.watch_ui.scheduler is not None,
             'report_source_available': self.report_source() is not None,
@@ -287,7 +288,7 @@ class ChatController:
             validate_page(data)
         if action in WATCH_ACTIONS:
             validate_watch(data)
-        if action == 'report' and data.get('period') not in ('half_hour', 'two_hours', 'today'):
+        if action == 'report' and data.get('period') not in (*PERIODS, *CALENDAR_PERIODS):
             raise ValueError('Invalid report period')
         with self.hooks.lock:
             if not self.hooks.available() or self.hooks.connection() is None:

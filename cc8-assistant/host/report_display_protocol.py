@@ -2,6 +2,9 @@
 
 import re
 
+PERIODS = ('half_hour', 'two_hours', 'today')
+CALENDAR_PERIODS = ('yesterday', 'last_week')
+
 
 def page_number(value: object) -> None:
     if type(value) is not int or not 0 <= value < 16:

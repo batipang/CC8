@@ -6,6 +6,7 @@ import json
 import math
 import re
 import struct
+from report_display_protocol import CALENDAR_PERIODS, PERIODS
 
 HEADER = struct.Struct('!BIQQQ')
 # 长度与头字段为网络字节序，PCM 载荷为小端有符号 16 位。
@@ -282,7 +283,7 @@ def validate_device_event(value: object) -> JsonObject:
         if (
             name == 'dot_chat_request'
             and value['action'] == 'report'
-            and value.get('period') not in ('half_hour', 'two_hours', 'today')
+            and value.get('period') not in (*PERIODS, *CALENDAR_PERIODS)
         ):
             raise ValueError('Invalid work report period')
         if name == 'saved_task_request':
