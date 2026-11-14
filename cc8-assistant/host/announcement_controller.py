@@ -44,8 +44,8 @@ class AnnouncementController:
         text = validate_text(text)
         return self._submit(text, prepare=prepare)
 
-    def announce_segments(self, segments, *, prepare, on_segment):
-        """Internal literal reports only; public owner IPC retains its 500-char limit."""
+    def announce_segments(self, segments, *, prepare=None, on_segment, before_playback=None):
+        """Internal literal sequences; public owner IPC retains its 500-char limit."""
         if (
             not isinstance(segments, tuple)
             or not 1 <= len(segments) <= 4
@@ -56,10 +56,14 @@ class AnnouncementController:
         if sum(map(len, segments)) > 4000:
             raise ValueError('Segmented report exceeds limit')
         return self._submit(
-            ''.join(segments), prepare=prepare, segments=segments, on_segment=on_segment
+            ''.join(segments),
+            prepare=prepare,
+            segments=segments,
+            on_segment=on_segment,
+            before_playback=before_playback,
         )
 
-    def _submit(self, text, *, prepare, segments=(), on_segment=None):
+    def _submit(self, text, *, prepare, segments=(), on_segment=None, before_playback=None):
         with self.hooks.lock:
             if (
                 not self.hooks.owner_access()
@@ -80,7 +84,13 @@ class AnnouncementController:
                         self._cleanup_error('diagnostics', secondary)
                 self._start_failure(previous + 1, error)
                 raise
-            job = Announcement(generation, text, segments=segments, on_segment=on_segment)
+            job = Announcement(
+                generation,
+                text,
+                segments=segments,
+                on_segment=on_segment,
+                before_playback=before_playback,
+            )
 
             def current():
                 return (

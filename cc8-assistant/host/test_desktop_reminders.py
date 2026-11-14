@@ -38,8 +38,14 @@ class DesktopReminderTests(unittest.TestCase):
             self.jobs.append((ident, body, valid, job))
             return job
 
-        def announce(body):
-            job = Announcement(1, body)
+        def announce(segments, *, on_segment, before_playback):
+            job = Announcement(
+                1,
+                ''.join(segments),
+                segments=segments,
+                on_segment=on_segment,
+                before_playback=before_playback,
+            )
             self.audio.append(job)
             return job
 
@@ -50,7 +56,7 @@ class DesktopReminderTests(unittest.TestCase):
                 publish_workspace=lambda: None,
                 can_deliver=lambda: self.current,
                 touch=lambda: None,
-                announce=announce,
+                announce_segments=announce,
                 desktop_notify=desktop,
             )
         )
@@ -146,6 +152,7 @@ class DesktopReminderTests(unittest.TestCase):
         self.tick()
         self.assertEqual(len(self.audio), 1)
         self.assertEqual(self.scheduler.channel, 'cc8')
+        self.audio[0].on_segment(0)
         self.audio[0].result = 'completed'
         self.audio[0].done.set()
         self.tick()

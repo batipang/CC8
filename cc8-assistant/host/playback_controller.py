@@ -416,7 +416,9 @@ class PlaybackController:
                         self.hooks.cancel_session('completion_timeout')
                         self.hooks.failure('设备播放未确认', error, trace_key=generation)
                         return False
-            return valid()
+            # A guarded segment uses the matched receipt as its delivery evidence,
+            # even if the next request cancelled this generation after the ACK.
+            return completed if before_playback is not None else valid()
         except Exception as error:
             self.hooks.diagnostics().failure(
                 generation, self.hooks.diagnostics().current_stage(generation), error

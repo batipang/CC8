@@ -1,5 +1,6 @@
 """Real persistence, receipt ordering and reminder scheduling; no live side effects."""
 
+from dataclasses import replace
 from datetime import datetime, timedelta
 import json
 from pathlib import Path
@@ -199,11 +200,19 @@ class WorkspaceTests(unittest.TestCase):
         jobs = []
         b.publish_workspace = lambda: None
 
-        def announce(text):
-            jobs.append(Announcement(b.session.generation, text))
+        def announce(segments, *, on_segment, before_playback):
+            jobs.append(
+                Announcement(
+                    b.session.generation,
+                    ''.join(segments),
+                    segments=segments,
+                    on_segment=on_segment,
+                    before_playback=before_playback,
+                )
+            )
             return jobs[-1]
 
-        b.announce = announce
+        b.reminders.hooks = replace(b.reminders.hooks, announce_segments=announce)
         for field in ['calibrating', 'playing', 'response_busy', 'recognition_busy']:
             b.session.connection = object()
             owner = (
@@ -249,6 +258,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertFalse(b.session.active)
         b.reminder_tick()
         self.assertEqual(len(jobs), 1)
+        jobs[0].on_segment(0)
         jobs[0].result = 'completed'
         jobs[0].done.set()
         b.reminder_tick()
@@ -263,7 +273,17 @@ class WorkspaceTests(unittest.TestCase):
                 b = Bridge(None, None, workspace=board)
                 b.session.connection = object()
                 b.publish_workspace = lambda: None
-                b.announce = lambda text: Announcement(b.session.generation, text)
+
+                def announce(segments, *, on_segment, before_playback):
+                    return Announcement(
+                        b.session.generation,
+                        ''.join(segments),
+                        segments=segments,
+                        on_segment=on_segment,
+                        before_playback=before_playback,
+                    )
+
+                b.reminders.hooks = replace(b.reminders.hooks, announce_segments=announce)
                 b.reminder_tick()
                 job = b.reminders.job
                 updated = board.reminder(
@@ -274,6 +294,8 @@ class WorkspaceTests(unittest.TestCase):
                         'due': (self.time + timedelta(hours=1)).isoformat(),
                     }
                 )['reminder']
+                if success:
+                    job.on_segment(0)
                 job.result = 'completed' if success else 'interrupted'
                 job.done.set()
                 b.reminder_tick()
